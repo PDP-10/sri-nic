@@ -1,0 +1,427 @@
+;XS:<5-GALAXY>LPDQSR.MAC.17,  4-May-87 14:55:12, Edit by KNIGHT
+; Close the stupid file in check for PostScript file
+;XS:<5-GALAXY>LPDQSR.MAC.16, 22-Jan-87 13:48:34, Edit by KNIGHT
+; Check for %! as the first two chars of a file - if so it's PostScript
+;XS:<5-GALAXY>LPDQSR.MAC.15, 22-Jan-87 09:53:07, Edit by KNIGHT
+;XS:<5-GALAXY>LPDQSR.MAC.14, 21-Jan-87 17:00:13, Edit by KNIGHT
+; Clear up QUEUE% argument block errors
+;XS:<5-GALAXY>LPDQSR.MAC.13, 21-Jan-87 14:42:31, Edit by KNIGHT
+;XS:<5-GALAXY>LPDQSR.MAC.12, 21-Jan-87 10:24:19, Edit by KNIGHT
+; Convert CREATE to QUEUE% JSYS.  Makes things MUCH easier
+; flush previous edit history
+
+	title lpdqsr - quasar interface for lpd
+	search monsym,macsym
+	search glxmac,qsrmac
+
+; this is the galaxy interface for lpd, which is supports spooling from
+; berkeley unix to TOPS-20 printers with tcp.
+
+; note: galaxy and macsym have conflicting definitions for
+; register names and various macros.  we search macsym before
+; the galaxy files, so macsym definitions have precedence.
+
+; this module assumes that columbia and cmu modifications have been made
+; to quasar and friends.  if not, removing the code involving non-DEC fields
+; and removing the code which sets the owner name should make this work.
+
+; some of this code is adapted from EXECQU and DAPLIB
+
+	search lpdmac			; only stuff for cancel at moment
+
+; there are three local features that are included under the "cu" conditional.
+; the first allows you to specify orientation and single/double-sided output.
+; the second allows the use of arbitrary strings for the owner field; this
+; is easy to change in the vanilla galaxy, by changing a few lines in qsrque.
+; just change the code that does an rcusr% to validate the username string, so
+; that strings rejected by rcusr% are accepted iff the requesting job has
+; wheel privileges.
+
+; finally, network printers are selected by "unit name", so you'll have
+; to change the code in routine "miscre" to use the sixbit printer name
+; as a forms name (I don't have a vanilla galaxy to test this with).
+
+stdac.					; standard ac definitions
+a=:1					; plus short names for temporaries
+b=:2
+c=:3
+d=:4
+
+defstr pageno,,26,9			; page number field from address
+
+	subttl getpid - get quasar's pid
+
+; creates a pid for this process, and determines quasar's pid
+;
+; returns:
+;	+1 failed
+;	+2 success, with
+;		qsrpid/	quasar's pid
+;		mypid/  pid for self
+
+.PSECT ICODE
+
+getpid::acvar <<argblk,3>>		; allocate argument block
+	gjinf%				; get our user number
+	movem a,userno			; save it for quasar
+	movei a,3			; a/ block length
+	movei b,argblk			; b/ block address
+	movx argblk,.mucre		; function code
+	movx argblk+1,ip%noa!.fhslf	; flags
+	mutil%				; create a pid for me
+	 erjmp r
+	movem argblk+2,mypid
+	movei a,3
+	movei b,argblk
+	movx argblk,.mursp		; function - read a system pid
+	movx argblk+1,.spqsr		; the pid we want is quasar's
+	mutil%				; get quasar's pid
+	 erjmp r
+	movem argblk+2,qsrpid		; save it away
+	endav.
+	retskp				; return success
+	subttl create - submit a printer request to quasar
+; accepts:
+;	a/ jfn of file to spool (need not be open)
+;	b/ pointer to owner name string
+;	c/ pointer to printer name (6 chars max)
+;	d/ pointer to note string
+; returns:
+;	+1 failed
+;	+2 success
+create::asubr <jfn,on,lp,note>
+	movx a,qu%nrs!fld(.quprt,qf%fnc)
+	movem a,qsrpag
+	setzm qsrpag+1
+	movx a,fld(^d50,qa%len)!fld(.qbfil,qa%typ)
+	movem a,qsrpag+2
+	hrroi a,quefil
+	movem a,qsrpag+3
+	move b,jfn
+	movx c,fld(.jsaof,js%dev)!fld(.jsaof,js%dir)!fld(.jsaof,js%nam)!fld(.jsaof,js%typ)!fld(.jsaof,js%gen)!js%paf
+	jfns%
+	movx a,qa%imm!fld(1,qa%len)!fld(.qbcop,qa%typ)
+	movem a,qsrpag+4
+	movei a,1
+	movem a,qsrpag+5
+	movem a,qsrpag+7
+	movx a,qa%imm!fld(1,qa%len)!fld(.qbodp,qa%typ)
+	movem a,qsrpag+6
+	movx a,fld(2,qa%len)!fld(.qbact,qa%typ)
+	movem a,qsrpag+10
+	hrroi a,[asciz/LPTACC/]
+	movem a,qsrpag+11
+	movx a,fld(10,qa%len)!fld(.qbnam,qa%typ)	; requestor's name
+	movem a,qsrpag+12
+	move a,on
+	movem a,qsrpag+13
+	movx a,fld(2,qa%len)!fld(.qbnte,qa%typ)
+	movem a,qsrpag+14
+	movei a,quenot
+	movem a,qsrpag+15
+	move b,note			; get note string pointer
+	call tosix			; convert to sixbit
+	movem a,qsrpag+17		; store them
+	movem a,quenot
+	setz a,				; clear second word
+	skipn c				; string exhausted?
+	 call tosix			; no, convert next six chars
+	movem a,quenot+1		; store them
+	movx a,qa%imm!fld(1,qa%len)!fld(.qbjbn,qa%typ)
+	movem a,qsrpag+16		; store them
+	movx a,qa%imm!fld(1,qa%len)!fld(.qbpnm,qa%typ)
+	movem a,qsrpag+20
+	move b,lp			;get pointer to unit name
+	call tosix			;get it in sixbit
+	movem a,qsrpag+21		;save the printername
+	move a,jfn			; get the jfn
+	move b,[xwd 1,.fbbyv]		; we want the byte size and page count
+	movei c,d			; and we want it in d
+	gtfdb%				; get them
+	 erjmp r			; failed...
+	load b,fb%bsz,d			; get the byte size
+	lsh b,^d30			; set up for openf%
+	txo b,of%rd			; open for read
+	move a,jfn
+	openf%
+	ifnje.				; we SHOULDN'T get an error
+	  bin%				; get first character of file
+	  caie b,"%"			; percent?
+	  ifskp.			; yes, check for second char !
+	    bin%
+	    caie b,"!"			; is it?
+	    ifskp.			; yes...
+	      hrli a,.fbctl		; change that word
+	      movx b,fb%fcf		; change the file class field
+     	      movx c,fld(.fbps,fb%fcf)	; ...
+	      chfdb%
+	    endif.
+	  endif.
+	endif.
+	move a,jfn
+	closf%
+	ifjer.
+	  move a,jfn
+	  rljfn%
+	   trn
+	endif.
+	load c,fb%bsz,d			; get the byte size
+	caie c,8			; is it 8?
+	ifskp.
+	  movx a,qa%imm!fld(1,qa%len)!fld(.qbfmt,qa%typ)
+	  movem a,qsrpag+22
+	  movx b,.fpf8b			; yes, tell lptspl and friends
+	  movem b,qsrpag+23
+	  movei a,24			; length of arg block
+	else.
+	  movei a,22			; ...
+	endif.
+	movei b,qsrpag			; get address of arg block
+	queue%				; queue the request
+	endas.
+	endav.
+	retskp
+
+	subttl cancel - cancel a print request
+
+; accepts:
+;	a/ address of argument block
+; returns:
+;	+1 failed
+;	+2 success, with
+;		a/ request page number
+;		and argument block set up for sndqsr
+;
+; argument block format (see LPDMAC)
+;	0/ pointer to request owner name
+;	1/ job name (or zero)
+;	2/ job name mask 
+;	3/ request number
+;	4/ pointer to foreign owner name (e.g. can pri */user:lougheed)
+;	5/ lpt name pointer
+
+cancel::acvar <ma,ab>
+	movem a,ab
+	movei ma,qsrpag
+	trze ma,777
+	 addi ma,1000			; set up pointer to message page
+
+	setzm (ma)			; clear the page
+
+	hrl a,ma
+	hrri a,1(ma)
+	blt a,777(ma)
+
+	movx a,mshsiz+rdbsiz+1		; request length
+	stor a,ms.cnt,.mstyp(ma)	; store it
+	movx a,.qokil			; request type
+	stor a,ms.typ,.mstyp(ma)	; store it
+	movei a,.otlpt			;queue is always lpt, nowadays
+	movem a,kil.ot(ma)		;put queue name in slot
+	skipn b,cn.jn(ab)		; get the job name
+	ifskp.
+	 call tosix			; convert to sixbit
+	 movem a,kil.rq+.rdbjb(ma)	; save it
+	else.
+	 setzm kil.rq+.rdbjb(ma)
+	endif.
+	skipn b,cn.jnm(ab)		; get the job name mask
+	ifskp.
+	 call tosix			; convert to sixbit
+	 movem a,kil.rq+.rdbjm(ma)	; save it
+	else.
+	 setzm kil.rq+.rdbjm(ma)
+	endif.
+	skipe b,cn.req(ab)		;request number?
+	 movem b,kil.rq+.rdbrq(ma)	;stuff it in block
+	hrroi a,kil.rq+.rdbow(ma)	; point at owner name field
+	skipn b,cn.fon(ab)		;foreign owner?
+	 move b,cn.ron(ab)		;get request owner name
+	movei c,^d39			; max length is 39 chars
+	setzm d				;  but stop on null
+	sout%				; copy the string
+	 erjmp r
+	load a,pageno,ma		; return the ipcf page
+	endav.
+	retskp				; all done
+
+	subttl sndqsr - send a request page to quasar
+
+; accepts:
+;	a/ request page number
+;
+; returns:
+;	via rcvqsr
+
+sndqsr::asubr <pn>			; must match storage for rcvqsr
+	acvar <<argblk,4>>		;  "     "      "     "    "
+	lsh a,9				; convert page number to address
+	aos b,unique			; get unique message number
+	movem b,.mscod(a)		; save it
+	setone mf.ack,.msflg(a)		; say we want an acknowledgement
+	movei a,4
+	movei b,argblk
+	movx argblk+.ipcfl,ip%cfv	;.IPCFL/ flags
+	move argblk+.ipcfs,mypid	;.IPCFS/ sender's pid
+	move argblk+.ipcfr,qsrpid	;.IPCFR/ recipient's pid
+	move argblk+.ipcfp,pn		;.IPCFP/ pointer to page to send
+	hrli argblk+.ipcfp,1000
+	msend%				; send the page off
+	 erjmp r			; failed?
+	jrst dorecv			; go get first response
+	endav.
+
+; rcvqsr - receive a response page from quasar
+;
+; accepts:
+;	a/ page number
+; returns:
+;	+1 mrecv% error
+;	+2 success, with
+;		a/ address of message text
+;		b/ zero, or page number if more messages follow
+
+rcvqsr::asubr <pn>			; must match storage for sndqsr
+	acvar <<argblk,4>>		;   "    "      "     "    "
+dorecv:	movei a,4			; length of the argument block
+	movei b,argblk			; it's address
+	setzm argblk+.ipcfl		;.IPCFL/ no flags this time
+	move argblk+.ipcfr,mypid	;.IPCFR/ recipient's pid
+	move argblk+.ipcfp,pn		;.IPCFP/ length,,address of block
+	lsh argblk+.ipcfp,9
+	hrli argblk+.ipcfp,1000
+	mrecv%				; wait for a reply
+	ifjer.
+	 caie a,ipcf16			; the usual error code?
+	  ret				; nope, return now
+	 movei a,4			; yes, try a page-mode receive
+	 movx argblk+.ipcfl,ip%cfv
+	 hrr argblk+.ipcfp,pn
+	 mrecv%				; try again
+	  erjmp r			; failed, just return now
+	endif.
+	came argblk+.ipcfs,qsrpid	; was it from quasar?
+	 jrst dorecv			; no, ignore it
+	move a,pn
+	lsh a,9
+	move b,.mscod(a)		; get the acknowledgement code
+	came b,unique			; does it match?
+	 jrst dorecv			; no, listen some more
+	load b,pageno,a			; return the page number
+	move c,.msflg(a)		; get the message flags
+	txne c,mf.fat			; fatal message?
+	 setzm b			; yes, no more will follow
+	txnn c,wt.mor			; no, more follow?
+	 setzm b			; neither, say no more messages
+	txnn c,mf.nom			; but no text?
+	ifskp.
+	 skipe a,b			; no, another message follows?
+	  jrst dorecv			; yes, go get it
+	else.
+	 movei c,.ohdrs+arg.hd(a)	; get address of message blocks
+	 move d,.oargc(a)		; get message block count
+	 do.
+	  load a,ar.typ,arg.hd(c)	; get the type field
+	  caie a,.cmtxt			; text? (what a stupid symbol to use!)
+	  ifskp.
+	   movei a,arg.da(c)		; yes, return the data
+	   retskp			; ...
+	  endif.
+	  load a,ar.len,arg.hd(c)	; else, get length of this block
+	  addm a,c			; update pointer
+	  sojg d,top.			; loop if more blocks remain
+	  movei a,[asciz /no response from Quasar/]
+	 od.				; return dummy message if none found
+	endif.
+	retskp				; return
+	endas.
+	endav.
+	
+	subttl listq - return queue information
+
+; accepts:
+;	a/ pointer to printer name
+; returns:
+;	+1 failed
+;	+2 success, with
+;		a/ pointer to reply string
+;		b/ non-zero if more info follows
+
+listq::	acvar <ma,pn>
+	movem a,pn			; save the printer name
+	movei ma,qsrpag
+	trze ma,777
+	 addi ma,1000			; set up pointer to message page
+
+	setzm (ma)			; clear the page
+	hrl a,ma
+	hrri a,1(ma)
+	blt a,777(ma)
+
+	movei a,mshsiz+.ohdrs+2		; size of request
+	stor a,ms.cnt,.mstyp(ma)	; set it
+	movei a,.qolis			; we want a list
+	stor a,ms.typ,.mstyp(ma)	; store it
+	setzm .oflag(ma)		; no flags yet
+	movei a,1
+	movem a,.oargc(ma)		; we're sending two blocks
+	movei a,2			; arg block length is 2
+	stor a,ar.len,.ohdrs+arg.hd(ma)	; store it
+	movei a,.lsque			; we want to list the queues
+	stor a,ar.typ,.ohdrs+arg.hd(ma)	; store first message block
+	movx a,liqlpt			; we want the line printer queue
+	movem a,.ohdrs+arg.da(ma)	; store it
+	move a,[xwd 2,.lsuni]
+	movem a,.ohdrs+arg.da+1(ma)
+	move b,pn			; get the printer name
+	call tosix			; convert to sixbit
+	movem a,.ohdrs+arg.da+2(ma)	; save it	
+	load a,pageno,ma		; return the page number
+	retskp
+	endav.				; flush acvar symbols
+
+	subttl tosix - convert a string to sixbit
+;
+; accepts:
+;	b/ pointer to string
+; returns:
+;	a/ sixbit word
+;	b/ updated pointer
+;	c/ 0 or number of trailing blanks in a (source string exhausted)
+
+tosix::	acvar <tmp>
+	setzm a				; clear a
+	tlc b,-1			; check for -1,,address
+	tlcn b,-1
+	 hrli b,(point 7)
+	movei c,6			; initialize count
+	move d,[point 6,a]		; set up sixbit byte pointer
+	do.
+	 ildb tmp,b			; get a character
+	 skipge tmp,ascsix(tmp)		; get it's sixbit equivalent
+	  exit.
+	 idpb tmp,d			; deposit it
+	 sojg c,top.			; loop if count not exhausted
+	od.
+	endav.
+	ret
+.ENDPS
+	subttl data area
+
+; ascii-to-sixbit conversion table
+.PSECT PURE
+ascsix:	repeat <40>,<-1>
+	repeat <100>,<.-ascsix-40>
+	repeat <40>,<.-ascsix-100>
+.ENDPS
+
+.PSECT IDATA
+qsrpag:	block 3000
+quefil:	block ^d50
+quenot:	block 2
+qsrpid:	z
+mypid:	z
+userno:	z				; my user number
+unique:	z				; unique message id
+.ENDPS
+	end

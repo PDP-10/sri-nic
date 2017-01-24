@@ -1,0 +1,288 @@
+Things to do to KCC:
+
+(0) Fix incorrect compilation
+    - Store then load into byte pointer / bitfield doesn't truncate!
+    - Happens both for use of value and for eliminated common sub
+
+(1) Propagate pseudo-label for return in endlabels
+    - Change JRST to ret label into a POPJ
+    - Careful not to try to skip over this
+    - This can be done by checking in gboolean() and jumping over jump
+    - Or just always jumping over jump and letting it get optimized
+    - Maybe have $RETZ, $RETO, $RETT for 0, -1, 1 returns?
+
+(2) Re-install automatic indirection
+    - Make sure all optimizations safe
+    - Perhaps undo when offsets other than zero used from same cell
+    - Don't do it for LSH
+
+(3) Allow assembly code within C sources
+    - Make this work inside functions
+    - Define pseudo-macros for args and locals
+    - Parse and re-emit (binary search on dec20op[] so comment alpha order)
+
+(4) Improve tail recursion for more expressions in places of variables
+
+(5) Fold ops on adjacent bit/byte field together.
+    - Turn byte field ops into bit field ones where possible.
+    - Merge adjacent deposits to or loads from literal byte pointers
+    - More halfword ops
+    - Change MOVE + ANDI into HRRZ (this actually happens in runtm)
+
+(8) Vectorize named array initialization loops into BLTs.
+    - Combine BLT loops into bigger BLTs.
+    - Use register loops for unnamed arrays...
+
+(9) Fix calling conventions for pseudo-instructions ($DMOVE etc)
+    - Use AC1 and AC2 rather than AC15 and AC16
+    - Push more of it into code generation rather than code emission
+    - Use getret/getrpair etc
+    - This allows more folds, simpler behavior for CSE, etc
+
+(10) Clean up peephole optimizer
+    - Make sure pushneg() not called in foldboth() when reg later used as index
+    - Put monument in pushneg() about it not checking for future uses
+    - Move more optimizations from code gen to optimizer modules (esp code0, 4)
+    - Break up large hairy messes into simple functions
+    - Pull comparison operand in code0 across multi-instr code for other op
+
+(11) Improve anti-aliasing
+    - Byte pointer changing ops can't affect cells used as word pointers
+    - Indexed expr with offset can't affect labeled cell with smaller offset
+
+(12) More creative uses of the PDP-10 instruction set
+    - Pull AOS R,S across in foldplus
+    - Push back AOS over IMULI by doing IDIVI / ASH afterwards
+    - Use DMOVE, DMOVEM, and EXCH to replace combinations of MOVE and MOVEM
+    - MOVE R,x + MOVEM R,1(S) => PUSH S,x  (choke)
+    - MOVE R,x + XMOVEI 16,y + CAMx R,16 => XMOVEI R,y + CAMy R,x
+    - MOVN + MOVEM becomes MOVNM + MOVN (in foldboth; flush MOVN in genrelease)
+    - CAIE+CAIN+TRNA => CAIL+CAILE even when skipped as long as CAILE reskips
+    - ADDB + AOS => ADDI + ADDB
+    - Flush duplicate assignments to same place
+    - Use ROT for LSH/AND/OR combos
+    - Fold NEG into COMPL and vice versa when useful
+    - Fold multiple AND/OR into one; fold binary+unary into appropriate binary
+    - PUSHJ can be ADJSP 17,1 + JRST or TRNA (both useless)... better tricks?
+
+(13) Clean up runtimes
+    - Fix printf() unsigned output
+    - Either remove call to jsys() in runtm or use it more regularly
+    - wait() in runtm can just be a jsys, move rest of mess elsewhere
+    - Make pipe() know how to use PTYs if PIP: doesn't work
+    - Teach _gtjfn() about ~username syntax
+    - Make fopen() accept "wb" or "r9" as well as "W" etc
+    - Automatic file bytesize fixup in stdio
+    - Implement berkeley dir stuff (see man 3 directory), ...
+    - Find varargs.h and make work for runtimes
+    - Terminal input is line driven?  EOF on ^D or ^Z?  Think about stty
+    - Work out some PRARG% convention to supercede RSCAN% passing if used
+
+(14) Language features
+    - Structure-structure assignment ($BLT?), vectorizing loops?
+    - Find some prefix for labels to distinguish from code/data
+    - Long variable names
+    - New data types: unsigned (for SC), short (HRRE after LDB unless unsigned)
+    - Warn about local variable shadowing function arg, built-in typedef
+    - Warn about statements without side effects
+
+(15) Programs
+    - More Unix programs and filters (as runtimes work or source found)
+    - Make AS68, LD68, CC68, C2 work (already have CCOM and CPP working)
+    - Get a shell running
+
+(16) Compiler execution
+    - Debug multi-file compile
+    - REL instead of FAIL (remain able to make FAIL) (long externs optional)
+    - Code generation uses table of PDP-10 opcode structure by actual op
+    - Make fixprev() back up to save peephole buffer space
+    - Allocate various data structures dynamically
+
+(17) Simplified instruction set for non-emission use
+    - Flush immedop() and directop() in favor of using IMMED forms
+
+Found in CCGEN1:		Should be:
+
+	CAIG	11,1			CAIL	4,77
+	CAIN	4,100			CAILE	4,102
+	JRST	$21			CAILE	11,1
+	CAIE	4,77			JRST	$21
+	CAIN	4,102
+	JRST	$21
+	CAIN	4,101
+	JRST	$21
+
+	CAIE	5,126			CAIL	5,125
+	CAIN	5,125			CAILE	5,127
+	JRST	$83			JRST	$82
+	CAIE	5,127
+	JRST	$82
+$83::
+
+	TRNA				CAIN	1,2
+$155::					JRST	$158
+	MOVEI	1,1			CAIE	1,1
+	CAIN	1,2			JRST	$159
+	JRST	$158		$155::
+	CAIE	1,1
+	JRST	$159
+
+Found in hock:
+
+$186::
+	MOVEI	3,1
+	MOVE	5,-3(17)
+	MOVE	4,2(5)
+	MOVEM	3,0(4)
+	CAML	3,-7(17)
+	JRST	$177			...
+	MOVEI	6,60			MOVE	3,-5(17)
+	ADD	3,-5(17)		LDB	10,1(3)
+	LDB	10,0(3)			CAIL	10,60
+	CAMLE	6,10			CAILE	10,71
+	JRST	$177			JRST	$177
+	MOVE	11,-5(17)
+	LDB	12,1(11)
+	CAILE	12,71
+	JRST	$177
+
+	PUSH 17,-1(17)			SKIPN 4,-2(17)
+	MOVE 4,0(17)			 POPJ 17,
+	JUMPN 4,$356			PUSH 17,4
+	ADJSP 17,-1
+	POPJ 17,
+$356::
+
+	IBP -4(17)			CAIN 4,0
+	JUMPN 4,$923			AOSA 5,-1(17)
+	SETO 3,				TRNA
+	ADJBP 3,-4(17)			JRST $919
+	MOVEM 3,-4(17)			IBP -4(17)
+	AOS 5,-1(17)			JRST $923
+	JRST $919
+
+	MOVNI 4,2			MOVNI 4,2
+	ADJBP 4,-5(17)			ADJBP 4,-5(17)
+	DPB 3,4				IDPB 3,4
+	SETZ 5,				SETZ 5,
+	SETO 6,				DPB 5,4
+	ADJBP 6,-5(17)
+	DPB 5,6
+
+	MOVE 3,210(10)			MOVE 3,210(10)
+	MOVE 6,-4(17)			MOVE 6,-4(17)
+	ADD 6,period			SKIPE 7,period
+	ADDB 3,31(6)			 ADDM 3,31(6)
+	SKIPN 7,period			ADD 6,7
+	 JRST $1334			ADDB 3,31(6)
+	MOVE 4,210(10)
+	MOVE 11,-4(17)
+	ADDB 4,31(11)
+$1334::
+
+gettok:
+	ADJSP	17,2			SETZB	4,ntoks
+	SETZB	4,ntoks			MOVEM	4,nctoks
+	MOVEM	4,nctoks		MOVEM	4,tokind
+	MOVEM	4,tokind		LDB	5,-3(17)
+	XMOVEI	3,tokbuf		CAIN	5,0
+	IOR	3,$BYTE			POPJ	17,
+	MOVEM	3,0(17)			ADJSP	17,2
+	LDB	5,-3(17)		XMOVEI	3,0(17)
+	CAME	5,4			IOR	3,$BYTE
+	JRST	$198			MOVEM	3,0(17)
+	ADJSP	17,-2
+	POPJ	17,
+$198::
+
+	JUMPE	5,$200			CAIN	5,40
+	CAIE	5,40			AOSA	3,tokind
+	CAIN	5,11			TRNA
+	TRNA				JRST	$199
+	JRST	$200			CAIE	5,11
+	CAIE	5,11			JRST	$200
+	AOSA	3,tokind		MOVN	3,tokind
+	SKIPA	4,[10]			IDIVI	3,10
+	JRST	$199			ADDI	4,10
+	MOVE	5,tokind		ADDB	4,tokind
+	IDIVI	5,10
+	SUB	4,6
+	ADDB	4,tokind
+	
+
+	MOVE	6,-1(17)		XMOVEI	4,linbuf
+	XMOVEI	4,linbuf		IOR	4,$BYTE
+	IOR	4,$BYTE			CAME	4,-1(17)
+	CAME	6,4			JRST	$222
+	JRST	$222
+
+doincl:
+	ADJSP	17,4			PUSH	17,nctoks
+	PUSH	17,nctoks		PUSH	17,-2(17)
+	PUSH	17,-6(17)		PUSHJ	17,maktnc
+	PUSHJ	17,maktnc		ADJSP	17,-2
+	ADJSP	17,-2			CAIN	1,0
+	MOVEM	1,-3(17)		POPJ	17,
+	JUMPN	1,$225			PUSH	17,1
+	ADJSP	17,-4			ADJSP	17,3
+	POPJ	17,			MOVEM	1,-1(17)
+$225::
+	MOVE	3,-3(17)
+	MOVEM	3,-1(17)
+
+	MOVE	6,0(17)			POP	17,6
+	LDB	3,[331106,,147]		LDB	1,[331106,,147]
+	JUMPN	3,$289			CAIN	1,0
+	LDB	4,[331106,,206]		LDB	1,[331106,,206]
+	JUMPE	4,$288			CAIE	1,0
+$289::					LDB	1,[331106,,1]
+	MOVE	1,0(17)			CAIE	1,0
+	LDB	3,[331101,,1]		MOVE	1,6
+	JUMPE	3,$288			POPJ	17,
+	ADJSP	17,-1
+	POPJ	17,
+$288::
+	SETZ	1,
+	ADJSP	17,-1
+	POPJ	17,
+
+pctfra:
+	ADJSP 17,1			PUSH 17,-3(17)
+	PUSH 17,-4(17)			PUSH 17,-3(17)
+	PUSH 17,-4(17)			PUSH 17,-3(17)
+	PUSH 17,-4(17)			PUSHJ 17,pldfra
+	PUSHJ 17,pldfra			ADJSP 17,-3
+	ADJSP 17,-3			LDB 3,1
+	MOVEM 1,0(17)			CAIN 3,60
+	LDB 3,1				 IBP 1
+	CAIN 3,60			POPJ 17,
+	 IBP 0(17)
+	POP 17,1
+	POPJ 17,
+
+	SKIPL 7,-4(17)			MOVE 7,-4(17)
+	 SKIPGE 5,-5(17)		XOR 7,-5(17)
+	 TRNA				JUMPGE 7,$1635
+	 JRST $1635
+	SKIPGE 4,-5(17)
+	 JUMPL 7,$1635
+
+	LDB 3,-4(17)			LDB 1,-4(17)
+	JUMPE 3,$1654			CAIE 1,0
+	SETO 1,				SETO 1,
+	JRST $1655
+$1654::
+	SETZ 1,
+
+upcase:
+	MOVEI 3,141			MOVE 1,-1(17)
+	CAMLE 3,-1(17)			CAILE 1,141
+	 JRST $1661			 CAILE 1,172
+	MOVE 1,-1(17)			 TRNA
+	CAILE 1,172			 SUBI 1,40
+	 JRST $1661			POPJ 17,
+	SUBI 1,40
+	POPJ 17,
+$1661::
+	MOVE 1,-1(17)
+	POPJ 17,

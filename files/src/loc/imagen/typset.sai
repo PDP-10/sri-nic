@@ -1,0 +1,328 @@
+!	Externals, global variables, required files;
+
+
+External simp procedure GetGlyphInfo(integer font,charno; 
+			     reference integer x,y,height,width,space,pnt);
+
+! ---------- a font information record;
+External Record!Class 	FI(string	fname;	! Font's file name;
+			   boolean   openable;	! Indicates font could be
+								     opened;
+			   integer  firstchar,	! Code of first char in font;
+				     lastchar,	! Code of last  char in font;
+					xline,	! Suggested interline
+								spacing;
+					spwid,	! Suggested interword
+								spacing;
+				      dirpoint,	! Pointer to start of
+								directory;
+					 check,	! Checksum, for comparison
+						  with Raster file Checksum;
+					   jfn;	! JFN for this font file;
+			   real		  mag);	! magnification;
+
+External record!pointer (FI) safa array fntinf [0:MAXF]; ! one pointer per 
+									font;
+
+Internal safa integer array 
+		    glyph[0:MAXF,0:MAXCH,0:3];	! Glyph Information Table;
+! First coordinate is font number, second character numbers, and third
+  indexes available information (0=pointer to glyst, 1=raster width, 2=input
+  unit width (e.g., rsu's), 3=space required in glyph table);
+
+! ------------ Several arrays and variables used in glyph table management;
+safa integer array glyst[0:MAXR], ! deletion queue;
+	         chars[0:4*MAXR]; ! list of characters which are to be 
+								downloaded;
+
+integer nexglyrec,	! pointer to end of deletion queue;
+	  pageptr,	! points to first component of deletion queue used 
+							     on current page;
+	   chrpnt,	! pointer to end of chars list;
+	  glydata,	! sum of space used by glyph data;
+	  glypage;	! sum of space used by glyphs on current page;
+
+! ------------ Typsetting variables; 
+internal integer marg, 	! left margin setting;
+	       xspace,  ! space setting;
+		bskip,	! interline space setting;
+		 curx,	! Output file horizontal position (pixels);
+		 cury,	! Output file vertical position (pixels);
+	  	 curf; 	! current font number;
+
+external integer tmarg, ! top margin;
+		 lmarg; ! left margin;
+
+require "outmac.sai" source!file;
+require "service.sai" source!file;
+
+!	AddNewChar;
+
+
+!	A D D   N E W   C H A R A C T E R
+!
+! ***********************************************************************
+! Takes font and char numbers, adds new entry to character list, updates
+! space required counter.
+! ***********************************************************************;
+simp procedure AddNewChar(integer font, char);
+	begin "-- add new char --"
+
+	define new 	= {glyst[nexglyrec]};
+	
+	define x	= {chars[chrpnt+2]},
+	       y	= {chars[chrpnt+3]},
+	       height	= {chars[chrpnt+4]},
+	       width	= {chars[chrpnt+5]},
+	       space	= {chars[chrpnt+6]},
+	       pnt	= {chars[chrpnt+7]};
+
+	print6(<nl,"Starting AddNewChar: font ",FI:fname[fntinf[font]],
+		", character code ", char,", next glyph record ",nexglyrec>)
+
+	if nexglyrec > MAXR then if not Compact then ! deletion queue
+								  overflow;
+			begin "-- fatal --"
+			error("Too many characters");
+			return
+			end   "-- fatal --";
+		
+	GetGlyphInfo(chars[chrpnt]_font,
+		     chars[chrpnt+1]_char,
+		     x,y,height,width,space,pnt); 
+
+	! if a character was found, update character list pointer;
+	if glyph[font,char,3]  0 then chrpnt _ chrpnt+8;
+	glydata_glydata+glyph[font,char,3];
+	glypage_glypage+glyph[font,char,3];
+	glyph[font,char,0]_nexglyrec;
+	glyst[nexglyrec]_(font lsh 7) lor char; ! Impress glyph identifier;
+	nexglyrec_nexglyrec+1;
+	print6(<nl,"Added new character: font ",FI:fname[fntinf[font]],
+		       ", character code ", char,", space required ",glyph[font,char,3]>)
+	end   "-- add new char --";
+
+!	FindChar;
+
+
+!	F I N D   C H A R
+!
+! *******************************************************************
+! Manages deletion queue and character list.
+! *******************************************************************;
+Internal simp procedure FindChar(integer char);
+	begin "-- find character --"
+	integer ptr; 
+
+	print8(<nl,"Starting FindChar: current font ",FI:fname[fntinf[curf]],
+		   ", character code ",char,", next glyph record ",nexglyrec,
+						 ", page pointer ",pageptr>)
+
+	! If a new character, add it to character list;
+	if (ptr_glyph[curf,char,0]) < 0 then addnewchar(curf,char)
+	else if ptr < pageptr then ! first use on this page;
+		begin "-- update usage --"
+		print8(<nl,"Usage update, pointer ",ptr,", page pointer ",
+			pageptr,", next glyph record ",nexglyrec>)
+
+		if nexglyrec > MAXR then 
+			if Compact then ptr_glyph[curf,char,0]
+			else 			    ! deletion queue overflow;
+				begin "-- fatal --"
+				error("Too many characters");
+				return
+				end   "-- fatal --";
+
+		glyst[nexglyrec]_glyst[ptr];
+		glyst[ptr]_-1; 			    ! note gap in queue;
+		glyph[curf,char,0]_nexglyrec;
+		glypage_glypage+glyph[curf,char,3]; ! Glyph space needed 
+							      for this page;
+		nexglyrec_nexglyrec+1
+		end   "-- update usage --"
+
+	end   "-- find character --";
+
+!	CheckPos;
+
+
+!	C H E C K   P O S I T I O N
+!
+! ********************************************************************
+! Checks that the current position is within the page boundaries
+! ********************************************************************;
+simp procedure CheckPos(integer curx,cury);
+	begin "-- check position --"
+	if curx>absrightmarg then
+		error("printing attempted beyond physical page width.  "&
+				"Requested x coordinate = "&cvs(curx))
+	else if curx<abslftmarg then 
+		error("printing attempted beyond absolute left margin.  "&
+				"Requested x coordinate = "&cvs(curx));
+	if cury>abspageheight then 
+		error("printing attempted beyond bottom of page.  "&
+				"Requested y coordinate = "&cvs(cury))
+	else if cury<abstopmarg then
+		error("printing attempted beyond absolute top margin.  "&
+				"Requested y coordinate = "&cvs(cury));
+	end   "-- check position --";
+
+!	SetPos;
+
+
+!	S E T   P O S I T I O N
+!
+! *******************************************************************
+! This routine adjusts the print position of the ImPrint-10 to match,
+! "as well as possible", the position specified by input file.  Most of 
+! the complexity of the procedure arises from the problem of 
+! discretization.  
+!	Since the height and advance width of a glyph may vary as much as
+! 1/2 pixel from what the formating program assumed, it is often necessary
+! to add or delete whitespace inorder to retain proper alignment and line
+! justification.  The problem is where to add or delete.  If the material
+! under consideration is text, it is not desirable to alter the relative
+! position of characters within a word, even if this means their absolute
+! position is off by more than 1/2 pixel.  In particular this means that
+! movements associated with kerning should be exact, while spaces between
+! words may be stretched or shrunk as necessary.
+!	To facilitate discretization with discretion, it is necessary to
+! know the nature of the material being produced.  For this reason the
+! following procedure allows the input file handler to specify whether
+! a move should be made so as to best approximate a new absolute position
+! or a certain amount of "motion".  This may be done for both the x and y
+! coordinate.
+!	The parameters to this routine are:
+!
+!		Boolean		emovex;	! if TRUE, move exactly
+!					  emovexamount.  If FALSE, move so
+!					  as to arrive at newx;
+!		Integer		emovey,	! ditto for y;
+!			  emovexamount,
+!			  emoveyamount,
+!
+!			  	  newx,	! Expected new x coordinate;
+!				  newy;	! Expected new y coordinate;
+!
+! 	The rest of the routine attempts to take advantage of certain
+! special commands available in Impress to handle spaces, newlines, and
+! one pixel moves.
+! ********************************************************************;
+
+!	SetPos, page 2;
+
+
+Internal simp procedure SetPos(boolean emovex, emovey;
+				 integer emovexamount, emoveyamount,
+							newx, newy);
+	begin "-- SetPos --"
+	integer dx, dy;
+	own integer lastdx, lastdy;
+	
+	print7(<nl,"SetPos, current (",curx,",",cury,
+		"), new (",newx+lmarg,",",newy+tmarg,"), exact moves ",
+		(if emovex then "TRUE" else "FALSE"),",",
+		(if emovey then "TRUE" else "FALSE"),
+		", exact move amounts (", emovexamount,",",emoveyamount,")">)
+	if emovey then 
+		begin "-- unadjustable move --"
+		dy_emoveyamount;
+		cury_cury+dy
+		end   "-- unadjustable move --"
+	else
+		begin "-- adjustable move --"
+		newy_newy+tmarg; 
+		dy_newy-cury; 
+    		cury_newy
+		end   "-- adjustable move --";
+	if emovex then
+		begin "-- unadjustable move --"
+		dx_emovexamount;
+		curx_curx+dx
+		end   "-- unadjustable move --"
+	else
+		begin "-- adjustable move --"
+		newx_newx+lmarg;
+		dx_newx-curx;
+		curx_newx
+		end   "-- adjustable move --";
+
+	CheckPos(curx,cury);
+
+!	SetPos, page 3;
+
+
+	if dy0 then if curx=marg then
+			begin "-- new line --"
+			if dybskip then 
+				begin "-- new baselineskip --"
+				lastdy_bskip_dy; SetBaselineSkip(dy)
+				end   "-- new baselineskip --";
+			SetNewLine;
+			return
+			end   "-- new line --"
+		else if dy=bskip then
+			begin "-- baselineskip --"
+			lastdy_dy; marg_curx;
+			SetMargin(curx); SetNewLine;
+			return
+			end   "-- baselineskip --"
+		else if dy=lastdy then
+			begin "-- new baselineskip --"
+			bskip_dy; SetBaselineSkip(dy);
+			marg_curx; SetMargin(curx);
+			SetNewLine;
+			return
+			end   "-- new baselineskip --"
+		else 
+			begin "-- verticle move --"
+			if not emovey then lastdy_dy; RelVertMove(dy)
+			end   "-- verticle move --";
+
+	if dx=0        then return			else
+	if dx=1        then begin OnePixelRight end	else
+	if dx=-1       then begin OnePixelLeft  end	else
+	if dx=xspace    then 
+		begin "-- space --"
+		lastdx_dx; OneSpace
+		end   "-- space --"	
+						else
+	if dx=xspace+1  then 
+		begin "-- space plus 1 --"
+		lastdx_dx; OneSpacePlus
+		end   "-- space plus 1 --"
+						else
+	if dx = lastdx or dx = lastdx + 1 or dx = lastdx - 1  then 
+		begin "-- new space --"
+		xspace _ lastdx min dx;
+		SetSpace(xspace); 
+		if dx = xspace then 
+			begin
+			OneSpace
+			end 
+		else
+			begin
+			OneSpacePlus
+			end
+		end   "-- new space --"
+						else
+		begin "-- horizontal move --";
+		if not emovex then lastdx_dx;
+		RelHorzMove(dx)
+		end   "-- horizontal move --"
+
+	end   "-- SetPos --";
+
+!       ClrGly;
+
+!   C L E A R    G L Y P H    S P A C E
+!
+! **********************************************************************
+! Clears the glyph and glyst arrays and resets pointers.
+! **********************************************************************;
+Internal simp procedure ClrGly;
+     begin "-- Clear Glyph Space --"
+     arrclr(glyst,-1); arrclr(glyph,-1);
+     nexglyrec_0; glydata_0;
+     end "-- Clear Glyph Space --";
+

@@ -1,0 +1,186 @@
+;#3 no separate tcpict and tcpibp for each RECV buffer
+;   increase RECV buffer from 521 to 2021
+;#2 correct bug where buffers overlapped
+;#1 change retransmission paramters to default
+	subttl tcp routines
+
+tcpchi:	SKIPN $JCN
+	 JRST [	BIN
+		RET]
+	sosge tcpict
+	 jrst [	call tcpifl
+		jrst tcpchi]
+	ildb B,tcpibp
+	ret
+
+tcpifl:	push p,a
+	push p,b
+	push p,c
+	movei a,^D10		; Allow 10 empty buffers marked done
+	movem a,tcpiwt
+	move b,tcpicp	; pointer to current block/buffer header
+;first queue for replacement of just emptied buffer or one found empty
+tretry:	move a,$JCN
+	hrli a,(tcp%js)
+	setzm (b)	; Clear buffer flags
+	movei c,tcpiln	; get request count
+	movem c,2(b)	; store in current buffer header
+	RECV		; Do it!
+	 jrst TCPEOF	; Foo?
+;now advance to next buffer
+	move b,tcpicp	; get current pointer
+	addi b,.tcibl	; increment
+	caile b,tcpihl	; check for wraparound
+	 movei b,tcpih1	; wrap around
+	movem b,tcpicp	; store new current pointer
+;now try to read from this buffer
+retest:	move a,(b)		;get flags for current buffer
+	tlnn a,(tcp%dn)	; TCP done?
+	 jrst [	movei a,<5*^D1000>	;loop indefinitely
+		disms
+		Jrst retest]
+	movei a,tcpiln		;number chars requested
+	sub a,2(b)		;less number unreturned yields count
+	jumple a,[sosge tcpiwt
+		 jrst TCPEOF		; Give Up
+		movei a,<5*^D1000>
+		disms			; Sleep for 5 sec
+		jrst tretry]
+
+	movem a,tcpict		;store count of rec'd chars
+	move a,1(b)		;address of buffer
+	hrli a,441000		;make into octet pointer
+	movem a,tcpibp		;initialize pointer
+	pop p,c
+	pop p,b
+	pop p,a
+	ret
+
+;initialize input by queueing requests for all buffers
+tcpiin:	movei b,tcpih1	; start with no. 1
+trcvdo:	movem b,tcpicp
+;queue for filling of buffer
+	move a,$JCN
+	hrli a,(tcp%js)
+	setzm (b)	; Clear buffer flags
+	movei c,tcpiln	; get request count
+	movem c,2(b)	; store in current buffer header
+	RECV		; Do it!
+	 jrst TCPEOF	; Foo?
+;now advance to next buffer
+	move b,tcpicp	; get current pointer
+	addi b,.tcibl	; increment
+	caige b,tcpihl	; check for end (don't do last one)
+	 jrst trcvdo	; do one
+	setzm tcpict	; say no chars yet
+	movem b,tcpicp	; store new current pointer
+	ret
+
+
+tcpout: SKIPN $JCN
+	 JRST [	SOUT
+		RET]
+	push p,1
+	push p,3
+	push p,4
+	push p,5
+	setz 4,
+	CAIA
+loopso:  call tcpofl
+	move 3,tcpoct
+	move 1,tcpobp
+	sout
+	ldb 5,1			;get last character
+	skipe 5			;skip if null
+	 jrst tonnul		;not null
+	ADD 1,[100000,,0]	;back up over null
+	movem 1,tcpobp
+	ADDI 3,1		;reflect in count!
+tonnul:	movem 3,tcpoct
+	jumpe 3,loopso
+	pop p,5
+	pop p,4
+	pop p,3
+	pop p,1
+	ret
+
+repeat 0,<
+tcpcho:	sosge tcpoct
+	 jrst [	setzm tcpoct
+		call tcpofl
+		jrst tcpcho]
+	idpb u1,tcpobp
+	ret
+>;repeat 0
+
+tcpofl:	push p,a
+	push p,b
+	push p,c
+	push p,d
+	move a,$JCN
+	hrli a,(tcp%js+tcp%wt)
+	movei b,tcpohd
+;; This wedges the job forever and ever!!!!
+;;	movsi c,(tcp%ur)
+;;	movem c,(b)	; set flags
+;; Try this instead
+	movsi c,(tcp%el)
+	movem c,(b)	; Set buffer flags
+
+	movei c,tcpoln
+	sub c,tcpoct
+	movem c,2(b)
+	movei c,^D30	; 30 sec timeout
+	move d,tcprtr
+	SEND		; do it!
+	 jrst TCPEOF	; aw phooey
+	call tcpoi
+	pop p,d
+	pop p,c
+	pop p,b
+	pop p,a
+	ret
+
+tcpoi:	push p,[tcpoln]
+	pop p,tcpoct
+	push p,[441000,,tcpobf]
+	pop p,tcpobp
+	ret
+
+
+;tcp output storage
+tcpoct:	0	; # chars left for output
+tcpobp:	0	; BP for deposit
+tcpoln==117
+tcpobf: block <tcpoln/4>
+;
+;#1 tcprtr:	003002,,0		; retrans params
+tcprtr:	0,,0			; retrans params
+tcpohd:	0	; flags
+	tcpobf
+	0	; byte count
+
+;tcp input storage
+tcpiln==^D521
+tcpib1:	block <tcpiln+3>/4		;#2 the +3 is a correction
+tcpib2:	block <tcpiln+3>/4
+tcpib3:	block <tcpiln+3>/4
+;
+tcpih1:	0	; flags
+	tcpib1	; buff adr
+	0	; # bytes
+.tcibl=.-tcpih1
+
+tcpih2:	0	; flags
+	tcpib2	; buff adr
+	0	; # bytes
+
+tcpihl:
+tcpih3:	0	; flags
+	tcpib3	; buff adr
+	0	; # bytes
+
+tcpiwt:	0	; retry count
+tcpicp:	block 1
+tcpict:	0	; # bytes left to read
+tcpibp:	0	; BP for read

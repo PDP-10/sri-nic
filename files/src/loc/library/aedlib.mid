@@ -1,0 +1,668 @@
+;-*-Midas-*-
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	AEDLIB - Library of routines for hacking the AED-512 display
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+%%NBIT==:8			;8-bit screen
+%%NC==:1_%%NBIT			;# colors.
+%%MAX==:%%NC-1			;Values are 0 through %%MAX
+
+%LEFT==:0 ? %RIGHT==:511.
+%TOP==:482. ? %BOTTOM==:0
+%WIDTH==:%RIGHT-%LEFT+1 ? %HEIGHT==:%TOP-%BOTTOM+1
+
+%CX==:%WIDTH/2 ? %CY==:%HEIGHT/2	;Center point.
+
+%S1==:255.
+%S2==:85.
+%S4==:17.
+%S8==:1
+
+%VERNIER==:1
+%JRATE==:2
+%HARDCOPY==:4
+%TRACE==:10
+%REVERSE==:20
+%SCROLL==:40
+%LOWERCASE==:100
+
+%BLACK==:0			;Canonical fixed colors
+%RED==:1
+%GREEN==:2
+%YELLOW==:3
+%BLUE==:4
+%MAGENTA==:5
+%CYAN==:6
+%WHITE==:7
+%FREE==:8.			;First available.
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Function codes
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+%END==:1		;Canonical non-function code
+
+%SEC==:67.	;Set current color
+%SBC==:91.	;Set background color
+
+%SCT==:75.	;Set up color lookup table
+
+%SWM==:76.	;Set video memory Write Mask
+%SRM==:77.	;Set the four video memory Read Masks
+
+%SBL==:52.	;Blink pixels
+
+%MOV==:81.	;Set CAP position
+%MVR==:105.	;Set CAP position relative to current CAP
+%RCP==:106.	;Read CAP
+
+%WPX==:84.	;Write pixel
+%WMP==:107.	;Write multiple isolated pixels
+%RPX==:89.	;Read pixel
+
+%DVA==:65.	;Draw vector absolute
+%DVR==:108.	;Draw vector relative
+%DMV==:109.	;Draw multiple vectors
+%GS==:29.	;Enter Tektronix-compatible vector drawing mode
+%SLS==:49.	;Set Line Style
+
+%WIP==:118.	;Write incremental plotter mode
+
+%DCL==:79.	;Draw circle
+%DFC==:110.	;Draw "fat" circle
+
+%DFR==:111.	;Draw filled rectangle
+%IFL==:73.	;Interior fill
+%BFL==:66.	;Boundry fill
+%OFL==:86.	;Overlay fill
+
+%DSF==:55.	;Define special font character
+%WSF==:56.	;Write special font characters
+%ESF==:57.	;Erase special font characters
+
+%SCC==:99.	;Set cursor colors
+%SCP==:93.	;Set cursor parameters
+%EJC==:85.	;Enable cursor positioning via joystick
+%DJC==:100.	;Disable " " " "
+%RCP==:106.	;Read cursor position
+%DCA==:112.	;Erase cursor if necessary and redraw centered on pixel
+%ECU==:53.	;Erase cursor unconditionally
+%RJP==:113.	;Read joystick position
+%SUB==:26.	;Enter Tektronix-compatible Graphic input mode
+
+%SHO==:102.	;Set horizontal origin register
+%HSR==:119.	;Horizontal scroll relative
+%SVO==:101.	;Set vertical origin register
+%VSR==:120.	;Vertical scroll relative
+%BSO==:103.	;Set both horizontal and vertical origin registers
+%RHO==:121.	;Read horizontal origin
+%RVO==:122.	;Read veritcal origin
+%EPA==:103.	;Enable panning
+%SZR==:69.	;Set zoom register
+
+%DAJ==:114.	;Define area of interest and area scanning parameters
+
+%WHS==:88.	;Write horizontal scan
+%RHS==:116.	;Read horizontal scan
+%WHC==:117.	;Write horizontal scan, non-AOI
+
+%WHR==:92.	;Write horizontal runs
+%RHR==:97.	;Read horizontal runs
+%WHU==:115.	;Write horizontal runs alternate
+
+%GS==:29.
+%SUB==:26.
+
+%DPK==:78.
+%DRL==:61.
+%SCS==:96.
+
+%DTM==:50.
+%ETC==:51.
+
+%LMR==:58.
+%JUS==:59.
+%SSE==:125.
+
+%SUP==:45.
+
+%SUC==:63.
+%WRD==:70.
+%RRD==:64.
+%SDA==:27.
+
+%WDA==:46.
+%RDA==:47.
+%SCD==:42.
+
+%HOM==:95.
+%SAP==:94.
+%SAC==:123.
+
+%ESC==:27.
+%RST==:48.
+%FFD==:12.
+%ERS==:126.
+%SIF==:72.
+%SKS==:54.
+%SCR==:62.
+%SBR==:98.
+%STD==:39.
+%COP==:41.
+
+%OPT==:40.
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Macros
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Define $START
+	Move 1,AED"AEDJFN
+	Movei 2,%ESC
+	BOUT
+Termin
+
+Define $END
+	Movei 2,%END
+	BOUT
+	Return
+Termin
+
+Define SETARG val,pos
+IRPC foo,bar,[val]
+IFSE foo,@,{
+    IFNB bar,{
+	Move T,bar
+	Movem T,AED"Arg+pos
+	     }
+    .ELSE .ISTOP
+}
+.ELSE {
+IFE <val>,Setzm AED"Arg+pos
+.ELSE {
+IFE <val>&<-1,,0>,Movei T,<val>
+.ELSE	Move T,[val]
+	Movem T,AED"Arg+pos
+      }
+}
+.ISTOP
+TERMIN
+Termin
+
+Define OUTSEQ stuff
+IRP FOO,,[stuff]
+IRPC car,cdr,FOO
+IFSE car,@,{
+	Move 2,cdr
+}
+.ELSE {
+IFE <FOO>&<-1,,0>,Movei 2,FOO
+.ELSE	Move 2,[FOO]
+}
+	BOUT
+.ISTOP
+TERMIN
+TERMIN
+Termin
+
+Define DEFUNCTION name,code,type
+IFSN [type][v]{
+IFSN [type][xy20] .Fatal name has an unknown MACRO flavor: 'type'
+.ELSE {
+Define NAME (x,y)
+	SETARG x,1
+	SETARG y,2
+	Movei T,code
+	Call AED"DoXY20
+Termin
+}}
+.ELSE {
+Define NAME (arg)
+	SETARG arg,1
+	Movei T,code
+	Call AED"DoArg
+Termin
+}
+Termin
+
+Define DEFCALL name,code,args
+Define NAME (args)
+.narg.==0
+IRP FOO,,[args]
+IFSE FOO,,.ISTOP
+	.kludge.==.IRPCNT
+	SETARG FOO,.kludge.+1
+.narg.==.narg.+1
+TERMIN
+	Movei T,code
+	Movei TT,.narg.
+	Call AED"DoCall
+Termin
+Termin
+
+Define PREAMBLE junk
+	preaml,,[.BYTE 8. ? %ESC
+IRP FOO,,[junk]
+	FOO
+	preaml==.irpcnt+2
+TERMIN
+	.BYTE]
+Termin
+
+Define SEQUENCE junk
+	.BYTE 8. ? %ESC
+IRP FOO,,[junk]
+	FOO
+TERMIN
+	%END ? .BYTE
+Termin
+
+Define DEFPREAMBLE name,junk
+Define NAME (foo)
+	Move T,[Preamble [junk]]
+	Call AED"OUTPRE
+Termin
+Termin
+
+Define DEFSTATIC name,junk
+Define NAME (foo)
+	Movei T,[Sequence [junk]]
+	Call AED"OUTSTR
+Termin
+Termin
+
+Define DEFSUBROUTINE name,address,args=foo
+Define NAME (args)
+IRP ARRGH,,[args]
+	.kludge.==.IRPCNT
+	SETARG ARRGH,.kludge.+1
+TERMIN
+	Call address
+Termin
+Termin
+
+Define BACKGROUND (color)
+	BACKGC(color)
+	OUTSEQ [^L]
+Termin
+
+Define RECTANGLE (x1,y1,x2,y2)
+	POSITION(x1,y1)
+	CAPRECT(x2,y2)
+Termin
+
+Define TEXT &string
+	Hrroi 2,[Asciz string]
+	Call AED"DoText
+Termin
+
+Define LABEL &string
+	POSITION(@AED"LabXY,@AED"LabXY)
+	Hrroi 2,[Asciz string]
+	Jrst AED"DoText
+Termin
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Pre-defined function calls
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+	Defunction SETCOLOR,%SEC,v
+	Defunction BACKGC,%SBC,v
+	Defunction POSITION,%MOV,xy20
+	Defunction VECTOR,%DVA,xy20
+	Defunction RVECTOR,%DVR,xy20
+	Defunction CIRCLE,%DCL,v
+	Defunction FATCIRCLE,%DFC,v
+	Defunction CAPRECT,%DFR,xy20
+	Defunction LED,%DRL,v
+	Defunction BFILL,%BFL,v
+	Defunction CONSOLE,%SCS,v
+	Defunction SETPIXEL,%WPX,v
+	Defunction CURSOR,%DCA,xy20
+
+	Defcall BLINK,%SBL,[color,r,g,b,on,off]
+	Defcall ZOOM,%SZR,[xzoom,yzoom]
+	Defcall LINESTYLE,%SLS,[pattern,scale]
+	Defcall CURCOLOR,%SCC,[color1,color2,blink]
+	Defcall SOFTKEY,%DPK,[key,c1,c2,c3,c4,c5,c6,c7,c8]
+	Defcall WRITECOLOR,%SCT,[addr,n,r,g,b]
+
+	Defstatic FILL,%IFL
+	Defstatic CLEAR,%FFD
+	Defstatic HOME,%HOM
+	Defstatic ERASE,%ERS
+	Defstatic RCP,%RCP
+	Defstatic RPX,%RPX
+	Defstatic CURON,%EJC
+	Defstatic CUROFF,%DJC
+	Defstatic ORIGIN,[%MOV,0,0,0]
+	Defstatic CENTER,[%MOV,0,%CX,%CY]
+
+	Defpreamble MPLOT,[%WMP]
+	Defpreamble MVECTOR,[%DMV]
+
+	Defsubroutine BORDER,AED"DoBorder,[width]
+	Defsubroutine STAR,AED"DoStar,[x,y,nsides,isize,osize,itheta]
+	Defsubroutine SPECTRUM,AED"MSpect,[c1r,c1g,c1b,c2r,c2g,c2b,n,f]
+	Defsubroutine READPIXEL,AED"RPixel
+	Defsubroutine DEFCOLOR,AED"DEFC,[addr,n,r,g,b]
+	Defsubroutine WRITEMAP,AED"WMap,[addr,n]
+	Defsubroutine RESETCOLORS,AED"ResCol
+	Defsubroutine OUTCHR,AED"SayChr,[char]
+	Defsubroutine OUTNUM,AED"SayNum,[number,base]
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Code segments and storage.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+.INSRT LIB:TRIG
+
+.BEGIN AED
+
+Arg:	Block 10.
+
+;	Black	Red	Green	Yellow	Blue	Magenta	Cyan	White
+IRed:	000 ?	%%MAX ?	000 ?	%%MAX ?	000 ?	%%MAX ?	000 ?	%%MAX
+IGreen:	000 ?	000 ?	%%MAX ?	%%MAX ?	000 ?	000 ?	%%MAX ?	%%MAX
+IBlue:	000 ?	000 ?	000 ?	000 ?	%%MAX ?	%%MAX ?	%%MAX ?	%%MAX
+
+Red:	Block %%NC
+Green:	Block %%NC
+Blue:	Block %%NC
+
+.Scalar AEDJFN			;JFN on 8-bit image output TTY
+.Scalar AEDdev			;Device designator of AED:
+
+Init:	Hrroi 1,[Asciz "AED:"]
+	STDEV
+	  Jrst [Hrroi 1,[Asciz "?AED: device not defined
+"] ?		PSOUT
+		Return]
+	Movem 2,AEDdev
+	Move 1,2
+	ASND
+	  Jrst [TypeCR "?Can't assign AED:"
+		Return]
+	Movx 1,GJ%SHT
+	Hrroi 2,[Asciz "AED:"]
+	GTJFN
+	  Jrst [TypeCR "?Can't get JFN on AED:"
+		Return]
+	Movem 1,AEDJFN
+	Move 2,[Field(8,OF%BSZ)+Field(.GSIMG,OF%MOD)+OF%RD+OF%WR]
+	OPENF
+	  Jrst [TypeCR "?Can't open AED:"
+		Return]
+	BACKGROUND(%BLACK)	;All-black, please.
+	CUROFF()		;Turn off the cursor
+	CONSOLE(0)		;Reset console-twiddle bits
+	LED(0)			;and the LEDs
+Popj1:	Aos (P)
+CPopj:	Return
+
+UnInit:	Skipn 1,AEDJFN
+	  Return
+	CLOSF
+	  Nop
+	Move 1,AEDdev
+	RELD
+	  Nop
+	Return
+
+ResCol:
+IRP color,,[Red,Green,Blue]
+	Move 1,[I!color,,color]
+	BLT 1,color+%FREE-1
+	Setzm color+%FREE
+	Move 1,[color+%FREE,,color+%FREE+1]
+	BLT 1,color+%%MAX
+TERMIN
+	WRITEMAP(0,%%NC)	;Blast the whole map out.
+	Return
+
+WMap:	$START
+	OUTSEQ [%SCT,@Arg+1,@Arg+2]
+	Move TT,Arg+2
+	Move T,Arg+1
+
+WMap0:	Sojl TT,CPopj
+	Andi T,%%MAX
+	Move 2,Red(T)
+	BOUT
+	Move 2,Green(T)
+	BOUT
+	Move 3,Blue(T)
+	BOUT
+	Aoja T,WMap0
+
+XY20:	Move T,Arg+1		;T/ X
+	IDivi T,256.		;T/ X high order, TT/ X low order
+	Lsh T,4			;Get into position
+	Push P,T		;Save X-high
+	Push P,TT		;stack/ X low order, X high order
+	Move T,Arg+2		;T/ Y, stack/ X high order
+	IDivi T,256.		;T/ Y high order, TT/ Y low order
+	Move T3,TT		;T3/ Y low order
+	Pop P,TT		;TT/ X low order, stack/ X high order
+	Add T,(P)		;TT/ xxxxyyyy high order bits
+	Adjsp P,-1		;Flush leftover gubbish
+	Return
+
+DoArg:	$START
+	OUTSEQ [@T,@Arg+1]
+	$END
+
+DoXY20:	$START
+	OUTSEQ [@T]
+	Call XY20
+	OUTSEQ [@T,@TT,@T3]
+	$END
+
+DoSimp:	$START
+	OUTSEQ [@T]
+	$END
+
+DoCall:	$START
+	OUTSEQ [@T]
+	Movei 3,Arg+1
+DoCal0:	Move 2,(3)
+	BOUT
+	Sose TT
+	  Aoja 3,DoCal0
+	$END
+
+OutPre:	Hlrz 3,T
+	Movns 3
+	Jrst OutSt0
+
+OutStr:	Movei 3,377777
+	Movei 4,%END
+OutSt0:	Move 1,AEDJFN
+	Hrrz 2,T
+	Hrli 2,440800
+	SOUT
+	Return
+
+DEFC:	WRITECOLOR(@,@,@,@,@)
+	Move TT,Arg+2
+	Move T,Arg+1
+	Move 1,Arg+3
+	Move 2,Arg+4
+	Move 3,Arg+5
+DEFC0:	Sojl TT,CPopj
+	Andi T,%%MAX
+	Movem 1,Red(T)
+	Movem 2,Green(T)
+	Movem 3,Blue(T)
+	Aoja T,DEFC0
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Higher-level drawing stuff
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+BordW:	0
+LabXY:	0
+
+DoBord:	Move T,Arg+1
+	Movem T,BordW
+	Addi T,8.		;Position for labeling
+	Movem T,LabXY
+	RECTANGLE(0,0,%RIGHT,@BordW)
+	Movei T,%RIGHT
+	Sub T,BordW
+	CAPRECT(@T,%TOP)
+	Movei T,%TOP
+	Sub T,BordW
+	CAPRECT(0,@T)
+	CAPRECT(@BordW,@BordW)
+	Return
+
+StarX:	0
+StarY:	0
+FirstX:	0
+FirstY:	0
+OldP:	0
+Theta:	0
+dTheta:	0
+
+DoStar:	Move T,Arg+1
+	Movem T,StarX
+	Move T,Arg+2
+	Movem T,StarY
+	FLTR T,Arg+4
+	Movem T,Arg+4		;i-size
+	FLTR T,Arg+5
+	Movem T,Arg+5		;o-size
+	Move T,[TRIG"Pi]
+	FLTR TT,Arg+3		;n
+	FDVR T,TT		;T/ angles tween points.
+	Movem T,dTheta
+	FLTR T,Arg+6		;i-theta (degrees)
+	FDVR T,[180.0]
+	FMPR T,[TRIG"Pi]	;into radians
+	Movem T,Theta
+	Setzm Oldp
+
+StarL:	Move 1,Theta		;Theta (radians)
+	Call TRIG"SINE
+	FMPR 1,Arg+5		;o-size
+	FIXR 1,1
+	Add 1,StarX		;+ x
+	Push P,1
+	Move 1,Theta		;Theta
+	Call TRIG"COSINE
+	FMPR 1,Arg+5		;o-size
+	FIXR 1,1
+	Add 1,StarY		;+ y
+	Pop P,2
+	Skipe Oldp
+	  Jrst [VECTOR(@2,@1)
+		Jrst Star1]
+	Movem 2,FirstX
+	Movem 1,FirstY
+	POSITION(@2,@1)
+
+Star1:	Move T,Theta
+	FADR T,dTheta
+	Movem T,Theta
+
+	Move 1,T
+	Call TRIG"SINE
+	FMPR 1,Arg+4
+	FIXR 1,1
+	Add 1,StarX
+	Push P,1
+	Move 1,Theta
+	Call TRIG"COSINE
+	FMPR 1,Arg+4
+	FIXR 1,1
+	Add 1,StarY
+	Pop P,2
+	Setom Oldp
+	VECTOR(@2,@1)
+
+	Move T,Theta
+	FADR T,dTheta
+	Movem T,Theta
+
+	Sose Arg+3
+	  Jrst StarL
+	VECTOR(@FirstX,@FirstY)
+	POSITION(@StarX,@StarY)	;End up in center in case you want to fill.
+	Return
+
+RPixel:	RPX()
+	BIN
+	Move T,2
+	Return
+
+SpectR:	0
+SpectG:	0
+SpectB:	0
+DeltaR:	0
+DeltaG:	0
+DeltaB:	0
+
+MSpect:	FLTR TT,Arg+7		;Floating-point n
+IRP color,,[R,G,B]
+	Move T,Arg+4+.IRPCNT
+	Sub T,Arg+1+.IRPCNT	;delta-color
+	FLTR T,T		;turn into floating point
+	FDVR T,TT
+	Movem T,Delta!color	;Floating-point delta-color
+	FLTR T,Arg+1+.IRPCNT
+	Movem T,Spect!color	;Initial color.
+TERMIN
+
+SpectL:	Sosge Arg+7
+	  Return
+	FIXR T,SpectR
+	Movem T,Arg+3
+	FIXR TT,SpectG
+	Movem TT,Arg+4
+	FIXR T3,SpectB
+	Movem T3,Arg+5
+	DEFCOLOR(@Arg+8,1,@,@,@)
+IRP color,,[R,G,B]
+	Move T,Spect!color
+	FADR T,Delta!color
+	Movem T,Spect!color
+TERMIN
+	Aos Arg+8
+	Jrst SpectL
+
+SKey:	$START
+	OUTSEQ [%DPK,@Arg+1]
+	Move 2,Arg+2
+	Hrli 2,440800
+DoText:	Move 1,AEDJFN
+	Setz 3,
+	SOUT
+	Return
+
+SayChr:	Move 1,AEDJFN
+	Move 2,Arg+1
+	BOUT
+	Return
+
+SayNum:	Move 1,AEDJFN
+	Move 2,Arg+1
+	Move 3,Arg+2
+	NOUT
+	  Nop
+	Return
+
+.END AED

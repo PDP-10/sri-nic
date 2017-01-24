@@ -1,0 +1,597 @@
+; -*-MIDAS-*-
+
+TITLE DIGITAL CROCK
+
+; Original program hacked up by GLS.
+; 10X/20X version hacked by EAK.
+; Modified by KLH for DM2500's.
+
+IFNDEF ITS,ITS==0
+IFNDEF TNX,TNX==0
+IFNDEF VTS,VTS==0
+
+IFE .OSMIDAS-SIXBIT/ITS/,ITS==1
+IFE .OSMIDAS-SIXBIT/TENEX/,TNX==1
+IFE .OSMIDAS-SIXBIT/TWENEX/,TNX==1
+
+IFN TNX,.DECSAV
+
+; If not ITS or VTS, can't use ^P codes.  Must define terminal type explicitly.
+ifndef t%its, t%its==its\vts	; ITS ^P codes
+
+; ACs
+A=1
+B=2
+C=3
+D=4
+E=5
+F=6
+G=7
+H=10
+S=14
+X=15
+Y=16
+P=17
+
+call=pushj p,
+return=popj p,
+
+ifn its,{
+toch=17
+.insrt syseng;$call macro
+}
+
+t%dm2500==5
+t%h1500==7
+t%vt52==17
+t%vt100==20
+t%c100==32
+t%h19==31
+
+lbr=="[
+esc==^[
+
+equals var,.scalar
+
+ifn tnx, var oldmod
+lpdl==40
+var pdl(lpdl)
+
+pm:	0
+
+
+ife t%its,{
+absmov:	0
+frame:	0
+framel:	0
+}
+
+dcrock:	move p,[-lpdl,,pdl-1]
+ifn its,{
+	$call open,[#toch,[sixbit/tty/]][][#%tjdis+.uao]
+	 .lose %lsfil
+}
+ifn tnx,{
+	movei a,.priou
+	gttyp			; get terminal type
+	movsi a,-nttypes
+chktyp:	hlrz c,ttypes(a)
+	hrrz d,ttypes(a)
+	came b,c
+	  jrst [setzm @(d)
+		aobjn a,chktyp
+		hrroi 1,[asciz "?Terminal type is not supported"]
+		esout
+		jrst die]
+	setom @(d)
+	hrrz a,1(d)		;address of absolute movement routine
+	movem a,absmov
+	hrrz a,2(d)		;address of frame
+	movem a,frame
+	subi a,1		;frame length stored right before start
+	movem a,framel
+	movei a,.priin
+	rfmod
+	movem b,oldmod		; save old status
+	trz b,tt%dam		; set to 8-bit i/o
+ifn t%its,{			; VTS
+	tro b,1_7		; turn on output translation
+}
+	sfmod			; zap
+ifn t%its,{
+	rtmod
+	tlo b,(tm%dpy)
+	stmod
+}
+}
+ifn its,{
+	move a,[440700,,frame]
+	movei b,lframe
+	.call [	setz ? sixbit /siot/
+		1000,,toch ? a ? b ((setz))]
+	 .lose %lsfil
+}
+ifn tnx,{
+	movei a,.priou
+	hrro b,frame
+	movn c,@framel
+	sout
+}
+	move a,[440700,,ob]
+	movem a,obp
+	movei a,lob
+	movem a,obc
+repeat 6, setzm screen+.rpcnt
+	seto h,
+hackit:
+ifn its,{
+	.rdtime s,
+	.rtime c,
+	camn c,h
+	 jrst hackit
+	move h,c
+}
+ifn tnx,{
+	time
+	move s,a
+	seto 2,		; get current time
+	setz 4,		; with no funny daylight savings or timezone stuff
+	odcnv		; get time
+
+	hrrz a,d
+	camn a,h
+	 jrst hackit
+	setzm pm
+	move h,a
+	movei c,0
+	idivi a,60.*60.
+	caile a,12.
+	  jrst [subi a,12.
+		setom pm
+		jrst .+1]
+	call sixn	;hours
+	move a,b
+	idivi a,60.
+	call sixn	;minutes
+	move a,b
+	call sixn	;seconds
+}
+	MOVNI D,6
+LOOP:	LSHC B,6
+	ANDI B,17
+	MOVE E,DIGITS(B)
+	MOVE F,E
+	EXCH F,SCREEN+6(D)
+	XOR F,E
+	JUMPE F,NEXT
+	MOVNI G,43
+CYCLE:	JUMPGE F,NXTBIT
+	hlrz x,chpos+43(g)
+	add x,horiz+6(d)
+	hrrz y,chpos+43(g)
+	addi y,4+2
+	call movcur
+	jumpge e,blank
+ifn its,movei a,"#
+.else [
+	movei a,"M
+	trnn d,1
+	  jrst [movei a,"A
+		skipe pm
+		  movei a,"P
+		jrst .+1]
+];tnx
+	call outb
+	jrst nxtbit
+blank:	call clchar
+nxtbit:	lshc e,1
+	aojl g,cycle
+next:	aojl d,loop
+	movei y,22.
+	movei x,69.
+	call movcur
+	call force
+ifn its,{
+	.listen a,
+	jumpn a,quit
+	addi s,28.
+	movn s,s
+	.sleep s,
+	jrst hackit
+}
+ifn tnx,{
+	movei a,.priin
+	sibe
+	  jrst [skipn vt52
+		  jrst quit
+		bin
+		caie b,^S
+		 jrst quit
+;X;		sibe
+;X;		 caia
+;X;		  jrst quit
+		bin
+		caie b,^Q
+		 jrst quit
+		jrst .+1 ]
+
+}
+	time
+	add a,b
+	sub a,s
+	jumpl a,hackit
+	imuli a,1000.
+	idiv a,b
+	subi a,7
+	disms
+	jrst hackit
+}
+
+subttl	Output
+
+lob==200.
+var ob(<lob+4>/5)
+var obp
+var obc
+
+ife t%its,{
+outn:	idivi a,10.
+	addi a,"0
+	caie a,"0
+	  call outb
+	movei a,"0(b)
+}
+outb:	idpb a,obp
+	sosg obc
+	 call force
+	return
+
+
+subttl	Operating system subroutines
+
+ifn its,{
+
+force:	push p,b
+	movei b,lob
+	sub b,obc
+	jumpe b,for1
+	push p,a
+	move a,[440700,,ob]
+	movem a,obp
+	addm b,obc
+	$call siot,[#toch,a,b]
+	 .lose %lsfil
+	pop p,a
+for1:	pop p,b
+	return
+
+
+quit:	.logout 1,
+}
+
+ifn tnx,{
+
+
+force:	push p,c
+	movei c,lob
+	exch c,obc
+	subi c,lob
+	jumpe c,for1
+	push p,a
+	push p,b
+	movei a,.priou
+	move b,[440700,,ob]
+	movem b,obp
+	sout
+	pop p,b
+	pop p,a
+for1:	pop p,c
+	return
+
+
+quit:	movei x,0
+	movei y,23.
+	call movcur
+	call force
+	movei 1,.priin
+	move 2,oldmod
+	sfmod		; Restore old modes
+die:	haltf
+	jrst dcrock
+
+sixn:	push p,a
+	push p,b
+	idivi a,10.
+	lsh c,6
+	addi c,'0(a)
+	lsh c,6
+	addi c,'0(b)
+	pop p,b
+	pop p,a
+	return
+}
+
+subttl	Terminal subroutines
+
+movcur:	push p,a
+ifn t%its,{
+	movei a,^P
+	call outb
+	movei a,"V
+	call outb
+	movei a,10(y)
+	call outb
+	movei a,^P
+	call outb
+	movei a,"H
+	call outb
+	movei a,10(x)
+	call outb
+}
+ife t%its,{
+	call @absmov
+}
+	pop p,a
+	return
+
+ife t%its,{
+dm25am:	movei a,^L	; DM2500 abs move
+	call outb
+	movei a,(x)
+	trc a,140
+	call outb
+	movei a,(y)
+	trc a,140
+	jrst outb
+	
+hz15am:	movei a,"~
+	call outb
+	movei a,^Q
+	call outb
+	movei a,(x)
+	caig a,30.
+	 addi a,140
+	call outb
+	movei a,140(y)
+	jrst outb
+
+vt52am:	movei a,esc
+	call outb
+	movei a,"Y
+	call outb
+	movei a,40(y)
+	call outb
+	movei a,40(x)
+	jrst outb
+
+c100am:	movei a,esc
+	call outb
+	movei a,"a
+	call outb
+	movei a,40(y)
+	call outb
+	movei a,40(x)
+	jrst outb
+
+vt10am:	movei a,esc
+	call outb
+	movei a,lbr
+	call outb
+	movei a,(y)
+	call outn
+	movei a,";
+	call outb
+	movei a,(x)
+	call outn
+	movei a,"H
+	jrst outb
+}
+
+clchar:	push p,a
+ifn t%its,{
+	movei a,^P
+	call outb
+	movei a,"K
+	call outb
+}
+ife t%its,{
+	movei a,40
+	call outb
+;X;	movei a,^H
+;X;	call outb
+}
+	pop p,a
+	return
+
+SCREEN:	BLOCK 6
+
+RADIX 2.
+DIGITS:	011101000110011101011100110001011100
+	001000110000100001000010000100011100
+	011101000100001000100010001000111110
+	011101000100001011100000110001011100
+	000100011001010100101111100010000100
+	111111000010000111100000110001011100
+	011101000110000111101000110001011100
+	111110000100001000100010001000100000
+	011101000110001011101000110001011100
+	011101000110001011110000110001011100
+RADIX 8.
+
+; For each terminal definition, HAKCLR specifies bytes to clear screen,
+; HAKMOV to move cursor to given X, Y, and HACK takes a string
+; generating the appropriate bytes for commands Up, Down, Back, and Forward.
+; Unrecognized chars are simply output (eg "$").
+
+ifn t%its,{
+DEFINE HAKCLR
+^P ? "C
+TERMIN
+DEFINE HAKMOV X,Y
+^P ? "H ? 10+<X>
+^P ? "V ? 10+<Y>
+TERMIN
+DEFINE HACK CHARS
+IRPC X,,[CHARS]
+IFSE X,$,	"$
+IFSE X,U,	^P ? "U
+IFSE X,D,	^P ? "D
+IFSE X,B,	^P ? "B
+IFSE X,F,	40
+TERMIN
+TERMIN
+}
+
+ife t%its,{
+DEFINE vt52hc			;VT52
+esc ? "H ? esc ? "J
+TERMIN
+DEFINE vt52mv H,V
+esc ? "Y ? 40+<V> ? 40+<H>
+TERMIN
+DEFINE vt52hk CHARS
+IRPC X,,[CHARS]
+IFSE X,$,	"$
+IFSE X,U,	esc ? "A
+IFSE X,D,	^J
+IFSE X,B,	^H
+IFSE X,F,	40
+TERMIN
+TERMIN
+
+define vt10hc
+esc ? lbr ? "2 ? "J
+termin
+define vt10xy (a)
+ifle a-9.,{"0+a} .ELSE {"0+<<a>/10.> ? "0+<a-<10.*<<a>/10.>>>}termin
+define vt10mv hor,ver
+esc ? lbr ? vt10xy(ver) ? "; ? vt10xy(hor) ? "H
+termin
+define vt10hk chars
+IRPC X,,[CHARS]
+IFSE X,$,	"$
+IFSE X,U,	esc ? lbr ? "A
+IFSE X,D,	^J
+IFSE X,B,	^H
+IFSE X,F,	40
+termin
+termin
+
+DEFINE c100hc			;C100
+^L
+TERMIN
+DEFINE c100mv H,V
+esc ? "a ? 40+<V> ? 40+<H>
+TERMIN
+DEFINE c100hk CHARS
+IRPC X,,[CHARS]
+IFSE X,$,	"$
+IFSE X,U,	esc ? ";
+IFSE X,D,	^J
+IFSE X,B,	^H
+IFSE X,F,	40
+TERMIN
+TERMIN
+
+DEFINE dm25hc			;DM2500
+^_ ? ^_
+TERMIN
+DEFINE dm25mv X,Y
+^L ? 140#<X> ? 140#<Y>
+TERMIN
+DEFINE dm25hk CHARS
+IRPC X,,[CHARS]
+IFSE X,U,	^Z .STOP
+IFSE X,D,	^J .STOP
+IFSE X,B,	^H .STOP
+IFSE X,F,	^\ .STOP
+"X
+TERMIN
+TERMIN
+
+DEFINE hz15hc			;H1500
+"~ ? 34
+TERMIN
+DEFINE hz15mv X,Y
+"~ ? ^Q
+IFG <X>-30.,{<X>} .ELSE {140+<X>}
+140+<Y>
+TERMIN
+DEFINE hz15hk CHARS
+IRPC X,,[CHARS]
+IFSE X,U,	"~ ? ^L .STOP
+IFSE X,D,	"~ ? ^K .STOP
+IFSE X,B,	^H .STOP
+IFSE X,F,	^P .STOP
+"X
+TERMIN
+TERMIN
+}
+
+ifn t%its,{
+FRAME:	.BYTE 7
+	HAKCLR
+	HAKMOV 8.,4.
+	HACK $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+	HACK DB$DB$DB$DB$DB$DB$DB$DB$DB$DB$
+	HACK BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$
+	HACK BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$
+	HACK BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$
+	HACK BB$BB$
+	HACK UB$UB$UB$UB$UB$UB$UB$UB$UB$
+	HAKMOV 8.+1+2+5+3+5+2, 4+3
+	HACK $$BBD$$BBDD$$BBD$$
+	HAKMOV  8.+1+2+5+3+5+6+5+3+5+2, 4+3
+	HACK $$BBD$$BBDD$$BBD$$
+LFRAME==.BYTC
+	.BYTE
+}
+
+ife t%its,{
+irp tty,,[hz15,dm25,vt52,c100,vt10]
+tty!lf:	tty!fl			;frame length
+tty!frame:
+	.BYTE 7
+	tty!hc
+	tty!mv 8.,4.
+	tty!hk $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+	tty!hk DB$DB$DB$DB$DB$DB$DB$DB$DB$DB$
+	tty!hk BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$
+	tty!hk BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$
+	tty!hk BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$BB$
+	tty!hk BB$BB$
+	tty!hk UB$UB$UB$UB$UB$UB$UB$UB$UB$
+	tty!mv 8.+1+2+5+3+5+2, 4+3
+	tty!hk $$BBD$$BBDD$$BBD$$
+	tty!mv 8.+1+2+5+3+5+6+5+3+5+2, 4+3
+	tty!hk $$BBD$$BBDD$$BBD$$
+tty!fl==.BYTC
+	.BYTE
+termin
+}
+
+CHPOS:
+IRPC Y,,[0123456]
+IRPC X,,[01234]
+	X,,Y
+TERMIN
+TERMIN
+
+HORIZ:	8+1+2
+	8+1+2+5+3
+	8+1+2+5+3+5+6
+	8+1+2+5+3+5+6+5+3
+	8+1+2+5+3+5+6+5+3+5+6
+	8+1+2+5+3+5+6+5+3+5+6+5+3
+
+ttypes:	5,,[dm2500' ? dm25am ? dm25fr]	;datamedia-2500
+	7,,[h1500' ? hz15am ? hz15fr]	;hazeltine-1500
+	17,,[vt52' ? vt52am ? vt52fr]	;vt52
+	20,,[vt100' ? vt10am ? vt10fr]	;vt100
+	31,,[h19' ? vt52am ? vt52fr]	;heath-19
+	32,,[c100' ? c100am ? c100fr]	;concept-100
+nttypes==.-ttypes
+
+PATCH:	BLOCK 40
+
+	END DCROCK

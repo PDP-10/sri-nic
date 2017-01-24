@@ -1,0 +1,367 @@
+;<UTILITIES>HSTGEN.MID.5, 25-Jul-82 22:31:33, Edit by ADMIN.MRC
+; Finish TAC = TIP edits
+;<UTILITIES>HSTGEN.MID.4, 25-Jul-82 22:27:38, Edit by ADMIN.MRC
+; TAC = TIP to allow NETSRV's disabling of TIPs to win
+;<UTILITIES>HSTGEN.MID.3, 13-Jul-81 21:19:12, Edit by ADMIN.MRC
+; Edit header text a little to include UNIX, document from HOSTS2
+;<STANFORD-UTILITIES>HSTGEN.MID.2,  8-Oct-79 01:13:04, Edit by ADMIN.MRC
+; Search for ARPANET instead of ARPA in network table lookup
+;<ADMIN.MRC>HSTGEN.MID.1,  7-Oct-79 05:31:17, Edit by ADMIN.MRC
+; Creation
+
+TITLE HSTGEN
+SUBTTL Definitions
+
+; Mark Crispin, SU-SCORE, 10/79
+
+;  Generates SYSTEM:HSTNAM.TXT from SYSTEM:HOSTS2.BIN, for the Tops-20
+; NCP to slurp up.  Only handles official host names, since user
+; programs are expected to use HOSTS2.
+
+.DECSAV
+
+; Assembly switches
+
+IFNDEF HSTVER,HSGVER==1		; major version of this program
+IFNDEF PDLLEN,PDLLEN==20.	; stack size
+IFNDEF HOSTS2,HOSTS2==400000	; where HOSTS2 gets mapped into
+
+; AC definitions
+
+A=1 ? B=2 ? C=3 ? D=4		; JSYS arguments
+AA=5 ? BB=6 ? CC=7 ? DD=10 ? EE=11; host table AC's
+P=17				; stack pointer
+
+; TMSG string
+; Types out a text string.
+
+DEFINE TMSG STRING
+ HRROI A,[ASCIZ/!STRING!/]
+ PSOUT%
+TERMIN
+
+; INS value,mask
+; Generates the value inserted in the position defined by the mask
+
+DEFINE INS ?VALUE,MASK
+ <.DPB VALUE,<.BP MASK>> TERMIN
+
+; Definitions for the MIT/Stanford HOSTS2 host table
+
+; Host table header
+
+.HTSID==:0			; host table SIXBIT ID (always HOSTS2)
+.HTFIL==:1			; file name of host table source in SIXBIT
+.HTVER==:2			; version of host table source in SIXBIT
+.HTDIR==:3			; directory of host table source in SIXBIT
+.HTDEV==:4			; device of host table source in SIXBIT
+.HTUSR==:5			; user name of host table compiler in SIXBIT
+.HTDAT==:6			; date of compilation as SIXBIT YYMMDD
+.HTTIM==:7			; time of compilation as SIXBIT HHMMSS
+.HTNAM==:10			; pointer to host table NAMES area
+.HTSIT==:11			; pointer to host table SITES area
+.HTNET==:12			; pointer to host table NETWORK area
+
+; Network table definitions
+;  This table contains one entry for each known network, sorted alphabetically
+; by network name.
+
+.HTNNE==:0			; number of network table entries
+.HTNWE==:1			; number of words/entry in network table
+ .HTNEN==:0			; network table entry network number
+ .HTNEM==:1			; network table entry network name (LH)
+ .HTNEA==:1			; network table entry network address table (RH)
+
+; Address table definitions
+;  There is one of these tables for each network, and contains an entry for
+; each site on that network, sorted by network address.  These tables are used
+; to convert a numeric address into a host name.  The list of network addresses
+; for a site are sorted within these tables.
+
+.HTANE==:0			; number of address table entries
+.HTAWE==:1			; number of words/entry in address table
+ .HTAEA==:0			; address table entry network address
+ .HTAES==:1			; address table entry site table entry (LH)
+ .HTAEN==:1			; address table entry next address entry (RH)
+
+; Site table definitions
+;  This table contains entries for each network site.  A site can have more
+; than one address (usually on different networks).
+
+.HTSNE==:0			; number of site table entries
+.HTSWE==:1			; number of words/entry in site table
+ .HTSEN==:0			; site table entry official host name (LH)
+ .HTSEA==:0			; site table entry address entry (RH)
+ .HTSES==:1			; site table entry operating system name (LH)
+ .HTSEM==:1			; site table entry machine name (RH)
+ .HTSEF==:2			; site table entry flags  (LH)
+  HT%SVR==:400000,,		; server site
+ .HTSER==:2			; reserved (RH)
+
+; Name table definitions
+;  This table contains all the site names sorted in alphabetical order, and is
+; used to convert a host name into a network address.
+
+.HTMNE==:0			; number of name table entries
+.HTMWE==:1			; number of words/entry in name table
+ .HTMES==:0			; name table entry site table entry (LH)
+ .HTMEN==:0			; name table entry host name (RH)
+
+; Address fields for the various networks
+
+NW%NWK==:377000,,000000		; network number
+
+AR%IMP==:000177,,777000		; (Arpanet) IMP number
+AR%HST==:000000,,000377		; (Arpanet) host number
+
+CH%SBN==:000000,,177400		; (CHAOS net) subnet number
+CH%HST==:000000,,000377		; (CHAOS net) host number
+
+DL%HST==:000000,,777777		; (Dialnet) pointer to phone number
+
+SUBTTL Main program
+
+HSTGEN:	RESET
+	MOVE P,[PDL(-PDLLEN)]	; init stack
+
+; First map in the host table
+
+	MOVSI A,(GJ%OLD\GJ%SHT)	; try to access HOSTS2
+	HRROI B,[ASCIZ/SYSTEM:HOSTS2.BIN/]
+	GTJFN%
+	 ERCAL FATAL
+	MOVEI B,OF%RD		; now open it up
+	OPENF%
+	 ERCAL FATAL
+	SIZEF%			; get its size in pages in C for PMAP
+	 ERCAL FATAL
+	MOVSI A,(A)		; map it in, starting at its page 0
+	MOVE B,[.FHSLF,,HOSTS2/1000]; to our reserved area
+	HRLI C,(PM%CNT\PM%RD)	; read access only
+	PMAP%
+	 ERCAL FATAL
+
+; Locate the Arpanet's address table, and set up generating the table
+
+	MOVE AA,HOSTS2+.HTSID	; get ID
+	CAMN AA,['HOSTS2]	; does it look right?
+	 SKIPN AA,HOSTS2+.HTNET	; yes, get net table pointer
+	  JRST [TMSG [?HOSTS2.BIN is bad
+]
+		JRST DEATH]
+	DMOVE CC,HOSTS2+.HTNNE(AA); number of entries in CC, words/entry in DD
+GTHHSN:	HLRZ BB,HOSTS2+2+.HTNEM(AA); get pointer to network name
+	MOVE BB,HOSTS2(BB)	; get network name
+	CAME BB,[ASCII/ARPAN/]	; found Arpanet's entry?
+	 SOJG CC,[ADDI AA,(DD)	; no, move to next entry
+		 JRST GTHHSN]
+	JUMPLE CC,[TMSG [?Arpanet not in host table
+]
+		  JRST DEATH]	; problem if can't find Arpanet!
+	MOVE EE,HOSTS2+2+.HTNEN(AA); get Arpanet's number, save in EE
+	MOVE AA,HOSTS2+2+.HTNEA(AA); get pointer to Arpanet's address table
+	DMOVE CC,HOSTS2+.HTANE(AA); number of entries in CC, words/entry in DD
+; falls through
+
+; drops in
+
+; Now we generate the host table
+
+	MOVSI A,(GJ%FOU\GJ%SHT)	; get a JFN on the host table file
+	HRROI B,[ASCIZ/SYSTEM:HSTNAM.TXT/]
+	GTJFN%
+	 ERCAL FATAL
+	MOVE B,[<INS 7,OF%BSZ>\OF%WR]; now try to make it
+	OPENF%
+	 ERCAL FATAL
+	HRROI B,[ASCIZ/; Host table generated from HOSTS2 by /]
+	SETZ C,
+	SOUT%
+	 ERCAL FATAL
+	PUSH P,A		; save JFN
+	GJINF
+	MOVE B,A
+	POP P,A
+	DIRST%
+	 ERCAL FATAL
+	HRROI B,[ASCIZ/
+; Date: /]
+	SETZ C,
+	SOUT%
+	 ERCAL FATAL
+	SETO B,
+	MOVSI C,(OT%DAY\OT%FDY\OT%FMN\OT%4YR\OT%DAM\OT%SPA\OT%12H\OT%TMZ\OT%SCL)
+	ODTIM%
+	 ERCAL FATAL
+	HRROI B,HTBDSC		; first write descriptor text
+	SETZ C,
+	SOUT%
+	 ERCAL FATAL
+; falls through
+
+; drops in
+
+;  Now loop through for each host in the table, writing an entry.  AA has
+; current address table pointer, CC has number of entries to do, DD has
+; number of words/entry.  BB will get site table pointer for that host.
+
+HSTLUP:	MOVE B,HOSTS2+2+.HTAEA(AA); get address
+	DPB B,[311000,,B]	; convert from HOSTS2 to BBN format
+	LSH B,-9.
+	DPB EE,[301000,,B]
+	MOVEI C,8.		; output the address in octal
+	NOUT%
+	 ERCAL FATAL
+	MOVEI B,",		; tack in a comma
+	BOUT%
+	 ERCAL FATAL
+	HLRZ BB,HOSTS2+2+.HTAES(AA); get site table entry pointer
+	HLRO B,HOSTS2+.HTSEN(BB); pointer to official host name
+	ADDI B,HOSTS2		; relocate to host table
+	SETZ C,			; put it in the file
+	SOUT%
+	 ERCAL FATAL
+	MOVEI B,",
+	BOUT%
+	 ERCAL FATAL
+	HLRZ D,HOSTS2+.HTSES(BB); pointer to operating system name
+	MOVE HOSTS2(D)		; get first word of the OS name
+	CAMN [ASCII/TOPS-/]	; a DEC operating system name?
+	 MOVE HOSTS2+1(D)	; yes, get second part of it
+	HRROI B,[ASCII//]	; default to null operating system
+	CAME [ASCII/TENEX/]	; OS names which are the same in HOSTS2 & HSTNAM
+	 CAMN [ASCII/ITS/]
+	  HRROI B,HOSTS2(D)
+	CAME [ASCII/TIP/]
+	 CAMN [ASCII/ELF/]
+	  HRROI B,HOSTS2(D)
+	CAME [ASCII/ANTS/]
+	 CAMN [ASCII/MULTI/]
+	  HRROI B,HOSTS2(D)
+	CAME [ASCII/20/]
+	 CAMN [ASCII/UNIX/]
+	  HRROI B,HOSTS2(D)
+	CAME [ASCII/WAITS/]	; as far as the NCP is concerned, WAITS is T10
+	 CAMN [ASCII/10/]	; must convert TOPS-10 though...
+	  HRROI B,[ASCIZ/DEC10/]
+	CAMN [ASCII/TAC/]	; TAC = TIP
+	 HRROI B,[ASCII/TIP/]
+	SOUT%
+	 ERCAL FATAL
+; falls through
+
+; drops in
+
+	HRROI B,[ASCIZ/,SERVER/]
+IFGE HT%SVR,.FATAL A crock has bit the bag
+	SKIPGE HOSTS2+.HTSEF(BB); note that HT%SVR is sign bit
+	 SOUT%
+	  ERCAL FATAL
+	HRROI B,[ASCIZ/,USER/]	; all hosts are users!
+	SOUT%
+	 ERCAL FATAL
+	HRROI B,[ASCIZ/,NEW/]	; finally see if it has new protocol
+	CAMN [ASCIZ/TAC/]
+	 JRST ISNEW
+	CAME [ASCII/TENEX/]
+	 CAMN [ASCII/20/]
+	  JRST ISNEW
+	CAME [ASCII/TIP/]
+	 CAMN [ASCII/WAITS/]
+ISNEW:	  SOUT%
+	   ERCAL FATAL
+	MOVEI B,^M		; terminate with a CRLF
+	BOUT%
+	 ERCAL FATAL
+	MOVEI B,^J
+	BOUT%
+	 ERCAL FATAL
+	ADDI AA,(DD)		; move to next entry
+	SOJG CC,HSTLUP
+
+; Finally close off file
+
+	CLOSF%
+	 ERCAL FATAL
+	TMSG [Remember to do TELNET INITIALIZE to read it in!
+]
+	HALTF%
+	JRST .-1
+
+SUBTTL Host table title text
+
+HTBDSC:	ASCIZ\
+;  This file contains official names only, since it is expected that all
+; user programs should use HOSTS2 instead.  HOSTS2 contains considerably
+; more nicknames in addition to supporting multiple networks without
+; taking up any additional monitor address space.
+;
+;Syntax:
+; Semicolon lines are ignored.
+; Blank lines are ignored.
+; Form feeds are ignored.
+; nnn,sssss,tt,f1,f2,f3...
+; Where:
+;  NNN is host number in octal.
+;  SSSSS is the name string.
+;  TT is system type spelled out. Current valid names are:
+;  NULL string means no system type or insufficient representation.
+;  TENEX -- System running BBN TENEX.
+;  TOPS-20 -- System running DEC TOPS-20.
+;  ITS -- System running MIT ITS.
+;  DEC10 -- System running DEC TOPS-10 or Stanford WAITS.
+;  TIP -- A TIP.
+;  MTIP -- Magtape TIP.
+;  ANTS -- System running some version of ANTS.
+;  ELF -- System running ELF operating system for PDP-11.
+;  MULTICS -- System running Multics.
+;  UNIX -- System running UNIX (tm).
+;  F1...F3... Are flags as follows:
+;   USER -- Doesn't run server TELNET.
+;   SERVER -- Runs some type of Server TELNET or FTP on Sockets 1 and/or 27(8).
+;   NICKNAME -- This is another name you can give for the host.
+;  NEW -- Uses new network protocol, (RAR/RAS, etc).
+
+
+; Now here are the entries...
+
+\
+
+SUBTTL Other stuff
+
+; Fatal error handler
+
+FATAL:	MOVEI A,"?
+	PBOUT%
+	MOVEI A,.PRIOU
+	HRLOI B,.FHSLF		; dumb ERSTR%
+	SETZ C,
+	ERSTR%
+	 NOP
+	 NOP
+	TMSG [, JSYS at PC=]
+	MOVEI A,.PRIOU		; output the PC
+	POP P,B
+	SUBI B,2		; point PC at actual location of the JSYS
+	MOVE C,[NO%MAG\8.]
+	NOUT%
+	 JRST 4,.-1		; this can't happen
+	TMSG [
+]
+DEATH:	HRROI A,.PRIIN		; flush input buffer
+	CFIBF%
+	HALTF%
+	JRST HSTGEN
+
+...LIT:	CONSTA			; generate literals
+
+; Entry vector
+
+EVEC:	JRST HSTGEN		; START
+	JRST HSTGEN		; REENTER
+	<HSGVER_24.>\.FVERS	; version
+EVECL==.-EVEC
+
+PDL:	BLOCK PDLLEN		; stack
+
+END EVECL,,EVEC

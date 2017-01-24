@@ -1,0 +1,547 @@
+!<5.1.EXEC>EXECPD.B36.2, 14-Nov-82 04:36:22, Edit by PA0B
+!Add DISPLAY opcodes for integers, Add OUTRANGE keyword
+!<4.EXEC>EXECPD.B36.82, 24-Jun-81 11:22:58, Edit by DK32
+!Fewer operations and more line numbers
+!<4.EXEC>EXECPD.B36.81,  7-Mar-81 18:00:49, Edit by DK32
+!Add Parsing-in-progress bit
+!<4.EXEC>EXECPD.B36.80, 25-Feb-81 21:52:20, Edit by DK32
+!Subcommands, Fields for Bliss 2.1, PassOutput
+!<4.EXEC>EXECPD.B36.79,  7-Jan-81 17:52:45, Edit by DK32
+!Separate controlled forks from invoked forks
+!<4.EXEC>EXECPD.B36.78, 23-Dec-80 17:05:38, Edit by DK32
+!Universal Exec linkage, Parse Invisible and Deleted
+!<4.EXEC>EXECPD.B36.77, 11-Dec-80 23:17:28, Edit by DK32
+!Preserved contexts
+!<4.EXEC>EXECPD.B36.76,  9-Dec-80 00:16:15, Edit by DK32
+!Exit Save and ToProgram
+!<4.EXEC>EXECPD.B36.75,  4-Dec-80 15:06:46, Edit by DK32
+!Command names in ECB
+!<4.EXEC>EXECPD.B36.74, 25-Nov-80 20:36:35, Edit by DK32
+!Preserved and superceded symbols
+!<4.EXEC>EXECPD.B36.73, 30-Oct-80 15:56:38, Edit by DK32
+!Runtime channel list
+!<4.EXEC>EXECPD.B36.72, 25-Oct-80 23:01:11, Edit by DK32
+!One invoked fork per context
+!<4.EXEC>EXECPD.B36.71, 20-Oct-80 17:24:50, Edit by DK32
+!Remove procdefs from GST
+!<4.EXEC>EXECPD.B36.70, 18-Oct-80 15:53:26, Edit by DK32
+!Parse FileList, Default_Gen, Wild
+!<4.EXEC>EXECPD.B36.69,  9-Oct-80 20:36:15, Edit by DK32
+!Parse List, Synonym and NoOriginal declarations
+!<4.EXEC>EXECPD.B36.68,  2-Oct-80 15:59:39, Edit by DK32
+!Parse NoIndirect and NoHelp
+!<4.EXEC>EXECPD.B36.67, 25-Sep-80 18:15:12, Edit by DK32
+!I/O fields in ECB
+!<DK32.CG>EXECPD.B36.66,  6-Aug-80 20:58:09, Edit by DK32
+!Keep PTY/PCT details in ECB
+!<DK32.CG>EXECPD.B36.65, 29-Jul-80 15:08:03, Edit by DK32
+!GETTYPOUT/CLEARTYPEOUT are GETTYPEOUT/CLEARTYPEOUT, Larger
+!GST _COD, CNS, SML
+!<DK32.CG>EXECPD.B36.64, 19-Jul-80 19:22:35, Edit by DK32
+!Additional comment on GST _NMA, Add 4th parameter register to EXEC linkage
+!<DK32.CG>EXECPD.B36.63, 10-Jul-80 13:53:26, Edit by DK32
+!Add DCB to ECB
+!<DK32.CG>EXECPD.B36.62,  3-Jul-80 14:31:38, Edit by DK32
+!Add * option to SBS
+
+
+
+!
+!  General definitions for Programmable Command Language 1
+!
+!  Copyright (C) 1980, Carnegie-Mellon University
+!
+
+! Primitive things
+
+LITERAL
+    TRUE=-1,
+    FALSE=0,
+    MAXLBL=20,			! Implementation limit of labels
+    MAXPRM=8,			! Implementation limit of procedure parameters
+    MAXVRC=128;			! Implementation limit of variables
+
+! Some otherwise unused bits in the CM%FFL field of the FLDDB, used
+! for various purposes.
+
+LITERAL
+    CM_NIN = %O'000400000000',	! NoIndirect requested
+    CM_SHR = %O'000200000000',	! StdHelp requested (used only within compiler)
+    CM_WLD = %O'000100000000';	! Wild requested
+
+! Some unused values of CM%FNC
+
+LITERAL
+    $CMFLS = %O'27';		! FileList
+
+!
+! Substitute for CH$PTR when I desire only a pointer just before a word
+! of 7-bit bytes.  This is necessary only because BLISS will never
+! knowingly generate a byte pointer with 440700 in the left half; it will
+! instead take an extra instruction to point to the previous word and then
+! put 010700 in the left half.
+!
+
+MACRO
+    BYTPTR(ADR) = ( LOCAL HLF: HLF_WRD;	! Byte pointer
+		    HLF = ADR;
+		    HLF[HLF_LFT] = %O'440700';
+		    .HLF )%;
+
+!
+! Alternate linkage type use for all routines.  It is basically
+! the standard BLISS36C linkage, except that CX is a temporary
+! since the Exec uses it that way, and Z is never to be used by
+! Bliss code.  Also, all arguments are passed through registers.
+!
+
+LINKAGE	EXEC = PUSHJ( REGISTER=1, REGISTER=2, REGISTER=3, REGISTER=4):
+		    LINKAGE_REGS(15,13,1)
+		    GLOBAL(Z=0)
+		    NOPRESERVE(2,3,4,5,14)
+		    PRESERVE(6,7,8,9,10,11,12);
+!
+! Many things are represented as halfword fields in fullwords.
+! They generally should be described as true fields, but that
+! is not always possible: They are often subfields of existing
+! fields.
+!
+
+FIELD HLF_FLD =
+    SET
+	HLF_LFT = [0,18,18,0],	! Left half
+	HLF_RGT = [0,0,18,0]	! Right half
+    TES;
+
+!
+! Scanner codes
+! The compiler converts the source into these 36-bit codes for parsing.
+!
+
+MACRO MAKSCN(NAM) = LITERAL %NAME('SCN_',NAM) = %NUMBER(MAKSCN_CNT);
+	%ASSIGN(MAKSCN_CNT,MAKSCN_CNT+1) %;
+COMPILETIME MAKSCN_CNT = 1;
+
+MAKSCN(IDENT);			! Identifier; name is in atom buffer
+MAKSCN(NUMB);			! Number; binary is in atom buffer
+MAKSCN(QSTRING);		! Quoted string; text is in atom buffer
+MAKSCN(PLUS);			! +
+MAKSCN(MINUS);			! -
+MAKSCN(TIMES);			! *
+MAKSCN(DIV);			! /
+LITERAL SCN_1RL = %NUMBER(MAKSCN_CNT);	! Tag so I can identify the relationals
+MAKSCN(LSS);			! LSS or <
+MAKSCN(LEQ);
+MAKSCN(NEQ);
+MAKSCN(EQL);			! EQL or =
+MAKSCN(GTR);			! GTR or >
+LITERAL SCN_LRL = %NUMBER(MAKSCN_CNT);	! Tag the last relational
+MAKSCN(GEQ);
+MAKSCN(LPAREN);			! (
+MAKSCN(RPAREN);			! )
+MAKSCN(SEMI);			! ;
+MAKSCN(COMMA);			! ,
+MAKSCN(COLON);			! :
+MAKSCN(LBRKT);			! [
+MAKSCN(RBRKT)			! ]
+MAKSCN(PROCEDURE);
+MAKSCN(COMMAND);
+MAKSCN(SYNONYM);
+MAKSCN(NOORIGINAL);
+MAKSCN(BEGIN);
+MAKSCN(END);
+MAKSCN(EXTERNAL);
+MAKSCN(INTEGER);
+MAKSCN(STRING);
+MAKSCN(LET);
+MAKSCN(IF);
+MAKSCN(THEN);
+MAKSCN(ELSE);
+MAKSCN(GOTO);
+MAKSCN(RETURN);
+MAKSCN(CASE);
+MAKSCN(FROM);
+MAKSCN(TO);
+MAKSCN(OF);
+MAKSCN(INRANGE);
+MAKSCN(OUTRANGE);
+MAKSCN(DO);			! THESE THREE MUST BE
+MAKSCN(WHILE);			! CONTIGUOUS AND IN THIS
+MAKSCN(UNTIL);			! ORDER TO BE COMPILED
+MAKSCN(SELECT);
+MAKSCN(DOCOMMAND);
+MAKSCN(ORIGINAL);
+MAKSCN(GUIDE);
+MAKSCN(PARSE);
+MAKSCN(OTHERWISE);
+MAKSCN(NOINDIRECT);
+MAKSCN(DEFAULT);
+MAKSCN(HELP);
+MAKSCN(NOHELP);
+MAKSCN(WORDS);
+MAKSCN(RADIX);
+MAKSCN(PARSEONLY);
+MAKSCN(STDHELP);
+MAKSCN(TIME);
+MAKSCN(DATE);
+MAKSCN(DEFAULT_DEV);		! These 4 must be contiguous and in this order
+MAKSCN(DEFAULT_DIR);
+MAKSCN(DEFAULT_NAM);
+MAKSCN(DEFAULT_EXT);
+MAKSCN(DEFAULT_GEN);		! This is separate
+MAKSCN(INPUT);
+MAKSCN(OUTPUT);
+MAKSCN(WILD);
+MAKSCN(INVISIBLE);
+MAKSCN(DELETED);
+MAKSCN(ERROR);
+MAKSCN(PROMPT);
+MAKSCN(NOECHO);
+MAKSCN(SYSNAME);		! System name; system name index in atom buffer
+MAKSCN(INVOKE);
+MAKSCN(PASSOUTPUT);
+MAKSCN(TYPEIN);
+MAKSCN(NORETURN);
+MAKSCN(GETTYPEOUT);
+MAKSCN(CLEARTYPEOUT);
+MAKSCN(KILLPROGRAM);
+MAKSCN(DISPLAY);
+MAKSCN(BINARY);
+MAKSCN(EXIT);
+MAKSCN(SAVE);
+MAKSCN(TOPROGRAM);
+MAKSCN(ABORT);
+MAKSCN(NOP);
+MAKSCN(CALL);
+MAKSCN(EOFILE);			! End of source
+
+!
+! The output of the compiler:  Executer codes
+!
+
+!
+! Description of instructions in Code portions of routine texts
+!
+
+FIELD COD_FLD =
+    SET
+	COD_VLD = [0,33,3,0],	! Validity code
+	COD_LNO = [0,24,9,0],	! Line number
+	COD_OPR = [0,18,6,0],	! Operation code
+	COD_OPA = [0,0,18,0],	! Operand descriptor A
+	COD_OPB = [1,18,18,0],	! Operand descriptor B
+	COD_OPC = [1,0,18,0],	! Operand descriptor C
+	COD_CNS = [0,0,36,0]	! Instruction word regarded simply as a word
+    TES;
+LITERAL	COD_VLD_NUM=5;		! The validity code
+
+!
+! The operation codes
+!
+
+! Macro to help keep operation list consistent
+
+MACRO MAKOPR(NAM) = LITERAL %NAME('OPR_',NAM)=%NUMBER(MAKOPR_CNT);
+	%ASSIGN(MAKOPR_CNT,MAKOPR_CNT+1) %;
+COMPILETIME MAKOPR_CNT = 0;
+
+! Three operand operators: A = B <operator> C
+
+MAKOPR(ADD);  MAKOPR(SUB);  MAKOPR(MUL);  MAKOPR(DIV);	! Integer ops
+MAKOPR(CNS);			! Concatenate strings
+
+! Two operand operators: A = <operator> C
+
+MAKOPR(STO);			! Copy integer
+MAKOPR(STS);			! Copy string
+
+! Two operand branches: Jump to code index A if B <test> C satisfied
+
+MAKOPR(BLE);  MAKOPR(BLT);  MAKOPR(BEQ);	! Arithmetic comparison
+MAKOPR(BNE);  MAKOPR(BGE);  MAKOPR(BGT);
+MAKOPR(CLE);  MAKOPR(CLT);  MAKOPR(CEQ);	! String comparison
+MAKOPR(CNE);  MAKOPR(CGE);  MAKOPR(CGT);
+
+! Assorted two word operators
+
+MAKOPR(CAL);			! Call procedure A, parameter list at
+				!  constant index B (-1 if no actuals)
+				!  (length in first word), store result
+				!  in C if typed procedure
+MAKOPR(CAS);			! Case: Based on integer A, jump to A'th
+				!  location in table B (length in C(B)), biased
+				!  by constant C
+MAKOPR(PRS);			! Parse command operands using FDB at A,
+				!  if all fail jump to C (give standard
+				!  error if C=-1)
+MAKOPR(SBS);			! Extract substring: Store in A substring of
+				!  string C, starting at Const[B] with length
+				!  Const[B+1] (or full length if Const[B+1]=-1)
+MAKOPR(DCM);			! Do Exec command in string A, original
+				!  if B=0, storing output to C
+
+! One word operators
+
+LITERAL OPR_11W=MAKOPR_CNT;	! First one word operator
+
+MAKOPR(JMP);			! Jump to code index A
+MAKOPR(RET);			! Return from command or procedure; value in A
+MAKOPR(IVP);			! Invoke program given in string A
+MAKOPR(TIN);			! Type string A into program fork
+MAKOPR(TIX);			! Same as TIN but without free CRLF
+MAKOPR(GTO);			! Get output from program fork into string A
+MAKOPR(KIL);			! Kill program fork
+MAKOPR(DPY);			! Type string A to real terminal
+MAKOPR(DPB);			! Type string A in binary mode
+MAKOPR(DPN);			! Type string A without carriage return
+MAKOPR(XIT);			! Exit command, options in A field: low bit=
+				!   Save, next bit=To Program
+MAKOPR(ABT);			! Issue fatal error with string A
+MAKOPR(NOP);			! No operation
+MAKOPR(PSH);			! Push copy of operand A
+MAKOPR(POP);			! Pop operand A
+MAKOPR(PMT);			! Prompt with string A
+MAKOPR(PMN);			! Prompt with string A and no echo
+MAKOPR(IVO);			! Invoke program given in string A, PassOutput
+MAKOPR(DIY);			! Type integer A to real terminal
+MAKOPR(DIB);			! Type string A in binary mode (well, why not?)
+MAKOPR(DIN);			! Type integer A without carriage return
+
+LITERAL OPR_LST=%NUMBER(MAKOPR_CNT)-1;
+
+!
+! System procedure/variable name table format
+!
+
+FIELD SYN_FLD =
+    SET
+	SYN_RTV = [0,35,1,0],	! Variable implemented as routine
+	SYN_WRT = [0,34,1,0],	! Variable can be written to
+	SYN_TYP = [0,21,3,0],	! Type
+	SYN_CLS = [0,18,3,0],	! Class
+	SYN_NML = [0,0,18,0],	! Length of name
+	SYN_NAM = [1,18,18,0],	! Address of ASCII name
+	SYN_ADR = [1,0,18,0]	! Address of datum or routine entry
+    TES;
+
+LITERAL
+    ! The types must be the same as the STE types
+    SYN_TYP_INT = 0,		! Integer
+    SYN_TYP_STR = 1,		! String
+    SYN_CLS_PRC = 0,		! Ordinary procedure
+    SYN_CLS_FCN = 1,		! Typed procedure
+    SYN_CLS_VAR = 2;		! Variable
+
+!
+! Operand descriptor format
+!
+
+FIELD OPN_FLD =
+    SET
+	OPN_CLS = [0,16,2,0],	! Class of operand reference
+	OPN_STR = [0,15,1,0],	! If constant or temporary, indicates string
+	OPN_ADR = [0,0,15,0],	! Symbol index or constant index of operand
+	OPN_WRD = [0,0,36,0]	! Entire operand word
+    TES;
+
+LITERAL
+    OPN_CLS_VAR = 0,		! User variable (widely assumed to be zero)
+    OPN_CLS_SYN = 1,		! System procedure or variable
+    OPN_CLS_CNS = 2,		! Constant
+    OPN_CLS_TMP = 3,		! Temporary
+    OPN_TMP_INT = %O'600000',	! Another representation of temporary integer
+    OPN_TMP_STR = %O'700000';	! Another representation of temporary string
+
+!
+! String value; used everywhere to refer to any string
+!
+
+FIELD STV_FLD =
+    SET
+	STV_LEN = [0,18,18,0],	! Character length of string
+	STV_ADR = [0,0,18,0]	! Address of string
+				! (real or relative depends on context)
+    TES;
+
+!
+! String block; used only to store accumulated text from a PCT
+!
+
+FIELD STB_FLD =
+    SET
+	STB_CNT = [0,18,18,0],	! Count of characters in block
+	STB_LEN = [0,0,18,0],	! Length of block
+	STB_BUF = [1,0,36,0]	! Buffer
+    TES;
+
+!
+! Local symbol table entry
+!
+
+FIELD STE_FLD =
+    SET
+	STE_WRD = [0,0,36,0],	! First word, to help in addressing the entry
+	STE_VLD = [0,33,3,0],	! Validity field
+	STE_CLS = [0,30,3,0],	! Class of symbol
+	STE_TYP = [0,29,1,0],	! Variable type
+	STE_LOC = [0,0,18,1],	! Stack frame displacement of variable datum
+	STE_NAM = [1,0,36,0],	! Stringvalue of symbol name
+	STE_NML = [1,18,18,0],	!   length
+	STE_NMA = [1,0,18,0]	!   constant table index
+    TES;
+
+LITERAL STE_LEN = 2,		! Length of symbol table entry
+	STE_VLD_NUM=2,		! Validity code number
+	STE_CLS_VAR=0,		! Local variable
+	STE_CLS_GBL=1,		! Global variable
+	STE_CLS_FML=2,		! Procedure argument
+	STE_CLS_PRC=3,		! Procedure
+	STE_CLS_FCN=4,		! Function
+	STE_TYP_INT=0,		! Integer
+	STE_TYP_STR=1;		! String
+
+!
+! Global symbol table entry
+!
+
+FIELD GST_FLD =
+    SET
+	GST_VLD = [0,0,36,0],	! Validity word; entry unused if zero
+	GST_PSV = [0,35,1,0],	! Preserved object
+	GST_SPR = [0,34,1,0],	! Superceded object if preserved
+	GST_DPL = [0,34,1,0],	! Duplicate of preserved if not preserved
+	GST_CLS = [0,31,3,0],	! Class of object
+	GST_TYP = [0,30,1,0],	! FV Type
+	GST_PCT = [0,26,4,0],	! PF Number of arguments
+	GST_CMA = [0,26,4,1],	! C Argument list, -2 = Parses, -1 = default
+	GST_SLN = [0,18,8,0],	! CPF Stack to reserve
+	GST_TXT = [0,0,18,0],	! CPFS Real address of text
+	GST_COD = [1,0,12,0],	! CPF Length of code
+	GST_CNS = [1,12,12,0],	! CPF Length of constant table
+	GST_SML = [1,24,12,0],	! CPF Length of symbol table
+	GST_VAL = [1,0,36,0],	! V Value
+	GST_PLN = [1,0,9,0],	! S Bytes in text, including terminator
+	GST_NAM = [2,0,36,0],	! Stringvalue of name of global object
+	GST_NML = [2,18,18,0],	!    length
+	GST_NMA = [2,0,18,0]	!    address
+				!   For synonym entries, there is an extra word
+				!   before the name block, in case it need be
+				!   an abbreviation; the word is not counted in
+				!   GST_NML
+    TES;
+
+LITERAL GST_LEN = 3,		! Length of global symbol table entry
+	GST_CLS_CMD = 0,	! Command
+	GST_CLS_PRC = 1,	! Procedure
+	GST_CLS_VAR = 2,	! Variable
+	GST_CLS_FCN = 3,	! Function
+	GST_CLS_SYN = 4,	! Synonym
+	! Certain routines require that GST types have the same
+	! representations as STE types
+	GST_TYP_INT = 0,	! Integer
+	GST_TYP_STR = 1;	! String
+
+!
+! Appearance of runtime stack frame
+!
+
+FIELD FRM_FLD =
+    SET
+	FRM_RET = [0,0,18,0],	! Relative address in caller to return to
+	FRM_PRV = [0,18,18,0],	! Caller's stack frame
+	FRM_STK = [1,18,18,0],	! Caller's stack pointer
+	FRM_PRC = [1,0,18,0],	! Caller's GST entry
+	FRM_WRD = [0,0,36,0]	! A variable or argument word
+    TES;
+
+LITERAL FRM_LOC = 2;		! First local variable
+
+!
+! Execution Context Block
+!
+
+FIELD ECB_FLD =
+    SET
+	ECB_NXT = [0,0,18,0],	! Link to next (older) context block
+	ECB_PRC = [0,18,18,0],	! Current routine's GST address or 0 if Procdef
+	ECB_POS = [1,0,36,0],	! Terminal file position
+	ECB_PC  = [2,0,18,0],	! PC
+	ECB_FP  = [2,18,18,0],	! FP
+	ECB_SP = [3,0,18,0],	! SP
+	ECB_STK = [3,18,18,0],	! Relative address of bottom of stack
+	ECB_CTN = [4,0,18,0],	! Number of fork-controlling PTY/ITY
+	ECB_CTJ = [4,18,18,0],	! JFN on that PTY/PCT
+	ECB_DTN = [5,0,18,0],	! Number of DoCommand-output PTY/ITY
+	ECB_DTJ = [5,18,18,0],	! JFN on that PTY/PCT
+	ECB_DTO = [6,18,18,0],	! Operand designator for DoCommand output
+	ECB_DCB = [6,0,18,0],	! Address of DoCommand string block
+	ECB_RCL = [7,18,18,0],	! Runtime channel list
+	ECB_GSC = [7,0,18,0],	! Address of global symbol for command
+	ECB_PFL = [8,0,18,0],	! Address of list of parsed JFN's
+	ECB_CFK = [8,18,18,0],	! Handle of controlled fork
+	ECB_CNM = [9,0,36,0],	! Command name in SIXBIT
+	ECB_PSV = [10,35,1,0],	! Preserved context
+	ECB_FNI = [10,34,1,0],	! Controlled fork was not Invoked
+	ECB_SCM = [10,33,1,0],	! Parsing a subcommand
+	ECB_ECO = [10,32,1,0],	! Echo off in subcommand parse
+	ECB_PAS = [10,31,1,0],	! Program running in PassOutput mode
+	ECB_PAR = [10,30,1,0],	! Command in the midst of Parsing
+	ECB_OPM = [11,0,36,0],	! Original prompt pointer
+	ECB_ORA = [12,0,18,0],	! Original reparse address
+	ECB_CSB = [13,0,36,0],	! First word of command state block
+	ECB_CJB = [23,0,36,0],	! First word of GTJFN block
+	ECB_CFB = [43,0,36,0]	! First word of command buffer
+    TES;
+
+!
+! General free space list
+!
+
+FIELD FRE_FLD =
+    SET
+	FRE_CNT = [0,18,18,0],	! Size of block including header
+	FRE_PTR = [0,0,18,0]	! Link to next free block
+    TES;
+
+!
+! Entry in JFN list
+!
+
+FIELD JLS_FLD =
+    SET
+	JLS_LNK = [0,0,18,0],	! Link to next entry in list
+	JLS_WLD = [0,35,1,0],	! Set if wildcards should be preserved
+	JLS_JFN = [1,0,36,0]	! JFN
+    TES;
+
+!
+! Entry in runtime channel list
+!
+
+FIELD RCL_FLD =
+    SET
+	RCL_CHN = [0,0,18,0],	! Channel number
+	RCL_NXT = [0,18,18,0],	! Link to next entry on list
+	RCL_JFN = [1,0,18,0],	! JFN
+	RCL_OUT = [1,18,1,0]	! Open for output
+    TES;
+
+!
+! Macros to make use of structures and fields more convenient
+!
+
+MACRO	COD_BLK = BLOCKVECTOR[0,1] FIELD(COD_FLD)%,
+	OPRAND = BLOCK[0] FIELD(OPN_FLD)%,
+	STR_VAL = BLOCK[1] FIELD(STV_FLD)%,
+	SYMENT = BLOCKVECTOR[0,STE_LEN] FIELD(STE_FLD)%,
+	STE_BLK = BLOCK[STE_LEN] FIELD(STE_FLD)%,
+	GST_TBL = BLOCKVECTOR[0,GST_LEN] FIELD(GST_FLD)%,
+	GST_BLK = BLOCK[GST_LEN] FIELD(GST_FLD)%,
+	STKFRM = BLOCKVECTOR[0,1] FIELD(FRM_FLD)%,
+	ECB_BLK = BLOCK[0] FIELD(ECB_FLD)%,
+	FRE_LST = BLOCK[0] FIELD(FRE_FLD)%,
+	STB_BLK = BLOCK[0] FIELD(STB_FLD)%,
+	HLF_WRD = BLOCK[1] FIELD(HLF_FLD)%,
+	SYN_TBL = BLOCKVECTOR[0,2] FIELD(SYN_FLD)%,
+	JLS_WRD = BLOCK[2] FIELD(JLS_FLD)%,
+	RCL_WRD = BLOCK[2] FIELD(RCL_FLD)%;

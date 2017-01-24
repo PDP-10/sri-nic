@@ -1,0 +1,824 @@
+;-*-Midas-*-
+
+	Title @UDP - Send UDP datagrams under direct user control
+
+.DECSAV
+
+ A=5
+ B=6
+ C=7
+ T=10
+TT=11
+T3=12
+ P=17
+
+UDPPRN==17.			;UCP Protocol Number
+TTLive==60.			;Time To Live
+
+PDLen==100
+PakLen==1000			;Packet Buffer length
+InBufl==20
+CarMsk==<-1,,600000>		;Mask of non-lower-16-bits
+GeeChn==1			;Channel for ^G interrupt
+
+.IPKVR==1			;Version, data offset, type of service
+.IPKSG==2			;Segment ID, frag stuff.
+.IPKPR==3			;Time to live, protocol#, header checksum
+.IPKSH==4			;Source host internet address
+.IPKDH==5			;Destination host " "
+    IPhlen==5			;IP header length.
+.UDPPO==6			;UDP port#'s
+.UDPLN==7			;UDP length, checksum
+    UDPhlen==2			;Length of UDP header
+.UDPDT==10			;UDP data bytes
+
+L16==<777774,,0>		;Mask for left 16-bit byte in word
+R16==<3,,777760>		;and for right 16-bit byte.
+B32==L16\R16			;Full 32-bit byte
+
+IPK$VR==:<.BP <740000,,0>,.IPKVR>	;IP Version#
+IPK$DO==:<.BP <036000,,0>,.IPKVR>	;Data Offset
+IPK$SR==:<.BP <001774,,0>,.IPKVR>	;Type of Service
+  IPK$ST==:<.BP <001600,,0>,.IPKVR>	;  (Precedence)
+  IPK$SF==:<.BP <000160,,0>,.IPKVR>	;  (Flags)
+IPK$DL==:<.BP R16,.IPKVR>		;Datagram Length
+
+IPK$SI==:<.BP L16,.IPKSG>		;Segment ID
+IPK$R1==:<.BP <000002,,0>,.IPKSG>	;Reserved, should be 0
+IPK$NF==:<.BP <000001,,0>,.IPKSG>	;Do-not-fragment bit
+IPK$MF==:<.BP <0,,400000>,.IPKSG>	;More-fragments flag
+IPK$FO==:<.BP <0,,377760>,.IPKSG>	;Fragment-Offset
+
+IPK$TL==:<.BP <776000,,0>,.IPKPR>	;Time-to-live
+IPK$PV==:<.BP <001774,,0>,.IPKPR>	;Protocol version
+IPK$HC==:<.BP R16,.IPKPR>		;IP Header Checksum
+
+IPK$SH==:<.BP B32,.IPKSH>
+
+UD$SRC==:<.BP L16,.UDPPO>
+UD$DST==:<.BP R16,.UDPPO>
+UD$LEN==:<.BP L16,.UDPLN>
+UD$CHK==:<.BP R16,.UDPLN>
+
+.INSRT LIB:SYMBOLS
+.INSRT LIB:MACROS
+.INSRT LIB:BBNTCP
+
+Define SHONUM bp,base
+	Movei 1,.PRIOU
+	Ldb 2,[bp PakBuf]
+	Movei 3,base
+	NOUT
+	  Nop
+Termin
+	
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Impure storage
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+PDList:	-PDLEN,,.
+	Block PDLen
+
+UsHost:	0
+InBuf:	Block InBufl
+HstBuf:	Block 10
+
+ToHost:	0
+ToPort:	0
+
+IQH:	0			;Internet Queue Handle
+MaxSiz:	0			;Maximum IP packet size
+Port:	0			;Local port#
+
+QDB:	.BYTE 8. ? 0 ? 0 ? 0 ? UDPPRN ? .BYTE	;UDP Protocol Number
+	0					;Wild foreign host
+	0					;Wild source host
+	0					;local port, foreign port
+	.BYTE 8. ? 0 ? 0 ? 0 ? 377 ? .BYTE	;Protocol number mask
+	0					;Foreign host mask
+	0					;Source host mask
+	.BYTE 16. ? -1 ? 0 ? .BYTE		;Local port mask
+QDBlen==.-QDB
+
+PakBuf:	0					;Packet Buffer total length.
+;;
+;;	Start of IP header
+;;
+	.BYTE 4,4,8.,16. ? 4 ? 5 ? 0 ? 0 ? .BYTE
+		;IP version #, Data Offset, Type of Service, Datagram Length
+	0	;Segmentation and frag junk.
+	.BYTE 8.,8.,16. ? 60. ? UDPPRN ? 0 ? .BYTE
+		;Time-to-live, Protocol number, IP header checksum
+	0	;Source host
+	0	;Destination host
+;;
+;;	End of IP header, start of UDP header.
+;;
+	0	;Local port number, destination port #
+	0	;UDP header+data length, checksum
+;;
+;;	End of UDP header, start of UDP data.
+;;
+	Block 1000
+
+GQErr:	0			;Flag for GetQueue
+
+DataBP:	0			;BP to UDP data
+DataLn:	0			;# octets in that data
+
+STypes:	[Asciz "Routine (0)"]
+	[Asciz "Priority (1)"]
+	[Asciz "Immediate (2)"]
+	[Asciz "Flash (3)"]
+	[Asciz "Flash Overrive (4)"]
+	[Asciz "CRITIC/ECP (5)"]
+	[Asciz "Internetwork Control (6)"]
+	[Asciz "Network Control (7)"]
+
+HstPrm:	Asciz "To host: "	;Starting prompts.
+	Block 10
+PrtPrm:	Asciz "At octal port: "
+	Block 10
+
+PSIPC1:	0
+PSIPC2:	0
+PSIPC3:	0
+
+LevTab:	PSIPC1 ? PSIPC2 ? PSIPC3
+
+ChnTab:	Channel GeeChn,2,GeeWiz
+	EndChannel
+
+GeeLoc:	0			;Where to return from ^G interrupt to
+
+CRLF:	Asciz "
+"
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Top-level gathering loop
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Begin:	RESET
+	Move P,PDList
+	Call IntIni		;Initialize the interrupt system.
+Again:	Call SayHi		;Introduce ourself.
+	Call WaitUp		;Wait until machine is fully up & initialize.
+	Call GetQueue		;Get us an Internet queue.
+CmdLst:	Type "Commands are (? to relist them):
+N - New port			R - Receive a single packet
+S - Send a packet		W - Wait for a packet to arrive
+Q - Quit			C - Continuous wait
+"
+Loop:	Type "UDP: "
+	PBIN
+	Cain 1,^M
+	  PBIN
+	Cain 1,^J
+	  Jrst [TypeCR "Type '?' for commands"
+		Jrst Loop]
+	Cail 1,"a
+	  Trz 1,40		;lc -> UC
+	Cain 1,"Q
+	  Jrst Quit
+	Cain 1,"R
+	  Jrst Receive
+	Cain 1,"S
+	  Jrst SendIt
+	Cain 1,"W
+	  Jrst WWait
+	Cain 1,"C
+	  Jrst CWait
+	Cain 1,"N
+	  Jrst NewPrt
+	Cain 1,"?
+	  Jrst CmdLst
+	TypeCR "  Type '?' for commands."
+	Jrst Loop
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Initialization routines.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+IntIni:	Movei 1,.FHSLF
+	Move 2,[LevTab,,ChnTab]
+	SIR
+	EIR
+	Movx 2,ChnMsk
+	AIC
+	Return
+
+GeeOn:	Movem T,GeeLoc		;Where to return to on ^G
+	Move 1,[.TICCG,,GeeChn]
+	ATI
+	Return
+
+GeeOff:	Movei 1,.TICCG
+	DTI
+	Return
+
+GeeWiz:	Push P,1
+	Movei 1,.PRIOU		;Flush the output buffer
+	CFOBF%
+	TypeCR "*Abort*"
+	Move 1,GeeLoc
+	Hrrm 1,PSIPC2		;Return location
+	Movx 1,Bit(5)
+	Iorm 1,PSIPC2		;Turn on user-mode bit
+	Pop P,1
+	DEBRK			;Return from interrupt
+
+SayHi:	Type "User Datagram Protocol on "
+	Movei 1,.PRIOU
+	Seto 2,
+	Movx 3,OT%DAY\OT%NSC\OT%12H\OT%TMZ\OT%SCL
+	ODTIM
+	Movei 1,.GTHSZ		;Get local host information
+	GTHST
+	  Jrst [Type "?Can't get our local host# - "
+		Call Barf
+		Jrst Die]
+	Movem 4,UsHost
+	Dpb 4,[IPK$SH PakBuf]	;Source host for sending (us)
+	CRType "This is "
+	Move T,4
+	Call ShoHst
+	TypeCR " on BBC 5"
+	Return
+
+WaitUp:	GTAD
+	Camn 1,[-1]		;Machine really up yet?
+	  Jrst [Movei 1,1000.
+		DISMS		;No, so wait a second
+		Jrst WaitUp]	;and try again.
+
+	Movei 1,.FHSLF		;Enable our capabilities,
+	RPCAP
+	Ior 3,2
+	EPCAP
+
+Releas:	Seto 1,			;then release all IN queues we might have.
+	RELIQ%
+	  Nop
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Allocate an Internet Queue
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+GetQue:	Hrroi T,[Asciz "Local port (octal)? "]
+	Call Ask
+	  Jrst GetQue
+	Hrroi 1,InBuf
+	Movei 3,8.
+	NIN
+	  Jrst [Call QBarf
+		AType CRLF
+		Jrst GetQue]
+	Movem 2,Port		;Local port.
+	Dpb 2,[.BP L16,QDB+.IQPTV]
+	Type "Allocating an Internet Queue..."
+	Setom GQErr		;No errors gotten so far.
+GetQ0:	Movei 1,QDB		;Address of Queue Desciptor Block
+	Setzb 2,3		;Reserved, must be 0
+	ASNIQ%			;Get a queue.
+	  Jrst QError		;  failed!
+	Movem 1,IQH		;Save the Internet Queue Handle
+	Movem 2,MaxSiz		;and maximum IP packet size.
+	Type "OK, IQH = "
+	Movei 1,.PRIOU
+	Move 2,IQH
+	Movei 3,8.
+	NOUT
+	  Nop
+	Type ", MaxSiz = "
+	Movei 1,.PRIOU
+	Move 2,MaxSiz
+	Imuli 2,4.
+	Movei 3,10.
+	NOUT
+	  Nop
+	TypeCR " bytes."
+	Return
+
+QError:	Aose GQErr		;This the first error?
+	  Jrst QWait		;  Naw, probably same, so just wait.
+	Pushn P,[1,2]		;Yes, so show the error.
+	CRType "?ASNIQ failed -- "
+	Call Barf
+	Popn P,[2,1]
+	Cain 1,NTWZX1		;Net Wizard needed?
+	  Jrst Die		;  Foo!  And we aren't!?
+	Cain 1,ASNSX2		;Job# in AC2?
+	  Jrst [Type " (job "	;  Yup.
+		Movei 1,.PRIOU
+		Movei 3,10.
+		NOUT
+		  Nop
+		TypeCR ")"
+		Jrst GetQue]
+	AType CRLF
+	Type "Trying again..."
+QWait:	Movei 1,30.*1000.	;Wait 30 seconds
+	DISMS
+	Jrst GetQ0		;and try again
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Commands here
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+NewPrt:	Type "ew port..."
+	Call Confirm
+	  Return
+	Call Release		;Release the old port
+	Call GetQueue
+	Jrst Loop	
+
+Quit:	Type "uit..."
+	Call Confirm
+	  Return
+	Call Release		;Release our queue.
+Die:	HALTF			;then stop.
+	Jrst Again
+
+CWait:	TypeCR "ontinuous wait..."
+CWait0:	Call WaiUDP
+	  Jrst [Call GeeOff
+		Jrst Loop]
+	Call Explode
+	Jrst CWait0
+
+WWait:	TypeCR "ait..."
+	Call WaiUDP		;Get one
+	  Jrst Loop		;  Failure!
+	Call GeeOff
+	Call Explode
+	Jrst Loop
+
+Receiv:	TypeCR "eceive..."
+	Call GetUDP
+	  Jrst [TypeCR "Nothing."
+		Jrst Loop]
+	Call Explode
+	Jrst Loop
+
+ShoHst:	Movei 1,.PRIOU
+	Ldb 2,[.BP <037700,,0>,T]
+	Movei 3,10.
+	NOUT
+	  Nop
+	Movei 2,".
+	BOUT
+	Ldb 2,[.BP <77,,600000>,T]
+	NOUT
+	  Nop
+	Movei 2,".
+	BOUT
+	Ldb 2,[.BP <0,,177400>,T]
+	NOUT
+	  Nop
+	Movei 2,".
+	BOUT
+	Ldb 2,[.BP <0,,377>,T]
+	NOUT
+	  Nop
+	Type " ("
+	Movei 1,.GTHNS
+	Hrroi 2,HstBuf
+	Move 3,T
+	GTHST
+	  Skipa 1,[-1,,[Asciz "???"]]
+	    Hrroi 1,HstBuf
+	PSOUT
+	CType ")
+	Return
+
+SendIt:	TypeCR "end..."
+	Skipa
+ESend:	  Call QBarf
+Send0:	Hrroi T,HstPrm
+	Call Ask		;Ask them
+	  Jrst [Skipn 3,ToHost	;They hit return.  There a default?
+		  Jrst Send0	;  No, so ask again.
+		Dpb 3,[.BP B32,PakBuf+.IPKDH]
+		Jrst Send1]	;They defaulted, skip new host stuff.
+	Move 1,[440700,,InBuf]
+Send00:	Ildb 2,1
+	Caie 2,40
+	  Cain 2,^I
+	    Jrst Send00
+	Caie 2,"[		;Did they give us a [a.b.c.d] #?
+	  Jrst Send01
+	Setzm ToHost
+	Movei 3,10.
+	NIN
+	  Jrst ESend
+	DPB 2,[.BP <037700,,0>,ToHost]
+	NIN
+	  Jrst ESend
+	DPB 2,[.BP <77,,600000>,ToHost]
+	NIN
+	  Jrst ESend
+	DPB 2,[.BP <0,,177400>,ToHost]
+	NIN
+	  Jrst ESend
+	DPB 2,[.BP <0,,377>,ToHost]
+	Move 3,ToHost
+	Jrst Send02
+
+Send01:	Movei 1,.GTHSN
+	Hrroi 2,InBuf
+	GTHST			;Loop up the named host.
+	  Jrst ESend
+	Camn 3,ToHost		;Same as last time?
+	  Jrst Send1		;  Yes, skip this stuff.
+	Movem 3,ToHost		;Save new host#
+Send02:	DPB 3,[.BP B32,PakBuf+.IPKDH]
+	Call MkHPrm		;Make new prompt
+
+Send1:	Hrroi T,PrtPrm
+	Call Ask
+	  Jrst [Skipn 2,ToPort
+		  Jrst Send1
+		DPB 2,[UD$SRC PakBuf]
+		Jrst GetDat]
+	Hrroi 1,InBuf
+	Movei 3,8.
+	NIN
+	  Jrst [Call QBarf
+		Jrst Send1]
+	Camn 2,ToPort		;Same as last time?
+	  Jrst GetDat		;  Yep
+	Movem 2,ToPort
+	DPB 2,[UD$SRC PakBuf]
+	Call MkPPrm
+
+GetDat:	Move A,[440800,,PakBuf+.UDPDT]
+	Setz B,
+	TypeCR "End input with a blank line."
+Get0:	Hrroi T,[Asciz "[Data]: "]
+	Call Ask
+	  Jrst Send3
+	Move C,[440700,,InBuf]
+	Move 1,C
+	Movei 3,8.
+GetO:	NIN			;Maybe a number?
+	  Jrst NotNum		;  Nope.
+	Idpb 2,A
+	Move C,1
+	Aoja B,GetO
+
+NotNum:	Ildb 1,C
+	Jumpe 1,np
+	Caie 1,40
+	  Cain 1,^I
+	    Jrst NotNum
+	Caie 1,""
+	  Jrst BadDat
+NotN0:	Ildb 1,C
+	Jumpe 1,BadDat
+	Cain 1,""
+	  Jrst GetO
+	Idpb 1,A
+	Aoja B,NotN0
+
+BadDat:	Call Terpri
+	TypeCR "Data should be octal#'s separated by whitespace mixed with
+Ascii text enclosed in double quotes."
+	Jrst Get0
+
+np:	Type "[Total: "
+	Movei 1,.PRIOU
+	Move 2,B
+	Movei 3,10.
+	NOUT
+	  Nop
+	TypeCR " octets]"
+	Jrst Get0
+
+Send3:	Move T,B
+	Addi T,UDPhlen*4
+	Dpb T,[UD$LEN PakBuf]
+	Addi T,IPhlen*4
+	Dpb T,[IPK$DL PakBuf]
+	Jumpe B,Send4
+	Sos B
+	Lsh B,-2		;/4
+	Aos B			;
+Send4:	Addi B,IPhlen+UDPhlen+1
+	Hrrzm B,PakBuf
+	Movei T,TTLive
+	Dpb T,[IPK$TL PakBuf]
+	Setz T,
+	Dpb T,[IPK$SR PakBuf]
+	Movei T,UDPPRN
+	Dpb T,[IPK$PV PakBuf]
+	Move T,Port
+	Dpb T,[UD$SRC PakBuf]
+	Move T,ToPort
+	Dpb T,[UD$DST PakBuf]
+	Move T,UsHost
+	Dpb T,[IPK$SH PakBuf]
+
+	Call Checksum		;Compute the UDP checksum into AC T
+	Dpb T,[UD$CHK PakBuf]	;Store it into UDP header.
+	Call Explode		;Show what we're sending.
+	Move 1,IQH		;Queue Handle
+	Movei 2,PakBuf		;Address of Packet Buffer
+	Setz 3,			;Reserved, must be 0.
+	SNDIN%			;Send off the datagram.
+	  Jrst [Hrroi T,[Asciz "SNDIN failed"]
+		Jrst Error]	;  in the log file.
+	TypeCR "Sent."
+	Jrst Loop		;Success, so we're done.
+
+MkHPrm:	Hrroi 1,HstPrm
+	Hrroi 2,[Asciz "To host ("]
+	Setz 3,
+	SOUT
+	Move 2,1		;Dest pointer in AC2
+	Movei 1,.GTHNS		;Code to get histname given hostnumber
+	Move 3,ToHost
+	GTHST			;Loop it up
+	  Jrst [Move 1,2	;Get back old BP
+		Hrroi 2,InBuf
+		Setz 3,
+		SOUT
+		Jrst MakPr0]
+	Move 1,2
+MakPr0:	Hrroi 2,[Asciz "): "]
+	Setz 3,
+	SOUT
+	Return
+
+MkPPrm:	Hrroi 1,PrtPrm
+	Hrroi 2,[Asciz "At octal port ("]
+	Setz 3,
+	SOUT
+	Move 2,ToPort
+	Movei 3,8.
+	NOUT
+	  Nop
+	Hrroi 2,[Asciz "): "]
+	Setz 3,
+	SOUT
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Get a UDP datagram and fill in first two words of
+;;	Store block (date&time and foreign host).  Possible
+;;	error (RCVIN failed) code Er$RCV
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+WaiUDP:	Movei T,CPopj		;Failure return on ^G
+	Call GeeOn
+	TypeCR "[Type ^G to abort]"
+	Tdza 1,1		;No flags means wait for one.
+GetUDP:	  Movx 1,RIQ%NW		;Don't wait
+	Movei 2,PakLen+1
+	Hrrzm 2,PakBuf
+	Hrr 1,IQH		;flags,,IQH
+	Movei 2,PakBuf
+	Setz 3,
+	RCVIN%
+	  Jrst [Tlz 1,-1
+		Cain 1,-1	;No packets?
+		  Return	;  Yeah, so just return.
+		Hrroi T,[Asciz "RCVIN failed"]
+		Jrst Error]
+GUDP0:	Jrst Popj1
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Error handler - writes error block to file, resets stack
+;;	(in case were in a subroutine when error happened) and
+;;	jumps back into gathering loop - Does NOT send an ACK.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Error:	CType "?
+	Hrro 1,T
+	PSOUT
+	Type " -- "
+	Call Barf
+	AType CRLF
+	Move P,PDList		;Reset stack in case were in subroutine.
+	Jrst Loop		;and go back to read-loop.
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Compute UDP checksum
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Checks:	Setz T,			;Accumulate checksum here.
+	Move A,[442000,,PakBuf+.IPKSH]
+REPEAT 4,[			;Get Source/Destination addresses
+	Ildb B,A		;in 4 16-bit chunks.
+	Add T,B
+];Repeat
+IRP FIELD,,[IPK$PV,UD$SRC,UD$DST,UD$LEN]
+	Ldb B,[FIELD PakBuf]	;Add in protocol#, source port,
+	Add T,B			;destination port, UDP length.
+TERMIN
+	Add T,B			;Add in UDP length again.
+	Subi B,UDPhlen*4-1	;Subtract # UDP header bytes giving # data,
+				;and add one in prep for LSH
+	Lsh B,-1		;# bytes / 2 = # 16-bit bytes.
+	Move A,[442000,,PakBuf+.UDPDT]
+	Jumple B,Check1		;No data bytes.
+	Move C,B
+Check0:	Ildb TT,A
+	Add T,TT
+	Sojg C,Check0
+Check1:	Tdne T,[CarMsk]		;Any carries beyond 16 bits?
+	  Jrst [Ldb A,[.BP CarMsk,T]
+		Tdz T,[CarMsk]	;Yes so add them in and loop
+		Add T,A		;until it all fits in 16 bits.
+		Jrst Check1]
+	Setca T,		;1's complement the sum
+	Andi T,177777		;and keep only the lower 16 bits.
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Explode a received packet buffer
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Explod:	Type "--Start of IP header--
++0: Version = "
+	Shonum IPK$VR,8.
+	Type ", Data Offset = "
+	Shonum IPK$DO,8.
+	CRType "    Type of Service = ["
+	Ldb T,[IPK$ST PakBuf]
+	Hrro 1,STypes(T)
+	PSOUT
+	Ldb T,[IPK$SF PakBuf]
+	Hrroi 1,[Asciz " /Low delay"]
+	Txne T,4
+	  PSOUT
+	Hrroi 1,[Asciz " /High throughput"]
+	Txne T,2
+	  PSOUT
+	Hrroi 1,[Asciz " /High reliability"]
+	Txne T,1
+	  PSOUT
+	Type "]
+    Datagram length = "
+	Shonum IPK$DL,10.
+	Type ".
++1: Segment ID = "
+	Shonum IPK$SI,8.
+	Type ", Reserved bit = "
+	Shonum IPK$R1,8.
+	Type ", Do-not-fragment = "
+	Shonum IPK$NF,2
+	CRType "    More-fragments = "
+	Shonum IPK$MF,2
+	Type ", Fragment-Offset = "
+	Shonum IPK$FO,8.
+	CRType "+2: Time-to-live = "
+	Shonum IPK$TL,10.
+	Type "., Protocol # = "
+	Shonum IPK$PV,8.
+	Type ", IP header checksum = "
+	Shonum IPK$HC,8.
+	CRType "+3: Source host = "
+	Ldb T,[.BP B32,PakBuf+.IPKSH]
+	Call ShoHst
+	CRType "+4: Destination host = "
+	Ldb T,[.BP B32,PakBuf+.IPKDH]
+	Call ShoHst
+	CRType "--End of IP header, start of UDP header--
++0: Source port = "
+	Shonum UD$SRC,8.
+	Type ", Destination port = "
+	Shonum UD$DST,8.
+	CRType "+1: Length = ",
+	Shonum UD$LEN,10.
+	Move T,2		;Save length
+	Type "., Checksum = "
+	Shonum UD$CHK,8.
+	CRType "--End of UDP header, start of UDP data--
+"
+	Subi T,UDPhlen*4	;Subtract length of UDP header
+	Jumpe T,[TypeCR "No data!"
+		 Jrst Loop]
+	Movei TT,2		;starting offset
+	Move A,[440800,,PakBuf+.UDPDT]
+	Movei B,4
+
+UDPDT0:	ctype "+
+	movei 1,.priou
+	movei 2,(tt)
+	move 3,[field(2,no%col)+no%lfl+8.]
+	nout
+	  Nop
+	ctype ":
+	push p,a		;save bp to start
+	push p,t		;save # bytes left
+
+udpdt1:	movei b,4		;4 bytes at a time
+	movei 1,.priou
+	move 3,[field(4,no%col)+no%lfl+8.]
+udpdt2:	sojl t,udpdt3
+	ildb 2,a		;get a byte
+	nout
+	  nop
+	sojg b,udpdt2
+	jrst udpdt4
+
+udpdt3:	type "    "
+	sojg b,udpdt3
+
+udpdt4:	ctype ^I		;tab out
+	pop p,t			;get back count
+	pop p,a			;and bp
+	movei b,4
+
+udpdt5:	sojl t,[typecr ""
+		return]
+	ildb 1,a
+	cail 1,40
+	  cain 1,177
+	    jrst [type ".  "
+		  jrst udpdt6]
+	pbout
+	type "  "
+udpdt6:	sojg b,udpdt5
+	typecr ""
+	jumple t,cpopj
+	aoja tt,udpdt0
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Misc. other subroutines
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+QBarf:	Call Terpri
+	CType "?
+	Call Barf
+	AType CRLF
+	Return
+
+Barf:	Movei 1,.PRIOU
+	Hrloi 2,.FHSLF
+	Setz 3,
+	ERSTR
+	  Nop
+	  Nop
+	Return
+
+Terpri:	Movei 1,.CTTRM
+	RFPOS
+	Tlz 2,-1
+	Hrroi 1,[Asciz "
+"] ?	Skipe 2
+	  PSOUT
+	Return
+
+Confirm:
+	Type " [Confirm] "
+Conf0:	PBIN
+	Cain 1,^M		;If reading a CR
+	  PBIN			;  then a LF is sure to follow.
+	Cain 1,^J		;On return,
+	  Jrst Popj1		;  take win return.
+	Cain 1,"?
+	  Jrst [TypeCR " Confirm with carriage return"
+		Jrst Confirm]
+	TypeCR " Not confirmed"
+	Return
+
+Ask:	Setzm InBuf
+	Hrro 1,T
+	PSOUT
+	Hrroi 1,InBuf
+	Movx 2,RD%BEL\RD%CRF+InBufl*5-1
+	Hrro 3,T
+	RDTTY
+	  Jrst [Call QBarf
+		Atype CRLF
+		Jrst Ask]
+	Setz 3,
+	Dpb 3,1			;Flush the terminator.
+	Tlz 2,-1
+	Caige 2,InBufl*5-2
+Popj1:	  Aos (P)
+Cpopj:	Return
+
+	End Begin

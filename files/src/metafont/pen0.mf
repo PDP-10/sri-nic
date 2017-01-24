@@ -1,0 +1,548 @@
+% This file draws a pen-style font given the following parameters:
+%
+% height 	the height in points of b above the baseline.
+%
+% oheight	the height in points of o above the baseline. Typically
+%		3/5 the value of HEIGHT for roman, 5/9 for italic.
+%
+% depth		the distance in points of the bottom of a p below
+%		the baseline; typically depth = height - oheight.
+%
+% capheight	The height in points of the tops of capital letters.
+%		Typically equal to 3/2 oheight for italic.
+%		If capheight = 0, it will be set so that the
+%		tops of capital letters are level with the bottoms of
+%		the serifs of the tall lower-case letters; this is
+%		typical for roman fonts.
+%
+% owidth	The width in points of "o". Typically equal to oheight
+%		for roman, less for italic.
+%
+% style		should equal either ROMAN or ITALIC; determines
+%		the shape of a and f. (ROMAN and ITALIC must be defined
+%		and be distinct; they might be zero and one, for example.)
+%
+% penwidth	width in points of pen; typically 1/5 oheight.
+%
+% penheight	height in points of pen. For a true pen-style font this
+%		should be as small as possible; the pen should draw a
+%		hairline when moved in the right direction.  But METAFONT
+%		causes funny things to happen since it digitizes the pen
+%		before drawing. For example, consider a very narrow pen at an
+%		angle of 45 degrees. If narrow enough, the only lattice
+%		points the elipse contains will have x=y; that is the
+%		pen will consists of a single diagonal of points. This
+%		would be OK, except that when such a pen is moved
+%		diagonally in the broad direction METAFONT's rounding
+%		rule causes it to miss half the points it is moving
+%		through. For example, say the pen contains (0,0) and
+%		(1,1) and moves down to the right. Now it will contain
+%		(1,-1) and (2,0). It has missed the point (1,0), which
+%		will never be blackened. This causes streaks in the
+%		letters. 
+%
+%		Thus, if penheight is set to 0, it will be reset to the
+%		smallest value such that this streaking effect does not
+%		occur; this value is a function of penwidth, penangle,
+%		and the resolution of the output device. 
+
+%
+% penangle	angle of pen; 0 means horizontal, 90 means vertical
+%		Usually 45 for italic and 30 for roman.
+%
+% slant		the tangent of the angle by which letters are tilted
+%		to the right; typically 0 for roman and .15 for italic,
+%		but you can slant a roman font or leave an italic one
+%		straight.
+%
+% serifsize	The radius in points of the circular motion used to finish
+%		most strokes on lower-case letters. Typical value: 1/2 PENWIDTH.
+%
+% footsize	This is the length of the straight, foot-like serifs used
+%		at the bottom of f and on many upper-case letters.
+%
+% oslant	This is the extra slant given to the round parts of
+%		letters to make them look italic. Typically OSLANT=0
+%		for roman and OSLANT=.20 for italic.
+%
+% nwidth	This is the ratio of the width of an "n" to the width
+%		of an "o". (More precisely, it is what the ratio
+%		would be if the characters were drawn with an infinitely fine
+%		pen.) Ann Camp recommends a value of pi/4  .78539
+%		in her book "Pen Lettering".
+%
+% sharp		Must be between 0 and 1. The larger it
+%		is the sharper is the turn between the curved and straight
+%		parts of the letters a,b,f,g,h,j,m,n,q,t,u, and y.
+%		Typically .9 for roman, .5 for italic.
+%		
+% mode		If mode=datadisk, the characters will be displayed on
+%		the data-disk as they are drawn. If mode=proof, a file
+%		of proof-sheets will be produced. If mode=font, a font
+%		and tfx file will be produced. For example, the statement
+%		mode + 1 = datadisk=proof=font causes none of these actions
+%		to be taken, so the file is rapidly scanned for errors.
+%		If mode=datadisk and modeproof, modefont, then TRXX will
+%		be used to shrink the characters in the x-direction to
+%		compensate for the non-square pixels on the screen.
+%		crs must also be defined.
+
+% expen		Explicit pen. It expen=0, everything is as described
+%		above. Otherwise, the file that uses this one is
+%		expected to have defined three subroutines,
+%		normpen, (which sets the normal pen), steeppen
+%		(which sets the pen to a steep pen for Z), and
+%		flatpen (which sets the pen to a flat pen for Q and the
+%		diagonal stroke of Z). The variables penwidth, penheight,
+%		and penangle must still be defined.
+
+%	This file defines global variables and useful subroutines.
+%	The programs for drawing the letters themselves are in
+%	the file PEN.MF. As an example of the use of these files,
+%	here is the METAFONT program that creates the font PENI12:
+%	
+%	"Peni12; 12-point italic scrivener's font";
+%	oheight=5/9 height;
+%	owidth=4/5 oheight;
+%	depth= 4/9 height;
+%	depth+height=12;
+%	capheight=3/2 oheight;
+%	sharp=.5; nwidth= 3.14159/4;
+%	roman=0;italic=1; style=italic;
+%	penwidth= 1/5 oheight;
+%	penheight= 1/6 penwidth;
+%	expen=0;
+%	serifsize= 2/5 penwidth;
+%	footsize = 2/5 penwidth;
+%	penangle = 45;
+%	slant=.15;
+%	oslant=.25;
+%	mode=datadisk=font=1+proof=1+crs;
+%	input pen0.mf;
+%	input pen.mf;
+
+
+
+% The value of PPP is the number of pixels per point. On the XGP
+% there are 3.6 pixels per point. For datadisk and proofmode,
+% PPP is fudged so that TOPLINE has a y-coordinate of 200 pixels.
+
+
+eps=.000314159;	% a very small random positive number
+lowres=1; dover=3; canon=4; canrst=5;
+	% symbolic names of modes
+designsize ptsize; % ignore error messages you get with old MF!
+if mode<0: mmode=-mode; new mode; mode=mmode;	% negative modes assume \\{mag} is set
+else: mag=1;
+fi;
+magnification mag;
+if mode=proof: proofmode; drawdisplay; titletrace;
+	pixels=18*mag; blacker=0; overcorr=1;	% for initial design of characters
+else:	if mode=lowres: fntmode; tfxmode; no modtrace;
+		pixels=(200/72.27)mag; blacker=.65; overcorr=.4;	% XGP, etc.
+	else: if mode=crs: crsmode; tfxmode; titletrace; no modtrace;
+			pixels=(16000/(3*72.27))mag; blacker=4; overcorr=1;	% Alphatype
+		else: if mode=dover: ocmode; tfmmode; dotwdmode; no modtrace;
+				overcorr=.6;
+				pixels=(384/72.27)mag; blacker=1.2;  % Dover
+			else: if mode=canon: chrmode; tfxmode; no modtrace;
+					pixels=(240/72.27)mag;
+					blacker=.2; overcorr=.4;	% Canon
+                          else: if mode=canrst: rstmode; tfxmode; no modtrace;
+					proofmode;
+					pixels=(240/72.27)mag;
+					blacker=.2; overcorr=.4;	% Canon
+				else: input mode;
+				fi;
+			  fi;
+			fi;
+		fi;
+	fi;
+fi;
+ppp=pixels;
+maxht height*ppp+1; trxy slant;
+texinfo slant, 5/6 owidth, 1/3 owidth, 1/3 owidth, oheight, 0,0;
+fontfacebyte 254-2*ptsize;
+hresolution pixels; vresolution pixels.
+
+subroutine fontbegin:	% Initialize before making a font:
+no eqtrace;	% Turn off tracing within this subroutine
+new w0,w1;	% raster-oriented pen sizes
+w0=round(pixels.penheight+blacker);	% hairline width
+w1=round(pixels.penwidth+blacker);	% stem width
+fi.
+
+call fontbegin;
+
+% w1 and w0 are the width and height of the pen in pixels. Using them
+% and PENANGLE we define the pen:
+
+no penreset;
+
+subroutine setpen(var penangle):
+spen(4*((cosd penangle)*(cosd penangle)/(w1*w1)+
+	(sind penangle)*(sind penangle)/(w0*w0)),
+     4*(sind(2*penangle))*(1/(w1*w1)-1/(w0*w0)),
+     4*((sind penangle)*(sind penangle)/(w1*w1)+
+	(cosd penangle)*(cosd penangle)/(w0*w0)),
+     0,0,0,0).
+
+
+if expen=0: call setpen(penangle); spen;; else: call normpen; epen;; fi;
+
+minvr 0.25; minvs 0.25;
+% Now define the following variables:
+%
+% TP		The y-coordinate in pixels of the center of a pen whose
+%		top is HEIGHT points above the baseline.
+% MID		The y-coordinate in pixels of the center of a pen whose
+%		top is oheight points above the baseline.
+% BASE		The y-coordinate in pixels of the center of a pen whose
+%		bottom is just touching the baseline.
+% BT		The y-coordinate in pixels of the center of a pen whose
+%		bottom is DEPTH points below tha baseline.
+% LEFT		The x-coordinate in pixels of the center of a pen whose
+%		left edge is just touching the line x=0, which is the
+%		left-most edge of "o".
+% RIGHT		The x-coordinate in pixels of the center of a pen whose
+%		right edge is OWIDTH points to the right of the line x=0.
+% CAP		The y-coordinate in pixels of the center of a pen whose
+%		top edge is CAPHEIGHT points above the baseline.
+% SRAD		SRAD pixels = SERIFSIZE points.
+% SSRAD		SSRAD = 2/3 SRAD; for smaller serifs.
+% SSSRAD	SSSRAD = 2/3 SSRAD; for still smaller serifs.
+% SPACE		The amount of blank space inserted at the left and right
+%		of characters by default.
+% ICX		amount to increment italic correction when upper-right
+%		"corner" of char is circle.
+
+top1tp = round(height*ppp);
+top1mid	= round(oheight*ppp);
+bot1base = 0;
+bot1bt = - round(depth*ppp);
+lft1left = 0;
+rt1right = round(owidth*ppp);
+srad = serifsize * ppp;
+9/4 sssrad = 3/2 ssrad = srad;
+top1cap=round(capheight*ppp);
+2 space = nwidth (right - left);
+icx=1/4[base,mid];
+
+% The shapes of most letters are defined in terms of a few important
+% points, which are now defined. Assume for the moment that
+% owidth=oheight. Let C be the circle inscribed in the square formed
+% by the lines y=base, y=mid, x=left, and x=right.
+% This is the circle in which the center of the pen moves to draw
+% an o. Let the right, top, left, and bottom extreme points of
+% this circle be points 3, 12, 9, and 6 (numbering them with
+% their clock-directions.)
+% The two vertical strokes of n are determined by the facts
+% that the distance
+% between their centers is NWIDTH*(RIGHT-LEFT) and that they
+% have the same distance from the center of the o. 
+% They intersect the circle C in four points, which will
+% be called points 2, 10, 8, and 4, again numbering them by their
+% clock-directions.
+
+% These eight points are used frequently in drawing the lower-case
+% alphabet. For example, the curved part of "d" is the arc through
+% the points 2,12,10,9,8,6,4, and the vertical part of the d is the
+% line segment through points 2 and 4 with endpoints intersecting
+% the lines y=tp and y=base. Because of their general utility these
+% points will be defined each time a letter is drawn, even though
+% not all of them are used for every letter.
+  
+% To draw the circular arcs it is necessary to know the tangent
+% direction of the circle at the points 10,8,4,2. The variables
+% tenx and teny will be set so that (tenx, teny) is the tangent
+% direction at point 10 going clockwise. This is the
+% same as the tangent direction at 4 going counter-clockwise. From all
+% that has been said so far you would think that the tangent
+% direction at 2 going clockwise would be (tenx, -teny), but
+% when the complications described below for italic fonts are
+% taken into account, you will find that the slope at 2 is
+% not determined from the slope at 10, so the variables
+% twox and twoy are set so that (twox, twoy) is the slope
+% at 2 going clockwise. The slope at 8 going counter-clockwise
+% is (twox,twoy).
+
+% The midpoints of the segments 8-10 and 2-4 are often useful,
+% so they will always be defined, too. They are close to the
+% points 9 and 3, so they will be numbered 90 and 30. As an example
+% of their use, consider drawing the arch and right stroke of n. 
+% Suppose that point 20 has been defined as the bottom of the
+% right stroke. The obvious way would be with the two statements:
+%
+% draw 10{tenx,teny~..12{1,0~..2{twox,twoy~; draw 2..20;
+%
+% But this would make an ugly sharp angle at 2. Instead use:
+%
+% draw 10{tenx,teny~..12{1,0~..30{0,-1~..20;
+%
+% Similarly the point 90 is used in the transistion from the left
+% stroke of u to the bottom stroke.
+%
+% Actually the points 90 and 30 are the exact midpoints
+% of the segments 8..10 and 2..4 only if the variable SHARP has
+% the value .5. If SHARP has the value 1, 90 is identical to 8
+% and 30 is identical to 2, causing the curve in n and u to make
+% a sharper turn. In general SHARP is the quotient of the length
+% of the segment 30..4 by the length of the segment 2..4, and also
+% the quotient of the length of the segment 90..10 by the length of
+% the segment 8..10. That is, as SHARP increases, 30 goes up and
+% 90 goes down.
+%
+% The reason I am typing so many comments instead of getting on
+% with computing the y-coordinates of the points 10,2,8, and 4
+% is that its harder to do so than you might think, and the reason
+% its hard is that if OSLANT is non-zero, some complications
+% occur. The problem with the above construction is that it
+% produces roman letters, not italic ones. You can slant everything
+% by setting SLANT=.15, and set STYLE=ITALIC to get italic-style
+% a and f, but all you get is slanted roman with italic a and f.
+% What I think will make the font look italic is if the circle
+% of the o is slanted more than the whole font. That is, imagine
+% that the points 12,10,9,8,6,4,3,2 are constructed as follows:
+% "Slant" the circle of the o so that it becomes an elipse leaning
+% to the right that is internally tangent to the rectangle
+% formed from the four lines x=left,x=right, y=base, y=mid.
+% Draw the uprights of n as before. Then the extreme points
+% of the elipse and the intersections of the elipse with the
+% uprights give the eight points.  This produces
+% a very different result than slanting the whole diagram.
+
+% So let's do it. Consider the transformation:
+% 
+% 	T(x, y)= (A x + B y, y)
+%
+% Given that T(x, y) is on the circle x^2 + y^2 = r^2, write
+% y in terms of x. We have:
+%
+%	A^2 x^2 + 2 A B x y + (B^2 + 1) y^2 = r^2
+%
+% or	(B^2 + 1) y^2 + (2 A B x) y + (A^2 x^2 - r^2) = 0.
+%
+% Now suppose that A^2 = 1 + B^2, and solve for y:
+%
+% 	    B x  +/-  sqrt(r^2 - x^2)
+%	y=  -------------------------			(1)
+%			A		.
+%
+% The extreme points of the solution set in the x-direction have
+% x = -r and x = +r. Obviously the extreme points in y direction
+% have y = r and y = -r also, since the transformation doesn't change
+% y. So the solution set is an elipse internally tangent to the
+% square max(|x|,|y|) = r. If B is zero, the solution set is just
+% the circle x^2+y^2=r^2. As B becomes very large, the term B x / A
+% dominates the term sqrt(r^2-x^2)/A, and the solution set becomes
+% close to the line y=x. Thus if we let B=OSLANT, the solution
+% set of (1) is the elipse which we are to intersect with the
+% uprights of the n.
+%
+% When x = -r, y =  - B r / A.
+%
+% Similarly when y = -r, x = - B r / A.
+% 
+% These formulas give the y-coordinate of points 9 and 3, and the
+% x-coordinate of points 12 and 6. The y-coordinates of points
+% 2, 4, 10 and 8 are determined by (1).
+%
+% Points 10 and 2 are on the positive branch of the solution for y,
+% and the slopes at points 10 and 2 is are given by differentiating
+% (1), assuming the larger root is taken:
+%
+%	y' = (1 / A) (B - x / sqrt(r^2-x^2)).
+%
+% We are finally ready to put it all together. We can't define
+% the points themselves since point definitions are local to
+% their section, so we define the values tenx, teny, twox, twoy,
+% which give the slopes at points ten and two, sixx and niney
+% which are the x and y coordinate of points 6 and 9, respectively,
+% eightx, eighty, fourx, foury, which are similarly the coordinates
+% of points 8 and 4. We use exszero and vvyezero for the coordinates
+% of the center of the circle. All of these values depend on right, left,
+% mid, base, oslant, and nwidth. It is convenient to write a subroutine
+% called SETCIRCLE
+% that sets the values, given the values of right, left, mid, and base;
+% then the subroutine can be used for defining the clock points on
+% the circle of the upper-case "O" as well as the lower-case "O".
+% OSLANT and NWIDTH could be changed between calls to SETCIRCLE,
+% but this is unusual, so they will not be arguments.
+
+subroutine SETCIRCLE(var left, var right, var mid, var base):
+
+new tenx, teny, twox, twoy, sixx, niney, fourx, foury, eightx,
+    eighty, B, A, rx, ry, exszero, vvyezero, cleft, cright, ctop,
+    cbot;
+
+cleft=left; cright=right; ctop=mid; cbot=base;
+
+fourx - eightx = nwidth (right - left);
+eightx - left = right - fourx;
+
+B = oslant; A = sqrt(1 + B B); rx = 1 / 2 (right - left);
+ry = 1 / 2 (mid - base);
+
+% remember that because RIGHTLINE may be # MIDLINE; the final
+% "circle" may be distorted. Use rx and ry as the two radii of
+% the final "circle".
+
+exszero = 1/2[left,right]; vvyezero = 1/2[base,mid];
+
+niney - vvyezero = - ry B / A;
+sixx - exszero = - rx B / A;
+
+eighty - vvyezero = - ry (1/A) (sqrt(1 - NWIDTH NWIDTH) + B NWIDTH);
+foury - vvyezero = ry (1/A) (B NWIDTH - sqrt(1 - NWIDTH NWIDTH));
+
+twox = tenx = rx/ry;
+
+twoy = (1/A) (B - NWIDTH / sqrt(1 - NWIDTH NWIDTH));
+
+teny = (1/A) (B + NWIDTH / sqrt(1 - NWIDTH NWIDTH)).
+
+% The following subroutine, CIRCLE, is called at the beginning
+% of every letter like this:
+% 
+% call CIRCLE(1,2,3,4,5,6,7,8,9,10,11,12);
+%
+% it defines the points in terms of the variables set by SETCIRCLE.
+% Notice that points 1,5,7,11 have creeped in; they are not on
+% the circle at all, but are often useful: point 11 is the top of
+% the left upright of the n, points 7 and 5 are the bottom of the
+% uprights of the n, etc.
+
+subroutine circle(index a, index b, index c, index d,
+		  index e, index f, index g, index h,
+		  index i, index j, index k, index l):
+
+yf=cbot; xf=sixx; xi=cleft; yi=niney;
+yl=ctop; xl - exszero = exszero - xf;
+xc = cright; yc - vvyezero = vvyezero - yi;
+nwidth * rx = exszero - xh = xd - exszero; xh=xj; xb=xd;
+yh = eighty; yd = foury;
+ctop - yj = foury - cbot;
+ctop - yb = eighty - cbot;
+xa=xb=xe; ya=ctop; ye=cbot;
+xk=xg=xh; yk=ctop; yg=cbot.
+
+
+subroutine lserif(index i, var dx, var dy, var m, var theta):
+% move pen in a circle, starting at point i in the direction
+% (dx,dy), curving to the left so that the circle becomes
+% tangent to the line y=m; continue past the point of tangency
+% for theta more degrees.
+
+% let point 1 be the intersection of the line y=m and the line
+% through i in the direction dx,dy:
+y1=m; new alpha; y1-yi=alpha dy; x1-xi=alpha dx;
+new d; % set d to the distance between point i and point 1:
+d = sqrt((xi-x1)(xi-x1) + (yi-y1)(yi-y1));
+% let point 2 be the point on the line y=m with distance
+% d from point 1 that is to the left of the line through i in
+% the direction (dx,dy):
+if alpha*(yi-m)<0: x2=x1-d; else: x2=x1+d; fi;
+y2=m;
+% Now let point 3 be the center of the circle of motion:
+new alpha;
+x3=x2; x3=xi-alpha dy; y3=yi+alpha dx;
+% now draw the arc from i to 2;
+draw i{dx,dy~..2{yi-m,0~;
+% now we must draw an arc around point 3 starting at point 2
+% for a distance of theta degrees. The terminal point of
+% the arc is (x3 - (sind theta)(y2-y3), y3 + (cosd theta)(y2-y3)),
+% and the slope at the terminal point is (-cosd theta, -sind theta)
+% if yi<m and (cosd theta, sind theta) if yi>m.
+x4=x3 - (sind theta)(y2-y3); y4=y3+(cosd theta)(y2-y3);
+draw 2{yi-m,0~..4{(yi-m)(cosd theta), (yi-m)(sind theta)~.
+
+subroutine rserif(index i, var dx, var dy, var m, var theta):
+% like rserif, but move to the right instead of to the left.
+y1=m; new alpha; y1-yi=alpha dy; x1-xi=alpha dx;
+new d; d = sqrt((xi-x1)(xi-x1) + (yi-y1)(yi-y1));
+if alpha*(yi-m)<0: x2=x1+d; else: x2=x1-d; fi;
+y2=m;
+% Now let point 3 be the center of the circle of motion:
+new alpha;
+x3=x2; x3=xi+alpha dy; y3=yi-alpha dx;
+% now draw the arc from i to 2;
+draw i{dx,dy~..2{m-yi,0~;
+x4=x3 + (sind theta)(y2-y3); y4=y3+(cosd theta)(y2-y3);
+draw 2{m-yi,0~..4{(yi-m)(- cosd theta), (yi-m)(sind theta)~.
+
+subroutine charbegin(var code, var l, var r, var d, var ic):
+% prepare for character with code CODE, whose left and right
+% strokes are centered at l and r respectively. d is the
+% depth in points. ic is the y-coordinate of the highest point
+% which is extreme in  the x-direction; for example for L ic is 0,
+% for T ic is tp, for o ic is the y-coordinate of circle-point 3.
+% Draw guidelines in proof mode and datadisk mode, set character
+% parameters in font mode. In any case, set incx so that the
+% character becomes centered in its box.
+
+charcode code;
+new charwidth; charwidth = (r-l) + 2 space; % charwidth in pixels
+no proofmode;
+if mode=5: charwd charwidth/ppp; charht height; chardp d;
+		charic slant*(top1ic)/ppp; chardw charwidth;
+		 incx space - l; fi;
+
+% draw guidelines if mode is debug or proof:
+if (mode - datadisk)*(mode - proof) = 0:
+	trxy 0;
+	x1=x2=x3=x4=l-space;
+	x10=x20=x30=x40=r+space;
+	y1=y10=y100=height*ppp;
+	y2=y20=oheight*ppp;
+	y3=y30=0;
+	y4=y40=y400= - depth*ppp;
+	x100=x400=rt1r+slant*ic;
+	cpen;
+	1 draw 1..4; draw 10..40; 
+	draw 1..10; draw 2..20; draw 3..30; draw 4..40;
+	draw 100..400;
+	if expen=0: spen;; else: call normpen; fi;
+	trxy slant; fi.
+
+subroutine lcircle(index i, var dx, var dy, var theta):
+% move pen in circle, from point i, starting in direction {dx,dy~,
+% curving to the left in a circle of radius sqrt(dx^2+dy^2), for
+% theta degrees.
+new s,c;
+s=sind theta; c=cosd theta;
+%point 1 will be terminus of path.
+x1 = xi - dy + dy c + dx s;
+y1 = yi + dx + dy s - dx c;
+draw i{dx,dy~..1{dx c - dy s, dx s + dy c~.
+
+subroutine rcircle(index i, var dx, var dy, var theta):
+% like lcircle, but curve to the right instead of to the left:
+new s,c;
+s=sind theta; c=cosd theta;
+x1 = xi + dy - dy c + dx s;
+y1 = yi - dx + dy s + dx c;
+draw i{dx,dy~..1{dx c + dy s, - dx s + dy c~.
+
+subroutine collinear(index i, index j, index k):
+% assert that points i, j, and k are collinear.
+% The values xj, xk, yj, yk must already be determined.
+if  xk = xj: xi=xj;
+ 	else: if yk=yj: yi=yj;
+		else: (xi - xj) / (xk - xj) = (yi - yj) / (yk - yj);
+	      fi;
+fi.
+
+subroutine lfoot(index i):
+	no proofmode;
+	y1=yi; x1=xi-footsize*ppp/2;
+	x2= 2[xi,x1];
+	y2= y1 - (sind penangle) footsize*ppp/4;
+	draw i..1{-1,0~..2{-cosd penangle, - sind penangle~.
+
+subroutine rfoot(index i):
+	no proofmode;
+	y1=yi; x1=xi+footsize*ppp/2;
+	x2= 2[xi,x1];
+	y2= y1 + (sind penangle) footsize*ppp/4;
+	draw i..1{1,0~..2{cosd penangle, sind penangle~.
+

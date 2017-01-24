@@ -1,0 +1,1297 @@
+;SRC:<6.1.MONITOR.STANFORD>ENET.MAC.124, 26-Nov-86 13:19:56, Edit by BILLW
+; Make IPRCI1-2 more lenient of mismatched hardware/software data lengths
+;[SU-SIERRA.ARPA]FS1:<DEC.6.1.MERGE>ENET.MAC.123, 20-Jun-86 16:13:28, Edit by GROSSMAN
+; ETHINI - ignore NCTs if NTLADR is invalid.  This prevents the setting of
+; a bogus PUP host address.
+;<6-1-MONITOR>ENET.MAC.121,  5-May-85 14:27:44, Edit by LOUGHEED
+; Type packet length on BADIP bugchk.
+; Detect, report, and discard trailer encapsulated IP datagrams
+;<6-1-MONITOR>ENET.MAC.120, 28-Apr-85 15:59:20, Edit by LOUGHEED
+; Change PSKED reference to PSKD1 to minimize scheduler thrashing
+;<6-1-MONITOR>ENET.MAC.119,  8-Apr-85 22:48:03, Edit by LOUGHEED
+; SUBNTF flag controls use of subnets
+;<6-1-MONITOR>ENET.MAC.118, 18-Mar-85 12:36:43, Edit by LOUGHEED
+;<6-1-MONITOR>ENET.MAC.116, 15-Mar-85 14:54:31, Edit by LOUGHEED
+;Move code into extended code section
+;Flush previous edit history
+
+
+SEARCH PROLOG,PHYPAR,ANAUNV
+TTITLE (ENET,ENET,< - Ethernet Routines for PUP and IP Protocols>)
+SUBTTL Kirk Lougheed / Stanford University / 26-February-83
+
+; Copyright (c) 1983, 1984, 1985
+; The Board of Trustees, Leland Stanford Junior University, Stanford, CA 94305
+; All Rights Reserved.
+
+; The information in this software is subject to change without notice
+; and should not be construed as a commitment by Stanford University.
+; Stanford assumes no responsibility for the use or reliability of
+; this software.
+
+SUBTTL Parameter Definitions
+
+IFNDEF STANSW,<STANSW==0>	;Define Stanford site switch
+IFNDEF PUPSW,<PUPSW==0>		;Define switch for PUP protocol support
+IFNDEF REL6,<REL6==1>		;Default assembly for Release 6.x
+
+IFE REL6,<DEFINE XSWAPCD <SWAPCD>>
+IFE REL6,<DEFINE XRESCD <RESCD>>
+
+EXTN <PKORCI,PKOWAI>		;Symbols defined in PKOPR.MAC
+EXTN <ARPENQ,RESOLV>		;Symbols defined in ARP.MAC
+
+IFN STANSW,<
+
+COMMENT \
+	At Stanford we split our network into subnets and (at present) use
+the PUP routing mechanisms to maintain knowledge of the SU-Net's topology.
+The gateways do not speak ICMP, but do know how to forward datagrams for a
+variety of protocols.  We borrow from the Stanford PUP code to figure out how
+to set up the Ethernet encapsulation.
+\
+
+;DEFSTR's from PUP.MAC describing an entry in the PUPROU routing table
+
+DEFSTR ROUACC,PUPROU-1,0,1	;Bit is set if network inaccessible
+DEFSTR ROUBRD,PUPROU-1,1,1	;Bit is set if broadcasts allowed
+DEFSTR ROUNET,PUPROU-1,9,8	;Net to which packets should be routed
+DEFSTR ROUHST,PUPROU-1,17,8	;Host to which packets should be routed
+DEFSTR NETADR,PUPROU-1,35,18	;Our address on this net (0 =) not on net)
+
+IFE PUPSW,<
+	PRINTX ? Must have PUP code for SUNet routing at Stanford
+	PASS2
+	END
+>
+>;IFN STANSW
+
+;Some useful local macros
+
+;ETHHST - extract subnet host number from Internet address
+
+DEFSTR ETHHST,,35,8		;Ethernet subnet host number (all classes)
+
+
+;SUBNET - extract an Ethernet subnet number from an Internet address.
+;Both SRC and DST must be AC's.
+
+DEFINE SUBNET(DST,SRC) <
+	TXNN SRC,.NETCA		;Class A network?
+	 JRST [ LDB DST,[POINT 8,SRC,19]
+		 JRST .+2]	;Yes, get the subnet number
+	LDB DST,[POINT 8,SRC,27] ;No, must be class B or C
+>
+
+;SETSUB - set an Ethernet subnet field in an Internet address.
+;Both SRC and DST must be AC's.
+
+DEFINE SETSUB(SRC,DST) <
+	TXNN DST,.NETCA		;Class A network?
+	 JRST [ DPB SRC,[POINT 8,DST,19]
+		 JRST .+2]	;Yes, get the subnet number
+	DPB SRC,[POINT 8,DST,27] ;No, must be class B or C
+>
+
+;Iorb parameters
+
+NPIRB==^D20			;Number of iorbs
+PUIRBL==IRBLLN*NPIRB		;Length of iorb buffer
+MINIRC==NPIRB/4			;Reserve these many iorbs for interrupt level
+IFL MINIRC-2,<MINIRC==4>	;Minimum is two iorbs/MEIS. Assume two MEIS's.
+IRBTMO==^D5000			;Wait five seconds to declare a MEIS hung
+
+;Ethernet encapsulation - offsets from LCLPKT storage offset.
+; Offset zero is a fake free storage header -- see MAXLDR definition.
+
+OFF3MB==<PKTELI-1-LCLPKT>	;Offset of start of 3MB encapsulation
+OFFETH==<PKTELI-4-LCLPKT>	;Offset of start of 10MB encapsulation
+
+;Sanity check in case someone changes MAXLDR again
+
+IFL MAXLDR-5 <PRINTX MAXLDR too small for 10MB Ethernet operation>
+IFL MAXLDR-2 <PRINTX MAXLDR too small for 3MB Ethernet operation>
+
+DEFSTR E3DST,OFF3MB+0,7,8	;3MB Destination host
+DEFSTR E3SRC,OFF3MB+0,15,8	;3MB Source host
+DEFSTR E3TYP,OFF3MB+0,31,16	;3MB Type code
+
+DEFSTR ETDH0,OFFETH+0,31,16	;10MB First 16 bits of Destination host
+DEFSTR ETDH1,OFFETH+1,31,32	;10MB Last 32 bits of Destination host
+DEFSTR ETSH0,OFFETH+2,31,32	;10MB First 32 bits of Source host
+DEFSTR ETSH1,OFFETH+3,15,16	;10MB Last 16 bits of Source host
+DEFSTR ETTYP,OFFETH+3,31,16	;10MB Type code
+
+;Ethernet packet types
+
+ET%PUP==1000			;PUP
+ET%3IP==1001			;IP on 3MB net
+ET%IP==4000			;IP on 10MB
+ET%ARP==4006			;RFC826 Address Resolution
+ET%XRX==1001			;Xerox PUP Address Resolution (cf. ET%3IP)
+ET%TRL==10000			;Trailer encapsulated IP
+
+;Miscellaneous parameters
+
+MINDAT==^D46			;Minimum data portion for a 10MB datagram
+
+;Resident Storage definitions
+
+RS PUIRBF,PUIRBL		;IORB storage
+RS IORBQ			;Free iorbs - linked through IRBSTS offset
+RS IORBC			;Count of free iorbs
+
+RS STAIMS			;No. process level iorb misses
+RS STAIPR			;No. IP packets received
+RS STAIBR			;No. IP bytes received
+RS STAIRE			;No. IP reception errors
+RS STAIPX			;No. IP packets transmitted
+RS STAIBX			;No. IP bytes transmitted
+RS STAIXE			;No. IP transmission errors
+RS STAIRF			;No. malformed IP packets received
+RS STAIBF			;No. packets dropped because no buffers
+RS STAIRS			;No. short IP packets received
+RS STAERC			;No. of misc. Ethernet packets processed
+RS STAIBC			;No. IP broadcasts received
+RS STATRL			;No. of trailer encapsulated IP's received
+
+RSI MEIBUG,<0>			;-1 if MEIS software debugging in effect
+RSI IPBRDF,<-1>			;-1 if receiving IP broadcasts, 0 if flushing
+RSI SUBNTF,<-1>			;-1 if using subnets, 0 if otherwise
+
+	XSWAPCD			;Start out swappable
+
+SUBTTL IORB Allocation and Construction
+
+;ASGIRB - assign an iorb block
+;Call from process level only
+;We *may* block if a free iorb can't be found.
+;If we unblock because iorbs become free or the timer goes off, we return
+; failure if we are still unable to get an iorb.  This prevents jobs from
+; hanging should the PHYSIO routines get confused.
+;Returns +1, no IORB and either pup fork or net went down
+;	 +2, T1/ iorb pointer
+
+	XRESCD			;We go IOPIOFF while NOSKED
+
+ASGIRB::TDZA T4,T4		;Set flag meaning first time through
+ASGIR0:	SETO T4,		;Set flag for second time through
+	NOSKED			;Prevent races
+	IOPIOFF			;Disable the relevant interrupts
+	MOVE T1,IORBC		;Get free iorb count
+	CAILE T1,MINIRC		;Always leave a few for interrupt level rtns
+	 CALL ASGIRI		;Go get an iorb, return pointer in T1
+	  JRST ASGIR1		;None found or supply low, must block
+	IOPION			;Re-enable interrupts
+	OKSKED			;Allow scheduling again
+	RETSKP			;Return to caller
+	
+ASGIR1:	IOPION			;Enable interrupts
+	OKSKED			;Allow scheduling
+	JUMPN T4,R		;Punt if second time through
+	SKIPE IORBQ		;Uninitialized iorb queue?
+	IFSKP.
+	  CALL IRBINI		;Yes, probably a PUP process running early
+	  JRST ASGIRB		;Init queue and try again
+	ENDIF.
+	AOS STAIMS		;Count a process level iorb miss
+	SKIPN JOBNO		;Are we a job zero process?
+	 RET			;Yes, possible PUP or Internet bkgnd.  Punt.
+	SKIPN NSKED		;NOSKED?
+	 SKIPE INSKED		;Or in scheduler?
+	  RET			;Yes, can't block.
+	MOVE T1,TODCLK		;Get present time
+	ADDI T1,IRBTMO		;Make it a little bit in the future
+	HRLZ T1,T1		;Set up for scheduler test
+	HRRI T1,IORBQT		;Wait for free iorb, timeout, or no Ethernet
+	HDISMS(^D200)		;Wait for condition to be true
+	SKIPN NETSUP		;Did network service go away?
+	 RET			;Yes, leave this test
+	JRST ASGIR0		;No, maybe we now have some buffers
+
+	XSWAPCD
+
+;IORBQT - test for free iorbs
+;Argument is timeout interval  (right half of TODCLK)
+;Callers are: ASGIRB
+
+	RESCD
+
+IORBQT:	SKIPN NETSUP		;Networks still up?
+	 JRST 1(T4)		;No, wakeup so connection will be killed
+	MOVE T2,IORBC		;Get free iorb count
+	CAILE T2,MINIRC		;Sufficient count for process level activity?
+	 JRST 1(T4)		;Yes, wakeup
+	HRRZ T2,TODCLK		;Get some of now
+	SUB T1,T2		;Is timeout still in the future?
+	JUMPGE T1,0(T4)		;Yes, keep on sleeping
+	BUG.(CHK,IORBQX,ENET,SOFT,<ENET - no free iorbs>)
+	SETZM MEITIM		;Force a scan of the MEIS units
+	JRST 1(T4)		;Now wakeup
+
+	XSWAPCD
+
+;ASGIRI - get a free iorb at interrupt level
+;Call at interrupt level or NOSKED and IOPIOFF
+;Returns +1 failure, no free iorbs
+;	 +2 success, T1/ pointer to iorb block 
+;Clobbers T1-T4
+	
+	XRESCD
+
+ASGIRI::MOVEI T1,IORBQ		;Queue header
+	CALL LREMTQ		;Remove item at head of queue
+	IFNSK.
+	  SETZM IORBC		;Nothing there, ensure consistent count
+	  RET			;Single return to caller
+	ENDIF.
+	SOSGE IORBC		;Decrement iorb count
+	 SETZM IORBC		;Fix it up if we have overly decremented it
+	MOVE T1,T2		;Get pointer into place for caller
+	SETZM IRBSTS(T1)	;Clear out any status flags
+	RETSKP			;Return to caller
+
+	XSWAPCD
+
+;RELIRB - Append an iorb to the free iorb queue
+;Call at interrupt level only
+;Takes	T1/ pointer to iorb block
+;Returns +1 always
+;Clobbers T1-T3
+
+	XRESCD
+
+RELIRB::AOS IORBC		;Increment free iorb count
+	MOVEI T2,IRBSTS(T1)	;T2/ link word
+	MOVEI T1,IORBQ		;T1/ queue header
+	CALLRET LAPPTQ		;append item to queue
+
+	XSWAPCD
+
+;IRBINI - initialize queue of free iorbs
+;Called from ETHINI before any MEIS is turned on.
+;Returns +1 always
+;Clobbers T1-T4
+
+IRBINI:	MOVEI T1,IORBQ		;Get address of queue header
+	HRLI T1,(T1)		;Form a nil queue pointer
+	MOVEM T1,IORBQ		;Make sure queue header is correct
+	SETZM IORBC		;No iorbs yet
+	MOVE T4,[XWD -NPIRB,PUIRBF] ;Form an aobjn-style pointer
+IRBIN0:	MOVEI T1,IORBQ		;T1/ Queue header
+	MOVEI T2,IRBSTS(T4)	;T2/ Link word is IRBSTS offset
+	CALL LAPPTQ		;Append this packet
+	AOS IORBC		;Count another iorb
+	ADD T4,[XWD 1,IRBLLN]	;Increment the pointer
+	JUMPL T4,IRBIN0		;Loop over all packets
+	RET			;Return to caller
+
+;LREMTQ - Remove item from head of queue (assumes local addresses)
+;Takes	T1/ Address of queue header
+;Returns +1  Queue empty
+;	 +2  T2/ Address of item removed
+;	     T3/ Address of new head item
+;Clobbers T2,T3
+
+	XRESCD
+
+LREMTQ:	HRRZ T2,(T1)		;Get current head
+	CAIN T2,(T1)		;Empty?
+	 RET			;Yes, fail
+	HRRZ T3,(T2)		;No, get successor
+	HRRM T3,(T1)		;Queue head _ successor
+	HRLM T1,(T3)		;Successor's predecessor _ queue header
+	SETZM (T2)		;Clear links in removed item
+	RETSKP			;Skip return
+
+	XSWAPCD
+
+;LAPPTQ - Append item to queue
+;	T1/ Address of queue header
+;	T2/ Address of item to append
+;Returns +1:
+;	T3/ Address of previous tail item
+;Clobbers T3
+
+	XRESCD
+
+LAPPTQ:	PUSH P,T4		;Save callers T4
+	HRRZ T4,T1		;In section pointer
+	HLRZ T3,(T4)		;Get current tail
+	HRLM T2,(T4)		;Queue tail _ new PB
+	HRRZ T4,T2		;In section pointer
+	HRRZM T1,(T4)		;New PB's successor _ queue header
+	HRLM T3,(T4)		;New PB's predecessor _ old tail
+	HRRM T2,(T3)		;Old tail's successor _ new PB
+	POP P,T4
+	RET    
+
+	XSWAPCD
+
+;BLDCCW - Compute and set up CCW words for a datagram
+;Takes	T1/ pointer to iorb
+;	T2/ starting address of datagram (including Ethernet encapsulation)
+;	T3/ number of 36-bit words in datagram
+;	T4/ CDB,,UDB entry for MEIS
+;Returns +1 always, CCW offsets set in IORB, T1/ pointer to iorb
+;Clobbers T1-T4
+
+	XRESCD
+
+BLDCCW::SAVEAC <Q1>		;We use Q1 as the iorb pointer
+	STKVAR <BLDOFF,BLDADR,BLD2ND>	;Declare local storage
+	MOVE Q1,T1		;Set up iorb pointer
+	HLRZM T4,BLDOFF		;Save only the CDB address
+	MOVEM T2,BLDADR		;Set up starting address of datagram
+	ANDI T2,777		;Want just address bits for start of datagram
+	ADD T2,T3		;Calculate address of last word
+	SUBI T2,1		; ...
+	TRNN T2,777000		;Did we cross a page boundary?
+	 JRST BLDCC0		;No, calculate just one CCW
+	ANDI T2,777		;Want just address bits again
+	ADDI T2,1		;Correct count (word 0 is counts as 1)
+	MOVEM T2,BLD2ND		;Number of words spilled into other page
+	MOVE T1,T3		;Get total word count
+	SUB T1,T2		;Subtract number of words on other page
+	HRLI T1,IRMWRD		;T1/ Data mode,,word count
+	MOVE T2,BLDADR		;Get address of packet buffer
+	MAP T2,(T2)		;T2/ Physical address of datagram start
+	TLZ T2,777760		;Mask off mapping information
+	MOVE T3,BLDOFF		;T3/ CDB address
+	CALL PHYCCW		;Calculate first CCW
+	MOVEM T1,IRBCC0(Q1)	;Stash it
+	MOVE T1,BLD2ND		;Get number of words on second page
+	HRLI T1,IRMWRD		;T1/ data mode,,word count
+	MOVE T2,BLDADR		;Start of packet buffer
+	XMOVEI T2,1000(T2)	;Increment page count
+	ANDCMI T2,777		;Mask off address bits
+	MAP T2,(T2)		;T2/ physical address of second page
+	TLZ T2,777760		;Mask off mapping information
+	MOVE T3,BLDOFF		;T3/ CDB address
+	CALL PHYCCW		;Calculate second CCW
+	MOVEM T1,IRBCC1(Q1)	;Stash it
+	SETZM IRBCC2(Q1)	;End list with a zero
+	MOVEI T1,IRBCC0(Q1)	;List header
+	HRLI T1,IRBCC2(Q1)	;List tail
+	JRST BLDCC1		;Join common exit code
+
+BLDCC0:	MOVE T1,T3		;Set up word count
+	HRLI T1,IRMWRD		;T1/ word data mode,,word count
+	MOVE T2,BLDADR		;Get address of packet buffer
+	MAP T2,(T2)		;Convert virtual address to physical address
+	TLZ T2,777760		;T2/ mask out extraneous mapping information
+	MOVE T3,BLDOFF		;T3/ address of CDB
+	CALL PHYCCW		;Compute CCW data
+	MOVEM T1,IRBCC0(Q1)	;Stash it
+	SETZM IRBCC1(Q1)	;Only one CCW, terminate the list
+	MOVEI T1,IRBCC0(Q1)	;Head of transfer list
+	HRLI T1,IRBCC1(Q1)	;Tail of transfer list
+BLDCC1:	MOVEM T1,IRBXFL(Q1)	;set up transfer pointers
+	MOVE T1,Q1		;Return iorb pointer in T1
+	RET			;Return to caller
+
+	XSWAPCD
+
+;BLDIOR - build an iorb for reading an Ethernet datagram 
+;Takes	T1/ byte count
+;	T2/ buffer pointer
+;	T3/ MEIS data mode
+;	T4/ done interrupt routine addresses: reception error,,reception okay
+;	P1/ NCT address
+;Returns +1 failure, insufficient resources
+;	 +2 success, T1/ pointer to IORB
+
+	XRESCD
+
+BLDIOR::ASUBR <IORBYT,IORBUF,IORMOD,IORDUN>	;Declare local storage
+	CALL ASGIRI		;Get an iorb
+	IFNSK.
+	  MOVE T1,IORBUF	;Get pointer to buffer
+	  JRST RETBUF		;Flush buffer and return
+	ENDIF.
+	MOVE T4,T1		;Put iorb pointer into T4
+	MOVE T2,IORBUF		;Get back buffer pointer
+	STOR T2,IRBUF,(T4)	;Remember buffer address
+	MOVX T2,IRFRED		;Function is read
+	STOR T2,ISFCN,(T4)	; ...
+	MOVEI T2,ETHRIN		;Address of done interrupt handling
+	MOVEM T2,IRBIVA(T4)	; ...
+	MOVE T2,IORDUN		;Addresses of buffer disposal routines
+	MOVEM T2,IRBDUN(T4)	; ...
+	SETZRO IRTRF,(T4)	;No trailer
+	SETONE IRHDR,(T4)	;32-bit headers
+	MOVE T1,IORBYT		;Set packet length
+	MOVEM T1,IRBCNT(T4)	; ...
+	MOVE T2,IORMOD		;Set data data mode
+	STOR T2,IRPMD,(T4)	; ...
+	MOVE T3,NTCAPC(P1)	;Get header count from NCT 
+	STOR T3,IRHLN,(T4)	;Store it in the iorb, use as arg to WRDCNV 
+	CALL WRDCNV		;Turn bytes into 36-bit words
+	MOVE T3,T1		;T3/ Count of 36-bit words in datagram
+	MOVE T1,T4		;T1/ Pointer to iorb
+	LOAD T2,IRBUF,(T1)	;T2/ Address of packet buffer
+	ADD T2,NTOFF(P1)	;Add offset to start of encapsulation data
+	MOVE T4,NTENCU(P1)	;T4/ Retrieve CDB,,UDB from NCT
+	CALL BLDCCW		;Set up channel control words
+	RETSKP			;Read this packet, T1/ iorb address
+
+	XSWAPCD
+
+;BLDIOW - build an iorb for writing an Ethernet datagram 
+;Takes	T1/ byte count
+;	T2/ buffer address
+;	T3/ MEIS data mode
+;	T4/ Address of done handling routine
+;	P1/ NCT pointer
+;Returns +1 always, packet disposed off
+
+BLDIOW::ASUBR <IOWBYT,IOWBUF,IOWMOD,IOWDUN>	;Declare local storage
+	CALL ASGIRB		;No, try for an iorb
+	IFNSK.
+	  MOVE T1,IOWBUF	;No iorbs, get buffer address
+	  JRST RETOUT		;Release buffer as if we sent it
+	ENDIF.
+	MOVE T4,T1		;Use T4 to address iorb
+	MOVE T2,IOWBUF		;Get address of buffer
+	STOR T2,IRBUF,(T4)	;Store buffer pointer in iorb
+	SETZRO IRTRF,(T4)	;No trailer mode
+	MOVX T2,IRFWRT
+	STOR T2,ISFCN,(T4)	;Set function to writing
+	MOVEI T2,ETHWIN		;Done interrupt routine
+	MOVEM T2,IRBIVA(T4)	;Set done interrupt address
+	MOVE T1,IOWDUN		;Get address of buffer handling routine
+	MOVEM T1,IRBDUN(T4)	;Set it
+	SETONE IRHDR,(T4)	;Use 32-bit header mode
+	SKIPN NTETHR(P1)	;Skip if 10MB Ethernet
+	IFSKP.
+	  MOVN T1,IOWBYT	;Get negative of data portion
+	  ADDI T1,MINDAT	;Add smallest allowable data portion
+	  SKIPLE T1		;Skip if packet is larger than minimum
+	   ADDM T1,IOWBYT	;Else pad the byte count for 10MB hardware
+	ENDIF.
+	MOVE T1,IOWBYT		;Get packet length in octets
+	ADDM T1,STAIBX		;Increment total byte count
+	AOS STAIPX		;Count another packet queued for output
+	MOVEM T1,IRBCNT(T4)	;Stash in iorb	
+	MOVE T2,IOWMOD		;Get data mode
+	STOR T2,IRPMD,(T4)	;Stash in iorb
+	MOVE T3,NTCAPC(P1)	;Get header count from NCT
+	STOR T3,IRHLN,(T4)	;Stash in iorb, use as arg for WRDCNV
+	CALL WRDCNV		;Compute number of 36-bit words in packet
+	MOVE T3,T1		;T3/ number of words in datagram
+	MOVE T2,IOWBUF		;Get back buffer pointer
+	ADD T2,NTOFF(P1)	;Add offset to start of encapsulation data
+	MOVE T1,T4		;T1/ pointer to iorb
+	MOVE T4,NTENCU(P1)	;T4/ Get CDB,,UDB for this NI from NCT 
+	CALL BLDCCW		;Assemble CCW words for the packet
+	MOVE T2,NTENCU(P1)	;Set up CDB,,UDB for call to physio routines
+	NOSKED			;Turn off scheduler
+	CALL PHYSIO		;Queue up packet for output
+	OKSKED			;Resume scheduling
+	RET			;Return to caller
+
+;ETHRIN - Ethernet input done routine
+;We are invoked by PHYSIO/PHYMEI on a done interrupt for a read
+;Buffer release routines must expect buffer pointer in T1
+;Takes	T1/ pointer to iorb
+;Returns +1 always
+
+	XRESCD
+
+IFE REL6,<ETHRIN: EA.ENT>
+IFN REL6,<XRENT ETHRIN>
+	PUSH P,T1		;Save pointer to iorb
+	MOVE T4,T1		;Copy iorb pointer
+	LOAD T1,IRBUF,(T4)	;Get buffer address
+	LOAD T2,IRDUN,(T4)	;Get done routine address
+	MOVE T3,IRBSTS(T4)	;Get status bits
+	TXNN T3,IS.ERR		;Everything okay?
+	IFSKP.
+	  AOS STAIRE		;No, count number of reception errors
+	  LOAD T2,IRBAD,(T4)	;Get address of buffer release routine
+	ENDIF.
+	CALL 0(T2)		;Take care of buffer
+	POP P,T1		;Restore iorb pointer
+	CALLRET RELIRB		;Release iorb and return to caller
+
+	XSWAPCD
+
+;ETHWIN - Ethernet output done routine
+;We are invoked by PHYSIO/PHYMEI on a done interrupt from the MEIS
+;Buffer release routines must expect buffer pointer in T1
+;Takes	T1/ pointer to iorb
+;Returns +1 always
+;Clobbers T1-T4
+
+	XRESCD
+
+IFE REL6,<ETHWIN: EA.ENT>
+IFN REL6,<XRENT ETHWIN>
+	PUSH P,T1		;Save pointer to iorb
+	MOVE T2,IRBSTS(T1)	;Get iorb status flags
+	TXNE T2,IS.ERR		;Any error during the transfer?
+	 AOS STAIXE		;Yes, just count it
+	LOAD T2,IRDUN,(T1)	;Get address of buffer disposal routine
+	LOAD T1,IRBUF,(T1)	;Get address of buffer 
+	CALL 0(T2)		;Get rid of the buffer
+	POP P,T1		;Retore iorb pointer
+	CALLRET RELIRB		;Put iorb back on free queue and exit
+
+	XSWAPCD
+SUBTTL IP/Multinet Interface
+
+;ETHINI (NTINI) - Network Initialization
+;Set up the NCT for each MEIS on the system.
+;Takes	P1/ pointer to NCT
+;Returns +1 always
+;Clobbers T1-T4
+
+ETHINI::SKIPG NTLADR(P1)	;NCT address initialized?
+	 RET			;No, leave it alone
+	SKIPN IORBQ		;If iorb queue not yet set up
+	 CALL IRBINI		;Then initialize pool of free iorbs
+	MOVE T1,DBUGSW		;Get setting of debug switch
+	CAIN T1,2		;Standalone system?
+	 SETOM MEIBUG		;Yes, turn on all bug reporting
+	MOVE T3,ENIUTP		;Get aobjn pointer for MEIS table
+ETHIN0:	SKIPN ENCUTB(T3)	;Do we have a MEIS here?
+	 JRST ETHIN1		;No, try next table entry
+	HRRZ T1,ENCUTB(T3)	;T1/ pointer to UDB
+	SKIPE MEUNCT(T1)	;Initialized yet wrt Internet?
+ETHIN1:	 AOBJN T3,ETHIN0	;Loop over all NI's
+	JUMPGE T3,R		;Just quit if no MEIS for this NCT 
+	MOVE T1,ENCUTB(T3)	;Get CDB,,UDB of that MEIS
+	CALL MEITYP		;What type of MEIS?
+	 SKIPA T4,[NT.3MB]	;3MB experimental Ethernet
+	MOVX T4,NT.ETH		;10MB standard Ethernet
+	LOAD T2,NTTYP,(P1)	;Get network type from NCT
+	CAIE T4,(T2)		;NCT matches hardware?
+	 JRST ETHIN1		;No, keep on looking.
+	MOVE T2,ENCUTB(T3)	;Get UDB,,CDB address pair
+	MOVEM T2,NTENCU(P1)	;Remember in NCT
+	HRRZS T2		;Isolate UDB pointer
+	MOVEM P1,MEUNCT(T2)	;Save pointer to NCT in UDB
+	MOVE T3,NTLADR(P1)	;Get our Internet address
+	SUBNET T2,T3		;Get our Ethernet subnet number
+	TXNE T3,.NETCA		;Test for a Class A address
+	 TXNN T3,.NETCB		;Test for a Class B address
+	  TRNA			;Class A or B, subnets are possible
+	   SETO T2,		;Can't have subnets for Class C addresses
+	SKIPN SUBNTF		;Allowing the use of subnets?
+	 SETO T2,		;No, say not possible
+	MOVEM T2,NTSUBN(P1)	;Stash subnet number or -1 in the NCT
+IFN PUPSW,<
+	CAILE T2,NPNETS		;Within range?
+	IFSKP.
+	  HRRZ T1,PUPPAR+2	;Yes, get default PUP subnet number
+	  SKIPN T1		;Skip if already set
+	   HRRM T2,PUPPAR+2	;Else set the default now
+	ENDIF.
+>;IFN PUPSW
+	LOAD T2,ETHHST,NTLADR(P1) ;Get our subnet (3MB Ethernet) host number
+	MOVEM T2,NTHSTN(P1)	;Stash it in the NCT
+	CAIE T4,NT.ETH		;Is this 10MB?
+	IFSKP.
+	  SETOM NTETHR(P1)	;Set to -1 for testing convenience
+	  MOVEI T2,^D8		;Need 8 16-bit words for 10MB encapsulation
+	  MOVEI T3,OFFETH	;Offset from LCLPKT (start of encaps.)
+	ELSE.
+	  SETZM NTETHR(P1)	;Set to 0 for testing convenience
+	  MOVEI T2,^D2		;Need only 2 such words for the 3MB net
+	  MOVEI T3,OFF3MB	;Offset from LCLPKT (start of encaps.)
+	ENDIF.
+	MOVEM T2,NTCAPC(P1)	;Stash in NCT
+	MOVEM T3,NTOFF(P1)	; ...
+	LSH T2,1		;Compute number of encapsulation bytes
+	MOVEM T2,NTCAPB(P1)	;Remember that number as well
+	ADDI T2,4		;Four bytes into IP is minimum for sniffing
+	MOVEM T2,NTIPMN(P1)	; ...
+	ADDI T2,^D20+^D20+^D8-4	;IP header + TCP header + data is max for sniff
+	MOVEM T2,NTIPMX(P1)	; ...
+	RET			;All done, return to caller
+
+;ETHON (NTRSRT) - Network restart instruction
+;Set address mask and enable reception
+;Takes	P1/ pointer to NCT
+;Returns +1 always
+;Clobbers T1-T4
+
+ETHON::	SKIPN T1,NTENCU(P1)	;Load CDB,,UDB for this interface
+	 JRST ETHONX		;We never found the MEIS for this NCT
+ 	CALL MEISDN		;Is the MEIS already enabled?
+	IFNSK.
+	  SKIPE NTORDY(P1)	;Yes, is output on?
+	   RET			;Yes, to both, just quit
+	  JRST ETHON1		;MEIS on, output off. Go restart things.
+	ENDIF.
+	MOVE T1,NTENCU(P1)	;T1/ CDB,,UDB of MEIS unit
+	SKIPN NTETHR(P1)	;10MB Ethernet?
+	IFSKP.
+	  MOVEI T2,1		;Yes, use FSM 1 as our primary address slot
+	  LOAD T3,HRDW0,(P1)	;Get first 32 bits of hardware address
+	  LOAD T4,HRDW1,(P1)	;Get last 16 bits of hardware address
+	ELSE.
+	  MOVE T2,NTHSTN(P1)	;Fetch our 3MB Ethernet host number
+	  SETZB T3,T4		;Clear these AC's, just in case
+	ENDIF.
+	CALL MEIADR		;Set address mask for this host
+	MOVE T1,NTENCU(P1)	;T1/ UDB,,CDB
+	CALL MEION		;Enable reception
+IFN PUPSW,<
+	SKIPGE T1,NTSUBN(P1)	;Pick out our Ethernet subnet number
+	 JRST ETHON1		;Strange.  PUP, but no subnets.
+	MOVE T2,NTHSTN(P1)	;Pick out our PUP (3MB) host number
+	TXO T2,1B1		;Broadcasts allowed on local subnet
+	MOVEM T2,PUPROU-1(T1)	;Set PUP routing entry for this host
+>;IFN PUPSW
+ETHON1:	SETOM NTSTCH(P1)	;Set change of state flag
+	SETOM NTORDY(P1)	;Ouput is possible
+	SETOM NTRDY(P1)		;Net is ready
+	RET			;Return to caller
+
+;Here for a non-existent MEIS
+
+ETHONX:	SKIPE NETON(P1)		;Is the net alleged to be on?
+	 RET			;No, it is off and that is good
+	SETOM NTSTCH(P1)	;Signal change of state
+	SETZM NETON(P1)		;Net is off
+	SETZM NTORDY(P1)	;Output is not possible
+	RET			;Return to caller
+
+;ETHOFF (NTKILL) - Shutdown the interface
+;This routine is a no-op if the MEIS is doesn't exist, is already off,
+; or if someone has issued a SHUTDOWN command from the console.
+;Returns +1 always
+;Clobbers T1-T4
+
+ETHOFF::MOVE T1,SCTLW		;Get scheduler control word
+	TXNN T1,1B3		;Doing a SHUTDOWN? (We might be continued!)
+	 SKIPN T1,NTENCU(P1)	;Load UDB,,CDB for this NI
+	   RET			;Shutdown, or was never on.  Do nothing.
+	CALL MEISDN		;Is the MEIS already down?
+	 SKIPN T1,NTENCU(P1)	;No, load up UDB,,CDB again
+	  RET			;Already off, do nothing
+	SETOM NTSTCH(P1)	;Set change of state flag
+	SETZM NETON(P1)		;State of network is off
+	SETZM NTRDY(P1)		;State of interface is off
+	SETZM NTORDY(P1)	;Output is not possible, don't queue packets
+	CALL MEIOFF		;Disable reception
+	RET			;Return to caller
+Subttl Ethernet Reception Routines
+
+;ETHRCI - Receive an Ethernet Datagram
+;Called at interrupt level from PHYMEI 
+;Takes	T1/ length of Ethernet packet in octets
+;	T2/ Ethernet packet type
+;	P3/ UDB of interrupting MEIS
+;Returns +1 flush packet
+
+
+RS RCILEN,1			;Length seen by hardware
+RS RCITYP,1			;Type seen by hardware
+
+;P1/ points to NCT
+;P4/ points to buffer
+
+	XRESCD
+
+IFE REL6,<ETHRCI::EA.ENT>	;Run in non-zero section (PHYSIO still in zero)
+IFN REL6,<XRENT ETHRCI,G>
+	SKIPN INTON		;IP layer must be initialized
+	 RET			;Punt if not
+	DMOVEM T1,RCILEN	;Save hardware length and type
+	SAVEP			;Preserve these AC'S
+	MOVE P1,MEUNCT(P3)	;Set up pointer to NCT
+	XMOVEI T3,PKORCI	;Default datagram handling routine
+IFN PUPSW,<
+	CAIN T2,ET%PUP		;PUP?  (Same code on both types of net)
+	XMOVEI T3,PUPRCI	;Yes.
+>;IFN PUPSW
+	CAIN T2,ET%TRL		;IP trailer encapsulated?
+	XMOVEI T3,TRLRCI	;Yes.
+	SKIPN NTETHR(P1)	;Branch on type of interface
+	IFSKP.
+	  CAIN T2,ET%IP		;10MB interface. Is it 10MB IP?
+	  XMOVEI T3,IPRCI	;Yes.
+	  CAIE T2,ET%XRX	;Xerox style ARP?
+	  CAIN T2,ET%ARP	;RFC826 style ARP?
+	  XMOVEI T3,ARPRCI	;Yes.
+	ELSE.
+	  CAIN T2,ET%3IP	;3MB interface.  Is it 3MB IP?
+	  XMOVEI T3,IPRCI	;Yes.
+	ENDIF.
+ETHRC0:	CALL (T3)		;Dispatch to appropriate handler
+	 RET			;Flush datagram sitting in RAM
+	RETSKP			;Start transfer, T1/ iorb pointer
+
+	XSWAPCD
+
+;TRLRCI - Trailer encapsulated IP reception interrupt
+;Called at interrupt level, assumes environment set up by ETHRCI
+; Some paranoia code in case a UNIX system tries to use IP trailers
+; to talk to us.  We absolutely can't cope with this type of IP datagram.
+;Returns +1 always, flush the datagram
+
+	XRESCD
+
+TRLRCI:	AOS STATRL		;Count number of these datagrams
+	SKIPE MEIBUG		;Skip if not debugging
+	 BUG.(INF,IPTRLR,ENET,SOFT,<ENET - Received trailer encapsulated IP>)
+	RET			;Return to caller, flush datagram
+
+	XSWAPCD
+
+;IPRCI - IP Reception Interrupt
+;Called at interrupt level, assumes environment set up by ETHRCI
+;Returns +1 flush packet
+;	 +2 receive packet, T1/ pointer to iorb
+
+	XRESCD
+
+IPRCI:	CALL GETBFF		;Get a buffer for the packet
+	 RET			;Can't, must flush it
+	MOVE P4,T1		;Save pointer to packet
+	MOVE T4,RCILEN		;Get number of bytes in packet
+	CAML T4,NTIPMN(P1)	;If smaller than IP mininum
+	 CAMLE T4,NTIPMX(P1)	;Or greater than the "small" IP cutoff
+	  MOVE T4,NTIPMN(P1)	;Then "sniff" the minimum number of bytes
+	MOVE T1,NTOFF(P1)	;Get encapsulation offset from NCT
+	ADD T1,P4		;Set up start address of packet
+	MOVE T2,NTENCU(P1)	;Set up CDB,,UDB of MEIS unit
+	CALL MEIRHD		;"Sniff" some bytes from packet into buffer
+	CALL CHKBRD		;Check for broadcast packet
+	 JRST IPRBRD		;It is.  Go think about it.
+IPRCI0:	LOAD T2,PIPL,-LCLPKT(P4) ;Get datagram length
+	CAIL T2,MINIHS		;Range check the length
+	 CAMLE T2,INTXPB	; ...
+	  JRST IPRCX0		;Go flush the packet -- bad length
+	SKIPE NTETHR(P1)	;If 10MB interface and the software length...
+	 CAIL T2,MINDAT		;...is less than the minimum hardware length
+	  TRNA			;Neither, sanity test is valid
+	   JRST IPRCI1		;Then skip the usual sanity test
+	MOVE T1,RCILEN		;Get back length of packet seen by hardware
+	SUB T1,NTCAPB(P1)	;Compute hardware length less encapsulation
+	SUBI T1,(T2)		;Compare software and hardware counts
+IFE STANSW,<
+	CAILE T1,1		;Should differ at most by one byte (3MB only)
+>;IFE STANSW
+IFN STANSW,<;;; Some machines (eg symbolics 3600) send out "bogus" packets
+	CAILE T1,20		;do SOME sanity checking
+>;IFN STANSW
+	 JRST IPRCX0		;Bad packet, flush it
+IPRCI1:	ADDM T2,STAIBR		;Increment count of bytes received
+	AOS STAIPR		;Increment count of packets received
+	MOVE T1,RCILEN		;Get back total packet size
+	CAMLE T1,NTIPMX(P1)	;Small packet? (optimize channel activity)
+	IFSKP.
+	  AOS STAIRS		;Count another small IP received
+	  MOVE T1,P4		;Get back buffer address 
+	  JRST APPIP		;Append to IP input queue and flush packet
+	ENDIF.
+	MOVE T1,T2		;T1/ Must read over Massbus.  Get byte count.
+	MOVE T2,P4		;T2/ Buffer address
+	MOVX T3,.PM32		;T3/ 32-bit data mode
+	MOVE T4,[XWD RETBUF, APPIP] ;T4/ Buffer handling routines
+	CALL BLDIOR		;Construct iorb for reading
+	 RET			;Some failure, flush packet
+	RETSKP			;Success, pass iorb back to physio
+
+;Here when an IP packet with a bogus length is detected
+;Should figure out a way of reporting the sender, net, etc.
+
+IPRCX0:	AOS STAIRF		;Count a bad packet
+	SKIPE MEIBUG		;MEIS debugging?
+IFE STANSW,<
+	 BUG.(CHK,BADIP,ENET,HARD,<ENET - Bad IP packet>) ;Yes, complain
+>;IFE STANSW
+IFN STANSW,<
+	 BUG.(CHK,BADIP,ENET,HARD,<ENET - Bad IP packet>,<<T2,LENGTH>>) ;Yes, complain
+>;IFN STANSW
+	MOVE T1,P4		;Get pointer to buffer
+	CALL RETBUF		;Release it
+	RET			;Return and flush the packet
+	
+;IPRBRD - here to handle an IP broadcast.  We have special code here since
+; we occasionally want to disable IP broadcast reception when some other
+; host has a brain damaged implementation that is flooding us with datagrams.
+
+IPRBRD:	AOS STAIBR		;Count a broadcast received
+	SKIPE IPBRDF		;Flushing IP broadcasts?
+	 JRST IPRCI0		;No, go read it in using normal code
+	MOVE T1,P4		;Yes, get pointer in place
+	CALL RETBUF		;Release storage
+	CALL PKOWAI		;Is the waif listener interested?
+	 RET			;No, flush the datagram
+	RETSKP			;Yes, T1/ iorb pointer
+
+	XSWAPCD
+
+;APPIP - append an IP packet to the IP input queue
+;Call at interrupt level
+;Takes T1/ pointer to buffer
+;Clobbers T1-T2
+
+	XRESCD
+
+APPIP:	PIOFF			;Make sure PI system is off (lock out AN20)
+	MOVE T2,INTIBI		;Get input queue tail pointer
+	JUMPN T2,APPIP0		;Queue not empty, go append packet
+	MOVEM T1,INTIBO		;Was empty.  This is only item now.
+	SKIPA			;Make head and tail be same packet
+APPIP0:	 STOR T1,NBQUE,(T2)	;Make old packet point to newest packet
+	MOVEM T1,INTIBI		;Set new tail pointer
+	AOS INTFLG		;Cause Internet process to notice it
+IFN STANSW,<	;NULJBF is Release 6 and Stanford Release 5.3+
+IFE REL6,<	
+	SKIPE NULJBF		;Is scheduler running the null job?
+	AOS PSKED		;Yes, wake it up
+>;IFE REL6
+>;IFN STANSW
+IFN REL6,<AOS PSKD1		;Minimize scheduler latency>
+	PION			;Turn PI system back on
+	RET			;Return to caller
+
+	XSWAPCD
+
+;CHKBRD - check if datagram is a broadcast
+;Call at interrupt or process level
+;Takes	P1/ NCT pointer
+;	P4/ buffer pointer
+;Returns +1 broadcast packet
+;	 +2 not broadcast (may be multicast, though)
+;Clobbers T1-T4
+
+	XRESCD
+
+CHKBRD:	SKIPN NTETHR(P1)	;10MB Ethernet?
+	IFSKP.
+	  LOAD T1,ETDH0,(P4)	;Yes, get first 16-bits of destination
+	  TRC T1,177777		;Complement those bits
+	  JUMPN T1,RSKP		;If some still set, can't be broadcast
+	  LOAD T1,ETDH1,(P4)	;Get last 32-bits of destination
+	  TLO T1,740000		;Set low four bits
+	  CAME T1,[-1]		;Skip if all bits now set (broadcast)
+	   RETSKP		;Not broadcast, skip return
+	ELSE.
+	  LOAD T1,E3DST,(P4)	;Get 3MB destination
+	  JUMPN T1,RSKP		;Zero is broadcast on 3MB net
+	ENDIF.
+	RET			;And take a single return 
+
+	XSWAPCD
+
+;ARPRCI - process an ARP packet
+;Called at interrupt level, assumes environment set up by ETHRCI
+;For now we "sniff" the entire packet into the buffer and append the buffer
+; to the ARP input queue.  The assumption is that ARP datagrams are very
+; small, making it inefficient to fire up the channel for a transfer.
+;Takes	P1/ NCT pointer
+;Returns +1 flush packet
+;	 +2 read packet, T1/ iorb pointer
+
+	XRESCD
+
+ARPRCI:	SUB T1,NTCAPB(P1)	;Discount encapsulation bytes
+	CAIL T1,^D12		;Smallest ARP assuming 8-bit hard/prot address
+	 CAMLE T1,INTXPB	;Fits within an IP buffer?
+	  RET			;Bad packet size, return to caller
+	CALL GETBFF		;Get an Internet buffer
+	 RET			;No buffers, must flush packet
+	MOVE P4,T1		;Stash buffer pointer in P4
+	ADD T1,NTOFF(P1)	;Add encapsulation offset into buffer
+	MOVE T2,NTENCU(P1)	;Get CDB,,UDB of MEIS unit
+	MOVE T4,RCILEN		;Get byte count
+	CALL MEIRHD		;Read entire (short) packet into buffer
+	MOVE T1,P4		;Get back buffer pointer
+	MOVE T2,P1		;NCT pointer is argument as well
+	CALL ARPENQ		;Hang buffer on ARP input queue
+	RET			;Flush the packet
+
+	XSWAPCD
+
+;GETBFF - claim and check a free Internet buffer
+;Call at interrupt level
+;The pointer returned by GETBFF points at the PKTELI offset, the beginning of
+; the data.  LCLPKT is the preceding offset that marks the beginning of the
+; four words of encapsulation data.
+;Returns +1 no free buffers, Internet fork prodded
+;	 +2 good buffer claimed, T1/ pointer to buffer
+;Clobbers T1-T4
+
+	XRESCD
+
+GETBFF::PIOFF			;Lock out rest of machine
+	SOSGE INTNFI		;Any buffers?
+	 AOSA INTNFI		;No, fix count
+	  TRNA			;Yes, skip into main code
+	   JRST GETBFX		;Go poke Internet fork
+	MOVE T1,INTFRI		;Get first buffer on queue
+	TRNN T1,-1		;Null queue is a bug
+	 BUG.(HLT,ENTBUF,ENET,SOFT,<ENET - free buffer queue fouled>)
+	LOAD T2,NBQUE,(T1)	;Get pointer to next buffer
+	SKIPE T2		;If non-zero
+	 SETSEC T2,INTSEC	;Then make an extended address
+	MOVEM T2,INTFRI		;Update head of free queue
+	PION			;Let rest of machine run again
+	SETZRO NBQUE,(T1)	;Clear pointer to next buffer
+	CAML T1,[XWD INTSEC,INTFRE]	;Range check the pointer 
+	 CAMLE T1,[XWD INTSEC,INTFRE+INTFSZ-1]	; ...
+	  BUG.(HLT,ENTBF1,ENET,SOFT,<ENET - bad Internet buffer>)
+	RETSKP			;Good return to caller
+
+GETBFX:	PION			;Turn PI system back on
+	AOS INTFLG		;Signal work to do
+	AOS STAIBF		;Increment count of buffer misses
+	SKIPE MEIBUG		;Debugging?
+	 BUG.(INF,ETHBFX,ENET,SOFT,<ENET - no free IP buffers>)	;Yes, complain
+	RET			;Return to caller
+
+	XSWAPCD
+
+;RETBUF - release an Internet buffer to the Internet free pool
+;Call at interrupt level
+;Takes	T1/ buffer pointer
+;Returns +1 always
+;Clobbers T1-T2
+
+	XRESCD
+
+RETBUF::CAML T1,[XWD INTSEC,INTFRE]	;Range check the pointer
+	CAMLE T1,[XWD INTSEC,INTFRE+INTFSZ-1]	; ...
+	IFNSK.
+	  BUG.(CHK,RETBFZ,ENET,SOFT,<ENET - bad buffer pointer at RETBUF>)
+	  RET			;Don't foul free queue if bad pointer
+	ENDIF.
+	OPSTR <SKIPN>,PFSIZ,-LCLPKT(T1)	;Full size packet?
+	 BUG.(CHK,RETBFX,ENET,SOFT,<ENET - Bad packet size>)
+	MOVE T2,T1		;Copy for indexing below
+	PIOFF			;Maintain queue integrity (lock out AN20)
+	EXCH T1,INTFRI		;Release to Internet
+	STOR T1,NBQUE,(T2)	; ...
+	AOS INTNFI		;Count another free buffer
+	PION			;Let rest of machine run
+	RET			;Return to caller
+
+	XSWAPCD
+Subttl IP Output Routines
+
+;ETHOOK (NTOTOK) - net output okay
+;Called T1/ (first hop) destination address
+;	T2/ pointing to an Internet buffer
+;	P1/ address of NCT
+;Returns +1 no can do, T1/ ICMP error code
+;	 +2 success, Ethernet encapsulation done
+;Clobbers T1,T3,T4, does NOT clobber T2
+;Note that we do the Ethernet encapsulation at this point rather than in
+; the ETHHDR (NTLLDR) routine.  We have all the information here and it
+; makes little sense to substantially repeat this work later.
+
+ETHOOK::SAVEAC<T2>		;Preserve this AC
+	STKVAR<DEST>		;Declare local storage
+	MOVEM T1,DEST		;Store destination address
+	MOVX T3,ET%IP		;Get type code for 10MB IP
+	SKIPN NTETHR(P1)	;Skip if 10MB Ethernet
+	MOVX T3,ET%3IP		;Get type code for 3MB IP
+	CALL ENCAPS		;Encapsulate the datagram
+	 JRST ETHOKX		;Can't send packet, generate ICMP error
+	RETSKP			;Good return to caller
+
+;Here when we can't do anything
+
+ETHOKX: SKIPE JOBNO		;Never complain if job zero (ping code) 
+	 SKIPN MEIBUG		;Do complain if MEIS debugging
+	  TRNA			;No complaints if not debugging or job zero
+	   BUG.(INF,ETHRTX,ENET,SOFT,<ENET - IP routing failure>) ;complain
+	JUMPE T1,ETHOK1		;Jump if temporary failure because of ARP
+	MOVE T1,DEST		;Get back destination
+	CALL HSTDWN		;Signal that host is inaccessible
+ETHOK1:	MOVX T1,<ICM%SQ>	;ICMP error is "source quench"
+	RET			;Take failure return
+
+	ENDSV.
+
+;HSTDWN - signal upper levels that a host is not accessible
+;Should define another status bit meaning "Gateway is down, host inaccessible"
+;Takes	T1/ internet address
+;Returns +1 always
+
+HSTDWN:	JUMPE T1,R		;Quit now if no specific host
+	CALL HSTHSH		;Find hash index for host
+	 RET			;No index, just return
+	MOVX T1,HS%VAL		;Get valid flag
+	IORM T1,HSTSTS(T2)	;Set it
+	MOVX T1,HS%UP		;Get host up flag
+	ANDCAM T1,HSTSTS(T2)	;Be sure to clear it
+	RET			;Return to caller
+
+;ETHOUT (NTOSRT) - Start output on the MEIS
+;Examine queued Internet packets and send one if possible
+;Takes	P1/ pointer to NCT
+;Returns +1 always
+
+ETHOUT::SKIPE NTIOBO(P1)	;Anything at head of Internet output queue?
+	 CALL GETOUT		;Yes, pull it off the queue
+	   RET			;Nothing there or lost timing race
+	MOVE T2,T1		;T2/ Get buffer pointer into place	
+	LOAD T1,PIPL,-LCLPKT(T2) ;T1/ Get packet length in octets
+	MOVX T3,.PM32		;T3/ 32-bit data mode
+	MOVEI T4,RETOUT		;T4/ Buffer disposal routine
+	CALL BLDIOW		;Construct and queue up an Ethernet write
+	 NOP			;Ignore any errors
+	RET			;Single return always
+
+;GETOUT - pull a packet off the Internet output queue
+;Takes	P1/ pointer to NCT
+;Returns +1 no packets to be sent
+;	 +2 success, T1/ address of packet to send
+;Clobbers T1-T2
+
+	XRESCD
+
+GETOUT:	PIOFF			;Interlock with PI system
+	SKIPN T1,NTIOBO(P1)	;Load pointer to head of Internet queue
+	 JRST GETOU1		;Nothing to do, quit
+	LOAD T2,NBQUE,(T1)	;Get successor packet
+	SKIPE T2		;Don't extend if nil
+	 SETSEC T2,INTSEC	;Make extended address
+	MOVEM T2,NTIOBO(P1)	;Update queue header
+	SKIPN T2		;Now a null queue?
+	 SETZM NTIOBI(P1)	;Yes, clear tail pointer as well
+	SETZRO NBQUE,(T1)	;Clear links in dequeued packet
+	AOS (P)			;Prepare skip return
+GETOU1:	PION			;Reallow PI now that queues are safe
+	RET			;Good return to caller
+
+	XSWAPCD
+
+;RETOUT - Release an IP output buffer
+;Called from interrupt level
+;This routine makes no assumptions about the size of the buffer and thus
+; hooks it to the general free list that the background fork looks at.
+;Takes	T1/ buffer pointer
+;Returns +1 always
+;Clobbers T1-T2
+
+	XRESCD
+
+RETOUT:	CAML T1,[XWD INTSEC,INTFRE]	;Range check the pointer 
+	CAMLE T1,[XWD INTSEC,INTFRE+INTFSZ-1]	; ...
+	IFNSK.
+	  BUG.(CHK,RETOTX,ENET,SOFT,<ENET - bad buffer pointer at RETOUT>)
+	  RET			;Don't foul free queue if bad pointer
+	ENDIF.
+	MOVE T2,T1		;Copy buffer pointer for indexing
+	PIOFF			;Make sure no one can manipulate free list
+	EXCH T1,INTNFB		;Put on free list
+	STOR T1,NBQUE,(T2)	;Hang old list off of this new head
+	PION			;Reallow PI activity
+	AOS INTFLG		;Get Internet gateway to notice it
+	RET			;Return to caller
+
+	XSWAPCD
+
+SUBTTL Subnet Routing and Ethernet Encapsulation
+
+;ENCAPS - perform IP and PUP encapsulation
+;Takes	T1/ address - if IP, right justified 32-bits of first hop address
+;		      if PUP, 1B0+subnet,,host of ultimate destination
+;	T2/ buffer pointer with zero point at start of 10MB encapsulation field
+;	T3/ protocol type code
+;	P1/ NCT address
+;Returns +1 failure, T1/ -1 if no path, 0 if ARP needed
+;	 +2 success, network dependent datagram encapsulation performed
+;Clobbers T1-T4
+
+;Q1 - scratch AC for SUBROU
+;Q2 - buffer pointer
+;Q3 - type code
+
+ENCAPS::SAVEQ			;We use these AC's
+	DMOVEM T2,Q2		;Load up buffer pointer, datagram type
+	XMOVEI T4,ENCETH	;Assume we want standard 10MB encapsulation
+	SKIPN NTETHR(P1)	;Standard 10MB Ethernet?
+	XMOVEI T4,ENC3MB	;No, we want 3MB encapsulation
+	CALL 0(T4)		;Do the output okay, encapsulation checks
+	 RET			;Failure
+	RETSKP			;Success return to caller
+
+;ENC3MB - perform 3MB datagram encapsulation
+;Set source and destination host addresses
+;Takes	T1/ PUP or IP address
+;	Q2/ buffer pointer
+;	Q3/ protocol type
+;	P1/ NCT address
+;Returns +1 routing failure, T1/ -1 if hard error, 0 if temporary (ARP)
+;	 +2 success, encapsulation data set up
+;Clobbers T1,T3-T4, Preserves T2
+
+ENC3MB:	CAIE Q3,ET%3IP		;Is the protocol 3MB IP?
+	 JRST ENC3M0		;No, go straight to subnet routing
+	LOAD T3,ETHHST,T1	;Get IP destination
+	CAIE T3,377		;Host 377 is IP broadcast address
+	 JRST ENC3M0		;Standard IP, do subnet routing
+	MOVE T3,NTHSTN(P1)	;Get source host number from NCT
+	SETZ T4,		;Destination address is broadcast
+	JRST ENC3M1		;Set up broadcast addresses
+
+ENC3M0: CALL SUBROU		;Do subnet routing
+	 JRST RETO		;Not possible, return hard failure
+ENC3M1:	STOR T3,E3SRC,(Q2)	;Set source host number
+	STOR T4,E3DST,(Q2)	;Set destination host number
+	STOR Q3,E3TYP,(Q2)	;Set packet type
+	RETSKP			;Skip return to caller
+
+;ENCETH - perform 10MB datagram encapsulation
+;Set source and destination host addresses
+;Takes	T1/ PUP or IP address
+;	Q2/ buffer pointer
+;	Q3/ protocol type
+;	P1/ NCT address
+;Returns +1 routing failure, T1/ -1 if hard error, 0 if temporary (ARP)
+;	 +2 success, encapsulation data set up
+;Clobbers T1,T3-T4, Preserves T2
+
+ENCETH:	CAIE Q3,ET%PUP		;PUP packet?
+	IFSKP.
+	  TRNN T1,-1		;Host 0 is PUP broadcast address
+	   JRST ENCET1		;Doing a broadcast
+	ELSE.
+	  LOAD T2,ETHHST,T1	;Get IP destination
+	  CAIN T2,377		;Host 377 is IP broadcast address
+	   JRST ENCET1		;Doing a broadcast
+	ENDIF.
+	SKIPGE NTSUBN(P1)	;Do we have subnets?
+	 JRST ENCET2		;No, skip the subnet routing stuff
+	CALL SUBROU		;Do subnet routing
+	 JRST RETO		;Not possible.  Return hard failure.
+	MOVE T3,NTSUBN(P1)	;Get our subnet number ready
+	CAIE Q3,ET%PUP		;PUP packet?
+	IFSKP.
+	  HRRZ T1,T4		;Resolve just the first hop host number
+	  HRLI T1,(T3)		;Form subnet,,host
+	ELSE.
+	  STOR T4,ETHHST,T1	;Set first hop host number
+	  SETSUB T3,T1		;Set first hop subnet number
+	ENDIF.
+ENCET2:	MOVE T2,Q3		;T2/ protocol type
+	CALL RESOLV		;Turn protocol address into hardware address
+	 JRST RETZ		;Can't do it, return soft error
+	STOR T1,ETDH0,(Q2)	;First 16 bits of destination host
+	STOR T2,ETDH1,(Q2)	;Last 32 bits of destination
+ENCET0:	LOAD T1,HRDW0,(P1)	;Get first 32 bits of our hardware address
+	STOR T1,ETSH0,(Q2)	;Set in datagram
+	LOAD T1,HRDW1,(P1)	;Get last 16 bits of our hardware address
+	STOR T1,ETSH1,(Q2)	;Set in datagram
+	STOR Q3,ETTYP,(Q2)	;Set type field 
+	RETSKP			;Skip return
+
+;Here to set hardware broadcast destination address
+
+ENCET1:	SETONE ETDH0,(Q2)	;-1 is broadcast address
+	SETONE ETDH1,(Q2)	; ...
+	JRST ENCET0		;Join rest of encapsulation code
+
+;SUBROU - do subnet routing
+;Takes	T1/ network address:  PUP: 1B0+subnet,,host
+;			       IP: 32 bits right justified
+;	Q2/ buffer pointer
+;Returns +1 destination inaccessible
+;	 +2 success, T3/ source host (8 bits)
+;		     T4/ destination host (8 bits)
+;Clobbers Q1, T2-T4
+
+;At Stanford we must consult the PUP routing table to figure out if we need
+; to use a local gateway to get to the destination host.  Other sites that
+; want to use subnet routing need to implement some other scheme.
+
+IFE STANSW,<
+SUBROU:	BUG.(INF,SUBRTX,ENET,SOFT,<ENET - Subnet routing scheme not defined>)
+	RET			;Complain and return
+>;IFE STANSW
+IFN STANSW,<
+SUBROU:	IFL. T1			;If trying to route PUP
+	  LDB Q1,[POINT 8,T1,17] ;Get subnet from left half
+	ELSE.
+	  SUBNET Q1,T1		;Otherwise get destination subnet from IP addr.
+	ENDIF.
+	CAILE Q1,NPNETS		;Within range of routing table?
+	 RET			;No, call it inaccessible
+	SKIPE Q1		;Allow subnet zero to mean connected subnet
+	CAMN Q1,NTSUBN(P1)	;On our subnet?
+	IFNSK.
+	  MOVE T3,NTHSTN(P1)	;Yes, get our subnet host number
+	  CALL USEDST		;Default host according to PUP or IP argument
+	  RETSKP		;Take good return
+	ENDIF.
+	JN ROUACC,(Q1),R	;Punt if subnet is inaccessible
+	LOAD T4,ROUHST,(Q1)	;Get host we route to on dest subnet
+	SKIPN T2,T4		;Zero means route directly
+	 CALL USEDST		;So use destination we were given
+	SKIPE T2		;Were we routing?
+	 LOAD Q1,ROUNET,(Q1)	;Yes, get subnet we are routing to
+	LOAD T3,NETADR,(Q1)	;Get our address on that subnet
+	JUMPE T3,R		;We're not there.  Punt.
+	RETSKP			;Return with T3, T4 set up.
+	  
+;Helper routine.  Get 8 bits of destination host from network address.
+
+USEDST:	SKIPL T4,T1		;Skip if PUP, load destination
+	 LOAD T4,ETHHST,T1	;Load destination from IP address
+	HRRZS T4		;Clear flag bits in case PUP
+	RET			;Return to caller
+>;IFN STANSW
+
+IFN STANSW,<
+;FNDINT - find best interface after net has been selected.
+;This routine addresses the problem of having two interfaces onto one network.
+; Normally the Multinet code only sees one interface, not necessarily the
+; optimal one. We are called by GWYLUK to ensure the best interface is chosen.
+; This code assumes Stanford-style subnet routing and handles multiple MEIS
+; devices only.
+;Takes	P1/ GWYLUK's best guess at an interface
+;	T1/ first hop address (either ultimate host or a local gateway)
+;Returns +1 always
+;	P1 changed if a better interface exists
+;	T1,T3 preserved
+
+FNDINT::TDZA T2,T2		;Find best interface that is up
+FNDINS::SETO T2,		;Find best interface, don't care if it's down
+	LOAD T4,NTDEV,(P1)	;Get type of hardware on this net
+	CAIN T4,NT.MEI		;If MEIS, then we do something special
+	 SKIPGE NTSUBN(P1)	;Possible to have subnets?
+	  RET			;No MEIS or no subnets, just return now
+	STKVAR <STRICTF>	;Declare local storage
+	MOVEM T2,STRICTF	;Set up flag word
+	SUBNET T4,T1		;Get destination subnet
+	CAIGE T4,NPNETS		;Check if it's within range
+	 SKIPG PUPROU-1(T4)	;Is that subnet at all accessible?
+	  RET			;No, quietly return having done nothing
+	XMOVEI T2,NCTVT		;Point to the NCT vector table
+FNDIN0:	LOAD T2,NTLNK,(T2)	;Get next NCT in the chain
+	JUMPE T2,FNDIN2		;Not directly connected to that subnet
+	CAME T4,NTSUBN(T2)	;Are we on that subnet?
+	 JRST FNDIN0		;No, try again
+	SKIPN NTORDY(T2)	;Is the interface up?
+	 SKIPE STRICTF		;Yes, do we care if interface is down?
+	  TRNA			;Up or we don't care if it's down.  Use it
+	   JRST FNDIN0		;No, go look for another
+FNDIN1:	MOVE P1,T2		;Found a directly connected interface
+	RET			;Return to caller
+
+;No direct connections to that subnet.  Pick best interface for routing.
+
+FNDIN2:	LOAD T4,ROUNET,(T4)	;Get subnet number of host I should route thru.
+	XMOVEI T2,NCTVT		;Point to the NCT vector table
+FNDIN3:	LOAD T2,NTLNK,(T2)	;Get next NCT in the chain
+	JUMPE T2,R		;Not directly connected to that subnet
+	CAME T4,NTSUBN(T2)	;Are we on that subnet?
+	 JRST FNDIN3		;No, try again
+	SKIPN NTORDY(T2)	;Is interface up?
+	 SKIPE STRICTF		;No, do we care?
+	  JRST FNDIN1		;Up or we don't care if it's down.  Use it.
+	   JRST FNDIN3		;Interface is down, try for a better one
+	ENDSV.
+>;IFN STANSW
+
+	TNXEND
+	END

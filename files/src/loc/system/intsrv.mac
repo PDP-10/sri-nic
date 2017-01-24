@@ -1,0 +1,3332 @@
+;[SRI-NIC]SRC:<LOC.SYSTEM>INTSRV.MAC.7, 19-Dec-83 15:40:48, Edit by IAN
+;Use symbolic hostname in DEAD routines.
+;[SRI-NIC]PS:<SATZ.STANFORD>INTSRV.MAC.2, 23-Nov-83 11:26:22, Edit by IAN
+;TACnews stuff [NIC1]
+;<TCP>INTSRV.MAC.10,  7-Sep-83 00:31:53, Edit by LOUGHEED
+; Search TCPSYM and ANAUNV
+;<TCP>INTSRV.MAC.9,  7-Sep-83 00:29:55, Edit by LOUGHEED
+; Don't do second SPJFN% in DOINF.
+;<TCP>INTSRV.MAC.8,  3-Jul-83 03:15:52, Edit by LOUGHEED
+; Call SNDCLS after FINGER has run to finish off connection
+;<TCP.STANFORD>INTSRV.MAC.7, 11-May-83 00:16:51, Edit by MRC
+;Stanford changes:
+; Add SMTP server to run MAISER
+; Turn off FT.TLL, FT.IS, FT.PRT
+;<ISI.SUBSYS>INTSRV.MAC.6, 17-Mar-83 16:56:23, Edit by HFEHLING
+; Bug fix DOINF1; pass FHINF to KFORK%
+;ISISRC:<ISI.SUBSYS>INTSRV.MAC.5,      18-Jan-83 17:20:25, Ed: DALE@USC-ISI
+; In DOICP; use 30 sec timeout in OPEN, then use service specific
+;	timeout in a zero octet SEND
+; In DOINF; close/release JFN on TVT prior to killing inferior work fork
+;ISISRC:<ISI.SUBSYS>INTSRV.MAC.4,      11-Jan-83 09:37:51, Ed: DALE@USC-ISI
+; Bug fix DOINF; reset the primary JFNs of the inferior fork to the job
+;	terminal, away from the assigned TVT
+; Use SYS:STATUS.EXE entry vec +3 to get automatic TCP connection display
+;ISISRC:<ISI.SUBSYS>INTSRV.MAC.3,       7-Jan-83 17:52:15, Ed: DALE@USC-ISI
+; Make timeout and retransmission parameters per fork
+;PS:<DALE>INTSRV.MAC.2,      30-Dec-82 12:11:12, Ed: DALE@USC-ISI
+; Adjustments to error handling to reduce hanging of service on bad connection
+; Add MKINF
+;PS:<DALE>INTSRV.MAC.1,      29-Dec-82 17:58:13, Ed: DALE@USC-ISI
+; This file was the result of "merging" NETSRV, TNSRV and FTTCTT
+; to provide a service monitor for the IP/TCP environment, as
+; NETSRV currently provides for the NCP environment.
+; Later on, symbols may be changed to reflect IP/TCP terms;
+; this release was purposely kept as close as possible to NETSRV.
+
+;ISISRC:<ISI.SUBSYS>NETSRV.MAC.5011,  7-Jul-82 09:59:41, Ed: DALE
+; ...
+;<PAETZOLD>NETSRV.MAC.2, 23-Aug-81 12:10:10, Edit by PAETZOLD
+;Add FT.TIP switch - If on then dont allow telnet from TIP's
+; UPD ID= 1, SNARK:<5.ARPA-UTILITIES>NETSRV.MAC.3,   9-Aug-81 20:28:03 by PAETZOLD
+;Dont increment return PC in WAITGO
+
+;This software is furnished under a license and may only be used
+; or copied in accordance with the terms of such license
+
+;Copyright (C) 1980, 1981 by,
+;Digital Equipment Corporation, Maynard Massachusets
+
+TITLE INTSRV - TOPS-20AN Internet Logger/Server
+
+COMMENT \
+
+	This is the NEW and IMPROVED TOPS-20AN ARPANET Logger/Server.
+This program replaces NETSER and FTSCTL.  The program is designed to
+run as a SUBJOB and NOT a subfork of SYSJOB.  The program communicates
+over .PRIIN and .PRIOU.  Commands to change the state of this program
+may be entered via the ^ESPEAK mechanism.  See NETSRV.MEM.
+
+	The program currently supports the following servers:
+
+		o  New Telnet
+		o  Old Telnet
+		o  FTP
+		o  SYSTAT
+		o  NETSTAT
+		o  Date and Time
+		o  TTYTST
+
+N.B.
+
+	NETSRV uses absolute assembly techniques.  They are used so
+that regions of the code (eg. pure) can be easily write protected to
+assist with debuging and reliability goals.  NETSRV uses its own 
+MACREL routines.  If MACREL routines are changed then the routines
+internal to NETSRV must be changed also.
+
+\
+
+	SUBTTL UNV and assembly control symbols
+
+	SEARCH MONSYM,MACSYM	; get UNV files we need
+				; we use our own MACREL routines
+
+	SEARCH TCPSYM,ANAUNV
+
+	DEFINE SYM(A,B),<A=B>
+	DEFINE SYMS(A,B),<A==B>
+	DEFINE DSYM(A,B),<IFNDEF A,<A=B>>
+	DEFINE DSYMS(A,B),<IFNDEF A,<A==B>>
+
+	IFNDEF DEBUG,<DEBUG==0>	; debug code included if non-zero
+	IFE DEBUG,<SALL>	; turn off MACRO listings
+	IFE DEBUG,<.DIRECTIVE FLBLST> ; turn off extended ASCIZ listings
+	DSYMS DBGTST,0		; use local command files if on
+
+	DSYMS FT.FNG,1		;#1 include FINGER if on (not supported)
+	DSYMS FT.TLL,0		;#1 Include TELL if on (ISI only)
+	DSYMS FT.IS,0		;#6 Include IS if on (ISI only)
+	DSYMS FT.TIP,0		; do not allow TELNET from tips if on
+	DSYMS FT.PRT,0		;#7 Include VMPSRV if on (ISI only)
+				; version information
+	DSYMS FT.TAC,0		;[NIC1] Include TACnews server (NIC only)
+
+	DSYMS VWHO,4		; who last hacked (0=DEC development)
+	DSYMS VMAJOR,^D5	; major version number
+	DSYMS VMINOR,^D0	; minor version number
+	DSYMS VEDIT,7		;#10  edit number
+	VERSIO==:<VWHO>B2!<VMAJOR>B11!<VMINOR>B17!<VEDIT>B35
+	SUBTTL AC names
+
+				; AC names (AC 10 is free)
+	SYM F,0			; flags
+	SYM T1,1		; \
+	SYM T2,2		;  \
+	SYM T3,3		;   > temporary ACs for JSYS's
+	SYM T4,4		;  /
+	SYM T5,5		; /
+	SYM P1,6		; general purpose AC
+	SYM P2,7		; general purpose ditto
+	SYM ES,11		; error string loc
+	SYM NX,12		; temporary AC for my macros
+	SYM FP,13		; file byte pointer
+	SYM FX,14		; fork index
+	SYM CX,16		; temp AC for MACSYM (very, very temporary)
+	SYM P,17		; PDL stack pointer
+
+				; alternative names for ACs
+	SYMS AC0,0
+	SYMS AC1,1
+	SYMS AC2,2
+	SYMS AC3,3
+	SYMS AC4,4
+	SYMS AC5,5
+	SYMS AC6,6
+	SYMS AC7,7
+	SYMS AC10,10
+	SYMS AC11,11
+	SYMS AC12,12
+	SYMS AC13,13
+	SYMS AC14,14
+	SYMS AC15,15
+	SYMS AC16,16
+	SYMS AC17,17
+	SUBTTL OPDEFS and macro macros
+
+	DEFINE JSYSF,<ERCAL .JSYSF>
+	DEFINE RETSKP,<JRST RSKP>
+	DEFINE NOERR,<ERJMP .+1>
+	DEFINE NOOP,<JFCL>
+	DEFINE OKINT,<CALL .OKINT>
+	DEFINE NOINT,<CALL .NOINT>
+
+	XLISTS==0
+
+	DEFINE XLIST%,<
+	XLISTS==XLISTS+1
+	IFE DEBUG,<IFE <XLISTS-1>,<XLIST>>>
+
+	DEFINE LIST%,<
+	XLISTS==XLISTS-1
+	IFE DEBUG,<IFE <XLISTS>,<LIST>>>
+	SUBTTL Flags and flag control macros
+
+				; flag defs for AC F
+	SYMS F%RFC,1B0		; RFC received (forks only)
+	SYMS F%ICP,1B1		; ICP socket open (forks only)
+	SYMS F%RCV,1B2		; receive socket open (forks only)
+	SYMS F%SND,1B3		; send socket open (forks only)
+	SYMS F%OLD,1B4		; old TELNET protocol flag bit (forks only)
+	SYMS F%PRV,1B5		; CRJOB%'d job is to be WHEEL (forks only)
+	SYMS F%SRV,1B6		; this is a server (forks only)
+	SYMS F%REF,1B7		; REFUSE command flag (mother only)
+	SYMS F%TAK,1B8		; TAKE command (or mode) in effect
+	SYMS F%ONC,1B9		; once only code done flag
+	SYMS F%FLW,1B10		; WAIT command was done in take file
+	SYMS F%ICE,1B11		;#4 Unexpected state in ICP connection
+
+				; Flag defs for word GLOBAL
+	SYMS GF%MSG,1B0		; type out login message
+	SYMS GF%NET,1B1		; ARPANET is up flag
+	SYMS GF%WDN,1B2		; ARPANET was down flag
+	SYMS GF%LOG,1B3		; logging is active
+
+	SYMS AT%NTP,1B2		; new protocol flag for ATNVT%
+	SYMS .ALMXP,777777	; alarm expired
+	SYMS .BADOK,777776	; bad okint/noint
+	SUBTTL Flag control macros
+
+	DEFINE MKGX(NAME,NORMAL),<
+	DEFINE NAME(FLG),<
+	XLIST%
+	MOVE NX,GLOBAL
+	LIST%
+	NORMAL NX,FLG>>
+
+	DEFINE MKGXM(NAME,NORMAL),<
+	DEFINE NAME(FLG),<
+	XLIST%
+	MOVE NX,GLOBAL
+	LIST%
+	NORMAL NX,FLG
+	XLIST%
+	MOVEM NX,GLOBAL
+	LIST%>>
+
+				; global flag testing macros
+	MKGXM GXO,TXO		; set flag
+	MKGXM GXZ,TXZ		; reset flag
+	MKGX GXNE,TXNE		; test flag off
+	MKGX GXNN,TXNN		; test flag on
+	SUBTTL Parameters
+
+	DSYMS FT.FST,-1		; fast mode (we run in queue zero)
+	DSYMS PDLSIZ,100	; main stack size
+	DSYMS FPDLSZ,100	; fork PDL stack size
+	DSYMS MSGSIZ,^D1000	; max number of chars in login file
+	DSYMS TIMRFC,^D15000	; time to wait for matching RFC
+	DSYMS TIMALL,^D15000	; time to wait for allocation
+	DSYMS TIMOPN,^D15000	; time to wait for data connections to open
+IFN FT.FNG,<DSYMS TIMFNG,^D15000> ; time to wait for FINGER command to come back
+	DSYMS TIMNVT,^D30000	; time to wait for ATNVT% to return
+	DSYMS TIMCRJ,^D30000	; time to wait for CRJOB% to return
+	DSYMS TIMATC,^D30000	; time to wait for ATACH% to return
+	DSYMS TIMCHK,^D30000	; time interval for asynchronous process
+	DSYMS TIMSHT,^D5000	; short wait interval
+	DSYMS ERRMAX,12		; maximum fatal error count
+	DSYMS NTSTSO,3		; EVEC offset for NETSTAT
+IFN FT.TLL,<DSYMS TELLO,3>	; EVEC offset for TELL
+	DSYMS BUFSIZ,^D5000	; log file buffer size in characters
+	DSYMS ERRSIZ,^D500	; log file error buffer in characters
+	DSYMS TXTSIZ,^D200	; text buffer size
+	DSYMS DDTADR,770000	; DDT starting address
+	SYM MAXPAG,777		; largest page number
+	DSYMS ATMSIZ,^D100	; atom buffer size
+	DSYMS HSTNMS,^D13	; size of host name field
+	DSYMS MINSKT,1000	; Minimum relative socket we will use
+	DSYMS MAXSKT,77776	; Maximum relative socket we will use
+	DSYMS DATSIZ,4000	; DATBUF size
+
+; Connection states:
+	SYM SYNCED,7
+	SUBTTL TTY I/O macros
+
+	DEFINE TYPEC(CHR),<
+	XLIST%
+	MOVEI T1,CHR
+	LIST%
+	PBOUT%>
+
+	DEFINE TYPE(STR),<
+	XLIST%
+	HRROI T1,[ASCIZ\
+STR\]
+	LIST%
+	PSOUT%>
+
+	DEFINE ETYPE(STR),<
+	XLIST%
+	HRROI T1,[ASCIZ\STR\]
+	LIST%
+	ESOUT%>
+
+	DEFINE TYPEN(STR),<
+	XLIST%
+	HRROI T1,[ASCIZ\STR\]
+	LIST%
+	PSOUT%>
+
+	DEFINE TYPEA(ADR),<
+	XLIST%
+	HRRO T1,ADR
+	LIST%
+	PSOUT%>
+
+	DEFINE NUMO(ADR,RDX,SIZ),<
+	XLIST%
+	MOVE T2,ADR
+	MOVEI T1,.PRIOU
+	MOVX T3,<NO%LFL!<SIZ>B17!<RDX>B35>
+	LIST%
+	NOUT%
+	XLIST%
+	 JSYSF
+	LIST%>
+	SUBTTL BUFFER I/O macros
+
+	DEFINE FNUMO(ADR,RDX,SIZ),<
+	XLIST%
+	MOVE T2,ADR
+	MOVX T3,<<SIZ>B17!<RDX>B35>
+	LIST%
+	CALL .FNUMO>
+
+	DEFINE FTYPE(STR),<
+	XLIST%
+	HRROI T2,[ASCIZ\
+STR\]
+	LIST%
+	CALL .FTYPE>
+
+	DEFINE FTYPEN(STR),<
+	XLIST%
+	HRROI T2,[ASCIZ\STR\]
+	LIST%
+	CALL .FTYPE>
+
+	DEFINE FTYPEA(ADR),<
+	XLIST%
+	HRRO T2,ADR
+	LIST%
+	CALL .FTYPE>
+
+	DEFINE FTYPEC(CHR),<
+	XLIST%
+	MOVX T2,CHR
+	LIST%
+	CALL .FTYPC>
+	SUBTTL Alarm and lock control macros
+
+	DEFINE ALARM(TIME,ADDR,STRING),<
+	XLIST%
+	MOVX NX,<TIME,,ADDR>
+	HRROI ES,[ASCIZ\STRING\]
+	LIST%
+	CALL ALARMS>
+
+	DEFINE CANCEL,<CALL ALARMC>
+
+	DEFINE LOCK(ADR),<
+	XLIST%
+	MOVEI NX,ADR
+	LIST%
+	CALL .LOCK>
+
+	DEFINE UNLOCK(ADR),<
+	XLIST%
+	MOVEI NX,ADR
+	LIST%
+	CALL .UNLOC>
+	SUBTTL COMND% JSYS macros
+
+	DEFINE CMD(NAME,DSP,FLAGS),<
+	IFB <DSP>,<
+	[CM%FW!FLAGS
+	ASCIZ\NAME\],,.'NAME>
+	IFNB <DSP>,<
+	[CM%FW!FLAGS
+	ASCIZ\NAME\],,DSP>>
+
+	DEFINE DOCMD(FNC,DATA),<
+	XLIST%
+	MOVX T1,<<FNC>B8>
+	IFB <DATA>,<SETZ T2,>
+	IFNB <DATA>,<MOVX T2,<DATA>>
+	LIST%
+	CALL .DOCMD>
+
+	DEFINE DOCMD2(FNC,DATA),<
+	XLIST%
+	MOVX T1,<<FNC>B8>
+	IFB <DATA>,<SETZ T2,>
+	IFNB <DATA>,<MOVX T2,<DATA>>
+	LIST%
+	CALL .DOCM2>
+
+	DEFINE NOISE(STR),<DOCMD .CMNOI,<-1,,[ASCIZ\STR\]>>
+	DEFINE CNFIRM,<DOCMD .CMCFM>
+	SUBTTL Server definitions
+
+	COMMENT \
+
+	The MKFORK macro defines characteristics for ALL the servers
+NETSRV knows about.  The macro does different things in pass 1 and
+pass 2.
+
+	HANDLE is the symbol (for the offset into tables) that the
+	 server will be known by.
+
+	DSP is the dispatch address to start the server.
+
+	NAME is the ascii text name that will be used to identify the
+	 server in the log file and status command.
+
+	ICP is the default icp socket for this server.  No other server
+	 is allowed to use this socket.
+
+	SUBSYS is the ascii test name of a subsystem to run in the
+	 job created by the server.
+
+\
+
+	DEFINE MKFORK(HANDLE,DSP,TMO,RXP,NAME,ICP,SUBSYS),<
+	XLIST%
+	IF1 <NFORKS==NFORKS+1>
+	IF2 <
+	IFN DEBUG,<IF1,<PRINTX  INTSRV .... name , default socket ICP>>
+	HANDLE==FINDEX
+	LOC FRKDSP+FINDEX
+	EXP DSP
+	LOC FRKTMO+FINDEX
+	EXP TMO
+	LOC FRKRXP+FINDEX
+	EXP RXP
+	LOC FPDLP+FINDEX
+	IOWD FPDLSZ,FPDL
+	LOC FRKNAM+FINDEX
+	-1,,[ASCIZ\NAME\]
+	LOC FRKDEF+FINDEX
+	EXP ICP
+	LOC FRKSUB+FINDEX
+	-1,,[ASCIZ\SUBSYS\]
+	FINDEX==FINDEX+1>
+	LIST%>
+
+	IF1 <NFORKS==0>
+	FINDEX==0
+
+	MKFORK SRV.OT,OTELNT,<^D300>,<0>,<Old Telnet   >,1
+	MKFORK SRV.SY,SYSTAT,<^D300>,<0>,<SYSTAT       >,13,<SYS:EXEC.EXE>
+	MKFORK SRV.DT,DATIME,<^D300>,<0>,<Date/Time    >,15
+	MKFORK SRV.NE,NETSTA,<^D300>,<0>,<Netstatus    >,17,<SYS:STATUS.EXE>
+	MKFORK SRV.TT,TTYTST,<^D300>,<0>,<Terminal Test>,23
+	MKFORK SRV.FT,FTP   ,<^D300>,<0>,<FTP          >,25,<SYSTEM:FTPSRT.EXE>
+	MKFORK SRV.NT,TELNET,<^D300>,<0>,<Telnet       >,27
+	MKFORK SRV.SM,SMTP  ,<^D300>,<0>,<SMTP         >,31,<SYSTEM:MAISER.EXE>
+   IFN FT.FNG,<
+	MKFORK SRV.FN,FINGER,<^D300>,<0>,<Finger       >,117,<SYS:FINGER.EXE>>
+   IFN FT.TAC,<
+	MKFORK SRV.TC,TACNEW,<^D300>,<0>,<TAC News     >,142,<SYS:TACNEWS.EXE>> ;[NIC1] 98.
+   IFN FT.TLL,<
+	MKFORK SRV.TL,TELL  ,<^D300>,<0>,<Tell         >,341,<SYS:TELL.EXE>> ;#1
+   IFN FT.IS,<
+	MKFORK SRV.IS,IS    ,<^D300>,<0>,<IS           >,343,<PS:<PRVSYS>IS.EXE>> ;#6 .
+   IFN FT.PRT,<
+	MKFORK SRV.PT,VMPSRV,<^D300>,<0>,<Vms Printer  >,345,<SYS:VMPSRV.EXE>> ;#7
+
+	SYMS MAXFRK,<NFORKS-1>	; Maximum fork number
+
+	SUBTTL Impure data storage, private to fork
+
+	LOC 200			; absolute assembly beginning at 200
+
+FHINF:	Z			; inferior fork handle
+FPC1:	Z			; forks interrupt PC storage
+FPC2:	Z
+FPC3:	Z
+
+FRKACS:	BLOCK 20		; fork ACs block
+FPDL:	BLOCK FPDLSZ		; fork PDL stack
+
+CRJARG:	BLOCK .CJSLO+1		; CRJOB argument block
+DATBFH:	BLOCK .TCPBS		; data buffer header
+ERRBFH:	BLOCK .TCPBS		; error buffer header
+ZROBFH:	BLOCK .TCPBS		; zero packet buffer header
+TCPCDB:	BLOCK .TCPCS		; Connection descriptor block
+
+DATBUF:	BLOCK <DATSIZ/4>+1	; general data buffer
+ERRBUF:	BLOCK <ERRSIZ/4>+1	; log file error buffer
+	SUBTTL Impure data storage 
+
+	LOC <.!777>+1		; step to next page
+
+IFK1PG==./1000			; Begin mapping to inferior forks here
+
+MPDL:	BLOCK PDLSIZ		; main PDL stack
+
+; All locations between BEGONC and ENDONC are zeroed on startup
+
+	BEGONC=.		; begining of once only zero area
+SOCKET:	Z			; local socket number storage
+SKTLCK:	BLOCK 2			; socket lock
+FILOCK:	BLOCK 2			; log file buffer lock
+ERRCNT:	Z			; error count
+DBUGSW:	Z			; super debugging mode if non-zero
+ERRACS:	BLOCK 20		; error AC save block
+GLOBAL:	Z			; global flag storage
+FRKICP:	BLOCK NFORKS		; ICP socket number to use
+FRKRUN:	BLOCK NFORKS		; fork was running if non-zero
+FRKCNT:	BLOCK NFORKS		; fork contact count
+FRKERS:	BLOCK NFORKS		; fork error count
+MSGLOG:	BLOCK <MSGSIZ/5>+1	; login message storage
+LOGFIL:	BLOCK <^D100/5>+1	; log file name storage
+	ENDONC=.-1		; end of once only zero code
+	SUBTTL Impure data storage zeroed on restarts
+
+; All locations between ZERBEG and ZEREND are zeroed on all restarts
+;  including error restarts
+
+	ZERBEG=.		; beginning of locations to zero
+TAKJFN:	Z			; TAKE file JFN storage
+BUFPTR:	Z			; buffer pointer
+ERRPTR:	Z			; pointer for error bufffer
+MPC1:	Z			; mother interrupt PC storage
+MPC2:	Z
+MPC3:	Z
+FRKID:	BLOCK NFORKS		; fork handle table
+ICPJFN:	BLOCK NFORKS		; ICP JFN storage
+F4NHST:	BLOCK NFORKS		; foreign host storage
+F4NSKT:	BLOCK NFORKS		; foreign socket storage
+LCLSKT:	BLOCK NFORKS		; local socket storage
+FRKERR:	BLOCK NFORKS		; fork error PC storage
+FRKINC:	BLOCK NFORKS		; NOINT count for forks
+NVTDES:	BLOCK NFORKS		; NVT designator from ATNVT%
+TVTJFN:	BLOCK NFORKS		; JFN of terminal (NVTDES)
+ALRMPC:	BLOCK NFORKS		; alarm new PC storage
+ALRMST:	BLOCK NFORKS		; alarm string pointer storage
+FRKJOB:	BLOCK NFORKS		; job number created storage
+	CSBSIZ==.CMGJB+1	; CSB size
+CSB:	BLOCK CSBSIZ		; COMND% state block
+CFB:	BLOCK .CMBRK+1		; COMND% function block
+CMDTXT:	BLOCK <TXTSIZ/5>+1	; COMND% text buffer
+CMDATM:	BLOCK <ATMSIZ/5>+1	; COMND% atom buffer
+CMDGTF:	BLOCK .GJATR+1		; COMND% GTJFN% block
+BUFFER:	BLOCK <BUFSIZ/5>+1	; log file buffer
+ERRLOG:	BLOCK <ERRSIZ/5>+1	; log file error buffer
+	ZEREND=.-1		; end of locations to zero
+	SUBTTL MACRO SUPPORT ROUTINES
+
+	LOC <.!777>+1		; move to a new page for pure code
+	PURE==.			; first location of pure code
+
+.FNUMO:				; support routine to FNUMO macro
+	MOVE T1,FP		; get the buffer pointer
+	NOUT%			; output the number
+	 JSYSF			; handle errors
+	MOVE FP,T1		; update the buffer pointer
+	RET			; return to caller
+
+.FTYPE:				; support routine for FTYPE and FTYPEN
+	MOVE T1,FP		; get the buffer pointer
+	SETZB T3,T4		; no fancy limits
+	SOUT%			; string output
+	 JSYSF			; handle errors
+	MOVE FP,T1		; update the buffer pointer
+	RET			; return to caller
+
+.FTYPC:				; support routine for FTYPEC macro
+	MOVE T1,FP		; get the buffer pointer
+	BOUT%			; output the byte
+	 JSYSF			; handle errors
+	MOVE FP,T1		; update the buffer pointer
+	RET			; return to caller
+
+	SUBTTL Mainline
+
+EVEC:				; entry vector
+	JRST INTSRV		; start
+	JRST NTSRV2		; reenter NOT same as start
+	EXP VERSIO		; version information
+	EVECL==.-EVEC		; length of entry vector
+
+INTSRV:				; and let us begin
+	MOVE P,[IOWD PDLSIZ,MPDL] ; get a stack pointer
+	RESET%			; reset the world
+	SKIPA T1,[PURE]		; get address of first pure location
+NTSRV0:				; touchy/feely loop for pure pages
+	 ADDI T1,1000		; increment page number
+	SKIP (T1)		; touch the page
+	CAIGE T1,<PUREND&777000> ; have we touched the last page?
+	 JRST NTSRV0		; no, go touch some more
+				; when here all pure pages exist
+	MOVE T1,[.FHSLF,,<PURE/1000>] ; my process,,first pure page
+	MOVX T2,<PA%RD!PA%EX>	; read/execute access only
+NTSRV1:				; page access loop address
+	SPACS%			; so we can't get zapped by buggy code
+	 JSYSF			; trap errors
+	CAME T1,[.FHSLF,,<PUREND/1000>] ; at last pure page?
+	 AOJA T1,NTSRV1		; no, loop for next page
+	SETZ F,			; reset flags
+	MOVX T1,<BEGONC,,BEGONC+1> ; get BLT AC
+	SETZM BEGONC		; zero first location
+	BLT T1,ENDONC		; zero once only zero code
+	MOVEI T1,MINSKT		; get the initial socket we will use
+	MOVEM T1,SOCKET		; and save it
+NTSRV2:				; reenter/restart address
+	RESET%			; clean up fork polution
+	MOVX T1,SIXBIT/INTSRV/	; set our name in case CSAVE'd
+	SETNM%
+;;	CALL CHKARP		; make sure we are an arpanet site
+	CALL MAKPRV		; give us privs
+	MOVX T1,<ZERBEG,,ZERBEG+1> ; get BLT AC
+	SETZM ZERBEG		; zero first location
+	BLT T1,ZEREND		; zero the zeroable area
+	CALL INILOK		; initialize all locks
+	CALL PSINIT		; initialize interrupt service
+	CALL SCHEDT		; schedule a timer interrupt
+	TXNE F,F%ONC		; once only?
+	 CALL RSTART		; no so restart all servers
+				; here to do commands
+	MOVX T1,<CSBV,,CSB>	; get BLT AC
+	BLT T1,CSB+CSBSIZ-1	; init whole COMND% state block
+	IFN DBGTST,<		; only if a a debug test version
+	TXNE F,F%ONC		; once only?
+	 JRST GETCMD		; no
+>				; end of IFN DBGTST
+	IFE DBGTST,<		; only if not a debug test version
+	TXOE F,F%ONC		; once only?
+	 JRST GETCMD		; no
+	MOVX T1,RC%EMO		; lookup OPERATOR's user number
+	HRROI T2,[ASCIZ/OPERATOR/]
+	RCUSR%
+	MOVE P1,T3		; save resulting user number
+	GJINF%			; get user number, etc.
+	CAME T1,P1		; are we OPERATOR?
+	 JRST GETCMD		; no, got to top level right away
+	TXZ F,F%ONC		; yes, not quite done with once only
+>				; end of IFE DBGTST
+	MOVX T1,<GJ%SHT!GJ%OLD>	; get GTJFN% flags
+	HRROI T2,CMDFIL		; get pointer to command file name
+	GTJFN%			; get a JFN on the command file
+	 ERJMP [TYPE <%INTSRV startup command file not found>
+		JRST GETCMD]	; go get commands
+	MOVEM T1,TAKJFN		; save the JFN
+	MOVX T2,<7B5!OF%RD>	; get OPENF% flags
+	OPENF%			; open up the file for I/O
+	 ERJMP [MOVE T1,TAKJFN	; get the JFN
+		RLJFN%		; release the JFN
+		 JSYSF		; trap errors
+		TYPE <%INTSRV startup command file OPENF% failure - >
+		JRST CMDER2]	; output error message and continue
+	TXO F,F%TAK		; set TAKE mode flag
+	HRL T1,TAKJFN		; get the JFN
+	HRRI T1,.NULIO		; output to bit bucket
+	MOVEM T1,CSB+.CMIOJ	; save JFNs
+GETCMD:				; all commands start here
+	DOCMD .CMINI		; init COMND% state block
+	SETZM CMDGTF		; clear COMND% GTJFN% block
+	MOVE T1,[CMDGTF,,CMDGTF+1]
+	BLT T1,CMDGTF+.GJATR	; zak!
+RPARSE:				; reparse dispatch address
+	MOVE P,[IOWD PDLSIZ,MPDL] ; get a new stack
+	DOCMD .CMKEY,PCMDS	; get the initial keyword
+	HRRZ T2,0(T2)		; get dispatch address
+	CALL (T2)		; dispatch to command routine
+	JRST GETCMD		; when done get another command
+	SUBTTL Routine dealings with privs
+
+NOPRIV:				; here when we are not holy
+	TYPE <%Can not run ARPANET server without privs>
+	HALTF%			; stop
+	JRST .-1		; trap continues
+
+MAKPRV:				; routine to give us privs
+	MOVEI T1,.FHSLF		; this fork
+	RPCAP%			; get our privs
+	 JSYSF
+	TXNN T2,<SC%WHL!SC%OPR>	; are we holy?
+	 JRST NOPRIV		; no
+	SETO T3,		; set all privs
+	EPCAP%			; give us all possible privs
+	 JSYSF
+	RET			; return to caller
+	SUBTTL Routine dealing with ARPANET status and availability
+
+   REPEAT 0,<
+CHKARP:				; check to make sure we are arpanet
+	MOVEI T1,.GTHSZ		; host information function
+	GTHST%			; get information on this host
+	 ERJMP NOARPA		; scream on errors
+	JUMPLE T4,NOARPA	; if not an ARPANET host die...
+	RET			; here if we are an ARPA site
+NOARPA:				; here when not an ARPA system
+	TYPE <%Can not run ARPANET server on non-ARPANET system>
+	HALTF%			; STOP
+	JRST .-1		; I do not think it magically appeared
+   >;REPEAT 0
+
+NETCHK:				; routine to see if the network is up
+	MOVEI T1,.NETRDY	; point to IMP status word
+	GETAB%			; get IMP state
+	 JSYSF
+	JUMPGE T1,NETCH2	; is it down or going down?
+	MOVX T1,<1,,.NETRDY>	; get network state word
+	GETAB%			; get the network state
+	 JSYSF
+	JUMPGE T1,NETCH2	; is network down?
+	GXO GF%NET		; net is up so set the flag
+	RET			; return to caller
+NETCH2:				; here when network or IMP is down
+	GXZ GF%NET		; reset the flag
+	RET			; return to caller
+	SUBTTL COMND% JSYS support routines
+
+.DOCMD:				; routine to process COMND% jsys stuff
+	MOVEM T1,CFB+.CMFNP	; save function code
+	MOVEM T2,CFB+.CMDAT	; save data
+	MOVEI T1,CSB		; get COMND% state block address
+	MOVEI T2,CFB		; get COMND% function block address
+	COMND%			; do the COMND% jsys
+	 JSYSF			; handle errors
+	TXNE T1,CM%NOP		; error occur?
+	 CALL CMDERR		; yes so handle it
+	RET			; return to caller
+
+.DOCM2:				; routine for COMND% jsys without error checks
+	MOVEM T1,CFB+.CMFNP	; save fnc code
+	MOVEM T2,CFB+.CMDAT	; save data
+	MOVEI T1,CSB		; get data address's
+	MOVEI T2,CFB
+	COMND%			; do the JSYS
+	 JSYSF
+	RET			; return to caller
+
+CMDERR:				; here on COMND% jsys errors
+	ETYPE <>		; position TTY, clear buffer, output "?"
+CMDER2:	MOVEI T1,.PRIOU		; output to TTY
+	MOVX T2,<.FHSLF,,-1>	; flag my last error
+	SETZB T3,T4
+	ERSTR%			; output error string
+	 NOERR
+	 NOERR
+	JRST GETCMD		; go get another command
+	SUBTTL Interrupt support routines
+
+PSINIT:				; routine to initialize interrupt service
+	MOVEI T1,.FHSLF		; this fork
+	MOVX T2,<LEVTAB,,CHNTAB> ; interrupt system tables address
+	SIR%			; set up interrupt system
+	 JSYSF			; handle errors
+	MOVX T2,CHNMSK		; get active channels mask
+	AIC%			; activate interrupt channels
+	 JSYSF
+	EIR%			; enable interrupt requests
+	 JSYSF
+	MOVX T1,<.TICCN,,TTYINT> ; TTY interrupt channel
+	ATI%			; activate TTY interrupts
+	 JSYSF
+	RET			; return to caller
+	SUBTTL PUSH command
+
+.PUSH:				; push to a higher EXEC command
+	NOISE <TO AN EXEC>
+	CNFIRM
+	STKVAR <PSHJFN,PSHFRK>
+	MOVX T1,<GJ%SHT!GJ%OLD>	; GTJFN% bits
+	HRROI T2,[ASCIZ/SYSTEM:EXEC.EXE/] ; file name
+	GTJFN%			; get a JFN on the EXEC
+	 JSYSF
+	MOVEM T1,PSHJFN		; save the JFN
+	MOVX T1,<CR%CAP>	; give fork privs
+	CFORK%			; make a fork
+	 JSYSF			; trap errors
+	MOVEM T1,PSHFRK		; save the fork handle
+	HRLS T1			; put fork id in correct place
+	HRR T1,PSHJFN		; get the JFN
+	GET%			; load the file into the fork
+	 JSYSF			; trap errors
+	MOVE T1,PSHFRK		; get fork handle
+	SETZ T2,		; entry vector offset zero
+	SFRKV%			; start the fork up
+	 JSYSF			; trap errors
+	MOVE T1,PSHFRK		; get fork handle
+	WFORK%			; wait for the fork to stop
+	 JSYSF			; trap errors
+	MOVE T1,PSHFRK		; get fork handle
+	KFORK%			; kill the fork
+	 JSYSF			; trap errors
+	RET			; return for another command
+	SUBTTL QUIT, EXIT, DDT, and RESTART commands
+
+.QUIT:				; QUIT command
+	NOISE <WITHOUT CLEANING UP>
+	CNFIRM
+	HALTF%			; stop
+	RET			; return for another command
+
+.DDT:				; DDT command
+	NOISE <MODE IN MOTHER FORK>
+	CNFIRM
+	MOVE T1,[.FHSLF,,<DDTADR/1000>]; see if a page of DDT exists
+	RPACS%			; get page accessability
+	 JSYSF
+	TXNN T2,PA%PEX		; does page exist?
+	 JRST .DDT1		; no, must load DDT
+	MOVE T1,DDTADR		; get DDT start location
+	CAMN T1,[JRST DDTADR+2] ; look like a DDT?
+	 JRST .DDT2		; yes, enter it
+.DDT1:	MOVX T1,<GJ%OLD!GJ%SHT>	; no, get a JFN on DDT
+	HRROI T2,[ASCIZ/SYS:UDDT.EXE/]
+	GTJFN%
+	 JSYSF			; DDT not available
+	HRLI T1,.FHSLF		; this fork
+	GET%			; load DDT in
+	 JSYSF
+	DMOVE T1,.JBSYM##	; get symbol table pointers
+	DMOVEM T1,@DDTADR+1	; and shove them into DDT
+	MOVEI T1,.FHSLF		; damn GET% sets the EVEC to be DDT, so
+	MOVE T2,[EVECL,,EVEC]	;  we'll set it back!
+	SEVEC%
+	 JSYSF
+.DDT2:	TYPEN <[Type R$G to return to INTSRV]>
+	TYPE <>
+	CALLRET DDTADR
+
+.RESTA:				; RESTART command
+	NOISE <INTSRV>
+	CNFIRM
+	JRST NTSRV2		; go restart us
+
+.EXIT:				; EXIT command
+	NOISE <FROM INTSRV AFTER CLEANING UP>
+	CNFIRM
+	CALL .STOPR		; kill all forks
+	CALL DMPFIL		; empty all buffers
+	HALTF%			; stop
+	RET			; on CONTINUE return
+	SUBTTL STOP, HELP and WAIT commands
+
+.STOP:				; STOP command
+	NOISE <ALL SERVERS>
+	CNFIRM
+.STOPR:				; stop routine
+	SETZ FX,		; reset fork index
+.STOP2:				; fork killing loop
+	SKIPE FRKID(FX)		; does this fork exist?
+	 SKIPN FRKRUN(FX)	; is this fork active?
+	  SKIPA			; fork does not exist
+	   CALL KILFRK		; yes so kill it
+	SETZM FRKRUN(FX)	; reset run flag in case we didn't KILFRK
+	CAIGE FX,MAXFRK		; all forks scanned?
+	 AOJA FX,.STOP2		; no so keep going
+	RET			; yes so return
+
+.WAIT:				; WAIT command
+	NOISE <FOREVER OR UNTIL INTERRUPT CHARACTER>
+	CNFIRM
+	TXNN F,F%TAK		; Take command in effect?
+	 JRST .WAIT2		; no so do it
+	TXO F,F%FLW		; yes so set wait command in file flag
+	RET			; get another command
+.WAIT2:				; here to really do the wait command
+	WAIT%			; wait forever
+	 JSYSF
+	JRST GETCMD		; go get another command ... stack 
+				; messed up from taknd
+
+.HELP:				; help command
+	NOISE <WITH INTSRV COMMANDS>
+	CNFIRM
+	STKVAR <HLPJFN>	
+	MOVX T1,<GJ%SHT!GJ%OLD>	; file must exist
+	HRROI T2,[ASCIZ/HLP:INTSRV.HLP/] ; help file name
+	GTJFN			; get a jfn for the help file
+	 ERCAL CMDERR		; handle error like a command error
+	MOVEM T1,HLPJFN		; save the jfn
+	MOVX T2,<7B5!OF%RD>	; 7 bit ascii readin mode
+	OPENF			; open up the file
+	 ERJMP [MOVE T1,HLPJFN	; get the jfn
+		RLJFN		; release it
+		 JSYSF		; handle this error
+		CALL CMDERR]	; handle this like a command error
+.HELP2:				; this is the help file read loop
+	MOVE T1,HLPJFN		; get the jfn
+	BIN			; read a byte
+	 ERJMP .HELP3		; assume EOF on error
+	MOVE T1,T2		; put byte for pbout to find
+	PBOUT			; output the byte
+	JRST .HELP2		; loop until EOF
+.HELP3:				; here on error from bin assume eof
+	MOVE T1,HLPJFN		; get the jfn
+	CLOSF%			; close the jfn
+	 JSYSF
+	RET			; go get another command
+
+	SUBTTL TAKE command and support routines
+
+.TAKE:				; TAKE command
+	TXNE F,F%TAK		; already in TAKE command?
+	 JRST .TAKER		; yes so bitch and scream
+	NOISE <COMMANDS FROM FILE>
+	MOVEI T1,CSB		; get COMND% state block address
+	IFE DBGTST,<MOVEI T2,[FLDDB. .CMIFI,,,,<SYSTEM:INTSRV.RUN>]>
+	IFN DBGTST,<MOVEI T2,[FLDDB. .CMIFI,,,,<INTSRV.DEBUG>]>
+	COMND%			; do the COMND% jsys
+	 JSYSF			; handle errors
+	TXNE T1,CM%NOP		; error occur?
+	 CALL CMDERR		; yes so handle it
+	MOVEM T2,TAKJFN		; save the TAKE file JFN
+	DOCMD2 .CMCFM		; confirm
+	TXNE T1,CM%NOP		; error?
+	 JRST [	MOVE T1,TAKJFN	; yes ... get the JFN
+		RLJFN%		; release it
+		 JSYSF
+		CALLRET CMDERR]	; go handle the error
+	MOVE T1,TAKJFN		; get the JFN back
+	MOVX T2,<7B5!OF%RD>	; read access
+	OPENF%			; open up the input file
+	 JSYSF			; handle errors
+	HRLS T1			; get the JFN in left half
+	HRRI T1,.NULIO		; output to bit bucket
+	MOVEM T1,CSB+.CMIOJ	; save new JFNs
+	TXO F,F%TAK		; and set TAKE flag
+	RET			; and start getting commands
+.TAKND:				; here on take file EOF
+	MOVX T1,<.PRIIN,,.PRIOU> ; get primaries back
+	MOVEM T1,CSB+.CMIOJ	; save them in proper place
+	MOVE T1,TAKJFN		; get the JFN
+	CLOSF%			; and close it
+	 JSYSF			; trap errors
+	TXZ F,F%TAK		; reset TAKE flag
+	TXO F,F%ONC		; set once only done flag
+	TXZE F,F%FLW		; was a wait command done?
+	 JRST .WAIT2		; yes so do it now
+	JRST GETCMD		; go get another command
+.TAKER:				; here to prevent recursive takes
+	TYPE <%TAKE command already in progress>
+	RET
+	SUBTTL RECEIVE and REFUSE commands
+
+.REFUS:
+	TXOA F,F%REF		; set REFUSE flag
+.RECEI:				; RECEIVE command
+	 TXZ F,F%REF		; reset REFUSE flag
+	STKVAR <SRVCOD,SRVSKT,<SKTBUF,3>>
+	SETZM SRVSKT		; reset the server socket storage
+				; at this time INTERNET is only legal network
+	NOISE <NETWORK>
+	MOVEI T1,CSB		; get comnd state block address
+	MOVEI T2,[<.CMKEY>B8!CM%DPP
+		  EXP NCMDS
+		  Z
+		  -1,,[ASCIZ/INTERNET/]]
+	COMND%			; parse the network name
+	 JSYSF
+	TXNE T1,CM%NOP		; errors?
+	 CALL CMDERR		; yes so handle it
+	NOISE <CONNECTIONS FOR>
+	DOCMD .CMKEY,SCMDS	; get connection type
+	HRRZ T2,0(T2)		; get the server code
+	MOVEM T2,SRVCOD		; save the server code
+	TXNE F,F%REF		; REFUSE command?
+	 JRST RECEV2		; yes so force confirm
+	NOISE <ON PORT>
+	MOVE FX,SRVCOD		; server code
+	HRROI T1,SKTBUF		; where socket default text goes
+	MOVE T2,FRKDEF(FX)	; get the default socket
+	MOVEI T3,^D10		; decimal radix
+	NOUT%			; set up default string
+	 JSYSF
+	MOVEI T1,CSB		; get data address's
+	MOVEI T2,[<.CMNUM>B8!CM%SDH!CM%HPP!CM%DPP
+		  ^D10		; decimal radix
+		  -1,,[ASCIZ/decimal port number/]
+		 POINT 7,SKTBUF]; default socket number
+	COMND%			; do the JSYS
+	 JSYSF
+	TXNE T1,CM%NOP		; error occur?
+	 CALL CMDERR		; yes so handle it
+	TXNE T2,<-1_^D16>	; disallow invalid bits
+	 JRST BADSKT
+	SETZ FX,		; reset fork index for socket scan
+RECEV1:				; socket scan loop
+	CAME FX,SRVCOD		; is this our fork?
+	 CAME T2,FRKDEF(FX)	; no .... does fork have right to socket?
+	  SKIPA			; no right or it is our fork
+	   JRST BADSK2		; bad bad .... predefined socket
+	CAME FX,SRVCOD		; our fork?
+	 CAME T2,FRKICP(FX)	; socket allready taken?
+	  SKIPA			; no
+	   JRST BADSK2		; socket allready in use
+	CAIGE FX,MAXFRK		; all forks scanned?
+	 AOJA FX,RECEV1		; no so keep going
+				; when we get to here socket is legal 
+	MOVEM T2,SRVSKT		; save the server socket
+RECEV2:				; here when confirm is needed
+	CNFIRM			; confirm the command
+RECEV3:
+	MOVE FX,SRVCOD		; get the server code
+	MOVE T1,SRVSKT		; get the server socket
+	TXNN F,F%REF		; REFUSE command?
+	 MOVEM T1,FRKICP(FX)	; no so save it
+	TXNN F,F%REF		; if not a refuse command
+	 CALL GOFORK		; startup the fork
+	MOVE T1,FRKICP(FX)	; get the socket
+	TXNE F,F%REF		; refuse command?
+	 MOVEM T1,SRVSKT	; yes so save the socket for logging
+	TXNE F,F%REF		; if a refuse command
+	 CALL KILFRK		; kill the fork
+	GXNN GF%LOG		; are we logging?
+	 JRST RECEV4		; no so just return
+	CALL LOKFIL		; yes so lock down the file
+	CALL TSTAMP		; get a time stamp
+	MOVE T1,FP		; get the buffer pointer
+	HRROI T2,[ASCIZ/Receive/] ; assume RECEIVE command
+	SETZB T3,T4
+	TXNE F,F%REF		; REFUSE?
+	 HRROI T2,[ASCIZ/Refuse /] ; yes
+	SOUT%			; output the command type
+	 JSYSF
+	MOVE FP,T1		; update buffer pointer AC
+	FTYPEN < connections for >
+	FTYPEA FRKNAM(FX)
+	FTYPEN < on port >
+	FNUMO SRVSKT,12,0	; output socket number
+	CALL ULKFIL		; unlock the file
+RECEV4:
+	TXNE F,F%REF		; refuse command?
+	 SETZM FRKICP(FX)	; yes so reset its icp socket
+	RET			; return for another command
+
+TTYPOS:				; routine to position tty
+	MOVEI T1,.PRIOU		; tty
+	DOBE%			; wait until it stops
+	MOVEI T1,.PRIOU		; TTY output device
+	RFPOS%			; read position
+	 JSYSF
+	HRRZS T2		; zero left half
+	JUMPE T2,R		; TTY at zero?
+	TYPE <>			; no, do a CRLF if needed
+	RET			; return to caller
+
+BADSKT:
+	ETYPE <Invalid port number .... more than sixteen bits>
+	JRST GETCMD		; go get another command
+
+BADSK2:				; here when port is already in use
+	ETYPE <Invalid port number .... port predefined or in use>
+	JRST GETCMD		; get another command
+
+	SUBTTL STATUS command
+
+.STATU:
+	NOISE <OF NETWORK SERVERS>
+	CNFIRM
+	TYPE < Server Name    ICP socket  Errors  Contacts       PC>
+	TYPE < ---------------------------------------------------->
+	SETZ FX,		; reset fork index
+STATU1:				; fork status loop
+	SKIPN FRKRUN(FX)	; is fork running?
+	 JRST STATU2		; no so try the next one
+	TYPE < >		; do a CRLF
+	TYPEA FRKNAM(FX)	; type out fork name
+	SKIPN T2,FRKICP(FX)	; get the ICP socket
+	 MOVE T2,FRKDEF(FX)	; if zero get the default
+	NUMO T2,^D8,^D10	; output ICP socket
+	NUMO FRKERS(FX),^D10,^D9; output error count
+	TYPEC "."		; do a space
+	NUMO FRKCNT(FX),^D10,^D8; output number of contacts
+	TYPEC "."
+	SKIPE FRKRUN(FX)	; fork active?
+	 SKIPN FRKID(FX)	; fork exist?
+	  JRST STATU2		; no
+	HRROI T1,[ASCIZ/      /]; delimit PC from rest
+	PSOUT%
+	MOVE T1,FRKID(FX)	; yes so get fork handle
+	RFSTS%			; read fork status
+	 JSYSF			; handle errors
+	HRRZ P2,T2		; zero the left half
+	MOVEI FP,.PRIOU		; output PC to terminal
+	CALL PCPNT
+STATU2:
+	CAIGE FX,MAXFRK		; all forks dumped?
+	 AOJA FX,STATU1		; no so continue
+	TYPE <>
+	GXNN GF%MSG		; do we have a message?
+	 JRST STATU3		; no
+	TYPE < Telnet login message>
+	TYPE < -------------------->
+	TYPE <>
+	HRROI T1,MSGLOG		; get pointer to string
+	PSOUT%			; and output it
+	 JSYSF			; trap errors
+STATU3:
+	GXNN GF%LOG		; do we have a log file?
+	 JRST STATU4		; no
+	TYPE <>
+	TYPE < Log file name>
+	TYPE < ------------->
+	TYPE < >
+	HRROI T1,LOGFIL		; get string pointer
+	PSOUT%			; output the file name
+	 JSYSF			; trap errors
+STATU4:
+	TYPE <>
+	TYPE <>
+	RET			; return to caller
+	SUBTTL OPEN command
+
+.LOG:				; LOG file is command
+	STKVAR <OPNJFN>
+	NOISE <TO FILE>
+	JRST .OPEN1		; and join OPEN code
+	
+.OPEN:				; OPEN up log file command
+	STKVAR <OPNJFN>
+	NOISE <AND START LOGGING TO FILE>
+.OPEN1:	MOVEI T1,CSB		; get COMND% state block address
+	MOVEI T2,[FLDDB. .CMFIL,,,,<SYSTEM:ARPANET-SERVER.LOG>]
+	COMND%			; do the COMND% jsys
+	 JSYSF			; handle errors
+	TXNE T1,CM%NOP		; error occur?
+	 CALL CMDERR		; yes so handle it
+	MOVEM T2,OPNJFN
+	DOCMD2 .CMCFM		; confirm
+	TXNE T1,CM%NOP		; errors?
+	 JRST [	MOVE T1,OPNJFN
+		CALL .OPEN2
+		CALLRET CMDERR]
+	CALL DMPFIL		; empty buffers
+	GXZ GF%LOG		; turn off logging
+	HRROI T1,LOGFIL		; get output pointer
+	MOVE T2,OPNJFN		; get the JFN
+	SETZB T3,T4		; no special options
+	JFNS%			; get the file name
+	 JSYSF
+	GXO GF%LOG		; set logging enabled flag
+	CALL INIFIL		; initialize file stuff
+	MOVE T1,OPNJFN		; get the JFN
+.OPEN2:				; now release the JFN
+	RLJFN%			; release the JFN
+	 JSYSF
+	RET			; return to caller
+	SUBTTL LOAD command
+
+.LOAD:				; LOAD message file command
+	STKVAR <LDDJFN>
+	NOISE <LOGIN MESSAGE FROM FILE>
+	MOVEI T1,CSB		; get COMND% state block address
+	MOVEI T2,[FLDDB. .CMIFI,,,,<SYSTEM:ARPANET-LOGIN-MESSAGE.TXT>]
+	COMND%			; do the COMND% jsys
+	 JSYSF			; handle errors
+	TXNE T1,CM%NOP		; error occur?
+	 CALL CMDERR		; yes so handle it
+	MOVEM T2,LDDJFN
+	DOCMD2 .CMCFM		; confirm
+	TXNE T1,CM%NOP		; command error?
+	 JRST [	MOVE T1,LDDJFN
+		RLJFN%
+		 JSYSF
+		CALLRET CMDERR]
+	MOVE T1,LDDJFN		; get the JFN
+	CALLRET LOADMS		; load up the file
+				; return to caller
+	SUBTTL CLOSE and UNLOAD commands
+
+.CLOSE:				; CLOSE log file command
+	NOISE <LOG FILE AND STOP LOGGING>
+	CNFIRM
+	CALL DMPFIL		; empty buffers
+	GXZ GF%LOG		; reset the flag
+	RET			; return to caller
+.UNLOA:				; unload message command
+	NOISE <LOGIN MESSAGE>
+	CNFIRM
+	GXZ GF%MSG		; reset the message flag
+	RET			; return to caller
+	SUBTTL TTY and IPCF interrupt routines
+
+   REPEAT 0,<
+.IPCF:
+	DEBRK%
+   >;REPEAT 0
+
+.TTYIO:				; TTY interrupt handler
+	CALL TTYIOR		; call the worker routine
+	DEBRK%			; dismiss the interrupt
+
+TTYIOR:				; worker routine
+	CALL SAVACS		; save interrupt ACs
+	MOVE T1,@LEVTAB+TTYLVL-1 ; get old PC
+	MOVX T2,<WAIT%>		; get code for a WAIT% JSYS
+	CAME T2,-1(T1)		; was user in a WAIT% JSYS?
+	 RET			; no so just dismiss
+	TXO T1,PC%USR		; make it a user mode PC
+	ADDI T1,1		; and bump the PC
+	MOVEM T1,@LEVTAB+TTYLVL-1 ; save the new PC
+	RET			; return to caller
+	SUBTTL Asynchronous clock interrupt handler 
+
+.CLOCK:				; here on the interrupt
+	CALL CLOCKR		; call worker routine
+	DEBRK%			; dismiss the interrupt
+	
+CLOCKR:				; clock worker routine
+	CALL SAVACS		; save user ACs
+	CALL NETCHK		; see if the network is still alive
+	GXNE GF%WDN		; was network down before?
+	 JRST CLOCK3		; yes
+	GXNE GF%NET		; is network down now?
+	 JRST CLOCK2		; no it is and was up
+				; here when network is newly down
+	CALL NETLOG		; log network status change
+	GXO GF%WDN		; set the was down flag
+	SETZ FX,		; reset the flag
+CLOCK1:				; this is the killing loop
+	SKIPE FRKRUN(FX)	; was this fork running?
+	 CALL SUSFRK		; yes so suspend it
+	CAIGE FX,MAXFRK		; all forks checked?
+	 AOJA FX,CLOCK1		; no so keep checking
+	JRST CLOCK2		; and continue with main flow
+CLOCK3:				; here when net was down
+	GXNN GF%NET		; is net now up?
+	 JRST CLOCK2		; no so there is nothing we can do
+	CALL NETLOG		; log network status change if needed
+	GXZ GF%WDN		; reset the was down flag
+	SETZ FX,		; reset fork index
+CLOCK4:				; this is the loop for restarting
+	SKIPE FRKRUN(FX)	; was this fork running?
+	 CALL STRFRK		; yes so restart it
+	CAIGE FX,MAXFRK		; all forks checked?
+	 AOJA FX,CLOCK4		; no so keep going
+				; fall through to main flow
+CLOCK2:				; now schedule the next interrupt
+	CALL DMPFIL		; empty log file buffers
+	CALL DEADR1		; check for any dead forks
+	CALLRET SCHEDT		; schedule the timer interrupt and return
+
+SCHEDT:				; routine to schedule asych interrupts
+	MOVX T1,<.FHSLF,,.TIMEL> ; elapsed time interrupt for me
+	MOVEI T2,TIMCHK		; get time interval
+	MOVEI T3,CLOCK		; get interrupt channel
+	TIMER%			; set the time to go off
+	 JSYSF			; trap errors
+	RET			; return to caller
+	SUBTTL Dead fork interrupt handler
+
+.DEAD:				; interrupt service routine
+	CALL DEADR		; call the worker routine
+	DEBRK%			; dismiss and go home
+
+DEADR:				; worker routine
+	CALL SAVACS		; save interrupt ACs
+DEADR1:				; alternate entry point from .clock
+	CALL NETCHK		; get network status
+	GXNN GF%NET		; is net up?
+	 RET			; no so just return and dismiss
+				; now check for dead forks
+	SETZ FX,		; reset fork index
+DEADR2:				; fork scanning loop
+	SKIPN FRKRUN(FX)	; is this fork active?
+	 JRST DEADR3		; no
+	HRRZ T1,FRKERR(FX)	; get the fork error PC/flag
+	CAIN T1,.ALMXP		; alarm expire?
+	 JRST DEADR4		; yes
+	SKIPN T1,FRKID(FX)	; does this fork really exist?
+	 JRST DEADR3		; no so ignore it
+	RFSTS%			; get fork status
+	 JSYSF			; trap errors
+	SKIPN FRKERR(FX)	; did the fork give an error PC
+	 MOVEM T2,FRKERR(FX)	; no so use the one RFSTS% gave us
+	LDB T1,[POINT 17,T1,17]	; get the status code
+	CAIE T1,.RFHLT		; did the fork HALTF%
+	 CAIN T1,.RFFPT		; or was it stopped?
+	  CAIA			; it was stopped
+	   JRST DEADR3		; try next fork
+	MOVE T1,FRKID(FX)	; get fork handle
+	GETER%			; get last error
+	 JSYSF			; trap errors
+	HRRZS T2		; zero left half
+	CAIN T2,OPNX9		; simult. access error?
+	 JRST DEADR7		; yes so just go restart
+	CAIE T2,ATNX6		; receive connection refused?
+	 CAIN T2,ATNX12		; or send connection refused?
+	  JRST DEADR7		; yes so just go restart
+DEADR4:				; here when we have the culprit
+	SKIPN FP,ERRPTR		; get the error buffer pointer
+	 MOVE FP,BF1PTR		; not set up yet
+	GXNN GF%LOG		; are we logging?
+	 JRST DEADR7		; no, skip this stuff
+	CALL TSTAMP		; do a time stamp
+	FTYPEN <*** Problem with server for >
+	FTYPEA FRKNAM(FX)	; type out fork name
+	CALL TSTAMP		; another time stamp
+	MOVE T2,FRKERR(FX)	; get error code
+	CAIN T2,.ALMXP		; alarm expire?
+	 JRST [	FTYPEN <*** Alarm expired while waiting for > ; yes
+		FTYPEA ALRMST(FX) ; type out alarm string
+		JRST DEADR6]	; continue the fork
+	CAIN T2,.BADOK		; bad noint/okint?
+	 JRST [	FTYPEN <*** Bad OKINT or NOINT> ; yes
+		JRST DEADR6]	; go restart the fork
+	FTYPEN <*** Fork halted at PC >
+	MOVE P2,FRKERR(FX)	; type out error PC
+	CALL PCPNT
+	CALL TSTAMP		; another time stamp
+	FTYPEN <*** Error:  >
+	MOVE T1,FP		; get byte pointer
+	HRLO T2,FRKID(FX)	; get fork handle
+	SETZB T3,T4
+	ERSTR%			; type out the error string
+	 NOERR
+	 NOERR
+	MOVE FP,T1		; update FP so error string goes in
+DEADR6:				; now output more error information
+	CALL TSTAMP		; output the time stamp
+	FTYPEN <*** Error Environment Information, FH: > ; prompt 
+	MOVEI T1,.GTHNS		; host name string function
+	MOVE T2,FP		; output host name to local buffer
+	MOVE T3,F4NHST(FX)	; get the host number
+	GTHST%			; output the host name
+	 ERJMP [FNUMO F4NHST(FX),10,^D12 ; output the host number
+		JRST .+2]
+	MOVE FP,T2
+	FTYPEN <, FP: >		; prompt for port number
+	FNUMO F4NSKT(FX),12,5	; output the port number
+	FTYPEN <, LP: >
+	FNUMO LCLSKT(FX),12,5	; output local port number
+	MOVEM FP,ERRPTR		; save the new error pointer
+	SKIPGE FILOCK		; can we seize the file lock?
+	 CALL DMPFIL		; yes, dump the error to log file
+				; fall through to continue fork
+DEADR7:				; here also when we did not log
+	CALL KILJOB		;#10 kill created subjob (if any)
+	SETZM FRKERR(FX)	; reset the error PC/flag
+	MOVE T1,FRKID(FX)	; get the fork handle
+	MOVEI T2,FRKRST		; get the fork restart address
+	SFORK%			; restart the fork
+	 JSYSF			; trap errors
+	AOS FRKERS(FX)		; bump fork error count
+DEADR3:				; here when fork is ok or have restarted it
+	CAIGE FX,MAXFRK		; all forks checked?
+	 AOJA FX,DEADR2		; no so keep going
+	RET			; try next fork
+	SUBTTL PC print routine
+
+;  Clever symbol table lookup routine.  For details, read "Introduction to
+; DECsystem-20 Assembly Language Programming", by Ralph Gorin, published by
+; Digital Press.  Called with PC in P2, designator in FP
+
+PCPNT:
+	SETZB T3,P1		; no current program name or best symbol
+	MOVE T4,.JBSYM##	; symbol table pointer left by LINK
+	HLRO T1,T4
+	SUB T4,T1		; -count,,ending address +1
+SYMLUP:
+	LDB T1,[400400,,-2(T4)]	; symbol type
+	JUMPE T1,NXTSYM		; program names are uninteresting
+	CAILE T1,2		; 0=prog name, 1=global, 2=local
+	 JRST NXTSYM		; none of the kind we want
+	MOVE T1,-1(T4)		; value of the symbol
+	CAMN T1,P2		; exact match?
+	 JRST [	MOVE P1,T4	; yes, select it
+		JRST FNDSYM]
+	CAML T1,P2		; smaller than value sought?
+	 JRST NXTSYM		; too large
+	SKIPE T2,P1		; get best one so far if there is one
+	 CAML T1,-1(T2)		; compare to previous best
+	  MOVE P1,T4		; current symbol is best match so far
+NXTSYM:
+	ADD T4,[2000000-2]	; add 2 in the left, sub 2 in the right
+	JUMPL T4,SYMLUP		; loop unless control count is exhausted
+	SKIPN T4,P1		; did we find anything helpful?
+	 JRST PCPNT1
+FNDSYM:
+	MOVE T1,P2		; desired value
+	SUB T1,-1(T4)		; less symbol's value = offset
+	CAIL T1,200		; is offset small enough?
+	 JRST PCPNT1		; no, not a good enough match
+	MOVE T4,P1		; get the symbol's address
+	MOVE T1,-2(T4)		; symbol name
+	TLZ T1,740000		; clear flags
+	CALL R50DOP		; print symbol name
+	SUB P2,-1(T4)		; value less this symbol's value
+	JUMPE P2,R		; if no offset, don't print "+0"
+	MOVE T1,FP
+	MOVEI T2,"+"		; add + to the output line
+	BOUT%
+	CAIA
+PCPNT1:
+	 MOVE T1,FP		; set up designator
+	MOVE T2,P2		; here if PC must be in octal
+	MOVEI T3,^D8
+	NOUT%
+	 JSYSF
+	MOVE FP,T1
+	RET
+
+; Convert a 32-bit quantity in A from squoze to ASCII
+
+R50DOP:
+	IDIVI T1,50		; divide by 50
+	PUSH P,T2		; save remainder, a character
+	SKIPE T1		; if A is now zero, unwind the stack
+	 CALL R50DOP		; call self again, reduce A
+	POP P,T1		; get character
+	ADJBP T1,[350700,,[ASCII/ 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ.$%/]]
+	LDB T2,T1		; convert squoze code to ASCII
+	MOVE T1,FP		; get designator
+	BOUT%
+	MOVE FP,T1		; update designator
+	RET
+	SUBTTL Error handlers
+
+.JSYSF:				; routine to handle errors
+	TXNN F,F%SRV		; are we a server?
+	 JRST JSYSF2		; no so go to other error routine
+	MOVEM T1,FRKERR(FX)	; save T1
+	HRRZ T1,0(P)		; get error PC
+	SUBI T1,2		; point at losing instruction
+	EXCH T1,FRKERR(FX)	; save the error PC
+	HALTF%			; stop .... let mother restart us
+	JRST .-1		; this should never happen
+
+JSYSF2:				; routine to handle errors in bottom level
+	MOVEM AC17,ERRACS+AC17	; save AC 17
+	HRRZI AC17,ERRACS	; get BLT AC
+	BLT AC17,ERRACS+AC16	; save ACs 0-16
+	MOVE AC17,ERRACS+AC17	; get AC17 back again
+	MOVEI T1,.FHSLF		; this fork
+	GETER%			; get my last error
+	 NOERR
+	HRRZS T2		; zero left half
+	TXNE F,F%TAK		; are we doing a TAKE command?
+	 CAIE T2,IOX4		; yes ... end of input file?
+	  SKIPA			; not in TAKE mode or not EOF
+	   JRST .TAKND		; yes so go handle it
+				; now handle error message etc...
+	ETYPE <INTSRV - Fatal JSYS error in main fork at PC >
+	MOVEI FP,.PRIOU		; output to TTY
+	HRRZ P2,0(P)		; get the error PC
+	CALL PCPNT
+	ETYPE <INTSRV - Error string .... >
+	MOVEI T1,.PRIOU		; output to TTY
+	MOVX T2,<.FHSLF,,-1>	; this fork's last error
+	SETZB T3,T4
+	ERSTR%			; output the error string
+	 NOERR
+	 NOERR
+	SKIPE DDTADR		; DDT present?
+	 SKIPN DBUGSW		; debugging mode?
+	  SKIPA			; no and/or no
+	   JRST DDTADR		; yes and yes so go to DDT
+	ETYPE <INTSRV - Attempting to restart .... if possible>
+	AOS T1,ERRCNT		; bump the error count
+	CAIG T1,ERRMAX		; have we exceeded error max?
+	 JRST NTSRV2		; no so restart
+	ETYPE <INTSRV - ERRMAX exceeded .... can not restart>
+	HALTF%			; stop
+	JRST .-1		; no continues
+	SUBTTL Routine to log network status changes
+
+NETLOG:				; routine to log network status change
+	GXNN GF%LOG		; are we logging?
+	 RET			; no so just return
+	CALL LOKFIL		; get file buffer
+	CALL TSTAMP		; do a time stamp
+	FTYPEN <ARPANET Status Change.  IMP is >
+	MOVEI T1,.NETRDY	; get GETAB% AC
+	GETAB%			; get IMP state
+	 JSYSF
+	HRROI T2,[ASCIZ/Up/]	; assume up
+	SKIPL T1		; is IMP up?
+	 HRROI T2,[ASCIZ/Down/]	; no
+	FTYPEA T2		; type out IMP status
+	FTYPEN <, ARPANET is >
+	MOVX T1,<1,,.NETRDY>	; get GETAB% AC
+	GETAB%			; get network status
+	 JSYSF
+	HRROI T2,[ASCIZ/Up/]	; assume up
+	SKIPL T2		; is network up?
+	 HRROI T2,[ASCIZ/Down/]	; no
+	FTYPEA T2		; output network status
+	FTYPEC "."		; output a dot
+	CALLRET ULKFIL		; unlock file buffer
+	SUBTTL Routines to stop and kill server forks
+
+SUSFRK:				; routine to reset a fork
+	MOVE T1,FRKID(FX)	; get the fork handle
+	HFORK%			; stop the fork
+	 JSYSF
+	MOVE T1,FRKID(FX)	; get the fork handle
+	KFORK%			; kill the fork
+	 JSYSF
+	SETZM FRKID(FX)		; zero out its fork handle
+	CALLRET FIXLOK		; fix any broken locks
+
+KILFRK:				; routine to totally kill a fork
+	SKIPN FRKRUN(FX)	; fork running?
+	 JRST KILFR2		; no
+	SETZM FRKRUN(FX)	; reset its running flag
+	SETZM FRKICP(FX)	; clear its socket
+	SKIPE FRKID(FX)		; does this fork exist for real?
+	 CALLRET SUSFRK		; kill the actual fork
+				; return to caller
+KILFR2:				; here when fork wasn't running
+	ETYPE <>
+	TYPEA FRKNAM(FX)	; type out server name
+	TYPEN <was not running>
+	RET			; return to caller
+	SUBTTL Routine to build and start server forks
+
+STRFRK:				; routine to start a fork
+	SETZM FRKERR(FX)	; reset error PC/flag area
+	MOVX T1,<FRKACS,,FRKACS+1> ; get BLT AC
+	SETZM FRKACS		; zero AC zero
+	BLT T1,FRKACS+17	; zero all ACs
+	MOVEM FX,FRKACS+FX	; save the fork index where fork can find it
+	MOVX T1,<CR%CAP!CR%ACS>	; get flags for CFORK%
+	MOVEI T2,FRKACS		; get address of ACs
+	CFORK%			; create and start the fork
+	 JSYSF			; handle errors
+	MOVEM T1,FRKID(FX)	; save the fork handle
+	MOVEI P1,IFK1PG		; first page to begin mapping
+STRFR2:				; page access settting loop
+	MOVE T1,P1		; get the page number
+	HRLI T1,.FHSLF		; this fork
+	RMAP%			; read page access
+	 JSYSF			; trap any errors
+	TXNN T2,RM%PEX		; does page exist?
+	 JRST STRFR3		; no
+	MOVE T3,T2		; get access bits
+	TXZ T3,<617377,,777777>	; turn off unwanted bits
+	MOVE T1,P1		; get page number
+	MOVE T2,P1		; for destination also
+	HRLI T1,.FHSLF		; this fork
+	HRL T2,FRKID(FX)	; new fork handle
+	PMAP%			; map the page
+	 JSYSF			; trap errors
+STRFR3:				; here to incrment page number
+	CAIGE P1,MAXPAG		; at last page?
+	 AOJA P1,STRFR2		; no so keep going
+				; now all pages are mapped
+	SETOM FRKRUN(FX)	; set the fork active flag
+	MOVE T1,FRKID(FX)	; get fork handle
+	MOVEI T2,FRKSTR		; get fork start address
+	SFORK%			; start the fork
+	 JSYSF			; trap errors
+	RET			; return to caller
+
+FRKRST:				; server fork restart point
+	MOVX T1,TIMSHT		; wait a second before restarting
+	DISMS%
+FRKSTR:				; server fork start point
+	MOVX F,F%SRV		; make sure all flags clear
+	SETOM FRKRUN(FX)	; and this fork flagged as running
+	SETZM FRKINC(FX)	; and okint/noint count set right
+	SETZM FRKERR(FX)	; reset fork error flag
+	JRST @FRKDSP(FX)	; restart fork
+
+GOFORK:				; routine to start a new fork
+	SKIPE FRKRUN(FX)	; is this fork running?
+	 JRST GOFRK2		; yes
+	CALLRET STRFRK		; no so start the fork
+				; return to caller
+GOFRK2:				; here when fork is already running
+	ETYPE <>
+	TYPEA FRKNAM(FX)	; type out fork name
+	TYPEN < already running>
+	RET			; return to caller
+
+RSTART:				; routine to restart forks
+	SETZ FX,		; reset fork index
+RSTAR2:				; fork scanning loop
+	SKIPE FRKRUN(FX)	; fork active?
+	 CALL STRFRK		; yes so restart it
+	CAIGE FX,MAXFRK		; all forks checked?
+	 AOJA FX,RSTAR2		; no so keep going
+	RET			; return to caller
+	SUBTTL LOCK/UNLOCK and NOINT/OKINT support routines
+
+.LOCK:				; routine to wait for lock in NX
+	AOSN (NX)		; lock?
+	 JRST .LOCK3		; yes
+	MOVEI T1,TIMSHT		; short wait
+	DISMS%			; snooze
+	 NOERR
+	JRST .LOCK		; try again
+.LOCK3:				; here when we locked it
+	MOVEM FX,1(NX)		; mark that we locked it
+	RET			; return to caller
+
+.UNLOC:				; unlocking routine
+				; lock adr is in NX
+	SETOM 1(NX)		; reset the who word
+	SETOM 0(NX)		; reset the lock itself
+	RET			; return to caller
+
+.NOINT:				; support routine for noint
+	SKIPG FRKINC(FX)	; allready done?
+	 AOSA FRKINC(FX)	; yes so bump it again
+	  SKIPA			; always skip
+	   RET			; all done so return
+	SKIPE FRKINC(FX)	; is it zero?
+	 JRST .NOIN2		; no
+	MOVEI T1,.FHSLF		; this fork
+	DIR			; disable interrupt requests
+	 JSYSF
+	AOS FRKINC(FX)		; bump counter
+	RET			; return to caller
+.NOIN2:				; here on badness
+	MOVEM T1,FRKERR(FX)	; save T1
+	MOVEI T1,.BADOK		; bad okint/noint code
+	EXCH T1,FRKERR(FX)	; save error code and restore T1
+	HALTF			; on badness just die
+	JRST .-1		; should never happen
+
+.OKINT:				; support for okint macro
+	SOSE FRKINC(FX)		; decrement the count
+	 JRST .OKIN2		; not zero
+	MOVEI T1,.FHSLF		; this fork
+	EIR			; enable interrupt requests
+	 JSYSF
+	RET			; return to caller
+.OKIN2:				; not zero after decrement when here
+	SKIPL FRKINC(FX)	; negative?
+	 RET			; no so just return
+	MOVEM T1,FRKERR(FX)	; save T1
+	MOVEI T1,.BADOK		; get error code
+	EXCH T1,FRKERR(FX)	; save error code and restore T1
+	HALTF			; on badness stop
+	JRST .-1
+
+	SUBTTL LOCK maintainence routines
+
+FIXLOK:				; routine to fix all locks
+	CAME FX,SKTLCK+1	; did this fork have socket lock?
+	 JRST FIXLK2		; no
+	SETOM SKTLCK+1		; yes so reset the lock
+	SETOM SKTLCK+0
+FIXLK2:
+	CAME FX,FILOCK+1	; did this fork have file lock?
+	 JRST FIXLK3		; no
+	SETOM FILOCK+1		; yes so reset the lock
+	SETOM FILOCK+0
+FIXLK3:
+	RET			; return to caller
+
+INILOK:				; routine to initialize locks
+	SETOM SKTLCK
+	SETOM SKTLCK+1
+	SETOM FILOCK
+	SETOM FILOCK+1
+	RET			; return to caller
+	SUBTTL File and socket LOCK/UNLOCK routines
+
+   REPEAT 0,<
+ASNSKT:				; assign socket routine
+	LOCK SKTLCK		; lock down sockets
+	MOVE T1,SOCKET		; get the socket number
+	CAIGE T1,MAXSKT		; is it past allowable sockets?
+	 JRST ASNSK2		; no
+	MOVEI T1,MINSKT		; yes so get initial socket again
+	MOVEM T1,SOCKET		; and save it
+ASNSK2:				; here to bump count for new socket
+	MOVEM T1,LCLSKR(FX)	; save the relative socket number
+	AOS SOCKET		; bump the count
+	AOS SOCKET		; again
+	UNLOCK SKTLCK		; unlock the lock
+	RET			; return to caller
+   >;REPEAT 0
+
+LOKFIL:				; routine to lock down the file buffer
+	LOCK FILOCK		; get the lock
+	SKIPN FP,BUFPTR		; get the buffer pointer
+	 MOVE FP,BUFONE		; not set up yet
+	RET			; return to caller
+
+ULKFIL:				; routine to unlock down file buffer
+	MOVEM FP,BUFPTR		; save the buffer pointer
+	HRRZS FP		; get rid of left half
+	SUBI FP,BUFFER		; compute amount of used space
+	CAIL FP,<BUFSIZ/5>-^D20	; within 100 chars of end of buffer?
+	 JRST DMPFI0		; yes - dump out buffer
+	UNLOCK FILOCK		; unlock it
+	RET			; return to caller
+
+TSTAMP:				; time stamp routine
+	FTYPE <>		; do a CRLF
+	MOVE T1,FP
+	SETO T2,		; current date/time
+	MOVX T3,<OT%SLA>	; flags for ODTIM%
+	ODTIM%			; output date/time
+	 JSYSF			; trap errors
+	MOVE FP,T1		; update pointer AC
+	FTYPEC " "		; do a space
+	RET			; return to caller
+	SUBTTL Log file initializing routine
+
+INIFIL:				; routine to initialize log file
+	GXNN GF%LOG		; are we logging?
+	 RET			; no so just return
+	CALL LOKFIL		; get buffer pointer
+	CALL TSTAMP		; do a time stamp
+	FTYPEN <INTSRV Version >
+	MOVEI T2,VMAJOR		; get major version number
+	FNUMO T2,10,0		; output major version number
+	MOVEI T2,VMINOR		; get minor version number
+	JUMPE T2,INIFI2		; if zero ignore
+	FTYPEC "."		; do a dot
+	MOVEI T2,VMINOR		; get minor version number again
+	FNUMO T2,10,0		; output minor version number
+INIFI2:
+	MOVEI T2,VEDIT		; get edit number
+	JUMPE T2,INIFI3		; if zero ignore
+	FTYPEC "("		; open paren
+	MOVEI T2,VEDIT		; get edit number again
+	FNUMO T2,10,0		; output edit number
+	FTYPEC ")"		; close paren
+INIFI3:
+	MOVEI T2,VWHO		; get who code
+	JUMPE T2,INIFI4		; if zero ignore
+	FTYPEC "-"		; do a dash
+	MOVEI T2,VWHO		; get who code again
+	FNUMO T2,10,0		; output who code
+INIFI4:
+	FTYPEN < Initialized>
+	CALL ULKFIL		; unlock the file
+	CALL NETLOG		; log network state
+	CALLRET DMPFIL		; dump out the buffer
+	SUBTTL Log file buffer emptying routine
+
+DMPFIL:				; routine to empty file buffer
+	STKVAR <DMPJFN>		; storage
+	GXNN GF%LOG		; are we logging?
+	 RET			; no so just return
+	CALL LOKFIL		; lock down the file
+	MOVE T1,BUFONE		; get initial buffer pointer
+	SKIPE T2,ERRPTR		; and error pointer if any
+	 CAMN T2,BF1PTR		; has error buffer moved?
+	  CAME T1,FP		; or buffer pointer?
+	   SKIPA		; yes
+	    JRST DMPFI4		; no so just unlock and return
+DMPFI0:				; here to write out the buffer
+	MOVX T1,<GJ%SHT!<777776>B35> ; get bits for GTJFN%
+	HRROI T2,LOGFIL		; get log file name string
+	GTJFN%			; get a JFN on the file
+	 JSYSF			; handle errors
+	MOVEM T1,DMPJFN		; save the JFN
+	MOVX T2,<7B5!OF%APP!OF%THW> ; get OPENF% bits
+	OPENF%			; open up the file for I/O
+	 ERJMP [CAIE T1,OPNX9	; simult. access error?
+		 CALL .JSYSF	; no so handle error
+		MOVE T1,DMPJFN	; get the JFN
+		RLJFN%		; release the jfn
+		 JSYSF
+		JRST DMPFI4]	; return to caller
+				; now see if it is regular buffer
+	MOVE T2,BUFONE		; get initial pointer
+	CAMN T2,FP		; has pointer changed?
+	 JRST DMPFI2		; no
+	SETZB T3,T4		; get a null byte
+	IDPB T3,FP		; append a null byte
+	SOUT%			; output the string
+	 JSYSF			; handle errors
+	MOVE FP,BUFONE		; get new buffer pointer
+DMPFI2:				; now check the error buffer
+	SKIPE T2,ERRPTR		; get error pointer
+	 CAMN T2,BF1PTR		; has pointer changed?
+	  JRST DMPFI3		; no or not set up
+	MOVE T2,BF1PTR		; start of buffer
+	SETZB T3,T4		; get null byte
+	IDPB T3,ERRPTR		; append the null byte
+	SOUT%			; output the buffer
+	 JSYSF			; trap any errors
+	MOVE T2,BF1PTR		; get initial byte pointer
+	MOVEM T2,ERRPTR		; save new error pointer
+DMPFI3:				; may fall through
+	CLOSF%			; close the log file
+	 JSYSF			; trap errors
+DMPFI4:				; unlock and return
+	CALLRET ULKFIL		; unlock the file lock
+				; return to caller
+	SUBTTL	DOICP - Routine to do a network ICP
+
+	COMMENT \
+
+	This routine performs the ICP functions for all the servers
+in INTSRV.  All arguments are from tables indexed by the fork number
+(in FX).
+\
+
+DOICP:	SETZM ICPJFN(FX)	; Reset JFN(JCN)s and flags
+	TXZ F,<F%ICP!F%RFC!F%SND!F%RCV!F%ICE>
+	MOVE T1,[TCPCDB,,TCPCDB+1] ; Clear out connection descriptor block
+	SETZM TCPCDB
+	BLT T1,TCPCDB+.TCPCS-1
+	MOVE T1,FRKICP(FX)	; Set local listening port
+	MOVEM T1,TCPCDB+.TCPLP
+	MOVX T1,<TCP%WT+TCPCDB>
+	MOVEI T2,^D<030>	; Synchronization timeout period
+	MOVEI T3,<0>		; Retransmission parameters
+	OPEN%
+	 JRST DOIC1		; Error
+	TXO T1,TCP%JS		; Mark as JCN
+	MOVEM T1,ICPJFN(FX)	; Have listening JCN
+
+	MOVEI T2,ZROBFH		; now that we have a connection,
+	SETZM .TCPBF(T2)	; establish the real
+	MOVE T3,FRKTMO(FX)	; Timeout period
+	MOVE T4,FRKRXP(FX)	; Retransmission parameters
+	SEND%
+	 ERCAL [JSP ES,NRUTE
+		 ASCIZ /SEND error /]
+
+	TXO T1,TCP%SY		; Giving symbols
+	MOVX T2,<-5,,[
+		ASCII /TFH/
+		ASCII /TLH/
+		ASCII /TFP/
+		ASCII /TLP/
+		ASCII /TERR/]> ; Address & error
+	MOVX T3,<-5,,FRKACS+1> ; To AC block 1-5
+	STAT%
+	 ERCAL [JSP ES,NRUTE
+		 ASCIZ /STAT error /]
+	MOVE T1,FRKACS+1	; Note foreign host
+	MOVEM T1,F4NHST(FX)
+	MOVE T1,FRKACS+3	; Note foreign port
+	MOVEM T1,F4NSKT(FX)
+	MOVE T1,FRKACS+4	; Note local port (same as FRKICP)
+	MOVEM T1,LCLSKT(FX)
+	SKIPE T1,FRKACS+5	; Error code?
+	 CALL [	JSP ES,NRUTE
+		 ASCIZ /connection STATUS error /]
+	RET
+
+DOIC1:	MOVEI T4,^D15000	; Default wait period
+	HLRZ T2,T1		; See if JCN was assigned
+	SKIPE T2
+	 TXO T2,TCP%JS		;  yes, special flag
+	MOVEM T2,ICPJFN(FX)
+	HRRZS T1		; Isolate error code
+	CAIE T1,<TCP%ER+TCP%LE+FLD(^D31,TCP%EC)>B<35+36-8>
+	  JRST DOICW
+	MOVX T4,<^D<2*60*1000>>	; Wait two minutes if TCP not available
+	JSP ES,DOICE		; OPEN of listening connection failed
+	 ASCIZ /TCP not initialized, error /
+
+
+DOICE:	PUSH P,T1		; Save error code
+	MOVE T1,[POINT 8,ERRBUF,15]
+	MOVE T2,[BYTE (8).CHCRT,.CHLFD]
+	MOVEM T2,0(T1)
+	SETO T2,		; current date&time
+	MOVX T3,<OT%SLA>
+	ODTIM%
+	 JSYSF			;  trap errors
+	HRROI T2,[ASCIZ / INTSRV: /]
+	SETZ T3,
+	SOUT%
+	 NOERR
+	HRROI T2,(ES)		; explanation
+	SOUT%
+	 NOERR
+	POP P,T2		; Get error code
+	MOVX T3,^D8
+	NOUT%
+	 NOERR
+	HRROI T2,[ASCIZ /
+/]
+	SETZ T3,
+	SOUT%			; End line
+	  NOERR
+	MOVE T1,[POINT 8,ERRBUF] ; Show to operator
+	PSOUT%
+
+DOICW:	SKIPE T1,ICPJFN(FX)	; Have a JCN?
+	 ABORT%			; Yes
+	  JFCL			; No, or error
+	SETZM ICPJFN(FX)
+
+	MOVE T1,T4		; Wait time
+	DISMS
+	JRST DOICP
+	SUBTTL	Format Error Messages
+
+;NRUTE - tell remote user of TCP Error Code
+;	JSP ES,NRUTE
+;	 ASCIZ /explanation/
+
+NRUTE:	PUSH P,T1		; Save TCP error code
+	MOVE T1,[POINT 8,ERRBUF]
+	HRROI T2,[ASCIZ	/
+421 /]
+	SETZ T3,
+	SOUT%
+	 NOERR
+	HRROI T2,(ES)
+	SOUT%
+	 NOERR
+	POP P,T2
+	MOVX T3,^D8
+	NOUT%
+	 NOERR
+	JRST EMSOU		; Now send off the composed msg
+
+
+;NRUSE - tell remote user of system error
+;	JSP ES,NRUSE
+;	 ASCIZ /explanation/
+
+NRUSE:	MOVE T1,[POINT 8,ERRBUF]
+	HRROI T2,[ASCIZ	/
+421 /]
+	SETZ T3,
+	SOUT%
+	 NOERR
+	HRROI T2,(ES)
+	SOUT%
+	 NOERR
+	HRLOI T2,.FHSLF
+	ERSTR
+	 NOERR
+	 NOERR
+	SKIPG FRKJOB(FX)
+	 JRST EMSOU
+	HRROI T2,[ASCIZ/, Job /]
+	SOUT%
+	 NOERR
+	MOVE T2,FRKJOB(FX)
+	MOVX T3,^D10
+	NOUT%
+	 NOERR
+
+
+EMSOU:	HRROI T2,[ASCIZ/
+/]
+	SETZ T3,
+	SOUT%
+	 NOERR
+	SKIPN NVTDES(FX)	; Have a TTY descriptor (& no JCN)?
+	 JRST EMSOU1
+	SKIPN TVTJFN(FX)	; Yes, do we have a JFN on the TVT?
+	 CALL ASTVT1		; No, get one
+	  NOOP
+	MOVE T1,[POINT 8,ERRBUF]
+	MOVE T2,TVTJFN(FX)
+	SETZ T3,
+	SOUT%
+	 ERJMP LOSE
+	JRST CLEAN
+
+EMSOU1:	MOVEI T3,1-ERRBUF(T1)	; Calculate length of msg
+	ASH T3,2
+	LDB T2,[POINT 3,T1,2]
+	SUBI T3,(T2)
+	MOVEM T3,.TCPBC+ERRBFH
+	MOVX T2,TCP%PU		; PUSH this data
+	MOVEM T2,.TCPBF+ERRBFH
+
+	SKIPN T1,ICPJFN(FX)	; See if connection looks usable
+	 ERJMP LOSE		; No
+	TXO T1,TCP%SY		; Giving symbols
+	MOVX T2,<-2,,[
+		ASCII /TERR/
+		ASCII /TSSYN/]> ; TERR into T4
+	MOVX T3,<-2,,T4>	; & TSSYN into T5
+	STAT%
+	 ERJMP LOSE		; STAT Error
+	JUMPN T4,LOSE		; Connection Error
+	CAIE T5,<SYNCED>	; Send side SYNCED?
+	 ERJMP LOSE		; No
+
+	MOVE T1,ICPJFN(FX)
+	MOVEI T2,ERRBFH
+	MOVX T3,<^D120>		; time-out in two minutes
+	MOVX T4,<0>		; retransmission parameters
+	SEND%
+	 ERJMP LOSE
+
+CLEAN:	CALL KILJOB		; Get rid of any known job
+	CALL SNDCLS		; Close out JCN (if any)
+	CALL RLTVT		; Get rid of any known TVT
+	JRST .JSYSF		; Die, and let mother restart us
+
+LOSE:	CANCEL			; Forget any pending alarm
+	HRROI T1,[ASCIZ /
+% INTSRV: Cannot report error to user: /]
+	PSOUT
+	MOVEI T1,.PRIOU
+	SETO T2,
+	SETZ T3,
+	ODTIM%
+	 NOERR
+	MOVE T1,[POINT 8,ERRBUF]
+	PSOUT
+	JRST CLEAN
+	SUBTTL DOICP - Routine to do a network ICP
+
+	COMMENT \
+
+	This routine performs the ICP functions for all the servers
+in NETSRV.  All arguments are from tables indexed by the fork number
+(in FX).  Timeouts are set at strategic locations throughout the ICP
+process so that problems can be detected and corrected quickly.
+
+	The following timeouts are defined:
+
+	o Timeout waiting for ICP socket connection to open after
+	  we sent our RFC.
+
+	o Timeout waiting for the allocation to be received from
+	  the user host.
+
+	o Timeout waiting for the data connections to open.
+
+\
+
+   REPEAT 0,<
+DOICP:				; routine to do the ICP work
+	STKVAR <<NCPBLK,.NCFSK-.NCFHS+1>>
+DOICPR:	SETZM ICPJFN(FX)	;#4 reset JFNs and flags
+	SETZM RCVJFN(FX)
+	SETZM SNDJFN(FX)
+	TXZ F,<F%ICP!F%RFC!F%SND!F%RCV!F%ICE>
+				; now get handle on the socket
+	MOVE T1,FRKICP(FX)	; get ICP socket
+	SETZB T2,T3		; listen mode
+	CALL NETABS		; get a handle on the socket
+	MOVEM T1,ICPJFN(FX)	; save the JFN
+	MOVEI T2,40		; 32 bit size
+	SETO T3,		; male (send) socket
+	MOVEI T4,ICPINT		; ICP interrupt socket
+	CALL NETOPN		; open the socket
+DOICP0:				; RFC wait loop
+	CALL ICPCHK		; check ICP socket status
+	TXNE F,F%ICE		;#4 Unexpected state of connection
+	JRST DOICPE		;#4 Something bizzare happened try to restart
+	TXNE F,F%RFC!F%ICP	;#3 RFC received?
+	 JRST DOICP1		; yes
+	WAIT%			; no so wait for status change
+ICPWAT:				; symbol for status command to find
+	JRST DOICP0		; wakeup .... go see if RFC received
+DOICPE:	MOVE T1,ICPJFN(FX)	;#4 Close JFN and restart
+	CLOSF%			;#4
+	 JSYSF			;#4
+	JRST DOICPR		;#4
+DOICP1:
+	ALARM TIMRFC,EXPIRE,<matching RFC after accept sent>
+	MOVE T1,ICPJFN(FX)	;#3 get the JFN
+	MOVEI T2,.MOACP		;#3 accept connection function
+	MTOPR%			;#3 send out matching RFC
+	 JSYSF			;#3
+DOICP2:				;#3 ICP socket open wait loop
+	CALL ICPCHK		;#3 check ICP socket status
+	TXNE F,F%ICP		; ICP socket open
+	 JRST DOICP3		; yes
+	WAIT%			; wait for status change
+	JRST DOICP2		; try again
+DOICP3:				; here when ICP socket open
+	CANCEL			; cancel the pending alarm
+	MOVEI T1,.GTNJF		; return JFN status
+	MOVE T2,ICPJFN(FX)	; get the JFN
+	MOVEI T3,NCPBLK		; return data area
+	MOVX T4,<-<.NCFSK-.NCFHS+1>,,.NCFHS> ; # of cells returned, first cell
+	GTNCP%			; get the status
+	 JSYSF
+	MOVE T1,NCPBLK		; host number
+	MOVEM T1,F4NHST(FX)	; save host number
+	MOVE T1,<.NCFSK-.NCFHS>+NCPBLK ; foreign socket number
+	MOVEM T1,F4NSKT(FX)	; save the socket number
+	MOVE T1,ICPJFN(FX)	; get the JFN
+	CALL NETOFF		; turn of interrupts
+	CALL ASNSKT		; get us a socket to use
+	MOVE T1,LCLSKR(FX)	; get our rcv socket (his send)
+	MOVE T2,F4NHST(FX)	; get host number
+	MOVE T3,F4NSKT(FX)	; get his socket number
+	ADDI T3,3		; make it his send
+	CALL NETJFN		; get a JFN on socket
+	MOVEM T1,RCVJFN(FX)	; save the JFN
+	MOVE T1,LCLSKR(FX)	; get local socket
+	ADDI T1,1		; make it our send socket 
+	MOVE T2,F4NHST(FX)	; get host number
+	MOVE T3,F4NSKT(FX)	; get his socket number
+	ADDI T3,2		; make it his rcv
+	CALL NETJFN		; get the JFN
+	MOVEM T1,SNDJFN(FX)	; save the JFN
+	ALARM TIMALL,EXPIRE,<allocation to be received>
+	MOVE T1,RCVJFN(FX)	; get our rcv socket JFN
+	CVSKT%			; convert to absolute socket numbers
+	 JSYSF			; trap errors
+	MOVEM T2,LCLSKT(FX)	; save the absolute socket number
+	MOVE T1,ICPJFN(FX)	; get the JFN
+	BOUT%			; output the byte
+	 JSYSF
+	CANCEL			; cancel the pending alarm
+	MOVE T1,ICPJFN(FX)	; get the JFN again
+	CLOSF%			; close the socket
+	 JSYSF
+	NOINT			; no interrupts
+	MOVE T1,RCVJFN(FX)	; get the receive socket JFN
+	MOVEI T2,^D8		; 8-bit bytes
+	SETZ T3,		; female socket
+	MOVEI T4,SKTINT		; get int channel
+	CALL NETOPN		; open the socket
+	MOVE T1,SNDJFN(FX)	; get the send socket JFN
+	MOVEI T2,^D8		; 8-bit bytes
+	SETO T3,		; male socket
+	MOVEI T4,SKTINT		; interrupt channel
+	CALL NETOPN		; open the socket
+	OKINT			; allow interrupts
+	ALARM TIMOPN,EXPIRE,<data connections to open>
+DOICP4:				; data socket wait loop
+	CALL RCVCHK		; check receive status
+	CALL SNDCHK		; check send status
+	TXNE F,F%RCV		; receive open?
+	 TXNN F,F%SND		; send open?
+	  SKIPA			; no
+	   JRST DOICP5		; yes
+	WAIT%			; wait for the status change
+	JRST DOICP4		; try again
+DOICP5:				; here when all sockets open
+	CANCEL			; cancel the pending alarm
+	MOVE T1,RCVJFN(FX)	; get the receiving JFN
+	CALL NETOFF		; dont let it bother us anymore
+	MOVE T1,SNDJFN(FX)	; get the sending JFN
+	CALLRET NETOFF		; don't let it bother us anymore either
+   >;REPEAT 0
+	SUBTTL NETJFN - Routine to get a network JFN
+
+	COMMENT \
+
+	T1/  local socket number
+	T2/  foreign host number
+	T3/  foreign socket number
+
+	CALL NETJFN ; for relative socket
+	CALL NETABS ; for absolute socket
+
+	T1/  JFN assigned
+
+\
+
+   REPEAT 0,<
+NETJFN:				; job relative entry point
+	TDZA T4,T4		; reset flag
+NETABS:				; absolute socket entry point
+	 SETO T4,		; set flag
+	STKVAR <NTJLCL,NTJHST,NTJSKT,NTJFLG,<NTJBUF,20>>
+	MOVEM T1,NTJLCL		; save local socket number
+	MOVEM T2,NTJHST		; save 4n host number
+	MOVEM T3,NTJSKT		; save 4n socket number
+	MOVEM T4,NTJFLG		; save the flag word
+	HRROI T1,NTJBUF		; get buffer pointer
+	HRROI T2,[ASCIZ/NET:/]	; get device
+	SETZB T3,T4	
+	SOUT%			; output device name string
+	 JSYSF
+	MOVE T2,NTJLCL		; get local socket number
+	MOVEI T3,^D8		; in base 8
+	NOUT%			; output local socket number
+	 JSYSF
+	SKIPN NTJFLG		; absolute mode?
+	 JRST NETJF3		; no
+	MOVEI T2,"V"-100	; get a control V
+	IDPB T2,T1		; and output it
+	MOVEI T2,"#"		; get absolute socket symbol
+	IDPB T2,T1		; and output it
+NETJF3:
+	SKIPN NTJSKT		; listen mode?
+	 JRST NETJF4		; yes
+	MOVEI T2,"."		; get a dot
+	IDPB T2,T1		; separate local side from foreign side
+	MOVE T2,NTJHST		; get 4n host number
+	MOVEI T3,^D8		; in base 8
+	NOUT%			; output host number
+	 JSYSF
+	MOVEI T2,"-"		; get a delimetor
+	IDPB T2,T1		; say we are now doing socket number
+	MOVE T2,NTJSKT		; get the socket number
+	MOVEI T3,^D8		; is base 8
+	NOUT%			; output socket number
+	 JSYSF
+NETJF4:
+	SETZ T2,		; get a null
+	IDPB T2,T1		; append a null
+	MOVX T1,<GJ%SHT>	; GTJFN% flags
+	HRROI T2,NTJBUF		; get pointer to name
+	GTJFN%			; get a JFN 
+	 JSYSF
+	RET			; return to caller
+   >;REPEAT 0
+	SUBTTL NETOPN - Routine to open a network JFN
+
+	COMMENT \
+
+	T1/  JFN
+	T2/  byte size
+	T3/  sex
+	T4/  interrupt channel
+
+\
+
+   REPEAT 0,<
+NETOPN:
+	STKVAR <NTOJFN,NTOSIZ,NTOSEX,NTOINT>
+	MOVEM T1,NTOJFN		; save the JFN
+	MOVEM T2,NTOSIZ		; save the byte size
+	MOVEM T3,NTOSEX		; save the sex
+	MOVEM T4,NTOINT		; save the interrupt channel
+	SKIPE NTOSEX		; male mode?
+	 SKIPA T2,[FLD(7,OF%MOD)+OF%WR]	;#5 Open send side in buffered mode
+	  MOVE T2,[FLD(6,OF%MOD)+OF%RD]	;#5 Receive side in immediate
+	MOVE T3,NTOSIZ		; get the byte size
+	DPB T3,[POINT 6,T2,5]	; deposit byte size
+	MOVE T1,NTOJFN		; get the JFN
+	OPENF%			; send out an OPN
+	 JSYSF
+	MOVE T1,NTOJFN		; get the JFN
+	MOVEI T2,.MOAIN		; assign interrupt channels function
+	MOVX T3,<770000,,0>	; get interrupt channel word
+	MOVE T4,NTOINT		; get interrupt channel
+	DPB T4,[POINT 6,T3,17]	; deposit interrupt channel
+	MTOPR%			; assign interrupts
+	 JSYSF
+	RET			; return to caller
+   >;REPEAT 0
+	SUBTTL Socket status change interrupt handlers
+
+   REPEAT 0,<
+.ICPSK:				; ICP socket status change
+	CALL ICPSKR		; call worker routine
+	DEBRK%			; dismiss
+
+.SKTSK:				; data socket status change
+	CALL SKTSKR		; call worker routine
+	DEBRK%
+
+ICPSKR:				; worker routine for ICP interrupts
+	CALL SAVACS		; save interrupt ACs
+	CALL ICPCHK		; check out the ICP socket
+	CALLRET WAITGO		; return from wait condition and dismiss
+
+SKTSKR:				; worker routine for data status interrupts
+	CALL SAVACS		; save interrupt ACs
+	CALL RCVCHK		; get the status of receive socket
+	CALL SNDCHK		; check send socket status
+	CALLRET WAITGO		; return from wait condition if needed
+   >;REPEAT 0
+	SUBTTL Socket status change support routines
+
+   REPEAT 0,<
+WAITGO:				; routine to cause return from WAIT%
+				; by incrementing PC and setting user mode
+	MOVE T3,FLVTAB(FX)	; get LEVTAB address
+	MOVE T3,<STSINT-1>(T3)	; get PC storage address
+	MOVE T1,(T3)		; get the actual PC
+	MOVX T2,<WAIT%>		; get the code for a WAIT%
+	CAME T2,-1(T1)		; was it a WAIT%?
+	JRST [	CAME T2,0(T1)	;#2 No. Is it going to be a WAIT%
+		RET		;#2 No. Just return to user
+		AOJA T1,.+1]	;#2 Increment PC and turn on user
+	TXO T1,PC%USR		; turn on user mode flag
+	MOVEM T1,(T3)		; set the new PC
+	RET			; return to caller
+
+NETOFF:				; routine to disable network interrupts
+	MOVEI T2,.MOAIN		; get MTOPR% finction code
+	MOVX T3,<770077,,0>	; get interrupt chaannel word
+	MTOPR%			; disable interrupts
+	 JSYSF			; handle errors
+	RET			; return to caller
+   >;REPEAT 0
+
+SAVACS:				; routine to save AC0-AC16 for interrupts
+	ADJSP P,16		; claim words for ACs 1-16 on the stack
+	MOVEM AC16,0(P)		; save AC16
+	MOVEI AC16,-15(P)	; get right half of BLT AC
+	HRLI AC16,AC1		; get left half of BLT AC
+	BLT AC16,-1(P)		; save ACs 1-15 on stack
+	CALL @-16(P)		; co-routine back to caller
+				; POPJ will return to here
+	 SKIPA			; non-skip return
+	  AOS -17(P)		; skip return
+	HRRI AC16,AC1		; get right half of BLT AC
+	HRLI AC16,-15(P)	; get left half of BLT AC
+	BLT AC16,AC16		; restore ACs 1-16
+	ADJSP P,-17		; discard saved ACs and first return
+	RET			; return to caller
+	SUBTTL Socket status routines
+
+RCVCHK:				; routine to check receive port status
+	MOVE T1,ICPJFN(FX)	; get JCN
+	TXO T1,TCP%SY		; using symbols
+	HRROI T2,[ASCII /TRSYN/]
+	HRROI T3,T4
+	STAT%			; get status in T4
+	 JSYSF
+	CAIN T4,<SYNCED>	; fully opened?
+	 TXOA F,F%RCV		; yes so set flag
+	  TXZ F,F%RCV		; no, make sure flag clear
+	RET
+
+SNDCHK:				; routine to check send port status
+	MOVE T1,ICPJFN(FX)	; get JCN
+	TXO T1,TCP%SY		; using symbols
+	HRROI T2,[ASCII /TSSYN/]
+	HRROI T3,T4
+	STAT%			; get status in T4
+	 JSYSF
+	CAIN T4,<SYNCED>	; fully opened?
+	 TXOA F,F%SND		; yes so set flag
+	  TXZ F,F%SND		; no, make sure flag clear
+	RET
+
+   REPEAT 0,<
+SKTSTS:				; routine to get socket status code
+	GDSTS%			; get status
+	 JSYSF
+	LDB T1,[POINT 4,T2,3]	; get status code
+	RET			; return to caller
+
+RCVCHK:				; routine to check receive socket status
+	MOVE T1,RCVJFN(FX)	; get the JFN
+	CALL SKTSTS		; get status
+	CAIN T1,.NSOPN		; open?
+	 TXO F,F%RCV		; yes so set flag
+	RET			; return to caller
+
+SNDCHK:				; routine to check send socket status
+	MOVE T1,SNDJFN(FX)	; get JFN
+	CALL SKTSTS		; get status
+	CAIN T1,.NSOPN		; open?
+	 TXO F,F%SND		; yes so set flag
+	RET			; return to caller
+
+ICPCHK:				; routine to check ICP socket status
+	MOVE T1,ICPJFN(FX)	; get the JFN
+	CALL SKTSTS		; get status code
+	CAIN T1,.NSLSN		;#4 Listening?
+	RET			;#4 Yes.  Just return
+	CAIE T1,.NSOPN		; open?
+	 JRST ICPCH2		; no
+	TXO F,F%ICP		; yes so set flag
+	RET			; return to caller
+ICPCH2:				; see if its a RFC received
+	CAIE T1,.NSRCR		; RFC received?
+	 JRST ICPCH3		;#4 No. Some unexpected state
+	TXO F,F%RFC		; yes so set flag
+	RET			; return to caller
+ICPCH3:	TXO F,F%ICE		;#4 Give error indication
+	RET			;#4  and return
+   >;REPEAT 0
+	SUBTTL Alarm macro support routines
+
+ALARMS:				; routine to set an alarm
+	PUSH P,T1		; preserve ACs
+	PUSH P,T2
+	PUSH P,T3
+	MOVEM ES,ALRMST(FX)	; save the string pointer
+	HRRZM NX,ALRMPC(FX)	; save the new PC
+	HLRZ T2,NX		; get the time to interrupt
+	MOVEI T3,FALARM		; get the interrupt channel number
+	MOVX T1,<.FHSLF,,.TIMEL> ; elapsed time interrupt
+	TIMER%			; set the timer
+	 JSYSF			; handle errors
+	POP P,T3
+	POP P,T2
+	POP P,T1
+	RET			; return to caller
+
+ALARMC:				; routine to cancel all alarms
+	PUSH P,T1
+	MOVX T1,<.FHSLF,,.TIMAL> ; get data for timer
+	TIMER%			; cancel all timer requests for us
+	 JSYSF
+	POP P,T1
+	RET			; return to caller
+	SUBTTL Alarm interrupt handler and support routines
+
+.ALARM:				; alarm interrupt handler
+	CALL ALARMR		; call worker routine
+	DEBRK%			; dismiss interrupt to a new PC
+
+ALARMR:				; worker routine for alarms
+	MOVEM T1,ALMINT+FPC1-1	; don't destroy AC1
+	MOVE T1,ALRMPC(FX)	; get the alarm expired new PC
+	TXO T1,PC%USR		; turn on user mode flag
+	EXCH T1,ALMINT+FPC1-1	; set new addr (recover AC1)
+	RET			; dismiss interrupt
+
+EXPIRE:				; here to handle expired alarm
+	MOVEM T1,FRKERR(FX)	; save T1
+	MOVEI T1,.ALMXP		; get alarm expired code
+	EXCH T1,FRKERR(FX)	; save code and restore T1
+	HALTF%			; stop and let mother fix us
+	JRST .-1		; this should never happen
+	SUBTTL TELNET servers
+
+OTELNT:				; old TELNET server
+	TXO F,F%OLD		; set flag for old protocol TELNET
+TELNET:				; new TELNET server (and common code for 
+				; old TELNET)
+	MOVE P,FPDLP(FX)	; get a stack pointer
+	CALL SETUP		; setup initial stuff
+TELNE2:				; this is the loop
+	MOVE P,FPDLP(FX)	; get a stack pointer
+	CALL CLNJFN		; clean up any old JFNs
+	CALL DOICP		; do the ICP
+   IFN FT.TIP,<			; only if we do not like TIPs
+	CALL CHKTIP		; check for tip..if yes then kill it
+	 JRST TELNE3>		; it was a tip..it has been disconnected
+	CALL DONVT		; get a new NVT
+	 JRST TELNE3		; sockets got closed so just log it
+	CALL DOMSG		; type message if needed
+	CALL DOCCC		; do a Control C for the user
+TELNE3:
+	CALL DOLOG		; log this if needed
+	AOS FRKCNT(FX)		; bump contact count
+	JRST TELNE2		; and loop forever
+
+   IFN FT.TIP,<			; only if we do not like TIPs
+CHKTIP:				; routine to check for TIPs
+	MOVEI T1,.GTHHN		; host status function
+	MOVE T3,F4NHST(FX)	; get the host number
+	GTHST%			; get the host status word
+	 JSYSF
+	LDB T1,[POINT 6,T4,26]	; get host type field
+	CAIE T1,<.HSTIP>_-^D9	; TIP?
+	 CAIN T1,<.HSMTP>_-^D9	; Magtape TIP?
+	  SKIPA			; yes so yell and kill
+	JRST RSKP		; no so allow it
+
+	ALARM TIMALL,EXPIRE,<allocation received and close from TIP>
+	MOVE T1,[POINT 8,DATBUF] ; Get msg in 8-bit ASCII
+	HRROI T2,[ASCIZ/
+
+?TELNET connections from TIPs are NOT allowed.
+
+/]
+	MOVEI T3,DATSIZ*4
+	SETZ T4,
+	SOUT%
+	 JSYSF
+	CALL DODAT		; Tell the user
+	CALL SNDCLS		; Close the connection
+	CANCEL			; cancel pending alarms
+	RET			; return to non skip return
+   >;IFN FT.TIP
+	SUBTTL FTP Server
+
+FTP:	TXO F,F%PRV		; server for FTP
+;;	TXO F,F%OLD		; set the old TELNET flag and server flag
+	MOVE P,FPDLP(FX)	; get a stack pointer
+	CALL SETUP		; setup initial stuff
+FTP2:				; this is the loop of the FTP server
+	MOVE P,FPDLP(FX)	; get a stack pointer
+	CALL CLNJFN		; clean up old cretinous JFNs
+	CALL DOICP		; do the ICP
+	MOVX T1,<CJ%WTA!CJ%FIL!CJ%ACS>
+	CALL DOJOB0		; get a job running FTPSER
+	 NOOP			; ignore error return
+	CALL DOLOG		; log this if needed
+	AOS FRKCNT(FX)		; bump contact count
+	JRST FTP2		; and loop forever
+	SUBTTL SMTP Server
+
+SMTP:	TXO F,F%PRV		; server for SMTP
+;;	TXO F,F%OLD		; set the old TELNET flag and server flag
+	MOVE P,FPDLP(FX)	; get a stack pointer
+	CALL SETUP		; setup initial stuff
+SMTP2:				; this is the loop of the SMTP server
+	MOVE P,FPDLP(FX)	; get a stack pointer
+	CALL CLNJFN		; clean up old cretinous JFNs
+	CALL DOICP		; do the ICP
+	MOVX T1,<CJ%WTA!CJ%FIL!CJ%ACS>
+	CALL DOJOB0		; get a job running MAISER
+	 NOOP			; ignore error return
+	CALL DOLOG		; log this if needed
+	AOS FRKCNT(FX)		; bump contact count
+	JRST SMTP2		; and loop forever
+	SUBTTL FINGER server
+
+IFN FT.FNG,<			; Only if FINGER on
+
+FINGER:				; FINGER server
+;;	TXO F,F%OLD		; we are an old server
+	MOVE P,FPDLP(FX)	; get stack pointer
+	CALL SETUP		; set up interrupt system etc...
+FINGE2:				; loop of the server
+	MOVE P,FPDLP(FX)	; get stack pointer
+	STKVAR <<FNGBUF,^D21>>
+	CALL CLNJFN		; clean up JFNs
+	CALL DOICP		; do the ICP
+	CALL ASTVT		; assign a TVT for use by inferior fork
+	 JRST FINGE3		; connection closed, so just log it
+	MOVX T1,CR%CAP		; make an inferior fork
+	CALL MKINF
+	ALARM TIMFNG,EXPIRE,<FINGER command from user>
+	MOVE T1,TVTJFN(FX)	; get command from FINGER user
+	DMOVE T3,[POINT 7,1+FNGBUF ; into FINGER buffer (limit 94 chars)
+		  ASCII/FING /]
+	MOVEM T4,FNGBUF		; set up FING command in buffer first
+	MOVEI T4,<5*^D20>-1
+FINGE1:	BIN%			; get character from user process
+	 JSYSF
+	IDPB T2,T3		; save in buffer
+	CAIE T2,.CHLFD		; terminating LF?
+	 SOJG T4,FINGE1
+	SETZ T2,		; tie off line
+	IDPB T2,T3
+	CANCEL			; cancel the FINGER alarm
+	HRROI T1,FNGBUF		; set buffer up with FINGER command
+	RSCAN%
+	 JSYSF
+	HRRO T2,TVTJFN(FX)	; output NVT for FINGER in RH
+	SETZ T3,		; position 0 of entry vector
+	SETZ T4,		; no final string
+	CALL DOINF		; run the inferior
+FINGE3:
+;	CALL SNDCLS		; close connection
+	CALL DOLOG
+	AOS FRKCNT(FX)		; bump contact count
+	JRST FINGE2		; and loop
+>				; end of IFN FT.FNG
+	SUBTTL TAC news server
+IFN FT.TAC,<
+
+TACNEW:	TXO F,F%PRV		; Give ^C privs?
+	MOVE P,FPDLP(FX)	; get stack pointer
+	CALL SETUP		; set up interrupt system etc...
+
+TACN2:	MOVE P,FPDLP(FX)	; get stack pointer
+	CALL CLNJFN		; clean up JFNs
+	CALL DOICP		; do the ICP
+	CALL DOJOB		; get a job running tacnews and a TVT
+	  NOOP			; connection closed?, so just log it
+TACN3:	CALL DOLOG
+	AOS FRKCNT(FX)		; bump contact count
+	JRST TACN2		; and loop
+
+>;End of TAC news (FT.TAC)
+
+	SUBTTL IS server	;#6 .
+;#6 Whole page is in edit #6
+IFN FT.IS,<			; Only if IS on
+
+IS:				; IS server
+;;	TXO F,F%OLD		; we are an old server
+	MOVE P,FPDLP(FX)	; get stack pointer
+	CALL SETUP		; set up interrupt system etc...
+IS2:				; loop of the server
+	MOVE P,FPDLP(FX)	; get stack pointer
+	STKVAR <<ISBUF,^D21>>
+	CALL CLNJFN		; clean up JFNs
+	CALL DOICP		; do the ICP
+	CALL ASTVT		; assign a TVT for use by inferior fork
+	 JRST IS3		; connection closed, so just log it
+	MOVX T1,CR%CAP		; make an inferior fork
+	CALL MKINF
+REPEAT 0,<			;#6 allow no options for now
+	ALARM TIMIS,EXPIRE,<IS command from user>
+	MOVE T1,TVTJFN(FX)	; get command from IS user
+	DMOVE T3,[POINT 7,1+ISBUF ; into IS buffer (limit 94 chars)
+		  ASCII/IS /]
+	MOVEM T4,ISBUF		; set up IS command in buffer first
+	MOVEI T4,<5*^D20>-1
+IS1:	BIN%			; get character from user process
+	 JSYSF
+	IDPB T2,T3		; save in buffer
+	CAIE T2,.CHLFD		; terminating LF?
+	 SOJG T4,IS1
+	SETZ T2,		; tie off line
+	IDPB T2,T3
+	CANCEL			; cancel the IS alarm
+	HRROI T1,ISBUF		; set buffer up with IS command
+>				;#6 end of REPEAT 0
+	HRROI T1,[ASCIZ \IS *
+\]				;#6 command to IS
+	RSCAN%
+	 JSYSF
+	HRRO T2,TVTJFN(FX)	; output NVT for IS in RH
+	SETZ T3,		; position 0 of entry vector
+	SETZ T4,		; no final string
+	CALL DOINF		; run the inferior
+IS3:
+	CALL DOLOG
+	AOS FRKCNT(FX)		; bump contact count
+	JRST IS2		; and loop
+>				; end of IFN FT.IS
+	SUBTTL SYSTAT server
+
+SYSTAT:				; SYSTAT server
+;;	TXO F,F%OLD		; we are an old server
+	MOVE P,FPDLP(FX)	; get stack pointer
+	CALL SETUP		; set up interrupt system etc...
+SYSTA2:				; loop of the server
+	MOVE P,FPDLP(FX)	; get stack pointer
+	STKVAR <TMPJFN>
+	CALL CLNJFN		; clean up JFNs
+	CALL DOICP		; do the ICP
+	CALL ASTVT		; assign a TVT for use by inferior fork
+	 JRST SYSTA3		; connection closed, so just log it
+	MOVX T1,<GJ%SHT!GJ%TMP>	; create a command file for inferior EXEC
+	HRROI T2,[ASCIZ/SYSTEM:INTSRV-SYSTAT.TMP/]
+	GTJFN%			; get a JFN on the file
+	 JSYSF
+	MOVEM T1,TMPJFN		; save JFN for later
+	MOVX T2,<7B5!OF%WR>	; open the file for write
+	OPENF%
+	 JSYSF
+	HRROI T2,[ASCIZ/SYSTAT
+POP
+/]
+	SETZB T3,T4
+	SOUT%
+	HRLI T1,(CO%NRJ)	; don't release the JFN
+	CLOSF%
+	 JSYSF
+	MOVX T1,CR%CAP		; make an inferior fork
+	CALL MKINF
+	MOVE T1,TMPJFN		; get JFN of file we just made back
+	MOVX T2,<7B5!OF%RD>	; open the file for read now
+	OPENF%
+	 JSYSF
+	HRL T2,TMPJFN		; command file for EXEC in LH
+	HRR T2,TVTJFN(FX)	; output NVT for EXEC in RH
+	SETZ T3,		; position 0 of entry vector
+	HRROI T4,[ASCIZ/
+/]				; final CRLF
+	CALL DOINF		; run the inferior
+	MOVE T1,TMPJFN		; get back file JFN
+	HRLI T1,(CO%NRJ)	; don't release the JFN
+	CLOSF%
+	 JSYSF
+	HRLI T1,(DF%EXP)	; delete and expunge the file
+	DELF%			; defenestration!
+	 JSYSF
+SYSTA3:
+	CALL DOLOG
+	AOS FRKCNT(FX)		; bump contact count
+	JRST SYSTA2		; and loop
+	SUBTTL Date/time server
+
+DATIME:				; Date/Time server
+;;	TXO F,F%OLD		; we are an old server
+	MOVE P,FPDLP(FX)	; get stack pointer
+	CALL SETUP		; set up interrupt system etc...
+DATIM2:				; loop of the server
+	MOVE P,FPDLP(FX)	; get stack pointer
+	CALL CLNJFN		; clean up JFNs
+	CALL DOICP		; do the ICP
+	MOVE T1,[POINT 8,DATBUF] ; collect string in memory
+	SETO T2,		; the current date/time
+	MOVX T3,<OT%DAY!OT%FDY!OT%FMN!OT%4YR!OT%DAM!OT%SPA!OT%12H!OT%TMZ!OT%SCL>
+	ODTIM%			; output date/time
+	 JSYSF
+	HRROI T2,[ASCIZ/
+/]				; get a CRLF
+	SETZB T3,T4
+	SOUT%			; out the CRLF
+	 JSYSF
+
+	ALARM ^D60000,EXPIRE,<timeout on Date/time SEND>
+	MOVX T3,<^D60>		; allow one minute for transfer
+	MOVX T4,<0>		; retransmission parameters
+	CALL DODAT		; send the data
+	CANCEL
+
+	CALL SNDCLS		; close the connections
+	CALL DOLOG
+	AOS FRKCNT(FX)		; bump contact count
+	JRST DATIM2		; and loop
+	SUBTTL NETSTAT server
+
+NETSTA:				; server for NETSTAT
+;;	TXO F,F%OLD		; set old protocol and server flag
+	MOVE P,FPDLP(FX)	; get a stack pointer
+	CALL SETUP		; set up PSI etc...
+	MOVEI T1,NTSTSO		; get the NETSTAT evec offset
+	MOVEM T1,.CJSFV+CRJARG	; put it in proper place
+NETST2:				; main loop for the server
+	MOVE P,FPDLP(FX)	; get a stack pointer
+	CALL CLNJFN		; get rid of old JFNs etc...
+	CALL DOICP		; do the ICP
+	MOVSI T1,(1B0)		; Insert AC argument, saying
+	MOVEM T1,FRKACS+1	; TCP connections only
+	MOVX T1,<CJ%WTA!CJ%FIL!CJ%ACS>
+	CALL DOJOB0		; get NETSTAT.EXE in a job our special way
+	 NOOP			; ignore error return
+	CALL DOLOG		; log this if needed
+	AOS FRKCNT(FX)		; bump contact count
+	JRST NETST2		; go back and do it again
+	SUBTTL TTYTST server
+
+TTYTST:				; TTY test server
+;;	TXO F,F%OLD		; we are an old server
+	MOVE P,FPDLP(FX)	; get PDL pointer
+	CALL SETUP		; setup the PSI system etc...
+TTYTS2:				; TTYTST server loop
+	MOVE P,FPDLP(FX)	; get PDL pointer
+	CALL CLNJFN		; clean up old JFNs
+	CALL DOICP		; do the ICP
+	MOVE T1,[POINT 8,DATBUF] ; Get TTYTST message into 8-bit ASCII
+	HRROI T2,TTYTXT
+	MOVEI T3,DATSIZ*4
+	SETZ T4,
+	SOUT%			; output the test message
+	 JSYSF			; handle errors
+
+	ALARM ^D60000,EXPIRE,<timeout on Terminal test SEND>
+	MOVX T3,<^D60>		; allow one minute for transfer
+	MOVX T4,<0>		; retransmission parameters
+	CALL DODAT		; Send it
+	CANCEL
+
+	CALL SNDCLS		; close the connections
+	CALL DOLOG		; log it if needed
+	AOS FRKCNT(FX)		; bump contact count
+	JRST TTYTS2		; and loop forever
+	SUBTTL TELL server
+IFN FT.TLL,<
+
+TELL:				; TELL server
+;;	TXO F,F%OLD		; we are an old server
+	MOVE P,FPDLP(FX)	; get PDL pointer
+	CALL SETUP		; setup the PSI system etc...
+	MOVEI T1,TELLO		; get the TELL evec offset
+	MOVEM T1,.CJSFV+CRJARG	; put it in proper place
+TELL2:				; TELL server loop
+	MOVE P,FPDLP(FX)	; get PDL pointer
+	CALL CLNJFN		; clean up old JFNs
+	CALL DOICP		; do the ICP
+	CALL DOJOB		; create a TELL job
+	 NOOP			; ignore error return
+	CALL DOLOG		; log it if needed
+	AOS FRKCNT(FX)		; bump contact count
+	JRST TELL2		; and loop forever
+>				; end of IFN FT.TLL
+	SUBTTL VMPSRV server
+;#7 whole page is #7
+IFN FT.PRT,<			;#7 Vms spoolingP?
+VMPSRV:				; VMPSRV server
+;;	TXO F,F%OLD		; we are an old server
+	MOVE P,FPDLP(FX)	; get stack pointer
+	CALL SETUP		; set up interrupt system etc...
+VMPSR2:				; loop of the server
+	MOVE P,FPDLP(FX)	; get stack pointer
+	CALL CLNJFN		; clean up JFNs
+	CALL DOICP		; do the ICP
+	CALL ASTVT		; assign a TVT for use by inferior fork
+	 JRST VMPSR3		; connection closed, so just log it
+	MOVX T1,CR%CAP		; make an inferior fork
+	CALL MKINF
+	MOVE T2,TVTJFN(FX)	; NVT is both primary input
+	HRLI T2,(T2)		;  and output
+	SETZ T3,		; position 0 of entry vector
+	SETZ T4,		; no final string
+	CALL DOINF		; run the inferior
+VMPSR3:
+	CALL DOLOG
+	AOS FRKCNT(FX)		; bump contact count
+	JRST VMPSR2		; and loop
+>				;#7 end if FT.PRT
+	SUBTTL Support routines for NVT's
+
+	COMMENT \
+
+	The ATNVT% Jsys has only a finite time to return.  If it
+exceeds its time a timeout will occur and the created job will be 
+killed.
+
+\
+
+DONVT:				; get an NVT
+				; non-skip return if sockets got closed
+				; if flag F%OLD is then use old TELNET
+	CALL RCVCHK		; check status of receive port
+	CALL SNDCHK		; check status of send port
+	TXNE F,F%RCV		; receive okay?
+	 TXNN F,F%SND		; and send okay?
+	  JRST DONVT2		; no
+	ALARM TIMNVT,EXPIRE,<return from ATNVT% JSYS>
+	MOVE T1,ICPJFN(FX)	; get JCN
+	TXNN F,F%OLD		; old or new protocol?
+	 TXO T1,AT%NTP		; new so set the option
+	ATNVT%			; attach NVT
+	 JSYSF			; trap errors (this jsys screws up a lot)
+	MOVEM T1,NVTDES(FX)	; save the NVT designator
+	RFMOD%			; get file mode word
+	 JSYSF
+	TXO T2,TT%LCA		; set lower case exists flag
+	STPAR%			; set the parameter
+	 JSYSF
+	MOVE T1,NVTDES(FX)	; get the NVT device deignator
+	MOVEI T2,.MOSLW		; set TTY line width function
+	SETZ T3,		; new width is zero
+	MTOPR%			; set the line width
+	 JSYSF
+	CANCEL			; cancel pending alarm
+	RETSKP			; return to caller
+DONVT2:				; here when the sockets got closed
+	CALL SNDCLS		; close out the connections
+	RET			; return with non-skip return
+
+   REPEAT 0,<
+DONVT:				; get an NVT
+				; non-skip return if sockets got closed
+				; if flag F%OLD is then use old TELNET
+	CALL RCVCHK		; check status of receive socket
+	CAIE T1,.NSOPN		; is it open?
+	 CAIN T1,.NSRCS		; RFC sent?
+	  SKIPA			; RFCS or OPND so skip
+	   JRST DONVT2		; no
+	CALL SNDCHK		; check status of send socket
+	CAIE T1,.NSOPN		; is it open?
+	 CAIN T1,.NSRCS		; RFC sent status?
+	  SKIPA			; RFCS or OPND so skip
+	   JRST DONVT2		; no
+	ALARM TIMNVT,EXPIRE,<return from ATNVT% JSYS>
+	MOVE T1,RCVJFN(FX)	; get receive JFN
+	MOVE T2,SNDJFN(FX)	; get the send JFN
+	TXNN F,F%OLD		; old or new protocol?
+	 TXO T1,AT%NTP		; new so set the option
+	ATNVT%			; attach NVT
+	 JSYSF			; trap errors (this jsys screws up a lot)
+	MOVEM T1,NVTDES(FX)	; save the NVT designator
+	RFMOD%			; get file mode word
+	 JSYSF
+	TXO T2,TT%LCA		; set lower case exists flag
+	STPAR%			; set the parameter
+	 JSYSF
+	MOVE T1,NVTDES(FX)	; get the NVT device deignator
+	MOVEI T2,.MOSLW		; set TTY line width function
+	SETZ T3,		; new width is zero
+	MTOPR%			; set the line width
+	 JSYSF
+	CANCEL			; cancel pending alarm
+	RETSKP			; return to caller
+DONVT2:				; here when the sockets got closed
+	CALL SNDCLS		; close out the connections
+	RET			; return with non-skip return
+   >;REPEAT 0
+
+DOCCC:				; routine to do the Control-C's to the NVT
+	MOVE T1,NVTDES(FX)	; get the designator
+	MOVEI T2,"C"-100	; get Control-C
+	STI%			; simulate terminal input
+	 ERCAL [JSP ES,NRUSE
+		 ASCIZ /STI failed; /]
+	RET			; return to caller
+
+DOMSG:				; routine to type the actual message
+	GXNN GF%MSG		; are we typing messages?
+	 RET			; no so just return
+	MOVE T1,NVTDES(FX)	; get device designator for the NVT
+	HRROI T2,MSGLOG		; get a pointer to the message
+	SETZB T3,T4
+	SOUT%			; output the string
+	 JSYSF
+	RET			; return to caller
+
+DODAT:				; routine to send data buffer
+	PUSH P,T3		; remember transfer timeout
+	PUSH P,T4		; remember retransmission parameters
+	MOVEI T3,1-DATBUF(T1)	; calculate length of msg
+	ASH T3,2
+	LDB T2,[POINT 3,T1,2]
+	SUBI T3,(T2)
+	MOVEM T3,.TCPBC+DATBFH
+	MOVX T2,TCP%PU		; PUSH this data
+	MOVEM T2,.TCPBF+DATBFH
+
+	MOVE T1,ICPJFN(FX)	; get JCN
+	TXO T1,TCP%WT		; wait for send to happen
+	MOVEI T2,DATBFH		; buffer header
+	POP P,T4
+	POP P,T3
+	SEND%
+	 JSYSF
+	RET
+	SUBTTL Routines to clean up resources and connections
+
+CLNJFN:				; close and release all JFNs
+	SETO T1,		; all
+	CLOSF%			; close all JFNs
+	 JSYSF			; errors should not happen
+	SETO T1,		; all
+	RLJFN%			; release all JFNs
+	 JSYSF			; should not be any errors
+	SETZM TVTJFN(FX)	; forget TVT JFN
+	SETZM NVTDES(FX)	; forget TVT designator
+	RET			; return to caller
+
+SNDCLS:				; routine to close network connection
+	SKIPN T1,ICPJFN(FX)	; get JCN
+	 RET
+	CLOSE%			; finish sending
+	 JSYSF
+	MOVEI T1,^D5000		; allow for things to clear out
+	DISMS
+	MOVE T1,ICPJFN(FX)	; get rid of JCN
+	ABORT%
+	 JSYSF
+	SETZM ICPJFN(FX)	; forget JCN assignment
+	RET
+
+   REPEAT 0,<
+SNDCLS:				; routine to close network connections
+	MOVE T1,RCVJFN(FX)	; get receive JFN
+	CLOSF%			; close it
+	 JSYSF
+	MOVE T1,SNDJFN(FX)	; get the send JFN
+	CLOSF%			; close it
+	 JSYSF
+	RET			; return to caller
+   >;REPEAT 0
+
+ASTVT:				; assign TVT to our job
+	CALL DONVT		; Attach the connection to a TVT
+	 RET
+ASTVT1:
+	STKVAR <<TTYNAM,2>>
+	HRROI T1,TTYNAM		; Build name string for TVT
+	HRROI T2,[ASCIZ \TTY\]
+	SETZ T3,
+	SOUT%
+	 JSYSF
+	MOVE T2,NVTDES(FX)	; Append number
+	TXZ T2,.TTDES
+	MOVX T3,<NO%MAG+10>
+	NOUT%
+	 JSYSF
+	HRROI T2,[ASCIZ \:\]
+	SETZ T3,
+	SOUT%
+	 JSYSF
+	MOVX T1,<GJ%SHT>	; Get JFN on TVT
+	HRROI T2,TTYNAM
+	GTJFN%
+	 JSYSF
+	MOVEM T1,TVTJFN(FX)
+	MOVX T2,<FLD(7,OF%BSZ)!OF%RD!OF%WR>
+	OPENF%			; Open for ASCII read/write
+	 JSYSF
+	RETSKP
+
+RLTVT:				; release TVT
+	SKIPN T1,TVTJFN(FX)	; Is there an active TVT?
+	 RET
+	CLOSF			; Yes, close it
+	 JSYSF
+	SETZM TVTJFN(FX)
+	SETZM NVTDES(FX)
+	RET
+	SUBTTL SETUP - Routine to initialize each server
+
+SETUP:				; routine to setup initial stuff
+	RESET%			; reset the world
+	CANCEL			; reset all pending alarms
+	IFN FT.FST,<		; only if we need fast mode
+	MOVEI T1,.FHSLF		; this fork
+	MOVEI T2,1		; we want queue zero only
+	SPRIW%			; set JOBBIT priority word
+	 JSYSF			; trap errors
+>				; end of IFN FT.FST
+	SETZM FRKJOB(FX)	; reset job number flag
+	MOVEI T1,DATBUF		; buffer addr
+	MOVEM T1,.TCPBA+DATBFH
+	MOVEI T1,ERRBUF		; Set buffer address
+	MOVEM T1,.TCPBA+ERRBFH
+	MOVEM T1,.TCPBA+ZROBFH	; (Legal addr, not used)
+	SETZM .TCPBC+ZROBFH	; Zero octets (forever)
+
+	MOVX T1,<CRJARG,,CRJARG+1> ; Clear CRJOB% arg block
+	SETZM CRJARG
+	BLT T1,CRJARG+.CJSLO
+	MOVE T1,FRKSUB(FX)	; get subsystem name pointer
+	MOVEM T1,.CJFIL+CRJARG	; save the file name pointer
+	MOVEI T1,.NULIO		; get TTY designator
+	MOVEM T1,.CJTTY+CRJARG	; new job is detached
+	MOVEI T1,FRKACS		; where AC values will be found
+	MOVEM T1,.CJACS+CRJARG	; if the subsystem cares to find them
+	MOVX T1,<FRKACS,,FRKACS+1> ; clear AC storage
+	SETZM FRKACS
+	BLT T1,FRKACS+17
+				; now enable the interrupt system
+	MOVEI T1,.FHSLF		; this fork
+	MOVX T2,<LEVFRK,,CHNFRK>
+	SIR%			; setup interrupt tables
+	 JSYSF			; if errors we are really messed up
+	MOVX T2,FRKMSK		; get active channel mask
+	AIC%			; activate interrupt channels
+	 JSYSF			; trap errors
+	EIR%			; enable interrupt requests
+	 JSYSF			; trap errors
+	RET			; return to caller
+	SUBTTL Routines to make and run inferior forks to servers
+
+;MKINF - make an inferior fork, and get subsystem into it
+; T1/ CFORK% flags
+;	CALL MKINF
+; Ret +1; always
+
+
+MKINF:				; routine to make an inferior fork
+	PUSH P,T1		; save CFORK flags
+	MOVX T1,<GJ%OLD!GJ%SHT>	; Get a JFN on the program to run
+	MOVE T2,FRKSUB(FX)
+	GTJFN%
+	 JSYSF
+	MOVEM T1,FHINF		; save JFN temporarily
+	POP P,T1		; Okay, now create an inferior fork
+	CFORK%
+	 JSYSF
+	EXCH T1,FHINF		; Remember fork handle, get JFN
+	HRL T1,FHINF		; Also need fork handle
+	GET%			; Put program into fork
+	 JSYSF
+	RET
+
+;DOINF - runs the subsystem in the inferior fork, and then insures
+; the INTSRV program name is posted.
+; T2/ primary in JFN ,, primary out JFN
+; T3/ entry vector position
+;	CALL DOINF
+; Ret +1; always
+
+DOINF:	MOVE T1,FHINF		; Working with this fork
+	SPJFN%
+	 JSYSF
+	MOVE T2,T3		; get entry vector position
+	SFRKV%			; start it
+	 JSYSF
+	WFORK%			; wait for it to terminate
+	 JSYSF
+	SKIPE T1,TVTJFN(FX)	; Active TVT?
+	 SKIPN T2,T4		; Yes, final output?
+	  JRST DOINF1
+	SETZ T3,		; Yes, send it off
+	SOUT%
+	 JSYSF
+DOINF1:	CALL RLTVT		; close the connections
+	MOVE T1,FHINF		; this fork handle
+	KFORK%			; finally kill the fork
+	 JSYSF
+	MOVX T1,SIXBIT/INTSRV/	; set our name in case FINGER clobbered it
+	SETNM%
+	RET
+	SUBTTL DOJOB - Routine to startup a subsystem in a new job
+
+	COMMENT \
+
+	The CRJOB jsys has only a finite time to return.  If it
+times out then the connections will be closed.  The ATACH Jsys
+may also time out.
+
+\
+
+DOJOB:				; routine to get a job
+	MOVX T1,<CJ%FIL!CJ%WTA>	; wait until attached before starting
+DOJOB0:	TXNE F,F%PRV		; should server run privileged?
+	 TXO T1,CJ%CAP		; yes, give it my capabilities
+	MOVEI T2,CRJARG		; get address of argument block
+	ALARM TIMCRJ,EXPIRE,<CRJOB% JSYS return>
+DOJOB2:				; alternate entry point
+	CRJOB%			; create the job
+	 ERCAL [JSP ES,NRUSE
+		 ASCIZ /CRJOB failed; /]
+	MOVEM T1,FRKJOB(FX)	; save the job number
+	CANCEL			; cancel pending alarm
+	CALL DONVT		; now get an NVT
+	 JRST KILJOB		;#10 if connections got closed handle it
+	ALARM TIMATC,EXPIRE,<ATACH% JSYS return>
+	MOVE T1,FRKJOB(FX)	; get the job number back
+	TXO T1,<AT%TRM>		; attach jsys flags
+	SETZB T2,T3
+	MOVE T4,NVTDES(FX)	; get the TTY number to use
+	ATACH%			; put the job where it belongs
+	 ERCAL [JSP ES,NRUSE
+		 ASCIZ /ATACH failed; /]
+	CANCEL			; cancel pending alarm
+	SETZM FRKJOB(FX)	; zero out job indicator
+	RETSKP			; return to caller
+
+;#10 All of KILJOB is under edit ;#10 
+KILJOB:
+	SKIPG T1,FRKJOB(FX)	; was a subjob created?
+	 RET			; no, simply return
+	HRROI T2,T3		; get one word into T3
+	MOVEI T3,.JIUNO		; we want the login user number
+	GETJI%			; get job info
+	 ERJMP [CAIE T1,GTJIX4		; job exist?
+		 CALL .JSYSF		; no, handle error
+		JRST KILJB1]
+	JUMPN T3,KILJB1		; do nothing if user logged in!
+	LGOUT%			; kill it
+	 JSYSF			; handle errors
+KILJB1:
+	SETZM FRKJOB(FX)	; no more job
+	RET			; return at error return
+	SUBTTL Routine to load message file
+
+LOADMS:				; routine to load the message
+	STKVAR <LODJFN>		; JFN storage
+	MOVEM T1,LODJFN		; save the JFN
+	GXZ GF%MSG		; turn off the flag
+	MOVX T2,<7B5!OF%RD!OF%THW> ; we want to read the file
+	OPENF%			; open up the file for reading
+	 JSYSF			; handle the error
+	MOVE T5,[POINT 7,MSGLOG] ; get pointer to message buffer
+	MOVEI T4,MSGSIZ		; get number of chars that will fit in buffer
+LOADM2:				; load file loop
+	MOVE T1,LODJFN		; get the JFN
+	BIN%			; read in a byte
+	 ERJMP LOADM3		; on error assume EOF
+	SOJLE T4,LOADM3		; make sure we dont overflow
+	IDPB T2,T5		; deposit the byte
+	JRST LOADM2		; loop until EOF
+LOADM3:				; here on EOF or overflow
+	SETZ T2,		; get a null byte
+	IDPB T2,T5		; deposit it
+				; close the file since we no longer need it
+	CLOSF%			; close the file and release JFN
+	 JSYSF
+	GXO GF%MSG		; turn flag back on
+LOADM6:
+	RET			; return to caller
+	SUBTTL Routine to log server activity
+
+DOLOG:				; routine to log server activity
+	GXNN GF%LOG		; are we logging?
+	 RET			; no so just return
+	STKVAR <<DLGHST,20>>	; get local storage
+	CALL LOKFIL		; lock down the buffer
+	CALL TSTAMP		; output time stamp
+	FTYPEA FRKNAM(FX)	; output fork name
+	FTYPEN < FH: >
+	MOVEI T1,.GTHNS		; host name string function
+	HRROI T2,DLGHST		; output host name to local buffer
+	MOVE T3,F4NHST(FX)	; get the host number
+	GTHST%			; output the host name
+	 ERJMP DOLOG5		; if error handle it
+	MOVEI T1,HSTNMS		; get host size
+	MOVE T2,[POINT 7,DLGHST] ; get byte pointer to name
+DOLOG2:				; output loop for host name
+	ILDB T3,T2		; get a byte
+	JUMPE T3,DOLOG3		; if null get do padding
+	 IDPB T3,FP		; deposit the byte into the buffer
+	SOJG T1,DOLOG2		; keep looping until max size or null
+DOLOG3:				; here on null or max size
+	JUMPLE T1,DOLOG6	; if padding done get out of loop
+	MOVEI T3," "		; get an ascii space
+	IDPB T3,FP		; output the padding character
+	SOJA T1,DOLOG3		; and do all padding
+DOLOG5:				; here when GTHST gave us an error
+	FNUMO F4NHST(FX),10,HSTNMS ; output host number in octal
+DOLOG6:				; may fall through from above
+	FTYPEN <, FP: >
+	FNUMO F4NSKT(FX),12,5	; output foreign port number
+	FTYPEN <, LP:  >
+	FNUMO LCLSKT(FX),12,5	; output local port number
+	SKIPN NVTDES(FX)	; get the NVT designator
+	 JRST DOLOG7		; no NVT if zero
+	FTYPEN <, TTY:  >
+	MOVE T2,NVTDES(FX)	; get the NVT designator
+	TXZ T2,.TTDES		; turn off TTY designator bit
+	FNUMO T2,10,3		; output TTY number
+DOLOG7:
+	CALLRET ULKFIL		; unlock file lock
+				; return to caller
+	SUBTTL Entry and exit routine for stack variable facility
+
+.STKST:
+	ADD P,0(AC16)		; bump stack for variables used
+	JUMPGE P,STKSOV		; test for stack overflow
+STKSE1:
+	PUSH P,0(AC16)		; save block size for return
+	CALL 1(AC16)		; continue routine, exit to .+1
+.STKRT:
+	 JRST [	POP P,AC16	; recover count
+		SUB P,AC16	; adjust stack to remove block
+		RET]		; do non-skip return
+	POP P,AC16		; skip return comes here, recover count
+	SUB P,AC16		; adjust stack to remove block
+RSKP:	AOS (P)			; now do skip return
+R:	RET			; normal return
+
+STKSOV:
+	SUB P,0(AC16)		; stack overflow, undo add
+	HLL AC16,0(AC16)	; setup to do multiple push, get count
+STKSO1:
+	PUSH P,[0]		; do one push at a time, get regular
+	SUB AC16,[1,,0]		;  action on overflow
+	TLNE AC16,777777	; count down to 0?
+	 JRST STKSO1		; no, keep pushing
+	JRST STKSE1
+	SUBTTL Pure data storage
+
+BUFONE:	POINT 7,BUFFER		; initial buffer pointer
+BF1PTR:	POINT 7,ERRLOG		; initial pointer for error buffer
+
+LEVTAB:	EXP MPC1		; interrupt PC storage address for mother
+	EXP MPC2
+	EXP MPC3
+
+LEVFRK:	EXP FPC1		; interrupt PC storage address for forks
+	EXP FPC2
+	EXP FPC3
+
+TTYTXT:				; TTYTST text
+	ASCIZ\
+ABCDEFGHIJKLMNOPQRSTUVWXYZ
+abcdefghijklmnopqrstuvwxyz
+0123456789 
+
+This system is running the TOPS-20AN operating system offered by
+Digital Equipment Corporation.
+
+\
+
+
+IFE DBGTST,<
+CMDFIL: ASCIZ/SYSTEM:INTSRV.RUN/
+>;IFE DBGTST
+IFN DBGTST,<
+CMDFIL: ASCIZ/INTSRV.DEBUG/
+>;IFN DBGTST
+
+				; pure data defined by MKFORK macro
+FPDLP:	BLOCK NFORKS		; fork PDL stack pointers
+FRKNAM:	BLOCK NFORKS		; fork name strings
+FRKSUB:	BLOCK NFORKS		; fork subsystem name
+FRKDSP:	BLOCK NFORKS		; fork dispatch address's
+FRKDEF:	BLOCK NFORKS		; forks default ICP socket
+FRKRXP:	BLOCK NFORKS		; fork OPEN retransmission parameter
+FRKTMO:	BLOCK NFORKS		; fork OPEN timeout period
+	SUBTTL Software Interrupt Definitions
+
+; Software interrupt stuff for server forks
+
+	DEFINE DEFCHN(NAME,CHANNEL,LEVEL,DISPATCH),<
+	FRKMSK==FRKMSK!1B<CHANNEL>
+	NAME==CHANNEL
+	LOC CHNFRK+CHANNEL
+	XWD LEVEL,DISPATCH
+	LOC FRKND2>
+	FRKMSK==0		; initialize used channels mask
+CHNFRK:	BLOCK ^D36		; fork interrupt channel table
+	FRKND2==.	
+
+				; fork interrupt level assignments
+	SYMS STSINT,3		; status interrupt level
+	SYMS ALMINT,2		; alarm expired interrupt level
+
+				; Fork interrupt channel assignments
+	DEFCHN FALARM,0,ALMINT,.ALARM ; alarm expired interrupt
+;;	DEFCHN ICPINT,1,STSINT,.ICPSK ; ICP socket status change
+;;	DEFCHN SKTINT,2,STSINT,.SKTSK ; data socket status change
+
+; Software interrupt stuff for mother fork
+
+	DEFINE DEFCHN(NAME,CHANNEL,LEVEL,DISPATCH),<
+	NAME==CHANNEL
+	CHNMSK==CHNMSK!1B<CHANNEL>
+	LOC CHNTAB+CHANNEL
+	XWD LEVEL,DISPATCH
+	LOC FRKND3>
+	CHNMSK==0		; init used channels mask for mother
+CHNTAB:	BLOCK ^D36		; mother interrupt channel table
+	FRKND3==.
+
+				; mother interrupt level assignmnets
+	SYMS ASYNCH,2		; asynchrous interrupt channel level
+	SYMS DEDINT,1		; fork dies interrupt channel level
+	SYMS TTYLVL,3		; TTY interrupt level
+
+				; mother interrupt channel assignments
+	DEFCHN CLOCK,0,ASYNCH,.CLOCK ; periodic clock interrupt
+	DEFCHN TTYINT,2,TTYLVL,.TTYIO ; TTY interrupt character
+	DEFCHN DEAD,.ICIFT,DEDINT,.DEAD ; fork died interrupt
+	SUBTTL COMND% JSYS command tables
+
+CSBV:				; virgin COMND% state block
+	EXP RPARSE		; reparse dispatch address
+	.PRIIN,,.PRIOU		; input and output JFNs
+	-1,,[ASCIZ/INTSRV>/]	; prompt
+	-1,,CMDTXT		; text buffer
+	-1,,CMDTXT		; text buffer
+	EXP TXTSIZ		; text buffer size
+	Z			; count of unparsed characters
+	-1,,CMDATM		; atom buffer
+	EXP ATMSIZ		; atom buffer size
+	EXP CMDGTF		; COMND% GTJFN% block
+IFN CSBSIZ-<.-CSBV>,<PRINTX ?CSB and CSBV disagree>
+
+PCMDS:	NPCMDS,,NPCMDS		; primary command table
+	CMD CLOSE,		; CLOSE log file
+	CMD DDT,,CM%INV		; transfer control to UDDT
+	CMD EXIT,		; EXIT after cleaning up command
+	CMD HELP,		; type out help text
+	CMD LOAD,		; LOAD message file
+	CMD OPEN,		; OPEN log file
+	CMD PUSH,,CM%INV	; PUSH to an EXEC
+	CMD QUIT,,CM%INV	; return to EXEC now
+	CMD RECEIVE,		; start a server
+	CMD REFUSE,		; stop or don't start a server
+	CMD RESTART,,CM%INV	; RESTART INTSRV
+	CMD S,SYMN1,CM%ABR!CM%INV ; abrev. for status
+SYMN1:	CMD STATUS,		; give a STATUS report
+	CMD STOP,		; STOP all servers command
+	CMD TAKE,		; TAKE commands from file command
+	CMD UNLOAD,		; UNLOAD message file
+	CMD WAIT,		; WAIT forever command
+	NPCMDS==.-PCMDS-1
+
+SCMDS:	NSCMDS,,NSCMDS		; server names command table
+	CMD DAYTIME,SRV.DT	; daytime server
+	CMD F,SYMN3,CM%ABR!CM%INV ; abrev. for ftp
+IFN FT.FNG,<			; only if we support finger
+	CMD FINGER,SRV.FN	; FINGER server
+>				; end of IFN FT.FNG
+SYMN3:	CMD FTP,SRV.FT		; FTP
+IFN FT.IS,<			;#6 only if we support IS
+	CMD IS,SRV.IS		;#6 IS server
+>				;#6  end of IFN FT.IS
+	CMD NETSTAT,SRV.NE	; NETSTAT server
+	CMD OLD-TELNET,SRV.OT	; old TELNET
+	CMD SMTP,SRV.SM		; SMTP
+	CMD SYSTAT,SRV.SY	; SYSTAT
+	CMD T,SYMN2,CM%ABR!CM%INV ; abriev. for telnet
+IFN FT.TAC,<
+	CMD TACNEW,SRV.TC	;TAC news
+>;TAC news
+IFN FT.TLL,<			; only if we support TELL
+	CMD TELL,SRV.TL		; TELL server
+>				; end of IFN FT.TLL
+SYMN2:	CMD TELNET,SRV.NT	; TELNET
+	CMD TTYTST,SRV.TT	; terminal test
+IFN FT.PRT,<			;#7 Do we support VAX spooling?
+	CMD VMPSRV,SRV.PT	;#7 Vms Printer server
+>				;#7 End FT.PRT
+	NSCMDS==.-SCMDS-1
+
+NCMDS:	NNCMDS,,NNCMDS		; network names command table
+	CMD INTERNET,-1		; INTERNET network
+	NNCMDS==.-NCMDS-1
+	SUBTTL Other randomness
+
+	IFE DEBUG,<XLIST>	; LIT follows
+...LIT:	LIT			; as you wish
+	IFE DEBUG,<LIST>	; end of LIT
+	PUREND==<.-1>!777	; end of pure storage
+
+	IFE DEBUG,<XLIST>	; repeat for symbol table follows
+	REPEAT <PUREND-<.-1>>,<0> ; make sure patch area/symbol table
+				;  starts on next page
+	IFE DEBUG,<LIST>	; end of repeat
+
+	END <EVECL,,EVEC>	; That's all folks
+

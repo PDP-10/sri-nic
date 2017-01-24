@@ -1,0 +1,227 @@
+;-*-Midas-*-
+;;
+;;add better clock/time checks
+
+
+;Clock returns time in format
+;  hh:mm:ss.s_____mm/dd/yy<CR>
+;Year is set by dipswitches in clock.
+;The tenths of seconds digit might be a '?' if the
+; clock hasn't synched to WWV in a few days.
+;Time returned by clock is about 2 seconds to slow.
+
+	Title  Time -- Heathkit WWV Clock time controller
+	Subttl      -- by Mark K. Lottor, August 1985
+
+.DECSAV
+
+A=1
+B=2
+C=3
+D=4
+P=17
+
+.INSRT	MID:MACROS
+.INSRT	MID:SYMBOLS
+
+Define RetSkp
+	Jrst Popj1
+Termin
+
+PDLen==40
+PDL:	Block PDLen
+
+TTYJFN:	0			;Clock's TTY port JFN
+TTYDES:	0			;Clock's TTY designator
+ClkDev:	Asciz "CLOCK:"
+TimBuf:	Block	40
+TimTad:	0
+Year:	0
+Month:	0
+Date:	0
+Day:	0
+
+;interrupt system stuff
+
+PC1:	0
+PC2:	0
+PC3:	0
+
+LevTab:	PC1
+	PC2
+	PC3
+
+ChnTab:	1,,TimeUp		;time routine
+	repeat	35,[0]
+IntMsk:	Bit(0)
+
+TimAdr:	0			;address to jump to on timeout
+
+Define TimOut (Tim,Adr)
+	Movei	1,Adr
+	Movem	1,TimAdr
+	Move	1,[.FHSLF,,.TIMEL]
+	Movei	2,Tim*1000.
+	Setz	3,		;channel 0
+	TIMER%
+	 Erjmp	Die
+Termin
+
+Define TimClr
+	Move	1,[.FHSLF,,.TIMAL]
+	Setz	2,
+	TIMER%
+	 Erjmp	Die	
+Termin
+
+TimeUp:	TypeCR	"%Timeout"
+	Move	1,TimAdr
+	Txo	1,Bit(5)	;turn on user mode bit
+	Movem	1,PC1		;return address
+	DEBRK%
+	 Erjmp	Die
+
+
+Start:	RESET%
+	Move	P,[PDL(-PDLen)]	;init stack
+	Movei	1,.FHSLF
+	Seto	3,
+	EPCAP%
+	Hrroi	1,ClkDev
+	STDEV%
+	 Erjmp	Die
+	Movem	2,TTYDES
+	Move	1,2
+	ASND%			;assign the tty
+	 Erjmp	Die
+	Movx	1,GJ%SHT
+	Hrroi	2,ClkDev
+	GTJFN%
+	 Erjmp	Die
+	Movem	1,TTYJFN
+	Move	2,[Field(7.,OF%BSZ)\OF%RD\OF%WR]
+	OPENF%
+	 Erjmp	Die
+	Call	SetInt		;setup interrupt system
+
+
+	Type	"
+Heathkit Most Accurate Time Clock says: "
+	Hrroi	1,TimBuf
+	Call	GetTim
+	 Jrst	[TypeCR "?Couldn't get time from clock"
+		 Jrst	Die]
+	Hrroi	1,TimBuf
+	PSOUT%
+	Movei	1,.CHLFD
+	PBOUT%
+	Call	CvtTim		;convert heath to tops-20
+	Call	ChkTim		;make sure its reasonable
+	 Jrst	[TypeCR "?Time no good"
+		 Jrst Die]
+	Type	"Setting system time to: "
+	Movei	1,.PRIOU
+	Move	2,TimTad
+	Setz	3,
+	ODTIM%
+	Movei	1,.CHSPC
+	PBOUT%
+	GTAD%
+	Came	1,[-1]
+	 Jrst	[TypeCR "%Time already set"
+		 Jrst Die]
+	Move	1,TimTad
+	STAD%
+	 Erjmp	[TypeCR "%Error setting time"
+		 Jrst Die]
+	TypeCR	"[OK]"
+	Jrst	Die
+
+
+;get the string from clock, puts it in TimBuf
+GetTim:	TimOut(5.,GetTi1)	;timeout in 5 seconds
+	Move	1,TTYJFN
+	CFIBF%
+	Movei	2,.CHCRT
+	BOUT%			;ask clock for time
+	Hrroi	2,TimBuf
+	Movei	3,^d30	
+	Movei	4,.CHCRT
+	SIN%
+	TimClr
+	Aos	(P)
+GetTi1:	Ret
+
+;converts the time string to tops-20 format tad, returned into TimTad
+CvtTim:	Hrroi	1,TimBuf
+	Movx	2,IT%NDA\IT%AIS\IT%AAC\IT%NTM\IT%NTZ
+	IDTNC%			;get time
+	 Erjmp	Die
+	Movei	3,10.
+	Push	P,4		;save seconds since midnight
+	NIN%			;get tenths of seconds 
+	 Erjmp	.+1		;this digit might be a '?' if losing accuracy
+	Movx	2,IT%NTI
+	IDTNC%			;get date
+	 Erjmp	Die
+	Pop	P,4
+	Subi	4,2.		;subtract about 2 seconds
+	Skipge	4
+	 Setz	4,
+	IDCNV%			;convert seperate numbers to internal format
+	 Erjmp	Die
+	Movem	2,TimTad	;save time
+	Ret
+
+
+;make sure the time is reasonable, ret +2 if ok
+ChkTim:	Move	2,TimTad
+	ODCNV%
+	 Erjmp	Die
+	Hlrzm	2,Year
+	Hrrzm	2,Month		;0=January
+	Hlrzm	3,Date		;0=first day of month
+	Hrrzm	3,Day		;0=Monday
+
+	Move	1,Year
+	Cail	1,1900.
+	 Subi	1,1900.
+	Caige	1,85.
+	 Ret			;year too early
+	Caile	1,90.
+	 Ret			;year too late
+
+	Aos	(P)
+	Ret
+
+
+;if done close TTYJFN and deassign clock
+Done:	Move	1,TTYJFN
+	Jumpe	1,Done2
+	CLOSF%
+	 Erjmp	.+1
+Done2:	Move	1,TTYDES
+	Jumpe	1,Done1
+	RELD%
+	 Erjmp	.+1
+Done1:	Haltf%
+	Jrst	Done1
+
+;Setup interrupt system
+SetInt:	Movei	1,.FHSLF
+	Move	2,[LevTab,,ChnTab]
+	SIR%
+	 Erjmp	Die
+	EIR%
+	 Erjmp	Die
+	Move	2,IntMsk
+	AIC%
+	 Erjmp	Die
+	Ret
+
+Popj1:	Aos	(P)
+R:	Ret
+
+Die:	Jrst	Done
+
+	End Start

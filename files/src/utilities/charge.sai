@@ -1,0 +1,290 @@
+BEGIN "charge"
+
+Comment
+
+Joe Weening 2/83.
+Modified 3/83 to read month-to-date data.
+
+This program reads the raw-data output file of FREP and displays charges
+for users whose names are given on the command line, or for the user running
+this program, if none were given.
+
+end of comment;
+
+require "{}<>" delimiters;
+define	! = {comment},
+	tab = '11,
+	lf = '12,
+	cr = '15,
+	crlf = {('15&'12)};
+
+define	jobsec!cost = {(100/3600)};	! $1.00 per hour;
+define	cpusec!cost = {(150/60)};	! $1.50 per minute;
+define  diskmpagm!cost = {(3/1000)};	! $0.03 per page-month;
+define	bmul = {(2/3)}, cmul = {(1/3)};	! night discounts;
+
+integer brchar;				! Break character for scanning;
+string  command!line;
+integer current!day;			! Today's day in month (1st day = 0);
+integer current!month;			! Today's month number (January = 1);
+integer current!year;			! Today's year;
+integer ichan;				! Channel for input file;
+integer incrlf,toblank,flush,tocomma,totab;	! Break tables for input;
+string  input!file!name;		! Accounting data file;
+integer month;				! Month of interest;
+string  our!user!name;			! Our user name;
+external integer !skip!;		! Various return codes from SAIL runtimes;
+string  user!name;			! User name to find charges for;
+integer year;				! Year of interest;
+
+preload!with "January","February","March","April","May","June",
+    "July","August","September","October","November","December";
+string array month!name[1:12];
+preload!with 31,28,31,30,31,30,31,31,30,31,30,31;
+integer array month!length[1:12];
+
+! INITIALIZE, EXIT, ERROR, FILES!ONLY;
+
+! INITIALIZE gets useful information at the beginning of the program.;
+
+simple procedure initialize;
+    begin "initialize"
+    integer our!usernum;
+    quick!code
+	movei 1,0;
+	rscan;				! back up input buffer to command line;
+	 haltf;
+	gjinf;
+	movem 1,our!usernum;
+	movni 2,1;			! for current date and time;
+	movei 4,0;
+	odcnv;
+	hlrzm 2,current!year;
+	hrrzm 2,current!month;
+	aos current!month;		! make January = 1 etc.;
+	hlrzm 3,current!day;
+	end;
+    our!user!name _ dirst(our!usernum);
+    setbreak(incrlf_getbreak,lf,cr,"INS");
+    setbreak(toblank_getbreak," "&tab,null,"INS");
+    setbreak(flush_getbreak,null," "&tab,"XNR");
+    setbreak(tocomma_getbreak,",",null,"INSK");
+    setbreak(totab_getbreak,tab,null,"INS");
+    command!line _ intty;
+    scan(command!line,toblank,brchar);	! remove program name;
+    end "initialize";
+
+! EXIT terminates (without the "End of SAIL execution" message)
+  and doesn't allow continuation.;
+
+simple procedure exit;
+    begin "exit"
+    label quit;
+quit:
+    quick!code haltf end;
+    print("Sorry, can't continue." & crlf);
+    go to quit;
+    end "exit";
+	
+! ERROR is used to print a message and die.;
+
+define error(mess) = {begin print(crlf & mess & crlf); exit end};
+
+! FILES!ONLY determines if a directory is files-only.  The argument is a
+  directory name without the structure name and "<" and ">" delimiters.;
+
+simple boolean procedure files!only(string directory);
+    begin "files!only"
+    directory _ "PS:<" & directory & ">" & 0;	! null at end;
+    start!code
+	movsi 1,1;			! ask for exact match only;
+	move 2,directory;		! byte ptr to dir name;
+	movei 3,0;
+	rcdir;
+	tlnn 1,'400000;
+	tdza 1,1;			! not files-only;
+	movni 1,1;			! files-only;
+	end;
+    ! Return value is now in register 1 for SAIL.;
+    end "files!only";
+
+! GET!INPUT!FILE asks for the name of the month, and opens the appropriate input
+  file based on that.;
+
+simple procedure get!input!file;
+    begin "get!input!file"
+    integer previous!month,default!month;
+    string s,input!file!name;
+
+    simple integer procedure cvmo(string mo);
+	begin "cvmo"
+	integer ci,m3;
+	m3 _ cvsix(mo) lsh -18;
+	for ci _ 1 step 1 until 12 do
+	    if m3 = cvsix(month!name[ci]) lsh -18 then return(ci);
+	return(0)
+	end "cvmo";
+
+    previous!month _ if current!month = 1 then 12 else current!month - 1;
+    default!month _ if current!day = 0 then previous!month else current!month;
+    do begin "get month"
+	print("Month ? (type <return> for ",month!name[default!month],") ");
+	s _ intty;
+	month _ if length(s) = 0 then default!month else cvmo(s);
+	if month = 0 then print("Eh?  Please try again." & crlf);
+	end "get month"
+    until month NEQ 0;
+    year _ if month LEQ current!month then current!year else current!year-1;
+
+    if month = current!month and current!day = 0 then
+	error(<"Data for ",month!name[current!month]," ",current!year,
+	    " is not available yet.">);
+    if year < 1983 then
+	error(<"Usage-based accounting for Score was not in effect in " &
+	    month!name[month] & " " & cvs(year) & ".">);
+    if year mod 4 = 0 then month!length[2] _ 29;	! Leap years;
+
+    input!file!name _ if month = current!month then
+	"PS:<ACCOUNTS>MONTH-TO-DATE.RAW" else
+	"PS:<ACCOUNTS>RAW-" & cvs(month) & "-" & cvs(year mod 100) & ".DAT";
+    ichan _ openfile(input!file!name,"ROE");
+    if ichan = -1 then
+	error(<"Unable to read file " & input!file!name>);
+
+    end "get!input!file";
+
+! GET!USER!NAME sets USER!NAME to the next user name on the command line,
+  or returns FALSE if there are no more names.;
+
+simple boolean procedure get!user!name;
+    begin "get!user!name"
+    scan(command!line,flush,brchar);
+    user!name _ scan(command!line,tocomma,brchar);
+    if user!name = "<" and user!name[INF for 1] = ">"
+	then user!name _ user!name[2 to INF-1];
+    return(user!name NEQ null);
+    end "get!user!name";
+
+! READ!USER!RECORDS finds all records in the input file for the user, and prints
+  charges and totals.;
+
+procedure read!user!records;
+    begin "read!user!records"
+    integer acpu,bcpu,ccpu,ajob,bjob,cjob,disk,
+	dummy,total!cpu,total!job;
+    integer acpu!cost,bcpu!cost,ccpu!cost,ajob!cost,bjob!cost,cjob!cost,disk!cost,
+	total!cost,grand!total,records!accepted;
+    string line,s1,s2,save!line;
+
+    grand!total _ records!accepted _ 0;
+    schptr(ichan,0);			! read from begining of file;
+    while true do begin "read loop"
+	label continue!read!loop;
+	save!line _ line _ input(ichan,incrlf);
+	if !skip! = -1 then done "read loop"
+	else if !skip! then begin "read error"
+	    print("Error reading file ",input!file!name,": ");
+	    erstr(!skip!,'400000);
+	    print(crlf);
+	    exit
+	    end "read error";
+	if line = "!" then continue "read loop";	! comment line in file;
+	s1 _ scan(line,totab,brchar);	! user name (or subdirectory);
+	if equ(user!name,s1[1 to length(user!name)]) then begin "prefix match"
+
+	    integer procedure getnum;	! get a number from LINE, error if empty;
+		begin "getnum"
+		integer n;
+		n _ intscan(line,brchar);
+		if brchar NEQ -1 then return(n);
+		print("Error in input file.  Ignoring the following line: " &
+		    crlf & save!line & crlf);
+		go to continue!read!loop;	! jumps out of this procedure;
+		end "getnum";
+
+	    s2 _ s1[length(user!name)+1 to INF];
+	    if s2 = null		! exact match;
+	      or s2 = "."		! subdirectory;
+		then begin "accept record"
+		label show!disk!cost;
+
+		total!cpu _ getnum div 1000;	! milliseconds to seconds;
+		total!job _ getnum;
+		dummy _ getnum;		! LPT pages;
+		dummy _ getnum;		! sessions;
+		disk _ getnum;
+		bcpu _ getnum div 1000;
+		ccpu _ getnum div 1000;
+		bjob _ getnum;
+		cjob _ getnum;
+		acpu _ total!cpu - bcpu - ccpu;
+		ajob _ total!job - bjob - cjob;
+	
+		ajob!cost _ ajob * jobsec!cost + 0.5;
+		bjob!cost _ bjob * jobsec!cost * bmul + 0.5;
+		cjob!cost _ cjob * jobsec!cost * cmul + 0.5;
+		acpu!cost _ acpu * cpusec!cost + 0.5;
+		bcpu!cost _ bcpu * cpusec!cost * bmul + 0.5;
+		ccpu!cost _ ccpu * cpusec!cost * cmul + 0.5;
+		disk!cost _ disk * diskmpagm!cost
+		    * (if month = current!month then
+			current!day/month!length[current!month] else 1.0)
+		    + 0.5;
+		total!cost _ ajob!cost + bjob!cost + cjob!cost
+		    + acpu!cost + bcpu!cost + ccpu!cost + disk!cost;
+
+		setformat(0,0);
+		print(crlf & "Score charges for ",s1," during ",
+		    month!name[month]," ",year,(if month = current!month
+			then " (through yesterday):" else ":"),crlf & crlf);
+		setformat(9,2);
+
+		! We print just disk cost if there is no cpu or job cost,
+		  and the directory is a subdirectory of the user or is
+		  files-only.;
+
+		if total!cpu = 0 and total!job = 0 and (s2 = "." or files!only(s1))
+		    then go to show!disk!cost;
+
+		print(
+"A job time:" & cvf(ajob/3600) & " hours    $" & cvf(ajob!cost/100) & crlf &
+"B job time:" & cvf(bjob/3600) & "           " & cvf(bjob!cost/100) & crlf &
+"C job time:" & cvf(cjob/3600) & "           " & cvf(cjob!cost/100) & crlf &
+"A cpu time:" & cvf(acpu/60)   & " minutes   " & cvf(acpu!cost/100) & crlf &
+"B cpu time:" & cvf(bcpu/60)   & "           " & cvf(bcpu!cost/100) & crlf &
+"C cpu time:" & cvf(ccpu/60)   & "           " & cvf(ccpu!cost/100) & crlf);
+
+show!disk!cost:	print(
+"Disk usage:" & cvf(disk/1000) & " pages     " & cvf(disk!cost/100) & crlf & crlf &
+"Total cost:         "         & "          $" & cvf(total!cost/100) & crlf);
+
+		grand!total _ grand!total + total!cost;
+		records!accepted _ records!accepted + 1;
+
+		end "accept record";
+	    end "prefix match";
+continue!read!loop:
+	end "read loop";
+
+    if records!accepted = 0 then
+	print(crlf & "No records found for ",user!name,crlf)
+    else if records!accepted > 1 then print(crlf & crlf &
+"Grand total:        "       & "          $" & cvf(grand!total/100) & crlf);
+
+    end "read!user!records";
+	
+! execution begins here;
+
+initialize;
+get!input!file;
+if get!user!name then
+    do read!user!records
+    until not get!user!name
+else begin
+    user!name _ our!user!name;
+    read!user!records;
+    end;
+release(ichan);
+exit;
+
+end "charge";

@@ -1,0 +1,284 @@
+IFN GTDSW,<
+NICSIZ==1000
+NICNAM:	BLOCK NICSIZ		;NICKNAME STRING SPACE
+NICTSZ==200
+NICTAB:	BLOCK NICTSZ		;TBLUK TABLE
+LNBFLN==40
+
+NICDNM:	BLOCK maxdc
+
+;ADD A NICKNAME, RETSKP IF OK, ENTRY TO ADD IN T2
+NICTBA::MOVEI T1,NICTAB
+	TBADD%
+	 ERJMP R
+	RETSKP
+
+;LOOKUP A NICKNAME, STRING IN T2
+;RETSKP IF FOUND WITH ADDRESS OF TABLE ENTRY IN T1
+NICTBL:	MOVEI T1,NICTAB
+	TBLUK%
+	 ERJMP R
+	TXNN T2,TL%EXM		;EXACT MATCH?
+	 RET
+	RETSKP
+
+	SUBTTL Nickname Table Initialization
+
+COMMENT \
+	The nickname translation table is used by the GTDOM% jsys.
+Any name without a dot is first looked up in the nickname table
+and if an entry is found it is translated into it's official name
+before being passed off for resolving.
+
+	Things used by this routine:
+
+NICNAM		the name space for strings
+NICSIZ		number of words allocated for NICNAM
+NICSPC		the number of free words in NICNAM space
+NICPTR		pointer to next free word in NICNAM
+NICTAB		a tbluk table of nicknames
+NICTSZ		size of tbluk table
+
+\
+
+NICINI::
+	TRVAR <NICJFN,NICSAV,NICSPC,NICPTR,<TMPBUF,20>,<LINBUF,LNBFLN>,LINPTR>
+
+	MOVX T1,GJ%SHT!GJ%OLD
+	HRROI T2,[ASCIZ /SYSTEM:NICKNAMES.TXT/]
+	GTJFN%
+	 ERJMP R		;file not found
+	MOVEM T1,NICJFN		;save JFN
+	MOVX T2,7B5!OF%RD
+	OPENF%
+	 ERJMP NICER1
+
+	MOVNI T1,NICSIZ		;SIZE OF NAME SPACE
+	MOVEM T1,NICSPC		;WORDS REMAINING
+	MOVEI T1,NICNAM
+	MOVEM T1,NICPTR		;NEXT AVAILABLE STRING SPACE
+	MOVEI T1,NICTSZ
+	HRL T1,T1
+	MOVEM T1,NICTAB		;TBLUK SETUP
+
+NICNL:	CALL NCNL		;SKIP TO START OF NEXT DATA LINE
+	 JRST NICCLS		;EOF
+	CALL NCRFLD		;READ A FIELD (primary host name)
+	 JRST NICNL		;NOTHING THERE
+	IDIVI T1,5
+	SKIPE T2
+	 ADDI T1,1
+	MOVE T3,T1
+	ADDM T1,NICSPC		;DECREMENT NAME SPACE LEFT
+	SKIPLE NICSPC		;TABLE FULL?
+	 JRST NICERF
+	MOVE T1,T3
+	PUSH P,T1		;SAVE COUNT
+	ADD T1,NICPTR
+	HRLZI T2,TMPBUF
+	HRR T2,NICPTR
+	BLT T2,(T1)		;SAVE STRING
+	MOVE T1,NICPTR		
+	MOVEM T1,NICSAV		;SAVE ADDR OF OFFICIAL NAME
+	POP P,T1		;RESTORE COUNT
+	ADDM T1,NICPTR		;UPDATE POINTER
+
+NICNIC:	CALL NCRFLD		;READ A NICKNAME
+	 JRST NICNL		;NOTHING
+	IDIVI T1,5
+	SKIPE T2
+	 ADDI T1,1
+	MOVE T3,T1
+	ADDM T1,NICSPC		;DECREMENT NAME SPACE LEFT
+	SKIPLE NICSPC		;TABLE FULL?
+	 JRST NICERF
+	MOVE T1,T3
+	PUSH P,T1		;SAVE COUNT
+	ADD T1,NICPTR
+	HRLZI T2,TMPBUF
+	HRR T2,NICPTR
+	BLT T2,(T1)		;SAVE STRING
+	HRLZ T2,NICPTR		
+	POP P,T1		;RESTORE COUNT
+	ADDM T1,NICPTR		;UPDATE POINTER
+	HRR T2,NICSAV		;NICKNAME,,OFFICIAL NAME
+	CALL NICTBA		;ADD TO TABLE
+	 TRNA			;SKIP ERRORS
+	JRST NICNIC		; READ ANOTHER NICKNAME
+
+NICER1:	MOVE T1,NICJFN
+	RLJFN%
+	 ERJMP .+1
+	RET
+
+NICERF:	TMSG <%Nickname space full
+>
+NICCLS:	MOVE T1,NICJFN
+	CLOSF%
+	 ERJMP .+1
+	RETSKP			;success return
+
+;SKIP TO NEXT LINE, RETSKP IF OK
+NCNL:	MOVE T1,NICJFN
+	MOVE T2,[POINT 7,LINBUF]
+	MOVEI T3,LNBFLN*5-1
+	MOVEI T4,.CHLFD
+	SIN%
+	 ERJMP [SETZM LINPTR
+		RET]
+	SETZ T4,
+	IDPB T4,T2
+	ILDB T1,[POINT 7,LINBUF]
+	CAIE T1,.CHCRT
+	 CAIN T1,.CHLFD
+	  JRST NCNL
+	CAIE T1,";"
+	 CAIN T1,"!"
+	  JRST NCNL
+	MOVE T1,[POINT 7,LINBUF]
+	MOVEM T1,LINPTR
+	RETSKP
+
+;READ A FIELD, RETSKP IF OK, RETURN CHAR COUNT IN T1, STRING IN TMPBUF
+NCRFLD:	SKIPN LINPTR
+	 RET			;NOTHING TO DO
+	MOVE T2,[POINT 7,TMPBUF]
+	SETZ T3,
+NCRFL1:	ILDB T1,LINPTR
+	JUMPE T1,R
+	CAIE T1,.CHSPC
+	 CAIN T1,.CHTAB
+	  JRST NCRFL1
+	CAIE T1,.CHCRT
+	 CAIN T1,.CHLFD
+	  RET
+NCRFL2:	IDPB T1,T2
+	ADDI T3,1
+	ILDB T1,T2
+	JUMPE T1,NCRFL3
+	CAIE T1,.CHSPC
+	 CAIN T1,.CHTAB
+	  JRST NCRFL3
+	CAIE T1,.CHCRT
+	 CAIN T1,.CHLFD
+	  JRST NCRFL3
+	CAIE T1,","
+	 CAIN T1,":"
+          JRST NCRFL3
+	JRST NCRFL2
+NCRFL3:	SETZ T1,
+	IDPB T1,T2
+	MOVEI T1,1(T3)		;RETURN COUNT (INCLUDING NULL)
+	RETSKP
+
+
+
+
+
+gtdstr:	umove flags,1			;setup flags and fcode
+	andx flags,diflag		;clear any unknown flags
+IFN GTDSW,<
+	ifxe. flags,dnf			;if asciz name
+	  umove t1,2			;get source designator
+	  call nicsin			;read in string
+	    djerr(gtdx1)
+ 	  umovem t1,2			;store updated designator
+	  call nicluk			;check for special stuff
+	    jrst nicnum			;  [a.b.c.d] format found
+	    call nicsub			;  nickname found
+	  call dsetup			;set up database context
+	  move t1,[point 7,nicdnm]	;source
+	  move t3,[ildb t2,t1]		;load instruction
+	  call sindnx
+	    djerr(gtdx1)
+	else.				;if domain format name
+	  call dsetup			;set up database context
+	  umove t1,2			;get source designator
+	  call sindn			;get domain name set up
+	    djerr(gtdx1)			;lost somehow, punt
+	  umovem t1,2			;store updated designator
+	endif.
+>;IFN GTDSW
+IFE GTDSW,<
+	call dsetup			;set up database context
+	umove t1,2			;get source designator
+	call sindn			;get domain name set up
+	 djerr(gtdx1)			;lost somehow, punt
+	umovem t1,2			;store updated designator
+>
+	movei t1,da
+	jrst dlooki			;and look it up	
+
+
+IFN GTDSW,<
+;read string to translate, retskp if ok
+nicsin:	move t3,[xctbu [ildb t2,t1]]	;instruction to fetch bytes
+	tlnn t1,777777			;if jfn do JSYS
+	 move t3,[bin%]
+	tlc t1,777777			;check for LH=-1
+	tlcn t1,777777
+	 hrli t1,(<point 7,0>)		;use standard pointer
+	movei t4,maxdc			;max chars allowed
+	move t7,[point 7,nicdnm]	;put asciz name here
+nicsi1:	xct t3				;get a character
+	 erjmp r
+	sojl t4,r			;error if more than max
+	jumpe t2,nicsix
+	caie t2,.chspc
+	 cain t2,.chtab
+	  jrst nicsix
+	caie t2,.chcrt
+	 cain t2,.chlfd
+	  jrst nicsix
+	idpb t2,t7			;save it
+	jrst nicsi1
+nicsix:	setz t2,
+	idpb t2,t7			;end string
+	retskp
+
+;check name read
+;ret +1 if [a.b.c.d] format
+;    +2 if nickname (no dots)
+;    +3 if domain name (dots)
+nicluk:	ildb t2,[point 7,nicdnm]
+	cain t2,133			;left bracket?
+	 ret 				;host number return     
+	aos (p)				;must be nickname or domain name
+	move t2,[point 7,nicdnm]
+niclu1:	ildb t3,t2
+	cain t3,"."			;domain name?
+	 retskp
+	jumpn t3,niclu1
+	ret				;no dots, nickname
+
+;nicdnm was a nickname, substitute official name
+nicsub:	hrroi t2,nicdnm
+	call nictbl		;lookup nickname
+	 ret			;failed, do nothing
+	hrrz t1,(t1)		;get address of official name
+	hrli t1,(<point 7,0>)
+	move t2,[point 7,nicdnm]
+nicsu1:	ildb t3,t1		;substitute it
+	idpb t3,t2
+	jumpn t3,nicsu1
+	ret
+
+;string was "[a.b.c.d]", just return internet number
+nicnum:	move t1,[point 7,nicdnm]
+	ildb t2,t1		;skip left bracket
+	movei t4,4		;4 octets
+	setz t5,		;form address here
+	movei t3,^d10
+nicnu1:	lsh t5,^d8
+	nin%
+	 erjmp nicnue
+	dpb t2,[point 8,t5,28]
+	sojg t4,nicnu1
+	umovem t5,t3		;return number to user
+	umovem t4,t4		;zero status
+	jrst skmrtn		;skip return
+
+nicnue:	djerr(gtdx1)		;lose
+
+>;IFN GTDSW
+

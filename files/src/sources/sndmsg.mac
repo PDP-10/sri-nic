@@ -1,0 +1,925 @@
+	TITLE SNDMSG - Routines to send local and network TTY messages
+	SUBTTL David Eppstein / Stanford University / 22 April 1983
+
+	;; Taken from SEND.MAC, written March 1981 by Kirk Lougheed
+	;;
+	;; Judy Anderson of HP and Ken Olum of FLAIR wrote the Chaos support.
+	;; Frank Fujimoto and David Eppstein, both of Stanford, wrote
+	;; the TCP/SMTP support.  David Eppstein wrote the Pup Ethernet code.
+
+	SEARCH MONSYM,MACSYM,SNDDEF
+	EXTERN $TCOPN,$TCPSI,$TCCLS,$TCSOU,$TCSND,$TCBOU,$TCBIN,$TCSIN
+	EXTERN $GTPRO,$GTLCL
+	ASUPPRESS
+	SALL
+
+; Definitions and Storage
+
+A=1				;Temporary AC's for JSYS use etc
+B=2
+C=3
+D=4
+
+ADR=10				;Pointer to current address block
+ABLOCK=11			;Pointer to argument block
+
+FP=15				;TRVAR frame pointer
+CX=16				;Scratch for MACREL
+P=17				;Main stack pointer
+
+	BUFLEN==600		;Length of command buffers (for long msgs)
+	PDLEN==100		;Length of pushdown stack
+	MAISKT==^D25		;Get socket for SMTP
+
+
+; Macros for returning error strings and codes
+
+DEFINE RETLOC (STRLOC,ERCODE) <
+	JRST [	HRROI A,STRLOC
+		IFNB <ERCODE>,<MOVX C,ERCODE>
+		RET ]
+>
+
+DEFINE RETSTR (ERTEXT,ERCODE) <RETLOC [ASCIZ\ERTEXT\],ERCODE>
+
+; Storage allocation
+
+	.PSECT DATPAG		;Paged storage
+
+BUFFER:	BLOCK 1000		;Random text storage etc (must be whole page)
+	BUFPAG==BUFFER/1000	;The associated page number
+
+	.ENDPS
+
+
+	.PSECT DATA		;Uninitialized unpaged data
+
+	NBFLEN==100
+NETBUF:	BLOCK NBFLEN		;Used to build "filename" for ICP etc
+
+NETUSR:	BLOCK 20		;Foreign username
+NETADR: BLOCK 20		;Foreign site name
+LCLHST:	BLOCK 10		;Local host name string (copy with GETLCL)
+NTOJFN:	BLOCK 1			;JFN for net
+
+	.ENDPS
+
+	.PSECT CODE		;Rest of this file is pure code
+
+; $SEND - Send a terminal message to multiple recipients
+; Call with A/pointer to ASCIZ message text
+;	    B/list of recipients to send to
+;	    C/argument block
+; Returns +1/Failed, A/error string
+;		     B/points to failed recipient
+;		     C/error code (TTXxxx defined in SNDDEF)
+;	  +2/Success, A/updated pointer, B/0, C/unchanged
+;
+; Format of the recipient list:
+;	Each recipient block is in the form of a header word possibly
+;	followed by some data words.  The format of the header word is
+;	RC%TYP,,RC%NXT where RC%TYP is a code for the type of recipient
+;	coded for by this block, and RC%NXT is the next recipient.
+;	End the list with a 0 RC%NXT field.  Values for RC%TYP are:
+;		RC.TTY - Recipient is a local terminal.
+;			 Data is the terminal number (without .TTDES)
+;		RC.USR - Recipient is a local user - data is user number.
+;		RC.ALL - Send to all local users (no data).
+;		RC.NET - Send to a net user.  Data are two word-aligned
+;			 ASCIZ strings for the user and host names.
+;
+;	Example: to send to TTY4, FMF, and CSD.KDO@SCORE one might have:
+;		RBLOCK:	RC.TTY,,RBLK0
+;			4		;TTY 4 (not 400004)
+;		RBLK0:	RC.USR,,RBLK1
+;			500000,,137	;FMF's user number (use RCUSR%)
+;		RBLK1:	RC.NET,,0
+;			ASCIZ/CSD.KDO/	;Net user name (CSD.KDO)
+;			ASCIZ/SCORE/	;Net host name (SCORE)
+;
+;
+; Format of the argument block:
+;	Word 0 (.SDPID): PID for IPCF messages.  Set to zero to make $SEND
+;			 create a new PID - it will be filled in if created.
+;	Word 1 (.SDFLG): Flags for the IPCF send server.  Defined flags:
+;		1B0 (T%USER) - "User program features" like typing the status
+;			       of a send to user with multiple ttys
+;		1B1 (T%RAFT) - Obey REFUSE SYS after this message
+;		1B2 (T%HDR)  - Don't supply a message header (needs WHEEL)
+;		1B3 (T%RSYS) - Obey REFUSE SYS always
+;	Word 2 (.SDTCC): Interrupt channel for TCP interrupt
+;			 See $TCPSI in TCPIO.MAC for details
+
+$SEND::	SAVEAC <D,ADR,ABLOCK,CX> ;Don't mung anything for caller
+	TRVAR <MSPTR,MSEPTR>	;Place to save message pointer and end of it
+	SETZM LCLHST		;No local host name found yet
+	MKPTR (A)		;Turn into a byte pointer
+	MOVEM A,MSPTR		;Get message text pointer
+	MOVE ADR,B		;Get address block
+	MOVE ABLOCK,C		;Get argument block
+	DO.
+	  CALL SNDONE		;Send one message
+	  IFSKP.
+	    MOVE B,.SDFLG(ABLOCK) ;Done, get SNDSRV flags
+	    TXZN B,T%RAFT	;Obey REFUSE SYS after that message
+	    IFSKP.
+	      TXON B,T%RSYS	;Yes, set flag for that
+	       MOVEM B,.SDFLG(ABLOCK) ;Save changed flag word
+	    ENDIF.
+	    LOAD ADR,RC%NXT,(ADR) ;Done, get next
+	    JUMPN ADR,TOP.	;And loop back with it
+	  ELSE.
+	    MOVE B,ADR		;Failed, get address block back
+	    RET			;And return failure
+	  ENDIF.
+	ENDDO.
+	SETO A,			;Get -1
+	ADJBP A,MSEPTR		;So we can point to null at end of message
+	MOVE B,ADR		;Get final value in ADR (should be 0)
+	MOVE C,ABLOCK		;Get address block address
+	RETSKP			;Return success with them
+
+; SNDONE - Send one message
+; returns +1/failure, A and C set up; +2/success
+
+SNDONE:	LOAD A,RC%TYP,(ADR)	;Get send type
+	CAIG A,RC.NET		;In range?
+	IFSKP.
+	  HRROI A,[ASCIZ/Unknown function code/]
+	  MOVEI C,TTXUNK	;No, get error string and code
+	  RET			;Return failure
+	ENDIF.
+	CAIN A,RC.NET		;If it's a net send
+	 JRST SNDNET		;Then send that way
+	JRST SNDLOC		;Else it's a local send
+
+; Here to make error string for JSYS error and return
+
+JSRET:	HRROI A,NETBUF		;Use a likely buffer
+	HRLOI B,.FHSLF		;With ourself
+	MOVEI C,40*5-1		;Number of characters available
+	ERSTR%			;Copy error string
+	 NOP
+	 NOP
+	HRROI A,NETBUF		;Now point to the string we made
+	MOVX C,TTXNET		;Random network error (not called from SNDLOC)
+	RET
+
+; Sending a Local Message
+
+SNDLOC:	LOAD A,RC%TYP,(ADR)	;Fetch type of field we parsed
+	MOVE A,[ SIXBIT/SNDLIN/
+		 SIXBIT/SNDUSR/
+		 SIXBIT/SNDALL/ ](A)
+	MOVEM A,BUFFER+SN$HDR	;Set up appropriate function code
+	MOVE A,1(ADR)		;Retrieve word of data (garbage for SNDALL)
+	MOVEM A,BUFFER+SN$DAT	;Set up data
+	MOVE A,.SDFLG(ABLOCK)	;Get flags for IPCF
+	MOVEM A,BUFFER+SN$FLG	;Set them
+	HRROI A,BUFFER+SN$MSG	;Into the appropriate place in the IPCF page
+	MOVE B,MSPTR		;From message pointer given to us
+	CALL MOVSTR		;Copy the message
+	MOVE D,.SDPID(ABLOCK)	;With PID we were given
+	CALL DOIPCF		;Go send it off
+	IFNSK.
+	  MOVEM D,.SDPID(ABLOCK) ;Failed, copy PID back anyway
+	  RET			;Give fail return
+	ENDIF.
+	MOVEM D,.SDPID(ABLOCK)	;Succeeded, copy PID back
+	SKIPN BUFFER+SN$HDR	;Header word is -1 on errors
+	IFSKP.
+	  HRROI A,BUFFER+SN$STR	;Point to error string
+	  MOVE C,BUFFER+SN$ERR	;And get error code returned
+	  RET			;Return failure
+	ENDIF.
+	MOVE A,BUFFER+SN$TTY	;Fetch number of terminals sent to
+	CAIG A,1		;One or none?
+	 RETSKP			;Yes, done (none?? should be error)
+	MOVE A,.SDFLG(ABLOCK)	;Get argument flags
+	TXNN A,T%USER		;We running a user program?
+	 RETSKP			;No, be quiet
+
+	;; Multiple jobs with T%USER set - give status of each
+	LOAD A,RC%TYP,(ADR)	;Get address type
+	CAIE A,RC.ALL		;Is it to *?
+	IFSKP.			;Yes, "* has multiple jobs" is ugly, so:
+	  TMSG <Status of system-wide send:
+>
+	ELSE.
+	  MOVEI A,.PRIOU	;To the terminal
+	  MOVE B,ADR		;With current address
+	  CALL $WTRCP		;Write recipient name
+	  TMSG < has multiple jobs:
+>				;Start message
+	ENDIF.
+	MOVN D,BUFFER+SN$TTY	;Fetch and negate no. of terminals pawed over
+	HRLZS D			;Swap and clear
+	DO.
+	  TMSG <  >		;Space over for pretty
+	  MOVEI A,.PRIOU	;A to the terminal
+	  HRRZ B,BUFFER+SN$TTY+1(D)
+	  ADDI B,.TTDES		;Make TTY number into a device designator
+	  DEVST%		;Write device name, e.g. TTY6
+	   ERJMP .+1
+	  TMSG <: -- >	;Add a colon and separating dashes
+	  HLRZ B,BUFFER+SN$TTY+1(D)	 ;Fetch status flag for that line
+	  HRRO A,[ [ASCIZ/refused/]
+		   [ASCIZ/ok/]
+		   [ASCIZ/timed out/]
+		   [ASCIZ/refused/] ]+1(B)
+	  PSOUT%		;Print out the status
+	  TMSG <
+>				;End with a CRLF
+	  AOBJN D,TOP.		;Loop over the list
+	ENDDO.
+	RETSKP
+
+; DOIPCF - send an IPCF page to the send server and await the response
+; call with BUFFER/message, D/PID of this process (zero if none)
+; returns +1/failure, +2/success, reply page in BUFFER
+
+	PACLEN==7		;Length of MSEND/MRECV packet
+
+DOIPCF:	STKVAR <SRVPID,<SNDARG,4>,<PACKET,PACLEN>>
+	MOVX A,IP%CPD		;Get create pid flag into place
+	SKIPE D			;Do we already have a pid?
+	 SETZ A,		;Yes, no special flags needed
+	MOVEM A,.IPCFL+PACKET	;Set up flag word
+	MOVEM D,.IPCFS+PACKET	;We are the sender
+	SETZM .IPCFR+PACKET	;INFO is the receiver
+	MOVEI A,SNDARG
+	HRLI A,4
+	MOVEM A,.IPCFP+PACKET	;Set up pointer to argument block
+	MOVX A,.IPCIW
+	MOVEM A,.IPCI0+SNDARG	;Get pid for this name
+	SETZM .IPCI1+SNDARG	;No duplicate
+	DMOVE A,[ASCIZ/SNDSRV/]	;Point to string for SNDSRV's PID name
+	DMOVEM A,.IPCI2+SNDARG	;Stash the id
+	MOVEI A,PACLEN
+	MOVEI B,PACKET
+	MSEND%			;Ask info for server PID, maybe create our PID
+	 RETSTR <Error while sending to INFO>,TTXIPC
+	MOVE D,.IPCFS+PACKET	;Fetch our PID in case it was created
+	MOVEM D,.IPCFR+PACKET	;We are receiver this time
+	SETZM .IPCFL+PACKET	;Sender is INFO
+	MOVEI A,PACLEN
+	MOVEI B,PACKET
+	MRECV%			;Receive reply from INFO
+	 RETSTR <Error receiving from INFO>,TTXIPC
+	LDB A,[POINT 6,.IPCFL+PACKET,29] ;Get INFO error code field
+	IFN. A
+	  CAIN A,76		;Couldn't find it?
+	   RETSTR <Server not running>,TTXIPC
+	  RETSTR <INFO error other than server not running>,TTXIPC
+	ENDIF.
+	MOVE A,.IPCI1+SNDARG
+	MOVEM A,SRVPID		;Store server's PID
+	MOVX A,IP%CFV
+	MOVEM A,.IPCFL+PACKET	;Sending a page of data
+	MOVEM D,.IPCFS+PACKET	;We are the sender
+	MOVE A,SRVPID
+	MOVEM A,.IPCFR+PACKET	;The server is the receiver
+	MOVEI A,BUFPAG		;From the data page
+	HRLI A,1000		;A whole page full
+	MOVEM A,.IPCFP+PACKET
+	MOVEI A,PACLEN
+	MOVEI B,PACKET
+	MSEND%			;Send off the request
+	 RETSTR <Error sending to server>,TTXIPC
+	MOVX A,IP%CFV
+	MOVEM A,.IPCFL+PACKET	;Receiving a page of data
+	MOVE A,SRVPID
+	MOVEM A,.IPCFS+PACKET	;From the server
+	MOVEM D,.IPCFR+PACKET	;To our own PID
+	MOVEI A,BUFPAG		;Back to the same data page
+	HRLI A,1000
+	MOVEM A,.IPCFP+PACKET
+	MOVEI A,PACLEN
+	MOVEI B,PACKET
+	MRECV%			;Receive a reply
+	 RETSTR <Error receiving from server>,TTXIPC
+	RETSKP
+
+; SNDNET - Send a Network Message
+; returns +1/failure, A and C set for return; +2/success
+
+SNDNET:	HRROI A,NETUSR		;Into net user string
+	HRROI B,1(ADR)		;With pointer from address block
+	CALL MOVSTR		;Copy string
+	HRROI A,NETADR		;Now into host name
+	HRROI B,1(B)		;With next string in block
+	CALL MOVSTR		;Copy string
+	HRROI A,NETADR		;Point to network site name
+	MOVEI C,NETLST		;Get list of protocols supported
+	CALL $GTPRO		;Look it up
+	 RETSTR <Unrecognized host name>,TTXNET
+	HRRZ C,(C)		;Get dispatch routine for protocol
+	JRST (C)		;Go jump to it
+
+
+; List of networks we know about.  For each network we have a pointer
+; to a string for the name of the net and the address of a handler routine.
+; The called routine gets a host number in B, should return +2 for success.
+
+NETLST:	[ASCIZ/Chaos/],,DOCHA	;MIT Chaosnet
+	[ASCIZ/Pup/],,DOETH	;Pup Ethernet
+	[ASCIZ/TCP/],,DOINT	;TCP/IP Internet
+	0
+
+; DOINT - Send a message over the Internet
+
+DOINT:	MOVE A,B		;Get host number where it belongs
+	MOVEI B,MAISKT		;Get maiser socket number
+	MOVEI C,1		;Job random factor (we should be the only one)
+	CALL $TCOPN		;Open the connection
+	 RETSTR <Host not responding>,TTXNET
+	MOVEM A,NTOJFN		;Save the JFN
+	MOVE B,.SDTCC(ABLOCK)	;Get interrupt channel to use
+	CALL $TCPSI		;Set up interrupt
+	 RETSTR <Couldn't get interrupt channel for response>,TTXNET
+	CALL GETRSP		;Pick up 220 site ident
+	IFSKP.
+	  CALL INTHEL		;Say hello to the foreign site
+	ANSKP.
+	  CALL GETRSP		;Pick up reply (most likely 250)
+	ANSKP.
+	  CALL INTSOM		;Say we're going to send a message
+	ANSKP.
+	  CALL GETRSP		;Get its response
+	ANSKP.
+	  CALL INTRCV		;Say who we want to receive it
+	ANSKP.
+	  CALL GETRSP		;Pick up reply (250 or 251)
+	ANSKP.
+	  HRROI B,[ASCIZ\DATA
+\]				;Point to string to send
+	  CALL INTSTR		;Go send it
+	ANSKP.
+	  CALL GETRSP		;Pick up reply (most likely 354)
+	ANSKP.
+	  CALL INTMSG		;Send the message
+	ANSKP.
+	  CALL GETRSP		;Pick up reply (most likely 250)
+	ANSKP.
+	  HRROI B,[ASCIZ \QUIT
+\]				;Tell the remote host goodbye
+	  CALL INTSTR		;Go send that off
+	   NOP			;Don't care about reply, msg already accepted
+	  CALL GETRSP		;See if they accept that
+	   NOP			;Don't care about reply, msg already accepted
+	  MOVE A,NTOJFN		;Get our jfn
+	  SETZM NTOJFN		;We have no more net JFN
+	  CALL $TCCLS		;Close it
+	  RETSKP
+	ENDIF.
+	PUSH P,A		;Some error.  Save error string
+	MOVE A,NTOJFN		;Get the JFN for our connection
+	HRROI B,[ASCIZ \QUIT
+\]				;Say we want to go bye-bye
+	SETZ C,			;Stop on null
+	CALL $TCSOU		;Output the string
+	 NOP
+	CALL $TCSND		;Send it off
+	 NOP
+	HRROI B,NETBUF		;Into this buffer
+	MOVX C,NBFLEN*5-1	;With this many possible characters
+	CALL SMTNIN		;Read in reply (most likely 221 but who cares?)
+	 NOP
+	CALL $TCCLS		;Close the connection and return
+	POP P,A			;Get error string back
+	MOVEI C,TTXNET		;Random network error
+	RET
+
+; GETRSP - listen for responses from the foreign MAISER
+; returns +1, with MAISER code in A, text in BUFFER
+; if MAISER sends a code .GE. 400, displays error and dies
+
+GETRSP:	MOVE A,NTOJFN		;A/foreign socket
+	HRROI B,BUFFER		;Into scratch buffer
+	MOVX C,1000*5-1		;With this many characters
+	CALL SMTNIN		;Read MAISER's response
+	 RET
+	CAIL B,400		;Is it a non-error?
+	 RETLOC BUFFER		;No, return error string
+	RETSKP
+
+; INTHEL - build a message into BUFFER to be sent on the Internet by MAISER
+
+INTHEL:	HRROI A,BUFFER		;Get a pointer to our output buffer
+	HRROI B,[ASCIZ/HELO /]
+	CALL CPYSTR		;Start our message
+	CALL GETLCL		;Append our local site
+	 RET			;Propagate fail return
+	JRST INTGO		;Finish up the message
+
+
+; INTSOM - tell the foreign host we're going to send them a message
+
+INTSOM:	HRROI A,BUFFER		;Put everything in our buffer
+	HRROI B,[ASCIZ/SOML FROM:</]
+	CALL CPYSTR		;Initiate message
+	CALL .DIRST		;Add our user name
+	MOVEI B,"@"		;Append at-sign for return address
+	IDPB B,A
+	CALL GETLCL		;Add our site name
+	 RET			;Propagate fail return
+	MOVEI B,">"		;Close with a close broket
+	IDPB B,A
+	JRST INTGO		;go finish up
+
+
+; INTRCV - tell foreign host to whom we want to send
+
+INTRCV:	HRROI A,BUFFER		;Where to build message to send
+	HRROI B,[ASCIZ/RCPT TO:</]
+	CALL CPYSTR		;Start command line for recipient
+	HRROI B,NETUSR		;Get net user name
+	CALL CPYSTR		;Add it in
+	MOVEI B,"@"		;Get an at-sign
+	IDPB B,A		;Add that too
+	HRROI B,NETADR		;Get site name of recipient site
+	CALL CPYSTR		;Add it in
+	MOVEI B,">"		;Want to close off the name
+	IDPB B,A		;So do so
+	JRST INTGO
+
+; INTMSG - build the actual message and send it
+; we have to add RFC822 standard header lines here...
+
+INTMSG:	SETZ D,			;Clear line position
+	HRROI A,BUFFER		;Point to buffer
+	HRROI B,[ASCIZ/Date: /]	;First header
+	CALL CPYSTR		;Copy out
+	SETO B,			;Output current date/time
+	MOVX C,OT%DAY!OT%SPA!OT%TMZ!OT%SCL ;RFC 822 standard date/time
+	ODTIM%			;Add time to buffer
+	HRROI B,[ASCIZ/
+From: /]			;Second header
+	CALL CPYSTR		;Copy it off
+	CALL .DIRST		;Add our user name
+	MOVEI B,"@"		;Atsign
+	IDPB B,A		;Add it in
+	CALL GETLCL		;Add local host name
+	 RET			;Propagate fail return
+	HRROI B,[ASCIZ/
+To: /]				;Final header
+	CALL CPYSTR		;Copy it in
+	HRROI B,1(ADR)		;Point to recipient username
+	CALL MOVSTR		;Copy across
+	MOVEI C,"@"		;Get atsign
+	DPB C,A			;Replace null with it
+	HRROI B,1(B)		;Now point to site name
+	CALL CPYSTR		;Copy that
+	HRROI B,[ASCIZ/
+/]				;A CRLF
+	CALL CPYSTR		;To tie off header
+	CALL INTGO		;Send header string off (will add other CRLF)
+	 RET			;Propagate fail return
+	MOVE C,MSPTR		;Point to message
+	ILDB B,C		;Get the first character
+	DO.
+	  CALL INTCHR		;Send char out, maybe processing prefix period
+	   RETSTR <Couldn't send char to net>
+	  ILDB B,C		;Get another
+	  JUMPN B,TOP.		;Go back for the next char
+	ENDDO.
+	MOVEM C,MSEPTR		;Save pointer to end of message
+	SKIPE D			;If not at start of line, need extra crlf
+	 SKIPA B,[POINT 7,[ASCIZ \
+.
+\]]
+	  MOVE B,[POINT 7,[ASCIZ \.
+\]]				;Will eventually end with a CRLF . CRLF
+	JRST INTSTR		;Append the trailer
+
+; Copy in one data character, being careful with CRLFs and dots
+
+INTCHR:	MOVE A,NTOJFN		;Get jfn for output
+	CAIE B,"."		;If we have a period
+	IFSKP.
+	  IFE. D		;If at the start of a line
+	    CALL $TCBOU		;Send an extra dot
+	     RET
+	  ENDIF.
+	  SETO D,		;In the middle of a line
+	  JRST $TCBOU		;Now send our first dot
+	ENDIF.
+	CAIE B,.CHCRT		;Carriage return?
+	IFSKP.
+	  MOVEM B,D		;Yes, set line position positive to remember
+	  JRST $TCBOU		;And go send it
+	ENDIF.
+	CAIN B,.CHLFD		;Line feed?
+	 SKIPG D		;And previous carriage return?
+	  CAIA			;No, go on
+	   TDZA D,D		;Yes, we are now at the start of a line
+	    SETO D,		;Else we are in the middle of a line
+	JRST $TCBOU		;In any case go send the char
+
+; INTGO - add CRLF to string in buffer and send it off
+; INTSTR - send string pointed to in B
+
+INTGO:	MOVEI B,.CHCRT		;A carriage return
+	IDPB B,A		;Append it to our buffer
+	MOVEI B,.CHLFD		;A linefeed
+	IDPB B,A		;Add it, too
+	MOVEI B,.CHNUL		;A null
+	IDPB B,A		;Tie off string with it
+	HRROI B,BUFFER		;What to send
+INTSTR:	MOVE A,NTOJFN		;Where to send
+	SETZ C,			;End on null
+	CALL $TCSOU		;Launch
+	 RETSTR <Couldn't send string to network>
+	CALL $TCSND		;Force sending of this
+	 RETSTR <Couldn't force data through network>
+	RETSKP
+
+; SMTNIN - input a number (like NIN%), break on non-digit
+; call with A/SMTP connection JFN, B/pointer to line buffer, C/char count
+; returns +1/failure, +2/success, number in B, C and D smashed
+
+SMTNIN:	TRVAR <ATMPTR,RETNUM,BUFCTR,<LINPTR,2>>
+	DMOVEM B,LINPTR		;Save where to start
+	SETZM ATMPTR		;No continuation lines yet
+	SETZM RETNUM		;Nothing to return yet
+	DO.
+	  SETZ C,		;Nothing this time through
+	  DO.
+	    CALL $TCBIN		;Get the next character from our stream
+	     RETSTR <Couldn't read SMTP server response>
+	    CAIL B,"0"		;Is it in range
+	     CAILE B,"7"	;to be a digit?
+	      IFSKP.
+		IMULI C,10	;Yes, shift result by octal radix
+		ADD C,B		;Add in digit
+		SUBI C,"0"	;Minus offset for ASCII characters
+		LOOP.		;Go back for the next one
+	      ENDIF.
+	  ENDDO.
+	  SKIPG C		;If somehow out of range
+	   RETSTR <SMTP input number was not positive>
+	  EXCH C,RETNUM		;Exchange with value to return
+	  IFG. C
+	    CAME C,RETNUM	;If had a number already but is not the same
+	     RETSTR <SMTP multi-line input had different codes>
+	  ENDIF.
+	  CAIE B,"-"		;If we got a dash
+	  IFSKP.
+	    CALL GETLFD		;Then read in some more
+	     RET		;Propagate fail return
+	    LOOP.
+	  ENDIF.
+	ENDDO.
+	CAIE B," "		;If not a space
+	 RETSTR <SMTP code terminator is neither a dash nor a space>
+;	JRST GETLFD
+
+; GETLFD - Read in rest of server response line
+
+GETLFD:	SKIPE B,ATMPTR		;Get pointer
+	IFSKP.
+	  DMOVE B,LINPTR	;If none, point to start of buffer
+	  MKPTR (B)		;Make sure it is a byte pointer
+	ELSE.
+	  MOVEI C,.CHCRT	;Else get a CR
+	  DPB C,B		;Drop it in over the null we left
+	  MOVEI C,.CHLFD	;And a linefeed
+	  IDPB C,B
+	  MOVEI C," "		;And finally a space
+	  IDPB C,B		;Drop it in to make pretty
+	  SOS C,BUFCTR		;Count off, get old buffer counter
+	  SOS C,BUFCTR		;And again
+	ENDIF.
+	MOVEI D,.CHCRT		;Read to a carriage return
+	CALL $TCSIN		;Do the read
+	 RET			;Propagate fail return
+	MOVEM B,ATMPTR		;Save new atom buffer pointer
+	MOVEM C,BUFCTR		;And new buffer space counter
+	SETZ C,			;Get a null
+	DPB C,B			;Drop it in over carriage return
+	CALL $TCBIN		;Now read in the linefeed
+	 RET
+	MOVE B,RETNUM		;Get the number to return
+	RETSKP
+
+; DOCHA - Send a message via the CHAOSnet
+
+; Chaosnet symbols abstracted from CHASYM
+	.CSRFS==3		;RFC sent
+	.CSOPN==4		;Connection is open
+	.MOPKR==27		;Read packet
+	CHPKDT==4		;???
+	$CPKNB==041400,,0	;???
+
+DOCHA:	PUSH P,B		;Save foreign host
+	HRROI A,NETBUF		;Set up pointer for building filename string
+	HRROI B,[ASCIZ/CHA:/]
+	CALL CPYSTR		;Start with correct device name
+	POP P,B			;Get host number back
+	MOVEI C,^D8		;Octal
+	NOUT%
+	 RETSTR <Couldn't copy host number>,TTXNET
+	HRROI B,[ASCIZ/.SEND_/]
+	CALL CPYSTR		;Put contact name into buffer too
+	HRROI B,NETUSR		;And net username
+	CALL CPYSTR
+	MOVX A,GJ%SHT!GJ%OLD	;Short form, old file
+	HRROI B,NETBUF		;Filename
+	GTJFN%
+	 RETSTR <Can't get Chaosnet connection>,TTXNET
+	MOVEM A,NTOJFN		;Save JFN for later
+	MOVX B,FLD(8,OF%BSZ)!FLD(6,OF%MOD)!OF%WR ;Don't wait, write, 8 bits
+	OPENF%
+	 RETSTR <Can't open Chaosnet connection>,TTXNET
+	DO.
+	  GDSTS%
+	   RETSTR <Can't get Chaosnet connection status>,TTXNET
+	  CAIN B,.CSOPN		;Open?
+	   RETSKP		;Yes, success, take a skip return
+	  CAIE B,.CSRFS		;RFC sent?
+	   RETSTR <Unexpected Chaosnet connection status>,TTXNET
+	  MOVEI A,^D100
+	  DISMS%		;Wait a tenth of a second
+	  MOVE A,NTOJFN		;Get back JFN
+	  LOOP.
+	ENDDO.
+	CALL CHAMSG		;Build the message to be sent
+	 RET
+	MOVE A,NTOJFN		;A/network jfn
+	MOVE B,[POINT 8,BUFFER]	;B/buffer where CHAMSG left the message
+	SETZB C,D		;Normal SOUT, flush randomness in C & D
+	SOUT%
+	TXO A,CO%WCL		;Wait for data to be acknowledged
+	CLOSF%			;Close the Chaosnet connection
+	IFNJE. <RETSKP>
+	MOVE A,NTOJFN		;A/network jfn
+	MOVEI B,.MOPKR		;Get Los/CLS packet
+	HRROI C,NETBUF		;Drop it into NETBUF
+	MTOPR%
+	 RETSTR <Connection failed>,TTXNET
+	MOVE A,[POINT 8,NETBUF+CHPKDT]
+	MOVE B,A		;Now, make sure asciz
+	LDB C,[$CPKNB+NETBUF]	;Get length
+	ADJBP B,C		;To point to end of string
+	SETZ B,			;Get a null
+	DPB B,C			;And tie off message with it
+	MOVX C,TTXNET		;Have pointer to string, now set err code
+	RET
+
+; CHAMSG - build a message to be sent over the CHAOSnet into BUFFER
+
+CHAMSG:	MOVE A,[POINT 8,BUFFER]	;Get a pointer to our output buffer
+	CALL .DIRST		;Add our user name
+	MOVEI B,"@"		;Get an atsign
+	IDPB B,A		;Drop it in
+	CALL GETLCL		;Copy local host name to our buffer
+	 RET			;Propagate fail return
+	MOVEI B,.CHSPC		;A space
+	IDPB B,A		;Add it to the buffer
+	SETO B,			;B/want present time
+	MOVX C,OT%NSC!OT%12H!OT%TMZ!OT%SCL ;C/format
+	ODTIM%			;Write the time
+	MOVEI B,215		;CHAOSnet EOL
+	IDPB B,A		;Drop that in
+	MOVE B,MSPTR		;Get pointer to message text
+	DO.
+	  ILDB C,B		;Get a byte from the user
+	  CAIN C,15		;Carriage return?
+	   MOVEI C,215		;Replace with chaos EOL character
+	  CAIE C,12		;If linefeed, ignore it.
+	   IDPB C,A		;Put character in the buffer
+	  JUMPN C,TOP.		;And continue until we have transferred a null
+	ENDDO.
+	MOVEM B,MSEPTR		;Save pointer to end of message
+	MOVEI C,215		;Put another carriage return for pretty
+	DPB C,A			;Clobber the null we left there
+	SETZ C,
+	IDPB C,A		;And terminate string with a null
+	RETSKP
+
+; DOETH - Send a message via the Pup Ethernet
+
+; Definitions for Pup-based Ethernet (stolen from PUPPAR)
+
+IFNDEF PUPI%,<
+	OPDEF PUPI% [JSYS 441]	;JSYS to send a packet over the Ether
+	OPDEF PUPO% [JSYS 442]	;JSYS to pick up a packet
+
+	PU%CHK==1B1		;Compute/check checksum
+	PU%MEI==1B3		;Header is in 16-bit hardware mode
+	PU%TIM==1B4		;(PUPI%) input timeout in ms in ac3
+
+	.PUORW==16		;Raw I/O mode for OPENF%
+>;IFNDEF PUPI%
+
+	PBCONT==5		;Start of data in buffer
+
+	MNPLEN==^D22		;Minimum Pup length (bytes) incl header
+	MXPLEN==^D554		;Maximum Pup length
+	MXPBLN==<MXPLEN+3>/4	;Maximum packet buffer size (words)
+
+	DEFSTR PUPLEN,BUFFER,17,16	;Pup length
+	DEFSTR PUPTYP,BUFFER,35,8	;Pup type
+
+DOETH:	PUSH P,B		;Save net number
+	HRROI A,NETBUF		;Get pointer to name string area
+	HRROI B,[ASCIZ/PUP:!J./]
+	CALL CPYSTR		;Copy string
+	HLRZ B,(P)		;Get net num back
+	MOVEI C,^D8		;Octal
+	NOUT%			;Add the number
+	 RETSTR <Couldn't copy net number>,TTXNET
+	CALL NUMSGN		;Add a number sign
+	POP P,B			;Get host number back
+	HRRZS B			;Just the host number
+	NOUT%			;Add the number (8 still in C)
+	 RETSTR <Couldn't copy host number>,TTXNET
+	CALL NUMSGN		;Another number sign
+	MOVEI B,"4"		;Well-known socket for misc-services
+	IDPB B,A		;Drop it in
+	SETZ B,			;Get a null
+	IDPB B,A		;Drop that in too
+	MOVX A,GJ%SHT!GJ%OLD	;Short-style gtjfn, old file
+	HRROI B,NETBUF		;From name we just built
+	GTJFN%			;Get the jfn
+	 RETSTR <Couldn't get network connection>,TTXNET
+	MOVX B,FLD(^D8,OF%BSZ)!FLD(.PUORW,OF%MOD)!OF%RD!OF%WR
+	OPENF%			;Open in raw packet mode
+	 RETSTR <Couldn't open network connection>,TTXNET
+	MOVEM A,NTOJFN		;Save JFN
+	CALL BLDETH		;Build packet into buffer
+	HRRZ A,NTOJFN		;Get JFN back
+	TXO A,PU%CHK!PU%MEI	;Compute checksum, MEIS headers
+	MOVE B,[MXPBLN,,BUFFER] ;Max length, from buffer
+	PUPO%			;Send it out
+	 ERJMP JSRET		;Random lossage
+	SETZM BUFFER		;Clear first word of buffer
+	MOVE A,[BUFFER,,BUFFER+1] ;Make BLT word
+	BLT A,BUFFER+MXPBLN	;Clear out in case string ends on word boundary
+	HRRZ A,NTOJFN		;Get JFN again
+	TXO A,PU%CHK!PU%MEI!PU%TIM ;Checksum, MEIS headers, timeout
+	MOVE B,[MXPBLN,,BUFFER] ;Max length, into buffer
+	MOVX C,^D<30*1000>	;Wait for up to 30 seconds
+	PUPI%			;Read it back in
+	IFNJE.			;Got one?
+	  LOAD A,PUPTYP		;Get type
+	  CAIN A,301		;Success?
+	   RETSKP
+	  LOAD B,PUPLEN		;Get length of pup
+	  MOVEI C,MNPLEN	;Minimum number of bytes
+	  SUBI C,(B)		;Minus that count is num chars text
+	  MOVE A,[POINT 8,PBCONT+BUFFER] ;Get pointer to error
+	  MOVX C,TTXNET		;And error code
+	  RET			;Return with it
+	ENDIF.
+	RETSTR <Failed to receive remote reply>,TTXNET
+
+NUMSGN:	MOVEI B,""		;Quote with control-V
+	IDPB B,A		;Drop it in
+	MOVEI B,"#"		;Number sign
+	IDPB B,A		;Drop it in
+	RET
+
+; Build packet into buffer for PUPO%
+; returns +1/always, mungs registers A-D
+
+BLDETH:	SETZM BUFFER		;Clear start of buffer
+	MOVE A,[BUFFER,,BUFFER+1]
+	BLT A,BUFFER+MXPBLN-1	;Clear it out for the length of a packet
+	MOVEI A,300		;Get packet type for ether send
+	STOR A,PUPTYP		;Save it
+	MOVE A,[POINT 8,PBCONT+BUFFER] ;Get dest ptr
+	CALL .DIRST		;Copy user name or string describing us
+	MOVEI B,":"		;Colon
+	IDPB B,A		;Drop it in
+	HRROI B,NETUSR		;Get net user name
+	CALL CPYSTR		;Add it in
+	MOVEI B,":"		;Another colon
+	IDPB B,A		;Drop it in
+	MOVE B,MSPTR		;Point to message
+	CALL CPYSTR		;Copy it in
+	MOVEM B,MSEPTR		;Save pointer
+	MOVEI D,@A		;Compute address of last word
+	SUBI D,BUFFER-1		;Compute # 36-bit words used
+	LSH D,2			;Convert to bytes
+	LSH A,-^D33		;Get bytes not used in last word
+	SUBI D,(A)		;Compute pup length
+	ADDI D,2		;Include checksum
+	STOR D,PUPLEN		;Save length
+	RET
+
+; $SSTAT - Send a request for statistics to the send server
+; call with D/PID, returns +1/always, D/updated PID
+
+$SSTAT::SAVEAC <A,B,C,CX>	;Don't mung caller's registers
+	MOVE A,['SNDSTA']	;SIXBIT function code
+	MOVEM A,BUFFER+SN$HDR	;Set it in IPCF page
+	SETZM BUFFER+SN$FLG	;No format flags
+	CALL DOIPCF		;Send it off
+	 NOP			;Ignore failure
+	RET
+
+; $WTRCP - Make string for recipient block
+; Call with A/Destination pointer (string or JFN)
+;	    B/Recipient block (as for $SEND)
+; Returns +1/Always
+
+$WTRCP::SAVEAC <B,C,ADR>	;Don't mung caller's registers
+	MKPTR (A)		;Make sure we have a real byte pointer
+	MOVE ADR,B		;Copy address block pointer
+	LOAD B,RC%TYP,(ADR)	;Find out what kind of send this is
+	JRST @[	WRTTTY		;RC.TTY - to line number
+		WRTUSR		;RC.USR - to user number
+		WRTALL		;RC.ALL - to all
+		WRTNET ](B)	;RC.NET - network send
+
+WRTTTY:	MOVE B,1(ADR)		;Get send data
+	MOVEI B,.TTDES(B)	;Turn into device designator
+	DEVST%			;Type it
+	 IFNJE. <RET>
+	FMSG <Unknown terminal>
+	RET
+
+WRTUSR:	MOVE B,1(ADR)		;Get send data
+	DIRST%			;Type user name
+	 IFNJE. <RET>
+	FMSG <Unknown user>
+	RET
+
+WRTALL:	FMSG <*>		;To everyone, just type a star
+	RET
+
+WRTNET:	HRROI B,1(ADR)		;Point to user
+	SETZ C,			;No limit
+	SOUT%			;Add it
+	HRROI C,1(B)		;Save it
+	MOVEI B,"@"		;Atsign
+	BOUT%			;Add that too
+	MOVE B,C		;Get pointer back
+	SETZ C,			;Ending on null
+	SOUT%			;Copy host name
+	RET
+
+; Random string copying utilities
+
+;MOVSTR - move ASCIZ string from source in B to dest in A, including the null
+MOVSTR:	MKPTR (A)
+	MKPTR (B)
+	DO.
+	  ILDB C,B
+	  IDPB C,A
+	  JUMPN C,TOP.
+	ENDDO.
+	RET
+
+; CPYSTR - copy an asciz string from source to destination without the null
+CPYSTR:	MKPTR (A)
+	MKPTR (B)
+	DO.
+	  ILDB C,B
+	  JUMPE C,R
+	  IDPB C,A
+	  LOOP.
+	ENDDO.
+
+; .DIRST - Copy our user name or string describing n-l-i into pointer in A
+.DIRST:	SAVEAC <B,C,D>		;Don't mung other registers
+	PUSH P,A		;Save pointer
+	GJINF%			;Get our user number
+	HLRZ B,A		;Get left half only
+	CAIE B,500000		;Look like a user number?
+	IFSKP.
+	  MOVE B,A		;Save user number
+	  POP P,A		;Get pointer back
+	  DIRST%		;Type it out
+	   IFSKP. <RET>		;If succeeded, we're all done
+	  HRROI B,[ASCIZ/Unknown user, /] ;Else start making string
+	ELSE.
+	  POP P,A		;Get dest back
+	  HRROI B,[ASCIZ/Not logged in, /]
+	ENDIF.
+	CALL CPYSTR		;Start string
+	IFL. D			;If detached (how'd a n-l-i det run send???)
+	  HRROI B,[ASCIZ/detached/]
+	  JRST CPYSTR		;Say so
+	ENDIF.
+	MOVEI B,.TTDES(D)	;Else get as terminal designator
+	DEVST%			;Write "TTYn"
+	 ERJMP .+1		;Ignore errors
+	RET			;All done
+
+; GETLCL - copy name of local site into pointer in A
+GETLCL:	SAVEAC <B,C,D>		;Don't mung other registers
+	SKIPE LCLHST		;Got a host name yet?
+	IFSKP.
+	  MOVE D,A		;No, make destination pointer safe
+	  HRROI A,LCLHST	;Point to permanent site name storage
+	  CALL $GTLCL		;Get our name with HSTNAM routine
+	   RETSTR <Couldn't find local site name>
+	  MOVE A,D		;Now restore saved pointer
+	ENDIF.
+	HRROI B,LCLHST		;With our site name
+	CALL CPYSTR		;Copy string into pointer
+	RETSKP			;And give success return
+
+	END

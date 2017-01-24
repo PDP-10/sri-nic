@@ -1,0 +1,69 @@
+29-Feb-88 22:02:01-PST,788;000000000001
+Mail-From: IAN created at 29-Feb-88 22:01:57
+Date: Mon, 29 Feb 88 22:01:56 PST
+From: Ian Macky <Ian@SRI-NIC.ARPA>
+Subject: maze!!!!
+To: klh@SRI-NIC.ARPA
+Message-ID: <12378767711.36.IAN@SRI-NIC.ARPA>
+
+ok, here it goes:
+
+after the rewind the stream is quiescent.  i can fgets, which calls fgetc,
+which sets the stream to reading in _readable; fgetc calls _prime, which
+calls setvbuf, which calls fflush.  fflush on a quiescent stream sets it
+back to quiescent!!!!!!  _filbuf continues along and does its read, which
+works, but the next time fgetc is called, _readable sees the stream is
+quiescent and _primes it, thereby throwing out all the data.
+
+my fix, hasty, uninstalled, but working, is to re-set (i.e. set) _SIOF_READ
+after doing the setvbuf in _filbuf().
+-------
+26-Mar-88 14:37:47-PST,1672;000000000001
+Mail-From: KLH created at 26-Mar-88 14:37:46
+Date: Sat, 26 Mar 88 14:37:45 PST
+From: Ken Harrenstien <KLH@SRI-NIC.ARPA>
+Subject: Bugs in STDIO
+To: ian@SRI-NIC.ARPA
+cc: klh@SRI-NIC.ARPA
+Message-ID: <12385502596.15.KLH@SRI-NIC.ARPA>
+
+I had a horrible time trying to replace KCC's current kludge with tmpfil()
+and finally gave up.  Here are some bugs I found:
+
+(1) Opening a w+b stream doesn't guarantee that you get an empty file (it
+should -- supposed to create new or truncate existing).  It looked as if
+I was writing into an existing file the second time I invoked it with the
+same filename.
+
+(2) ungetc barfs on a w+b stream.  I tried changing ungetc so that it
+called _readable() first, which seemed to work, but when I looked at fputc
+I didn't see anything that would flush the ungetc'd chars (as I think it
+should) so I have not installed the new one yet.  In general, update streams
+are confusing.
+
+(3) It's possible that what I thought was overwriting-an-existing-file was
+not due to the failure of fopen/open to get a new file or truncate existing,
+but rather due to something left around in the buffer while switching the
+state.  Someone should put together a complete state machine diagram of
+how stdio should behave.  This will also help fix with more confidence the
+problem you ran into a month ago.
+
+Unfortunately the latest ANSI draft has a few subtle differences from the
+H&S version.  For example, ungetc is evidently supposed to work regardless
+of whether the last operation was a read or not.  It also adjusts the
+file position pointer!!!  Yeeech!!  We'll have to wait and see if that
+makes it into the final.
+-------
+26-Mar-88 14:46:32-PST,471;000000000001
+Mail-From: KLH created at 26-Mar-88 14:46:31
+Date: Sat, 26 Mar 88 14:46:31 PST
+From: Ken Harrenstien <KLH@SRI-NIC.ARPA>
+Subject: another stdio bug - tmpnam
+To: ian@SRI-NIC.ARPA
+cc: klh@SRI-NIC.ARPA
+Message-ID: <12385504191.15.KLH@SRI-NIC.ARPA>
+
+This isn't supposed to use ;T files.  The filenames are supposed to be
+guaranteed not to exist and that is all.  tmpfile() should not be calling
+tmpnam() for this reason -- it can use ;T filenames instead.
+-------

@@ -1,0 +1,142 @@
+Overall plan for putting together a public LIBC, to go with a public C
+compiler:
+
+(1) Scan a V7 libc.a to get a complete list of symbols: LIBC.V7
+	Use the SYMS program.
+	Categorize the symbols; identify them.
+	Cross-check against the V7 UPM to verify.
+(2) Do likewise for existing GNU routines: LIBC.GNU
+(3) Do likewise for existing KCC routines: LIBC.KCC
+(4) Merge the three lists; this becomes the "libc master list": LIBC.MASTER
+	For each V7 symbol show its current status.
+	Format is described below.
+(5) Select a location to hold canonical LIBC sources.
+	Copy all versions there.
+	Where?  A UNIX system would provide a "homey" environment
+	and permit cross-checking of V7 routines with GNU versions.
+	On the other hand, stuff that works on a TOPS-20 system
+	is almost certain to be portable elsewhere, and there may be
+	less suspicion concerning UNIX copyright violations.
+	Note: SRI-NIC can provide huge amounts of disk storage and
+	would be a good distribution location, but probably cannot
+	support active development - this can be seen as bad (more
+	work to update canonical package from development systems) or
+	good (clear formal separation between canonical distribution and
+	testing-in-progress versions).  I'm neutral.  What is the general
+	status of SU-SIERRA or MIT-PREP?  Comments?
+
+(6) ?? Copy the version info (from libc master) at start of each routine.
+	Whenever this is changed, the info must be changed both
+	in the heading and in libc master.
+	Hack up a version-info extractor so this part of libc
+	master can be generated automatically from the files.
+	Create place-holder files for functions not yet written?
+(7) Assign priorities for implementation (which routines to write first).
+	Make these priority notations part of LIBC.MASTER.
+
+Format of symbol entries in LIBC.MASTER:
+
+At least one line per symbol, possibly more:
+
+<class> <symbol+type>	<version>: <module> (Need: <needed-versions>)
+			<version>: <module> <other-info>
+
+	Class:	Classification of symbol - similar to UPM sections.
+		One-letter type indicators, okay to OR them by using together.
+			S = System calls
+			U = UNIX-environment dependent (e.g. GETPWENT)
+			I = I/O
+			H = Defined in .h file, not library.
+			C = General C support - not I/O, System, or
+				Unix-dependent.  Functions that "extend"
+				C.  E.g. string routines, qsort, simple
+				math stuff.
+			L = Library support - needed by other library routines
+				but not normally used by or known to 
+				external user.  Usually written in C.
+			R = C internal runtime support, invoked by
+				compiler to handle various parts of the
+				language.  Not invoked as C functions.
+				Normally very system specific
+				and written in assembler.
+		The UPM classification can be appended with a dash:
+			-2 = Unix system call
+			-3 = General C library
+			-3S = STDIO "library", normally integral with libc.a
+			-3M = Math library, libm.a
+			-3X = Other esoteric library
+	Symbol+Type: The symbol, as a C declaration to indicate type.
+		Always ended with a semicolon.
+		.H file definitions are indicated thusly:
+			switch foo;		Conditional compile switch
+			constant FOO;		Manifest constant
+			structure foo;		Structure declaration
+			macro FOO;		Macro definition (general)
+			macro int foo();	Macro "function" definition
+	Module: Name of module (minus .C or .A extension).  One word.
+		If an .H file, the .H is retained.
+	Version: V7, GNU, KCC.  V7 indicates Western-Electric UNIX and
+		should always appear on the first line if it exists.
+		There must be one line for each version, indented if
+		the class and symbol declaration are the same.
+		If version is NOT written in C, specify language with
+		suffixed dash, e.g. KCC-FAIL.  There is no V7-AS because
+		the source is unavailable and the distinction is irrelevant.
+		Note that if a GNU version exists, it is assumed to be
+		usable by all other versions.  Thus a separate KCC version
+		is not needed.  Exceptions can be flagged with the
+		"Needed" keyword (see below).
+		
+	Info: General keyworded info.  Each item enclosed in parens or
+		brackets; the first word is a keyword identifier (unique
+		prefix is sufficient) with optional colon.  If the item is
+		"unbalanced" with respect to parens/brackets, the offending
+		char can be quoted with \.  This is unlikely to ever happen.
+		In general, to indicate a "null-specified" item (as
+		opposed to the default, which is assumed if item is not
+		specified at all), use the value "-".
+
+		The first two keywords (Done, Needed) only appear on the first
+		line.  "Done" allows for compaction in cases where the
+		default information is okay.  "Needed" marks those places
+		which need work.  Keeping all on one line makes it easier
+		to scan for things (using GREP or M-X Keep Lines$).
+		Done: Which versions have been written.
+			Default: -
+			If a version does not appear here, but appears on a
+			succeeding line anyway, that is OK.  The line wins.
+			If a version appears here but does NOT appear on
+			a succeeding line, everything for that
+			version is defaulted; class, symbol, module name
+			are as for first line.  Keyword items are all
+			defaulted.
+		Needed: Which versions still need to be written.
+			Default: -
+			If a version appears here, but also appears on a
+			succeeding line anyway, the line wins.
+
+		Maintainer: Who is responsible for routine.
+			Default: Whoever is generally responsible for version.
+				V7: -
+				KCC: Satz@SU-SIERRA
+				GNU: RMS@MIT-MC
+		Source: location of source file (e.g. "module")
+			Default: 
+				V7: -
+				KCC: [SU-SIERRA]PS:<KCC.LIB>module.C    ???
+				GNU: [MIT-PREP]/u/rms/gnulib/module.c ???
+		Doc: name of doc file
+			Default:
+				V7: UPM.  "man" directory.
+				KCC: ? UPM? module.DOC?
+				GNU: ? UPM? module.man?
+		Sys: Systems tested on
+			Default: assumed portable to all systems.
+		Comments: Obvious.
+
+Example:
+
+HI-3S	macro FILE;	V7: stdio.h (Done: KCC) (Need: GNU)
+I-3S	FILE *fopen();	V7: fopen (Need: GNU)
+			KCC: fopen (Sys: TOPS-20)
+

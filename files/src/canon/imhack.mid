@@ -1,0 +1,4106 @@
+;add exit inst.  try upping things for 300dpi
+;SRC:<CANON>IMHACK.MID.48,  5-May-86 14:40:13, Edit by KNIGHT
+; Fix bug accessing fonts
+;SRC:<CANON>IMHACK.MID.47, 23-Apr-86 14:26:45, Edit by KNIGHT
+; use NICPROG: instead of <NICPROG>
+;SRC:<CANON>IMHACK.MID.46, 23-Apr-86 11:41:50, Edit by KNIGHT
+; Make this use FONT:
+.symtab 8003.,8003.
+title imhack
+
+; This program converts AUGMENT (NLS) Output Processor output into
+; files suitable for printing on the Imagen Imprint-10.
+; It also does a bunch of other interesting things.
+srilog==0	; Set 1 to include SRI logo hackery
+.decsav
+
+irp ac,,[f,a,b,c,d,e,x,y,fnt,ic,oc,u1,u2,u3,u4,p]
+ac=.irpcnt
+termin
+ifn p-17, .err AC def lossage - P must be 17
+
+fl20x==0	; Not 20X
+erjmpa==<jumpa>	; for 10X
+
+$$out==1	; Ask for new output package!
+$$ouuo==0	; disable output uuo's!
+$$obuf==1	; Ask for buffered output mode stuff!
+$$oerr==1
+uareas==1
+.insrt nicprog:macros
+.insrt nicprog:nuuos
+.insrt nicprog:out
+
+define error &text&
+call [	out(,ch(tyoc),eol,(text),eol)
+	jrst errpt]
+termin
+define syserr &text&,?errval
+call [	out(,ch(tyoc),eol,(text),(" - "),err(errval),eol)
+	jrst errpt]
+termin
+last:	-1
+
+	subttl	Defs for PDP-11 word hacking
+
+$minus:	177777		; 16-bit value of "-1", in 36 bits.
+%16sign==<1_15.>	; sign bit for 16-bit word
+$ubsiz==512.		; # bytes in a UNIX block
+
+	; Masks for 8-bit bytes in a 36-bit word
+%bm0==776000,,0
+%bm1==001774,,0
+%bm2==000003,,770000
+%bm3==000000,,007760
+
+	; Byte pointers to access successive 8-bit bytes in word.
+$bp0==<.bp %bm0,0>
+$bp1==<.bp %bm1,0>
+$bp2==<.bp %bm2,0>
+$bp3==<.bp %bm3,0>
+$bp01==<.bp %bm0\%bm1, 0>
+$bp12==<.bp %bm1\%bm2, 0>
+$bp23==<.bp %bm2\%bm3, 0>
+$bp012==<.bp %bm0\%bm1\%bm2, 0>
+$bp123==<.bp %bm1\%bm2\%bm3, 0>
+$bpall==<.bp %bm0\%bm1\%bm2\%bm3, 0>
+
+$bp==<441000,,0>		; For ILDB/IDPB's to hack 1st byte
+$wd==<442000,,0>		; for ditto to hack 1st word
+$wd0==$bp01
+$wd1==$bp23
+$2wd==$bpall
+
+
+	subttl	Main command loop
+
+tyic==1
+tyoc==2
+ich==3
+och==4
+tmpc==5
+cach==6		; Post-Page cache (really need 8-bit UAR type!)
+
+
+pdllen==1000
+pdlptr:	-pdllen,,pdl
+.scalar pdl(pdllen)
+
+main:	tlo f,fl20x
+	reset
+	move p,pdlptr
+	out(tyic,open(uc$iot,[.priin]))
+	out(tyoc,open(uc$iot,[.priou]))
+	movei ic,ich		; Leave at this throughout.
+
+	call sreset
+errpt:
+mloop:	move p,pdlptr
+	movei a,cmdtab
+	call cmdget
+	out(,ch(tyoc))		; Reset std output to TTY before each cmd
+	call (a)
+	jrst mloop
+
+popj1:	aos (p)
+apopj:	popj p,
+.scalar junk
+
+define cmd &name&,rtn,&help&
+rtn ? [asciz name] ? [asciz help]
+termin
+$cmrtn==0
+$cmnam==1
+$cmhlp==2
+$cmsiz==3
+
+cmdtab:	-ncmds,,.+1
+	cmd "Translate",ctran,"Translate COM to ASCII for debugging"
+	cmd "Output",cout,"Output COM to IMPRINT file"
+	cmd "Use",cuse,"Use old NLS-8.5 COM fmt"
+	cmd "XGP",cxgp,"XGP file to IMPRINT file"
+	cmd "Decode",cdeco,"Decode IM file to ASCII"
+	cmd "Exit",cenco,"Exit program"
+ifn srilog, cmd "Hack",chack,"NST file to KST"
+ifn srilog, cmd "Astout",casto,"Internal pix to AST file"
+ifn srilog, cmd "SRI",csri,"Kludge to test SRI pix"
+ncmds==<<.-cmdtab>-1>/$cmsiz
+
+cmdget:	pushae p,[b,c,d,e]
+	move e,(a)	; Get AOBJN to cmdtab
+cmdg10:	out(tyoc,rabr)	; ">"
+	call tyiu
+cmdg12:	cain a,^M
+	 jrst [	call tyiu
+		cain a,^J
+		 jrst cmdg10
+		jrst cmdg12]
+	cain a,"?
+	 jrst cmdg60
+	move d,e
+cmdg20:	hrrz c,$cmnam(d)
+	hrli c,440700
+	ildb b,c
+	cain a,(b)
+	 jrst cmdg50
+	addi d,$cmsiz-1
+	aobjn d,cmdg20
+	out(tyoc,("??"),eol)
+	jrst cmdg10
+
+cmdg50:	out(tyoc,tpz(c))	; output rest of cmd name
+	hrrz a,$cmrtn(d)
+	popae p,[e,d,c,b]
+	ret
+
+cmdg60:	move d,e
+	out(tyoc,crlf)
+cmdg61:	out(tyoc,tz(@$cmnam(d)),(" - "),tz(@$cmhlp(d)),eol)
+	addi d,$cmsiz-1
+	aobjn d,cmdg61
+	jrst cmdg10
+
+
+linbfl==140.
+.scalar linbuf(<linbfl+4>/5)
+.scalar linbrk		; Break char terminating line (see INLIN)
+.scalar lincnt
+.scalar linptr
+.scalar linprm
+
+; GETLNP - Read a line
+;	A/ <bp to prompt string if any>
+; returns .+1 if no input
+; returns .+2
+;	A/ <# chrs>
+;	B/ <BP to string>
+
+getlin:	setz a,
+getlnp:	pushae p,[c]
+	move b,[440700,,linbuf]
+	movem b,linptr
+	movni a,linbfl
+gtlin2:	
+	; 20X specific crock (lazy me)
+	move c,a	; Set up prompting-text buffer pointer
+	move b,[rd%top+rd%crf+linbfl]	; RH is max # chs
+	move a,linptr
+	rdtty		; obscene 20X call
+	 erjmp [syserr "RDTTY",a]
+	movni a,(b)
+	addi a,linbfl	; Find # chars used
+	subi a,1	; less break char.
+	movem a,lincnt
+
+gtlin9:	popae p,[c]
+	move a,lincnt
+	move b,linptr
+	call spfls	; flush leading whitespace
+	call enptfl	; Flush trailing non-print stuff
+	caile a,	; If returning something, skip.
+	 aos (p)
+	ret
+
+; SPFLS - Flush spaces/tabs.
+;	A/ # chars
+;	B/ <BP>
+
+spfls:	jumple a,apopj
+	pushae p,[b,c]
+spfls2:	movem b,-1(p)
+	ildb c,b
+	caie c,40
+	 cain c,^I
+	  sojg a,spfls2
+	popae p,[c,b]
+	popj p,
+
+; ENPTFL - Flush non-printing chars from end of string
+;	A/ <# chars>
+;	B/ <BP>
+
+enptfl:	jumple a,apopj
+	pushae p,[c,d]
+	move d,b
+	ptskip a,d	; Increment bp in D by c(A) bytes
+enptf2:	ldb c,d		; get ch
+	move c,charf(c)
+	tlnn c,ch%pt	; Skip if printing char
+	 sojg a,[md7bpt d,	; Decrement BP
+		jrst enptf2]
+	popae p,[d,c]
+	ret
+
+charf:	chtmac		; Insert character-class table
+
+
+cuse:	out(tyoc,eol,("Using old NLS-8.5 COM format"),eol)
+	movei a,0
+	movem a,opver	; Set COM fmt version to NLS-8.5
+	ret
+
+ifn srilog,[
+
+csri:	movei e,ochbf8
+	call copenx
+	call iminit
+	movei a,2
+	call fndfnx	; Set up for SRI font
+	movei a,1
+	dpb a,fntbmp+"A
+	movei a,500.
+	out(cach,call(imhpos))
+	movei a,500.
+	out(cach,call(imvpos))
+	out(cach,c(IM"C$F),c(@f$num(fnt)),c("A))
+	call imeod
+	call ochcls
+	ret
+
+casto:	movei e,ochlst
+	call copenx
+	call pixsiz
+	call pixo
+	call ochcls
+	ret
+chack:	movei e,ochwd
+	call copenx
+	call outpix
+	call ochcls
+	ret
+] ;ifn srilog
+
+
+cenco:	haltf
+
+cdeco:	movei b,[asciz /; IM input file/]
+	call inopn8
+	hrroi a,opfiln	; Set up source filename string.
+	move b,injfn
+	setz c,
+	jfns
+	movei e,ochbf7	; Use buffered output
+	call copenx	; Takes E as arg ptr
+	call imdeco	; Grovel through IM input file!
+	call ochcls
+	ret
+
+ctran:	setom opcnvf	; Say doing translation output stuff
+	movei e,ochlst
+	jrst cout1
+
+cout:	setzm opcnvf	; Say doing real output stuff
+	movei e,ochbf8
+cout1:	movei b,[asciz / COM input file/]
+	call inopn7
+	hrroi a,opfiln	; Set up source filename string.
+	move b,injfn
+	setz c,
+	jfns
+
+	call copenx	; Takes E as arg ptr
+	skipn opcnvf	; If hacking real output,
+	 call iminit	; initialize it.
+	call ophak	; Grovel through COM input file!
+	call ochcls
+	ret
+
+cxgp:
+	movei e,ochbf8
+	movei b,[asciz /; XGP input file/]
+	call inopn7
+	hrroi a,opfiln	; Set up source filename string.
+	move b,injfn
+	setz c,
+	jfns
+	call copenx	; Takes E as arg ptr
+	call xphak	; Grovel through XGP input file!
+	call ochcls
+	ret
+
+
+$newin==1
+
+; Most of this functionality isn't really needed, it is just serving
+; as a test for some ideas.
+
+ifn $newin,[
+.begin in
+
+define .m"stdin(ac=u1,eof)
+	sosge in"uincnt(ic)
+	 call [	movei u3,eof
+		jrst in"uinfil]
+	ildb ac,in"uinbp(ic)
+termin
+
+define .m"stdinr(ac=u1,eof)
+	call inrget
+	 eof
+ifn ac-u1,move ac,u1
+termin
+
+.scalar uincnt(20)	; # chars left in buffer
+.scalar uinbp(20)	; BP into buffer
+.scalar uinbsz(20)	; Byte size of channel (# bits)
+.scalar uinjfn(20)	; JFN for open input file
+.scalar uinibp(20)	; Initial BP into buffer
+.scalar uinbfl(20)	; Length of buffer
+.scalar uinloc(20)	; File loc of end of buffer
+.scalar uinfll(20)	; File length in bytes
+.scalar uinflg(20)	; Flags (Sign bit = EOF on buffer)
+defbfl==1000		; Default buffer size is length of page
+.scalar scrbuf(defbfl)
+
+uopjfn:	hrrzm a,in"uinjfn(ic)
+	setzm in"uincnt(ic)
+	setzm in"uinloc(ic)
+	setzm in"uinflg(ic)
+	pushae p,[b,c]
+	rfbsz
+	movem b,uinbsz(ic)
+	move c,[440000,,scrbuf]
+	dpb b,[300600,,c]	; Deposit size in S field
+	movem c,uinibp(ic)
+	movei c,36.
+	exch b,c
+	idivi b,(c)
+	imuli b,defbfl		; Find # bytes in buffer
+	movem b,uinbfl(ic)
+	call filenb
+	movem b,uinfll(ic)
+	popae p,[c,b]
+	ret
+
+inrget:	aos u1,uincnt(ic)
+	camle u1,uinbfl(ic)	; See if still pointing within buffer
+	 jrst inrgt2
+	dbp uinbp(ic)		; Decrement byte ptr
+	ldb u1,uinbp(ic)	; Get the byte
+	aos (p)
+	ret
+	; Prev char not in buff, try to get previous bufferful.
+inrgt2:	move u1,uinloc(ic)
+	sub u1,uinbfl(ic)
+	jumple u1,inrgt9	; Jump if no previous bufferful.
+	pushae p,[a,b]
+	move a,uinjfn(ic)
+	move b,u1
+	sfptr
+	 jfcl
+	popae p,[b,a]
+	movem u1,uinloc(ic)
+	call getbuf
+	 halt			; Shouldn't happen
+	move u1,uincnt(ic)
+	subi u1,1
+	adjbp u1,uinibp(ic)
+	movem u1,uinbp(ic)
+	movei u1,1
+	movem u1,uincnt(ic)
+	ldb u1,uinbp(ic)
+	ret
+
+inrgt9:	seto u1,
+	skipe u3,@(p)
+	 jrst (u3)
+	ret
+
+uinfil:	call getbuf
+	 jrst uineof
+	sos uincnt(ic)
+	ret
+
+	; EOF, jump to EOF vector (or hack standard default)
+	; Could possibly jump with return address still on PDL, in case
+	; user wants to return odd value from STDIN, but that seems
+	; unlikely, so just effect JRST.
+uineof:	ldb u1,[$acfld,,@(p)]	; Get AC field from next instruction
+	setom (u1)		; Zap it
+	setzm uincnt(ic)
+	jumpn u3,[sub p,[1,,1]
+		jrst (u3)]
+	aos (p)			; Skip over ILDB
+	ret
+	
+GETBUF:	PUSHAE P,[A,B,C]
+	SKIPG A,UINJFN(IC)
+	 JRST GTBUF9		; Input not from JFN
+	MOVE B,UINIBP(IC)
+	MOVEM B,UINBP(IC)
+	MOVE C,UINFLL(IC)
+	SUB C,UINLOC(IC)	; Find # bytes left to read
+	CAMLE C,UINBFL(IC)	; Compare with size of buffer
+	 MOVE C,UINBFL(IC)	; Buffer smaller, so use this many bytes.
+	JUMPLE C,GTBUF9
+	PUSH P,C
+	MOVN C,C
+	SIN
+	 ERJMP .+1
+	ADD C,(P)		; Find # bytes read
+	SUB P,[1,,1]
+	ADDM C,UINLOC(IC)	; Update file ptr loc
+	MOVEM C,UINCNT(IC)	; and set # bytes available
+	CAIG C,
+	 JRST [	MOVE C,UINFLL(IC)	; If EOF, make sure no re-try!
+		MOVEM C,UINLOC(IC)
+		JRST GTBUF9]
+	AOS -3(P)
+GTBUF9:	POPAE P,[C,B,A]
+	POPJ P,
+
+
+.m"intell:
+	move u1,uinloc(ic)
+	sub u1,uincnt(ic)
+	caige u1,
+	 setz u1,
+	ret
+
+.m"inseek:
+	caml u1,uinloc(ic)	; Past end of buffer?
+	 jrst insek5
+	move u3,uinloc(ic)
+	caml u3,uinfll(ic)	; Is this last buffer (possibly incomplete)?
+	 jrst insek4		; Yes, go punt (ugh! ugh!)
+	sub u3,uinbfl(ic)	; Find ptr for start of buffer
+	camge u1,u3		; New loc within buffer?
+	 jrst insek4		; No, go reload buffer.
+	sub u1,u3		; Find offset from start
+	move u3,uinbfl(ic)
+	sub u3,u1		; Find # chars now left in buffer
+	movem u3,uincnt(ic)
+	push p,a
+	move a,u1
+	adjbp a,uinibp(ic)	; Find BP to right location
+	movem a,uinbp(ic)
+	pop p,a
+	ret
+
+	; Punt altogether and reload buffer.  (Very inefficient too!)
+insek4:	movem u1,uinloc(ic)
+	pushae p,[a,b]
+	move a,uinjfn(ic)
+	move b,u1
+	sfptr
+	 jfcl
+	popae p,[b,a]
+	call getbuf
+	 jfcl
+	ret
+
+	; New loc is past end of buffer
+insek5:	camge u1,uinfll(ic)
+	 jrst insek4		; Not past EOF, so go punt and reload
+ 	setzm uincnt(ic)
+	movem u1,uinloc(ic)
+	pushae p,[a,b]
+	move a,uinjfn(ic)
+	seto b,
+	sfptr
+	 jfcl
+	popae p,[b,a]
+	ret
+	
+
+] ;ifn $newin
+
+ife $newin,[
+
+define stdin(ac=u1,eof)
+	call stdbin
+ifn ac-u1,move ac,u1
+ifsn [eof][] jumpl ac,eof
+termin
+define stdinr(ac=u1,eof)
+	call stdinb
+	stdin(ac,eof)
+	call stdinb
+termin
+
+stdbin:	push p,a
+	push p,b
+	move a,injfn
+	bin
+	skipn u1,b
+	 jrst [	gtsts		; See if EOF
+		tlne b,1000
+		 seto u1,	; Yes, return -1
+		jrst .+1]
+	pop p,b
+	pop p,a
+	ret
+stdinb:	push p,a
+	move a,injfn
+	bkjfn
+	 jfcl
+	pop p,a
+	ret
+
+.m"intell:
+	pushae p,[a,b]
+	move a,injfn
+	rfptr
+	 setz b,
+	move u1,b
+	popae p,[b,a]
+	ret
+.m"inseek:
+	pushae p,[a,b]
+	move b,u1
+	move a,injfn
+	sfptr
+	 jfcl
+	popae p,[b,a]
+	popj p,
+] ;ife $newin
+
+.m"inlin:
+	movni a,linbfl
+	move b,[440700,,linbuf]
+inlin2:	stdin
+	jumpl u1,[addi a,linbfl
+		jumple a,apopj
+		jrst inlin9]
+	caie u1,^J
+	 cain u1,^M
+	  jrst inlin8
+	cain u1,^L
+	 jrst inlin8
+	idpb u1,b
+	aojl a,inlin2
+inlin8:	addi a,linbfl
+inlin9:	move b,[440700,,linbuf]
+	movem u1,linbrk
+	aos (p)
+	ret
+
+; FILENB - File Length in Bytes.
+;	A/ <JFN>
+; Returns B/ <# bytes>
+
+filenb:	seto b,
+	sfptr		; Set to EOF
+	 erjmpa filen9
+	rfptr		; Read new ptr
+	 erjmpa filen9
+	push p,b
+	setz b,
+	sfptr
+	 erjmpa .+1
+	pop p,b
+	caia
+filen9:	 setz b,
+	ret
+
+ifn $newin,.end in
+
+comment |
+
+Notes on resolution units:
+
+	OP units are in mils (1/1000").
+	IM units are 1/300".
+	XGP units are 1/200". (X dir for sure; Y may be 1/192")
+	Dover units are perhaps 1/384" (verify?)
+	Alto units are perhaps 1/80" (verify?)
+	A "point" (as in "10 point type size") is 1/72".
+	A "pica" is 12 points.  "Agate" is 5.5 points.
+
+OP Range: 0-8500 x 0-11000	(from one edge of paper to the other)
+IM range: uncertain.
+	Theoretical:	0-2040 x 0-2640	(edge to edge)
+	Luis: current software limitations are
+			0-2047 x 0-2400 Hardware left margin of
+						about 1/4", ditto top.
+	RAS sez:	0-1982 x 0-2330 (left & top margin)
+	SAIL pgm:	0-1966 x 0-2200 (left & top margin)
+	It appears that for hardware reasons the IM cannot access all
+	of a page; currently known margins are:
+		Left: 80 pixels (1/3")
+		Top: 0 (maybe a few pixels)
+		Bottom: 0 (for sure-- will print legal size)
+		Right: approx 1/4" (60 pixels)
+	Location 0,0 DOES, however, correspond to 0,0 of physical page.
+	Thus, the range 0-80 and 1980-2040 horizontally is addressable
+		but nothing can be printed there.
+
+Ratio of IM/OP is 6 IU = 25 OU. (300 : 1000) (1 : 4.1666...)
+Ratio of XGP/OP is 1 XU = 5 OU. (200 : 1000) (1 : 5)
+
+OP char sizes are a bit painful.  To decipher them, must grok "points".
+Note that the OP-unit values in the following table are the ones given
+in the OP-produced COM files when asking for the corresponding point size.
+
+Size in: Pts	OP units	IM pixels	XGP pixels
+	 1	1000/72 (125/9)	300/72 (10/3)	200/72 (25/9)
+	 1	 14 ( 13.8...)	 3.3...		 2.7...
+	 4	 56 ( 55.5...)	13.3...		11.1...
+	 5	 69 ( 69.4...)	16.6...		13.8...
+	 6	 83 ( 83.3...)	20.0		16.6...
+	 7	 97 ( 97.2...)	23.3...		19.4...
+	 8	111 (111.1...)	26.6...		22.2...
+	 9	125 (exactly)	30.0		25.0
+	10	139 (138.8...)	33.3...		27.7...
+	11	153 (152.7...)	36.6...		30.5...
+	12	167 (166.6...)	40.0		33.3...
+	13	181 (180.5...)	43.3...		36.1...
+	14	194 (194.4...)	46.6...		38.8...
+	15	208 (208.3...)	50.0		41.6...
+	16	222 (222.2...)	53.3...		44.4...
+	17	236 (236.1...)	56.6...		47.2...
+	18	250 (exactly)	60.0		50.0
+
+Format of OP "Output COM" files is documented in Journal item 27680
+	(also on <CANON>VIRTUAL-COM.AUG)  This format is to be updated
+	to a new version documented in <PROGDOCS>LAYOUT-FILE.AUG
+	(also on <CANON>)
+Format of IMPRINT-10 files isn't really documented.  When this is fixed,
+	pointers will be duly inserted here.
+	For now, yell at LTP@SAIL and perhaps RAS@SAIL.
+
+|
+opver:	1	; 0 = NLS 8.5 COM,  1 = AUGMENT-10 Layout
+.scalar opdbgf	; -1 to print error messages, 1 to also produce debug output.
+.scalar opcnvf	; 0 = normal conversion, 1 = output deciphered cmds
+.scalar opsavp	; Saved PDL ptr
+.scalar opfiln(<3*40.>/5)	; ASCIZ source filename string
+
+define operr(a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p)
+    out(tyoc,a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p)
+termin
+
+; Given OP COM file already opened (TJFN), output on standard output.
+; This should have been opened for 8-bit bytes.
+
+ophak:	push p,oc
+	movem p,opsavp
+	skipn opver
+	 jrst ophk10	; Old-style
+
+ophak1:	stdin		; New-style input loop
+	cail u1,ncmdop
+	 jrst [	call opbad ? jrst ophak1]
+	call @opcmds(u1)
+	jrst ophak1
+
+ophk08:	skipge a,u1
+	 pjrst opeof	; EOF hit, sigh.
+	operr(("Bad input char: "),o(a),eol)
+ophk10:	stdin		; Get input byte (7-bit)
+	caie u1,177	; Must be rubout
+	 jrst ophk08
+	stdin		; Get next
+	caie u1,177
+	 jrst ophk08	; Error
+	stdin		; Get command char
+	cail u1,ncmd85	; Mustn't be too big
+	  jrst [call opbad ? jrst ophk10]
+	call @opcmds(u1)	; Go process cmd
+	jrst ophk10
+
+	opeof	; Premature EOF
+opcmds:	opbad	;
+	oplin	; 1 = Output (Typeset) Line Segment
+	opeop	; 2 = New Page (End of Page)
+	opinsf	; 3 = Insert Figure
+	opeod	; 4 = End of Document
+	oplinw	; 5 = Output Linework (Draw Vector)
+ncmd85==<.-opcmds>		; 8.5 doesn't have the rest
+	opdevs	; 6 = Device Specification
+	oplead	; 7 = Typeset Leader
+	oprule	; 8 = Draw Rule
+ncmdop==<.-opcmds>
+
+
+opabrt:	operr(("Aborting input"))
+	jrst opeof2
+
+opeof:	operr(("Premature EOF on input COM file."),eol)
+opeof2:	call imeof		; Force out anything remaining
+	move p,opsavp
+	pop p,oc
+	ret
+
+opbad:	cain u1,177		; Can ignore DEL bytes.
+	 ret
+	movei a,(u1)
+	operr(("Unknown OP cmd: "),o(a),eol)
+	ret
+
+define opin n,loc=a
+	stdin
+ifle <n-1>,movem u1,loc
+.else {
+	movei a,(u1)
+  repeat <n-1>,[ stdin
+		lsh a,7
+		addi a,(u1)
+		]
+	ifsn [loc][a] movem a,loc
+	}
+termin
+
+define opins n,loc=a
+	stdin
+ifle <n-1>, trne u1,<1_6.> ? tdo u1,[-1_6.] ? movem u1,loc
+.else {
+	movei a,(u1)
+  repeat <n-1>,[ stdin
+		lsh a,7
+		addi a,(u1)
+		]
+	tdne a,[1_<<n*7>-1>]
+	 tdo a,[-1_<<n*7>-1>]
+	ifsn [loc][a] movem a,loc
+	}
+termin
+
+	; End of Page - no arguments
+opeop:	skipe opcnvf
+	 outcal(,("--- End of Page ---"),eol)
+	skipn opcnvf
+	 call imeop		; Process end-of-page
+	ret
+
+	; End of Document (and Page) - no arguments
+opeod:
+	skipe opcnvf
+	 outcal(,("--- End of Document ---"),eol)
+	skipn opcnvf
+	 call imeod	; Process end-of-document
+
+; For now, don't handle multi-document files.
+;	stdin		; See if any more input
+;	jumpge u1,[stdinr
+;		ret]
+	move p,opsavp	; Quit out of top level loop
+	pop p,oc
+	ret
+
+	; Insert Figure - FIGN,Y,XL,XR
+opinsf:	opin 3,opfign		; 3 bytes of ARC Catalog number
+	opin 2,opy1		; Y-coord of center of figure
+	opin 2,opxlft		; X-coord of left edge of figure
+	opin 2,opxrht		; X-coord of right edge of figure
+	skipe opcnvf
+	 outcal(,("Insert Figure: #"),d(opfign),(" at Y "),d(opy1),(" between "),d(opxlft),(" and "),d(opxrht),eol)
+	skipn opcnvf
+	 call iminsf		; Process
+	ret
+
+	; Output Linework (Draw Vector) - TYPE,INT,WID,X1,Y1,X2,Y2
+oplinw:	opin 1,opvtyp		; Line type
+	opin 1,opvint		; Intensity
+	opin 1,opvwid		; Broadness
+	opin 2,opx1		; X1 (start pt)
+	opin 2,opy1		; Y1
+	opin 2,opx2		; X2 (end pt)
+	opin 2,opy2		; Y2
+	skipe opcnvf
+	 outcal(,("Draw Vector: "),LPAR,d(opvtyp),(" "),d(opvint),(" "),d(opvwid),RPAR,d(opx1,6),(","),d(opy1,4),(" to "),d(opx2,4),(","),d(opy2,4),eol)
+	skipn opcnvf
+	 call imvect
+	ret
+
+	; Device Specification - "DEV MODEL VENDOR " (not in 8.5)
+opdevs:	opin 2		; Length of string
+	skipe opcnvf
+	 outcal(,("Device Specification: "),d(a),(' = "'))
+	jrst opdev3
+opdev2:	stdin
+	jumpl u1,opdev3
+	skipe opcnvf
+	 jrst [	stdout
+		jrst .+1]
+opdev3:	sojge a,opdev2
+	skipe opcnvf
+	 outcal(,('"'),eol)
+	ret
+
+	; Typeset Leader - Y,XL,XR,SPC,FACE,TYPE,STYLE (not in 8.5)
+oplead:	opin 2,opbase		; Y-coord of baseline
+	opin 2,opxlft		; Left X-coord
+	opin 2,opxrht		; Right X-coord
+	opin 2,oplspc	; Spacing of leader chars (left edge to left edge)
+	opin 1,optfac		; Face number (?)
+	opin 2,optsiz		; Type size
+	opin 2,optsty		; Style (see Line Segment cmd for details)
+	opin 1,oplchr		; Leader character
+	skipe opcnvf
+	 call [	out(,("Typeset Leader: "),d(opbase,4),(" "))
+		out(,d(opxlft,4),(" - "),d(opxrht,4),(" Spacing "),d(oplspc),eol)
+		out(,TAB,LPAR,("Font "),d(optfac),(" "),d(optsiz),(" "),o(optsty),(" "),RPAR)
+		out(,(' char "'),c(@oplchr),('"'),EOL)
+		ret]
+	skipn opcnvf
+	 call imlead
+	ret
+
+	; Draw Rule - TYPE,XL,XR,YT,YB (not in 8.5)
+oprule:	opin 1,opvtyp		; Rule type (currently always 1)
+	opin 2,opx1		; Left X-coord
+	opin 2,opx2		; Right X-coord
+	opin 2,opy1		; Top Y-coord
+	opin 2,opy2		; Bottom Y-coord
+	skipe opcnvf
+	 outcal(,("Draw Rule: "),d(opvtyp),(" Top left "),LPAR,d(opx1),(","),d(opy1),RPAR,(" Bottom right "),LPAR,d(opx2),(","),d(opy2),RPAR,eol)
+	skipn opcnvf
+	 call imrule
+	ret
+
+.scalar opfign		; Figure number
+.scalar opvtyp		; Vector line type
+.scalar opvint		; Vector intensity
+.scalar opvwid		; Vector broadness
+.scalar opx1,opx2,opy1,opy2	; X,Y-coords for various cmds
+.scalar oplspc		; Spacing for leader chars
+.scalar oplchr		; Leader character to use
+
+.scalar opbase		; Y-coord of baseline for line segment
+.scalar opxlft		; X-coord of left margin of line seg
+.scalar opxrht		; X-coord of right margin of line seg
+.scalar opjust		; Justification code for line seg
+.scalar opnseg		; # text segments in this line seg
+
+.scalar optfac		; Type Face for text seg
+.scalar optsiz		; Type Size for text seg
+.scalar optsty		; Type Style for text seg
+.scalar optcnt		; # chars in text seg
+
+ops%bm==007	; Boldness mask:
+  ops.bm==0	;	medium
+  ops.bl==1	;	light
+  ops.bb==2	;	bold
+  ops.bx==3	;	(unused)
+  ops.bd==4	;	demibold			(currently unused)
+  ops.bk==5	;	extra light			(currently unused)
+  ops.bc==6	;	extra bold			(currently unused)
+  ops.by==7	;	(unused)
+ops%ul==010	; Underlined
+ops%ms==020	; Monospaced
+ops%sc==040	; Small caps				(currently unused)
+ops%sl==100	; Slanted or Italic
+ops%ct==0200	; Cancelled type style			(currently unused)
+ops%uu==0400	; Double-underline			(currently unused)
+ops%cm==03000	; Color mask; 0 Black, 1-3 per user	(currently unused)
+ops%sm==14000	; Squash mask:				(currently unused)
+  ops.sn==0	;	normal
+  ops.sc==1	;	somewhat compressed
+  ops.sv==2	;	very compressed
+  ops.sx==3	;	extended
+ops%x== 20000	; (unused)
+
+; OPLIN		Typeset Line Segment - Y,XL,XR,JUST,NSEG,<seg>,...,<seg>
+;	Nitty-gritty stuff!
+
+oplin:	opin 2,opbase		; Y-coord of baseline
+	opin 2,opxlft		; X-coord of left margin for line seg
+	opin 2,opxrht		; X-coord of right margin for line seg
+	opin 1,opjust		; Justification code (0-3)
+
+; Apparently Tymshare doc is wrong, and AUGMENT-10 new fmt still uses only
+; one byte for OPNSEG.
+;	skipe opver	; Get # of text segments following
+;	 jrst [	opin 2,opnseg	; New fmt uses 2 bytes
+;		jrst opln03]
+	opin 1,opnseg		; Old 8.5 fmt uses 1 byte
+opln03:
+	skipe opcnvf
+	 outcal(,("L "),d(opbase,4),d(opxlft,5),(" to "),d(opxrht,4),(" J"),d(opjust),(", segs "),d(opnseg),eol)
+	skipg e,opnseg
+	 ret		; Just return if none to read.
+
+	; Check out justification code
+	; 0 = flush left, 1 = flush right, 2 = center, 3 = full justify
+	skipl a,opjust
+	 caile a,3
+	  jrst [operr(("Bad lineseg justification: "),o(a),eol)
+		setz a,
+		jrst .+1]
+	skipe opcnvf
+	 jrst opln80	; Go handle simple output-translate loop
+
+	call xlsegb	; Process start of line segment
+
+	; Ugh, need to make a pre-pass to figure out how big lineseg is!
+	; Now must save I/O ptr
+	call intell
+	push p,u1		; Save input ptr
+
+	; Loop handling each text segment
+	move e,opnseg
+opln20:	call opltin		; Get start of text seg
+	call xtseg1		; Process text segment, pass 1
+	sojg e,opln20
+	pop p,u1
+	call inseek		; Restore input ptr
+
+	; Output pass
+opln50:	call xlsegm		; Process line seg, between passes
+	move e,opnseg		; # text segments to crunch
+opln52:	call opltin		; Snarf start of text seg
+	call xtseg2		; Process text segment, pass 2
+	sojg e,opln52
+
+	call xlsege		; Process end of line segment
+	ret
+
+	; Loop for output of deciphered COM stuff
+opln80:	skipg e,opnseg
+	 ret
+opln81:	call opltin	; Get text-seg header
+	out(,TAB,LPAR,("Font "),d(optfac),(" "),d(optsiz),(" "),o(optsty),(" "),RPAR)
+	out(,(" "),d(optcnt),(' = "'))
+	skipg a,optcnt
+	 jrst opln85
+opln84:	stdin
+	jumpl u1,[out(,eol)
+		ret]
+	stdout
+	sojg a,opln84
+opln85:	out(,('"'),eol)
+	sojg e,opln81
+	ret
+
+	; Read Text Segment header - FACE,SIZE,STYLE,CNT
+opltin:	opin 1,optfac		; Type Face
+	opin 2,optsiz		; Type Size
+	skipe opver		; Type Style
+	 jrst [	opin 2,optsty	; New fmt - 2 bytes
+		jrst oplti2]
+	stdin		; Old fmt - 1 byte
+	trze u1,4	; Check old "italics" bit
+	 tro u1,100	; If on, move to right place.
+	movem u1,optsty
+oplti2:	opin 2,optcnt		; # chars in text seg
+	ret
+
+
+.begin IM		; Start IMPRINT-10 symbol def block
+
+icmdtb:	block 200	; Dispatch & name tables
+icmntb:	block 200
+
+define icmd name,val
+c$!name==:val!.
+if2 [	ifndef d.!name, d.!name==defd.
+	ifndef e.!name, e.!name==defe.
+	tmploc icmdtb+<<val!.>&177>,{ d.!name,,e.!name }
+]
+tmploc icmntb+<<val!.>&177>,{ [asciz /name/] }
+termin
+
+icmd page,213	; Separates pre-page from post-page context
+icmd end,219	; End-of-Page.  Terminates post-page context, starts pre-page
+icmd eof,255	; End of Document ("compilation").
+icmd pagor,204	; Set page orientation
+icmd h,	195	; Set Horizontal position
+icmd v,	196	; Set Vertical position
+icmd ms,205	; Set "MS-system"
+icmd rotms,206	; Rotate MS-system
+icmd sgly,198	; Down-load font char
+icmd bgly,199	; Down-load a BIG font char
+icmd delg,200	; Delete a font char (specific orientation)
+icmd delc,201	; Delete a font char (all orientations)
+icmd delf,202	; Delete a font (all chars)
+icmd f,	207	; Select Font
+icmd setsp,210	; Set space-value
+icmd sp0,128	; Move right by space-value units
+icmd sp1,129	; Move right by space-value + 1 units
+icmd m,	130	; Move right by N units
+icmd mp1,131	; Move right by 1 unit
+icmd mm1,132	; Move  left by 1 unit
+icmd marg,209	; Set margin value
+icmd bskip,208	; Set baseline skip
+icmd n,	197	; "New-line" - move to margin and skip
+icmd srule,192	; Print rule
+icmd brule,193	; Print BIG rule
+icmd push,211	; Push current status
+icmd pop,212	; Pop back status
+
+.end IM
+
+	; Fixed (relatively speaking) parameters
+	; Should go over these later when find actual values etc.
+imvmax:	3300.		; Max Y position (11" x 300)
+imhmax:	2490.		; Max X position
+
+	; Current parameters
+.scalar cpfont	; Font (0 if none)
+.scalar cpcurx	; H position
+.scalar cpcury	; V position
+.scalar cphsp	; Space size
+.scalar cpbskp	; Baseline skip size
+.scalar cpmarg	; Margin setting
+
+
+.scalar cpoutc	; Output channel to send stuff to
+.scalar cppagc	; Current page context (0 = pre-page, else post-page)
+.scalar cppagn	; Page #
+.scalar cpfdat	; # bytes being used for font data
+.scalar cpodat	; # bytes for output data
+.scalar cpfdlm	; Max # bytes of font data
+.scalar cpodlm	; Max # bytes of output data
+
+.scalar cpsinc	; # pixels to add to each space-char (for justification)
+.scalar cpsrem	; # space-chars needing 1 extra pixel
+.scalar cpxlft	; OPXLFT in pixels
+.scalar cpxrht	; OPXRHT in pixels
+.scalar cpxbeg	; Starting X-coord of output, in pixels
+.scalar cpybeg	; Starting Y-coord of output, in pixels
+
+ifndef cacsiz,cacsiz==20000.	; Page Cache - up to this many bytes
+
+; IMINIT - Called at start of "output" command.
+;	Argument in OPFILN will be ASCIZ source filename.
+
+iminit:
+	movei a,2		; Set # of blocks to allocate for data
+	out(,c("0(a)),tz(opfiln),c(0),("ImagImPr"))	; Std header
+	imuli a,8192.		; Allocation is in 8K
+	movem a,cpodlm		; Set limit
+	move b,[55.*8192.]	; Total is 55K, so
+	sub b,a			; find how much left for fonts.
+	movem b,cpfdlm		; This much.
+	setzm cpfdat
+	setzm cpodat
+
+	setzm cppagn		; Page 0
+	setzm cppagc		; Current context is pre-page
+
+	setzm cpfont	; Font (0 if none)
+	setzm cpcurx	; H position
+	setzm cpcury	; V position
+	setzm cphsp	; Space size
+	setzm cpbskp	; Baseline skip size
+	setzm cpmarg	; Margin setting
+
+	movem oc,cpoutc		; Save output channel
+	call cppini		; Initialize post-page cache, switch OC
+	ret
+
+; CPPINI - Set up output page cache, switch OC to point there
+
+.scalar cparpt		; ARPT for cache memory
+.scalar cpcapt		; BP to start of cache
+cppini:	push p,a
+	skipn a,cparpt		; Postpage cache already allocated?
+	 uaropn a,[0 ? [cacsiz/4]]
+	movem a,cparpt		; Save ptr
+	move a,$arloc(a)	; Get mem addr
+	hrli a,441000		; Make 8-bit byte ptr
+	movem a,cpcapt
+	out(,ch(cach),open(uc$bpt,a,[cacsiz]))	; Point to cache
+	pop p,a
+	ret
+
+
+; IMEOD - Called for "End of Document".
+;	Terminates IMPR output, restores OC channel.
+;	This is the "end" to IMINIT's "begin".
+;	No arguments.
+
+imeod:	call imeop
+	out(,ch(@cpoutc),c(IM"C$EOF))	; End of compilation...
+	ret
+
+
+; XLSEGB - Called at beginning of an OP Line Segment.
+;	Args:	opbase - Y-coord of baseline
+;		opxlft - X-coord of left margin for seg
+;		opxrht - X-coord of right marg for seg
+;		opjust - Justification code
+;		opnseg - # text segments (always > 0)
+.scalar cpllen		; Total length of line seg thus far
+.scalar cpspct		; # spaces seen in line seg
+
+imlsgb:
+xlsegb:	setzm cpllen		; Clear line seg length
+	setzm cpspct
+	ret
+
+define cnvoi ac,loc		; Clobbers AC+1
+ifsn [ac][loc]	move ac,loc
+	imuli ac,1000.		; Get more precision
+	addi ac,<4166./2>	; Round off
+	idivi ac,4166.		; 1 pixel = 4.166... OP units
+termin
+
+; XLSEGM - Called between pass 1 and pass 2 over a line segment.
+;	Set up for actual output pass.
+;	IM:	Calculate justification parameters and start loc
+
+imlsgm:
+xlsegm:	cnvoi a,opbase		; Convert OP units to IM units
+	movem a,cpybeg		; Save starting Y-loc
+	cnvoi a,opxrht
+	movem a,cpxrht		; Save
+	cnvoi b,opxlft
+	movem b,cpxlft
+	movem b,cpxbeg		; Set beginning X loc of line seg
+	sub a,b			; Get range of line segment in pixels
+
+	move b,a		; Save for error report
+	sub a,cpllen		; Find difference from actual computed len
+	jumpl a,[operr(("Squashing space: lseg "),d(cpllen),(" into range "),d(b),(" "),LPAR,("OP "),d(cpxlft),("-"),d(cpxrht),RPAR,eol)
+		jrst xlsgm3]	; Use full-justify code to win.
+	setzm cpsinc
+	setzm cpsrem
+	skipn c,opjust		; Find justification type
+	 jrst xlsgm4		; 0 - Left justify.  Already set up.
+	cain c,3
+	 jrst xlsgm3		; 3 - Full justify, urk.
+	cain c,2
+	 lsh a,-1		; 2 - Center - like Rightjust but halfway
+	addm a,cpxbeg		; 1 - Right justify.
+	jrst xlsgm4		; Ok, done.
+
+xlsgm3:	idiv a,cpspct		; Divide by # spaces seen
+	movem a,cpsinc		; Save space-char increment (pixels to add)
+	movem b,cpsrem		; and # spaces needing one more or less pixel.
+xlsgm4:
+	; Now output cmds to set location.
+	move a,cpxbeg
+	lsh a,1			; Absolute pos, not incremental
+	move b,cpybeg
+	lsh b,1
+	out(,c(IM"C$H),s([2],[201000,,a]),c(IM"C$V),s([2],[201000,,b]))
+	ret
+
+; XLSEGE - Called at end of an OP Line Segment after all text segs
+;	have been processed, for finalization.  Args are as for
+;	XLSEGB.
+
+imlsge:
+xlsege:
+	ret
+
+; XTSEG1 - Text Segment, Pass 1.  Just has to find how big text seg is.
+;	Args:
+;		optfac - Type Face
+;		optsiz - Type Size
+;		optsty - Type Style
+;		optcnt - # chars in text seg
+
+imtsg1:
+xtseg1:	skipg d,optcnt
+	 ret		; If no chars, don't bother.
+	call fndfnt	; Find font, given fac/siz/sty.  Never fail.
+	movei b,f$chw(fnt)	; Set up ptr to font width table
+	hrli b,u1	; Index by U1
+	move c,cpllen	; Set up current line-seg length
+	movei a,1	; Set up bit for deposit in bitmap
+xtsg10:	stdin		; Get text-seg char
+	cain u1,40	; Space?
+	 jrst [	aos cpspct		; Yup, count it
+		add c,f$spw(fnt)	; Space width is a funny
+		jrst xstg15]
+	add c,@b		; add width for this char
+	dpb a,fntbmp(u1)	; Set char-used flag
+xstg15:	sojg d,xtsg10
+	movem c,cpllen	; Store new updated length
+	ret
+
+; XTSEG2 - Text Segment, Pass 2 (Output pass!)
+;	Args are as for XTSEG1.
+
+imtsg2:
+xtseg2:	skipg d,optcnt	; Get # chars into D
+	 ret		; If no chars, don't bother.
+	call fndfnt	; Find font, given fac/siz/sty.  Never fail.
+
+	; First switch to right font.
+	; Then set up space value.  Gross hack necessitated by fact that
+	; typical losing TEX font has 040 set to a printing glyph!!!
+xtsg20:	out(,c(IM"C$F),c(@f$num(fnt)))
+	skipg cpspct		; Verify more spaces to go
+	 jrst xtsg22		; Can bypass!
+	move a,f$spw(fnt)	; Get space-width for this font
+	add a,cpsinc		; Add increment needed for justification
+	caige a,		; Make sure total isn't negative.
+	 setz a,
+	out(,c(IM"C$SETSP),s([2],[201000,,a]))	; Set space-value
+
+xtsg22:	stdin		; Get text-seg char
+	cain u1,40	; Space?
+	 jrst [	sosge c,cpspct		; Yup, count it off
+		 setzm cpspct		; Shouldn't hit this, but in case...
+		camge c,cpsrem		; Time to start adding a pixel?
+		 skipa u1,[IM"C$SP1]	; Yup, use space-value plus 1
+		  movei u1,IM"C$SP0	; Nope, use normal space-value.
+		jrst .+1]
+	stdout			; Output this char directly
+	sojg d,xtsg22
+	ret
+
+
+; IMEOF - Called when input file terminates unexpectedly.
+;	No arguments.
+
+imeof:	call imeod
+	ret
+
+; IMEOP - Called when "End of Page" OP command seen.
+;	No arguments.
+;	IM:	Determine which fonts to download in pre-page context,
+;			output download stuff in that context.
+;		Switch to post-page context
+;		Force out buffered post-page stuff
+;		Set up for next page
+
+imeop:	push p,fnt
+	out(,ch(@cpoutc))		; Set up for direct output
+	move e,[-nfonts,,fnttab]	; Scan font table
+imep10:	skipn fnt,.fntpt(e)		; for active fonts
+	 jrst imep49
+	movei d,f$newc(fnt)		; Point to "seen" bitmap
+	hrli d,-4
+imep12:	move b,(d)			; Get a word of bits
+	andcm b,f$oldc-f$newc(d)	; Compare with "loaded" word
+	jumpe b,imep48			; Jump if nothing new to load
+	jrst imep45			; Start grovelling through bits
+
+	; Found char to download.
+imep15:	tdz b,bittab(c)			; Flush from bitmap word
+	hlrz a,d
+	add c,4(a)+[0 ? 40 ? 100 ? 140]	; Make real char value
+
+	; Now download char C from font FNT, not clobbering
+	; any of B,D,E.
+	call fntlod			; Output directly
+
+imep45:	jffo b,imep15			; Jump if found a new char
+	setz a,
+	exch a,(d)			; Get back new-char bits
+	iorm a,f$oldc-f$newc(d)		; OR into downloaded map
+imep48:	aobjn d,imep12			; Iterate through all chars
+imep49:	addi e,.fntl-1
+	aobjn e,imep10			; Iterate through all fonts
+	
+	out(cach,ptv(a))		; Get # bytes stored up
+	cail a,cacsiz			; Make sure didn't hit limits of buff
+	 jrst [	operr(("Output page buffer overflow!!"),eol)
+		jrst .+1]
+	out(,c(IM"C$PAGE))		; Switch to post-page context
+	out(,s(a,cpcapt),c(IM"C$END))	; Force out, and send end-of-page
+
+	; Must reset per-page variables...
+	call cppini		; Reset post-page cache and point OC there
+	pop p,fnt
+	ret
+
+iminsf:
+	operr(("Cannot process 'Insert Figure' cmd!"),eol)
+	ret
+
+imvect:
+	operr(("Cannot process 'Draw Vector' cmd!"),eol)
+	ret
+
+imlead:
+	operr(("Cannot process 'Typeset Leader' cmd!"),eol)
+	ret
+
+imrule:
+	operr(("Cannot process 'Draw Rule' cmd!"),eol)
+	ret
+
+subttl	Misc IMPRINT-10 stuff
+
+; IMSFNT - Selects font.
+;	FNT/ ptr to font structure to use
+
+imsfnt:	out(,c(IM"C$F),c(@f$num(fnt)))
+	ret
+
+; IMCHRO - Takes char in U1, outputs in current font.
+
+imchro:	movei u4,1
+	dpb u4,fntbmp(u1)	; Set char-used flag
+	stdout			; Output the char
+	ret
+
+; IMSPO - Output spacing
+
+imspo:	out(,c(IM"C$SP0))
+	ret
+
+; IMSTSP - Set spacing char width
+;	A/ <# pixels>
+
+imstsp:	out(,c(IM"C$SETSP),s([2],[201000,,a]))
+	ret
+
+; IMHPOS - Set H (X, column) position
+;	A/ <X-coord in pixels>
+
+imhpos:	lsh a,1		; Want absolute, not incremental
+	out(,c(IM"C$H),s([2],[201000,,a]))
+	ret
+
+; IMVPOS - Set V (Y, scanline) position
+;	A/ <Y-coord in pixels>
+
+imvpos:	lsh a,1		; Want absolute, not incremental
+	out(,c(IM"C$V),s([2],[201000,,a]))
+	ret
+
+; IMHINC - Set H position incrementally
+;	A/ <X-offset in pixels>
+
+imhinc:	; NOT IMPLEMENTED - use IMHPOS instead (sigh)
+;	lsh a,1
+;	tro a,1		; Ask for incremental pos
+;	out(,c(IM"C$H),s([2],[201000,,a]))
+	ret
+; IMVINC - Set V position incrementally
+;	A/ <Y-offset in pixels>
+
+imvinc:	; NOT IMPLEMENTED - use IMVPOS instead (sigh)
+;	lsh a,1
+;	tro a,1		; Ask for incremental pos
+;	out(,c(IM"C$V),s([2],[201000,,a]))
+	ret
+
+; IMUNDL - Do underline
+;	A/ <X-coord of start, in pixels>
+;	B/ <Y-coord of start, in pixels>
+;	C/ <length of underline in pixels>
+;	D/ <width of underline in pixels>
+
+imundl:	out(,c(IM"C$PUSH))
+	call imhpos
+	move a,b
+	call imvpos
+	movei b,1
+	caig d,377
+	 caile c,377	; Dimensions small enough for 1 byte?
+	  jrst imund2	; No, use big form.
+	out(,c(IM"C$SRULE),c((c)),c((d)),c(0),c(IM"C$POP))
+	ret
+imund2:	out(,c(IM"C$BRULE))
+	move a,c
+	call imo2b
+	move a,d
+	call imo2b
+	out(,c(0),c(0),c(IM"C$POP))
+	ret
+
+
+; IMSTBS - Set Baseline Skip value
+
+imstbs:	out(,c(IM"C$BSKIP))
+imo2b:	out(,s([2],[201000,,a]))
+	ret
+
+; IMSTLM - Set Left Margin value
+
+imstlm:	out(,c(IM"C$MARGIN))
+	pjrst imo2b
+
+subttl	XGP character input
+
+; Format is documented in [MIT-AI] INFO;XGP >
+; SAIL format is quite similar, with some minor differences.  Could
+; easily be adapted.
+; Bugs:
+;	SKIP isn't done right.  Assumes always =1.  Needs a XGP-cmd filter
+;		in order to count FF's properly.
+;	TITLE and TSKIP aren't implemented.
+;	Not sure what to make of -180. initial Y.  Setting up for
+;		default header??? Seems like a crock.
+;	Implementation of "Set Scan Line" (XGP Escape 3) is not
+;		quite right.  XGP stores up entire text line before
+;		sending to print, so this cmd could happen at end or
+;		during middle of line.  Here, we assume it always
+;		comes before any text!  Also, offset to baseline is
+;		derived here from Font 0's baseline offset, whereas real XGP
+;		actually does use the topmost scanline of current line.
+;	Header text can't yet have commands in it
+;		(input needs to be redirected).
+;	Header isn't even sent or anything yet!
+
+	; XGP "spooler" parameters
+.scalar xpbmar	; Bottom margin - pixel distance from end of page
+.scalar xplmar	; Left margin
+.scalar xptmar	; Top margin
+.scalar xplsp	; Pixels per line (baseline to baseline)
+.scalar xpsize	; Page size in inches
+.scalar xpskip	; Skip this many pages before printing
+.scalar xpvsp	; # pixels between lines (added to font 0 size to get lsp)
+
+	; XGP processing parameters
+.scalar xpcurx	; Current column #
+.scalar xpcury	; Current scanline # (baseline)
+.scalar xpispv	; IMPRINT-10 current "spacing value"
+.scalar xplmrv	; IMPRINT-10 current left-margin value
+.scalar xplspv	; IMPRINT-10 current baseline-skip value
+.scalar xpucol	; "Start underline" column
+.scalar xpbadj	; Baseline adjust value
+.scalar xpicsp	; Inter-character spacing
+.scalar xpbhgt	; Baseline "height" - Font 0's baseline (Y-offset) value
+.scalar xpbotm	; Bottom margin as absolute Y coord.
+.scalar xplpgn	; Logical page number
+.scalar xppagn	; Paper page number
+.scalar xphedc	; # chars in header text
+.scalar xphead(200)	; Header text (guaranteed to fit since count is 7 bits)
+.scalar xpsavp	; Not a param, just saved PDL for aborts.
+
+xphak:	push p,oc	; Save std output channel
+	movem p,xpsavp	; Save PDL ptr
+
+	; This section needs to hack the first page of XGP ";FOO" type
+	; commands.
+	call xpsres	; Reset spooler parameters
+	call xprcmd	; Snarf commands and handle them
+
+	; Set up processing parameters
+	skipn fnt,xpfnts	; Font 0 specified?
+	 jrst [	movei a,1	; No, use default
+		call fndfnx
+		movem fnt,xpfnts
+		jrst .+1]
+	
+	setzm xpucol
+	setzm xpbadj
+	setzm xpicsp
+	setzm xplpgn
+	setzm xppagn
+	setzm xphedc
+	move a,imvmax	; Get length of a page
+	camle a,xpbmar
+	 sub a,xpbmar	; Find bottom margin in abs coords
+	movem a,xpbotm	; Set up
+
+	; Set up default distance between topmar and 1st baseline
+	skipg a,f$bl(fnt)	; Get baseline param for KST font
+	 move a,f$bskp(fnt)	; If none, kludge with baseline skip size
+	movem a,xpbhgt		; Store baseline offset for font 0
+
+	; Set up distance between baselines
+	skipl a,xplsp	; Was LSP specified explicitly?
+	 jrst xphk04	; Yes, use that value
+	skipge a,xpvsp	; Nope.  Was VSP specified?
+	 movei a,6	; No, use default VSP value
+	movem a,xpvsp	; and set it.
+	skipg b,f$khgt(fnt)	; Add in the font 0 char height for KST fmt
+	 move b,f$bskp(fnt)	; (if none, try this format-indep value)
+	add a,b
+xphk04:	movem a,xplsp	; Now LSP has been determined
+
+	; Should verify that xptmar+xplsp doesn't > xpbotm, or will
+	; loop infinitely on FF!!
+	move a,xptmar
+	add a,xplsp
+	caml a,xpbotm
+	 jrst [	operr(("Margins screwed up"))
+		pjrst xpabrt]
+
+	; Initial X, Y theoretically set by XPTRES & XPRCMD, but
+	; here we flush that and use a "sensible" default.
+	move a,xplmar
+	movem a,xpcurx	; Set X to left margin
+	move a,xptmar	; Set Y to top margin
+	add a,xpbhgt	; Add skip to appropriate baseline for 1st text
+	movem a,xpcury
+
+	; Skip to right page.  This isn't quite right, but will
+	; suffice for common ";skip 1" case.
+	skipg a,xpskip
+	 jrst xphk10
+xphk05:	stdin
+	jumpl u1,[operr(("Skipped past EOF!"),eol)
+		pjrst xpabrt]
+	caie u1,^L
+	 jrst xphk05
+	sojg a,xphk05
+
+	; Fire up the IMPRINT-10 output stream!
+xphk10:	call iminit	; Set up output
+	setz a,		; Force select of Font 0
+	call xp1fnt
+	move a,f$spw(fnt)	; Get width of space char
+	movem a,xpispv		; We'll set this as IMPRINT-10 space val
+	call imstsp		; Set it
+	move a,xplsp		; Get baseline skip
+	movem a,xplspv		; Set as IMPRINT-10 baseline skip val
+	call imstbs
+	move a,xplmar		; Get left-margin
+	movem a,xplmrv		; Set as IMPRINT-10 left margin val
+	call imstlm
+	skipe a,xpcurx		; Must initialize position
+	 call imhpos
+	skipe a,xpcury
+	 call imvpos
+	jrst xphk20		; Enter loop!
+
+	; Process straight text, interpreting XGP escapes and format controls.
+	jrst xphk22	; -1 return to re-read char in U1
+xphk20:	stdin		; Get input char
+xphk22:	jumpl u1,xphak9	; Done, flush out.
+	push p,[xphk20]	; "Return" to start of loop.
+	cain u1,177	; XGP Escape char?
+	 pjrst xpesc
+	caile u1,40	; Check for formatting char or space
+	 pjrst xphakc	; Normal output char
+	pjrst @.+1(u1)
+	apopj		; Ignore nulls completely
+	repeat 7,xphakc	; 1-7 normal chars
+	xphkbs		; 10 - BS
+	xphktb		; 11 - TAB
+	xphklf		; 12 - LF
+	xphakc		; 13 normal char
+	xphkff		; 14 - FF
+	xphkcr		; 15 - CR
+	repeat 40-16,xphakc	; 16-37 normal chars
+	xphksp		; 40 - SP
+
+	; EOF - End of file, end of printing
+	; Maybe this should effect a LF too?
+xpeof:
+xphak9:	call imeod		; EOF, force stuff out.
+xpabrt:	move p,xpsavp		; Restore PDL ptr
+	pop p,oc		; and std output channel
+	ret
+
+	; Handle normal character - char in U1
+xphakc:	movei a,(fnt)
+	addi a,(u1)
+	move b,f$chw(a)		; Get char width
+	addm b,xpcurx		; Bump up by this much
+	call imchro		; Output char in U1
+	skipn a,xpicsp		; Is there any interchar spacing?
+	 ret			; Nope, done
+	jrst xphsp1		; Yes, go space out that much.
+
+	; SP - Move right width of 1 space char plus inter-char spacing.
+xphksp:	move a,f$spw(fnt)	; Get width of space
+	add a,xpicsp		; Plus inter-char spacing if any
+xphsp1:	addm a,xpcurx
+	camn a,xpispv		; Space = to current val of IMPR space?
+	 pjrst imspo		; Yes, output space as previously def'd
+
+xphspi:	jumpl a,xphsp3
+	caml a,xpispv		; Try to space out using large increments
+	 jrst [	call imspo
+		sub a,xpispv
+		jrst .-1]
+	outcal(,c(IM"C$MP1))	; Then use 1-pixel increments.
+	sojg a,.-1
+	ret
+xphsp3:	outcal(,c(IM"C$MM1))	; Must backspace (ugh!)
+	aojl a,.-1
+	ret
+
+	; BS - Move left width of 1 space char plus inter-char spacing.
+xphkbs:	movn a,f$spw(fnt)	; Go back width of 1 space
+	sub a,xpicsp		; plus inter-char spacing.
+;	pjrst xp2inc		; Go effect the increment
+	addb a,xpcurx		; Sigh, need this code since IMHINC doesnt work
+	pjrst imhpos
+
+	; TAB
+xphktb:	skipn a,xpfnts		; Use space from font 0
+	 skipa c,[18.]		; No font 0, use this (XGP uses 16.)
+	  move c,f$spw(a)
+	add c,xpicsp		; Add interchar spacing
+	move a,c
+	addb a,xpcurx		; Always space at least 1
+	sub a,xplmar		; Start from left margin
+	lsh c,3			; Get tab length
+	idivi a,(c)		; Find # tabs in A, # remaining bits in B
+	move a,xpcurx
+	jumpg b,[movei a,(c)
+		subi a,(b)	; Find # bits to go
+		addb a,xpcurx
+		jrst .+1]
+	call imhpos		; Effect the move
+	ret
+
+xphklf:	call xplfrc		; Force out line if any buffering.
+	move a,xpcury
+	add a,xplsp	; Find new baseline (this is a crock)
+	caml a,xpbotm
+	 pjrst xphkff	; Sigh, went off bottom.
+	movem a,xpcury	; OK, update location
+	call imvpos	; and move there.
+	ret
+
+xplfrc:			; Subroutine to push out current line if buffered.
+	setzm xpbadj	; End of line, reset baseline adjust.
+	setzm xpicsp	; Ditto for interchar spacing.
+	ret
+
+	; FF - New page
+xphkff:	call xplfrc	; Push out current line
+	movei a,1
+	movem a,xppagn	; Must determine if anything writ on page yet or not
+			; and ignore if not (but bump page cnt)
+	call imeop	; Effect end of page
+	move a,xptmar	; Move to top margin
+	call xp3set	; Set scanline position
+	skipe a,xpcurx	; IMPRINT-10 goes to 0,0 after page, so must
+	 call imhpos	; reset horiz pos appropriately.
+	ret
+
+	; CR - Beg of line
+xphkcr:	move a,xplmar	; Do column select to left margin
+	came a,xplmrv	; Same as IMPRINT-10 margin?
+	 pjrst xp1cos	; Nope, just set X pos.
+	move b,xplsp	; Check baseline skip value
+	came b,xplspv	; to see if that's equal too
+	 pjrst xp1cos
+
+	; Can do simple newline command, if next char is LF!
+	stdin		; Get next char
+	caie u1,^J	; LF?
+	 jrst [	push p,u1	; No, must save it
+		call xp1cos	; and perform our CR duties
+		pop p,u1	; and restore char
+		sos (p)		; and return to re-read it.
+		ret]
+	movem a,xpcurx	; Have CRLF!  Can update X coord for sure
+	add b,xpcury	; See if still on page
+	caml b,xpbotm
+	 pjrst xphkff	; Sigh, went off bottom.
+	movem b,xpcury	; OK, update location
+	call xplfrc	; Force out line if any buffering.
+	out(,c(IM"C$N))	; Do IMPRINT-10 type CRLF.
+	ret
+
+
+	; XGP ESCAPE
+xpesc:	stdin			; Get next char
+	cail u1,1
+	 caile u1,4
+	  jrst xphakc		; Not one of the recognized command bytes.
+				; 5-10, 13, 16-37 are to be "reserved",
+				; but for now just treat like quoted char.
+	jrst @.(u1)	; Dispatch on 1-4
+	xpcmd1
+	xpcmd2
+	xpcmd3
+	xpcmd4
+
+	; XGP ESCAPE 2 - Increment Column position
+xpcmd2:	opin 1		; Get increment - signed 7-bit value
+	trne a,<1_6.>	; Extend sign bit
+	 tdo a,[<-1_6.>]
+xp2inc:	; Make sure not going off edge...
+
+	call imhinc	; Increment H position
+	ret
+
+	; XGP ESCAPE 3 - Set Scan line position
+	;  Next 2 bytes are scan line # on which to start this text line.
+	; The topmost scanline of the present text line will be placed on the
+	; scan line indicated in this command.
+xpcmd3:	opin 2		; Get scan line #
+xp3set:	add a,xpbhgt	; Get baseline to use (this is an assumption!)
+			; Sets this to baseline of font 0, which may not be
+			; the right thing.
+	caml a,xpbotm	; See if going off bottom margin
+	 jrst xphkff	; Yes, pretend saw FF.
+xp3do:	movem a,xpcury	; Set V position
+	call imvpos	; Output cmds to do it.
+	ret
+
+	; XGP ESCAPE 4 - Draw Vector
+xpcmd4:	operr(("Cannot do 'Vector' command"),eol)
+	opin 2		; Y0 - Scan # of first line of vector
+	opin 2		; X0 - Column pos of left edge of first line of vector
+	opin 3		; DX - 1 bit sign, 11 bits integer, 9 bits fraction
+	opin 2		; N - # of scan lines on which vector is visible
+	opin 2		; W - column width of each scan-line
+	ret
+
+	; XGP ESCAPE 1 - Hairy command select
+xpcmd1:	opin 1		; Get next sub-command char
+	jumpl a,xpeof
+	cail a,xp1n	; Within limits for sub-cmd value?
+	 jrst xp1bad
+	jrst @xp1dsp(a)	; Dispatch
+xp1dsp:	repeat 20,xp1fnt	; 0-17 font select
+	repeat 20,xp1bad	; 20-37 reserved
+	xp1col		; 40 Column select
+	xp1und		; 41 Underscore
+	xp1lsp		; 42 Line Space
+	xp1bla		; 43 Baseline Adjust
+	xp1pgn		; 44 Print paper page number
+	xp1hed		; 45 Set Heading text
+	xp1unb		; 46 Start Underline
+	xp1une		; 47 Stop Underline
+	xp1isp		; 50 Set Inter-character spacing
+	xp1vwu		; 51 Variable width underline
+	xp1bli		; 52 Relative Baseline Adjust
+	xp1uni		; 53 Relative Underscore
+xp1n==<.-xp1dsp>
+
+xp1bad:	operr(("Bad Escape 1 subcmd: "),d(a),eol)
+	ret
+
+xpmaxf==20		; # XGP fonts we can handle (limited by protocol)
+.scalar xpfntn		; # fonts in table
+xpfnts:	block xpmaxf
+
+	; Select font in A
+xp1fnt:	skipn b,xpfnts(a)	; Get font ptr
+	 jrst [	operr(("Select of non-ex font: "),d(a),eol)
+		ret]		; Stay in current font
+	movei fnt,(b)		; Switch to new font
+	call imsfnt		; Output font select cmd
+	skipn xpbadj		; Reset baseline adjust
+	 ret
+	move a,xpcury		; Move to real baseline
+	call imvpos
+	setzm xpbadj
+	ret
+
+	; Column Select
+xp1col:	opin 2
+xp1cos:	movem a,xpcurx		; Set column
+	call imhpos		; Do it
+	ret
+
+	; Underscore
+xp1und:	opins 1		; Get Y offset (signed)
+	move b,a	; Save
+xp1un2:	opin 2		; Get length
+	move c,a
+	add b,xpcury	; Get abs Y-pos
+	move a,xpcurx	; Get current X-pos
+	movei d,1
+	call imundl	; Execute the underline
+	ret
+
+	; Line space
+xp1lsp:	opin 1		; Get baseline increment
+	add a,xpcury	; Find new baseline value
+	caml a,xpbotm	; Over bottom margin?
+	 pjrst xphkff	; Yeah, move to new page.
+	push p,a	; Save it
+	call xplfrc	; Push out current line
+	pop p,a
+	pjrst xp3do	; Move to new Y position.
+
+	; Set Baseline Adjustment
+xp1bla:	opins 1,xpbadj		; Get signed value
+	skipn a,xpbadj
+	 ret
+	call imvinc		; Adjust real baseline
+	ret
+
+	; Print paper page number as <logical PN>[.<phys sub-PN>]
+xp1pgn:	out(tmpc,open(uc$xct,[call xphakc]),d(xplpgn))
+	skipe xppagn
+	 outcal(tmpc,("."),d(xppagn))
+	ret
+
+	; Accept Heading Text
+xp1hed:	opin 1		; Get # bytes to hack
+	movem a,xphedc	; Save # chars
+	caig a,
+	 ret
+	move b,[440700,,xphead]
+xp1hd2:	stdin		; Get char
+	idpb u1,b	; Store away
+	sojg a,xp1hd2
+			; Then drop thru to print it.
+xphedo:	skipg c,xphedc
+	 ret
+	push p,c
+	push p,[440700,,xphead]
+xphed2:	ildb u1,(p)
+	call xphakc	; This is actually cheating since shd handle cmds too.
+	sosle -1(p)
+	 jrst xphed2
+	sub p,[2,,2]
+	ret
+
+	; Begin Underline
+xp1unb:	move a,xpcurx
+	movem a,xpucol	; Remember current col # as beg of underline
+	ret
+
+	; End Underline
+xp1une:	opins 1		; Get Y-offset to put line on
+	add a,xpcury
+	move b,a
+	skipn a,xpucol	; Get back saved start col
+	 move a,xplmar	; Use left margin if none
+	move c,xpcurx
+	sub c,a		; Find length of underscore
+	movei d,1
+	call imundl	; Execute underline
+	ret
+
+	; Set inter-char spacing
+xp1isp:	opin 1,xpicsp	; Set it.
+	skipn a,xpicsp	; If there's a value,
+	 ret
+	movem a,xpispv
+	call imstsp	; Go set spacing char.
+	ret
+
+	; Variable-width underscore
+xp1vwu:	opin 1		; Get # lines to draw (width of underscore)
+	move d,a	; Put in right place
+	opins 1		; Get Y-offset to put line on
+	jumple d,apopj	; Make sure we'll draw something
+	add a,xpcury
+	move b,a
+	skipn a,xpucol	; Get back saved start col
+	 move a,xplmar	; Use left margin if none
+	move c,xpcurx
+	sub c,a		; Find length of underscore
+	call imundl	; Execute underline
+	ret
+
+	; Relative Baseline Adjust
+xp1bli:	opins 1		; Get signed increment
+	addm a,xpbadj	; Add into current adjust value
+	call imvinc	; and effect adjust of real baseline.
+	ret
+
+	; Relative Underscore
+xp1uni:	opins 1		; Get offset to adjusted baseline
+	add a,xpbadj	; Add in the baseline adjust
+	pjrst xp1un2	; Rest is as for regular underscore.
+
+
+; XPRCMD - Reads 1st page of stuff from std input, looking for
+;	XGP-spooler commands.  Resets std input back to what it was
+;	before returning.
+
+.scalar xpsiop			; Saved I/O ptr
+xprcmd:	pushae p,[a,b,c,d,e]
+	call intell		; Find current I/O ptr
+	movem u1,xpsiop
+
+xprc10:	call inlin		; Read a line
+	 jrst xprc90		; EOF, none left
+	jumple a,xprc80
+	ildb c,b		; Get 1st char
+	caie c,";		; Should be start of spooler cmd
+	 jrst xprc90		; Else ignore this line and assume done.
+	soj a,
+	call get6wd		; Isolate command word
+	movsi e,-nxprsw
+xprc25:	move d,xprtab(e)
+	camn c,(d)
+	 jrst xprc30
+	aobjn e,xprc25
+	jrst xprc80		; Unknown cmd, ignore line.
+
+xprc30:	hlrzs d
+	call (d)		; Invoke command, arg is remainder of line
+
+xprc80:	move a,linbrk		; Get break char for line
+	caie a,^L		; If a FF, done with 1st page.
+	 jrst xprc10		; Nope, get another line.
+
+xprc90:	move u1,xpsiop
+	call inseek		; Return to original I/O location
+	popae p,[e,d,c,b,a]
+	ret
+
+define xsc name,rout=apopj
+	rout,,[sixbit /name/]
+termin
+
+xprtab:				; <default value> <description>
+	xsc autcut		; 1 If non-z, automatically cut between pages
+	xsc botmar,xpsbot	; 124. Use N pixels of bottom margin
+;?	xsc cskip,xcskip	; XGPSPL re-queue hack
+;?	xsc defaul,defaul	; Set default dev/dir from filespec
+	xsc delete		; Delete text file after printing
+	xsc ffcut		; 0 If non-z, cut only on FF's.
+	xsc header,xpshdr	; Use rest of line as text of header
+	xsc height		; Maint - type height of chars
+	xsc kill		; Maint - kill spooler
+	xsc kset,xpskst		; 25FG Use specified fonts (font1,font2,...)
+	xsc ksubset		; Says which chars of a font are needed
+	xsc lftmar,xpslft	; 200. Use N pixels of left margin
+	xsc list,xpslst		; Print text file with default header
+	xsc lsp,xpslsp		; 31. Use N pixels per line (includes font ht)
+	xsc nlines		; Maint - type # of lines per page
+;?	xsc notify,donote	; Notify specified requester when output starts
+;?	xsc noxgp,cpopj1	; ?
+	xsc plot		; Treat file as plotter file
+	xsc print		; File to print
+	xsc priori		; Give this request high priority
+	xsc reset,xpsres	; Reset param values to defaults.
+	xsc rotate		; "Rotate bit map of pixels that are converted
+				; into scan line" (???)
+	xsc sample,xpssam	; Assume file is font, and print sample
+	xsc scan		; Treat file as bit-map drawing (SCN fmt)
+	xsc show		; Maint - type values of selected params
+	xsc size		; 11.  Use page size of N inches
+	xsc skip,xpsskp		; 0  Skip N pages before printing
+	xsc sndfnt		; Send font to PDP-11
+	xsc squish		; Purge useless chars from font
+;?	xsc status,status	; Maint - type status
+	xsc test		; Test XGP (???)
+	xsc thesis		; Use thesis paper for printing
+	xsc title,xpstit	; 0 Use following N pages as title pages.
+				; Gross hack, see XGPSPL comments.
+	xsc topmar,xpstop	; 128.  Use N pixels of top margin
+	xsc tskip,xpstsk	; See TITLE and comments
+	xsc txtcmd		; -1  If non-z, read cmds from text file
+	xsc verse		; Maint - type name and version #
+	xsc vsp,xpsvsp		; 6.  Use N pixels between lines
+				; (VSP+HT(font 0)) => LSP
+	xsc x0,xpsx0		; 1100. Use N as initial X-coord
+	xsc y0,xpsy0		; -180. Use N as initial Y-coord
+nxprsw==<.-xprtab>
+
+
+	; Reset params to default vals
+xpsres:	movei a,124.
+	movem a,xpbmar
+	movei a,200.
+	movem a,xplmar
+	movei a,128.
+	movem a,xptmar
+;	movei a,6.	 ; Defaults enacted after switches read
+	setom xpvsp
+;	movei a,31.
+	setom xplsp
+	setzm xpskip
+	movei a,11.
+	movem a,xpsize
+	movei a,1100.
+	movem a,xpcurx
+	movni a,180.
+	movem a,xpcury
+	movsi a,-xpmaxf
+	setzm xpfnts(a)		; Zap font table
+	aobjn a,.-1		; (Really should unmap fonts, etc)
+	setzm xpfntn
+	ret
+
+	; List text file with default header
+xpslst:	ret
+
+	; Set fonts to use
+xpskst:	setzm xpfntn		; Reset font table
+	move c,a
+	move d,b
+xpsks2:	call lkgetw		; Get word
+	 ret			; No more
+	aos e,xpfntn		; Always bump count
+	cail e,xpmaxf
+	 jrst [	operr(("Too many fonts in KSET, max is "),d([xpmaxf]),eol)
+		sos xpfntn
+		ret]		; Continue, though.
+
+	call fntfil		; Get JFN for this font file
+	 jrst xpsks2		; Failed, but keep trying.
+	call fntgen		; Get a font-table entry with ID, ptr in E
+	 jrst xpsks2		; Barf!?!?! Go on anyway.
+	call fntset		; OK, set up the font...
+	move a,xpfntn
+	movem fnt,xpfnts-1(a)
+	jrst xpsks2
+
+	; Set # pixels per line (VSP + HT)
+xpslsp:	call getnum
+	 ret
+	movem c,xplsp
+	ret
+
+	; Set bottom margin in pixels
+xpsbot:	call getnum
+	 ret
+	movem c,xpbmar
+	ret
+
+	; Set left margin in pixels
+xpslft:	call getnum
+	 ret
+	movem c,xplmar
+	ret
+
+	; Set top margin in pixels
+xpstop:	call getnum
+	 ret
+	movem c,xptmar
+	ret
+
+	; Set VSP (dist between lines) in pixels -- see LSP
+xpsvsp:	call getnum
+	 ret
+	movem c,xpvsp
+	ret
+
+	; Set initial X-coord
+xpsx0:	call getnum
+	 ret
+	movem c,xpcurx
+	ret
+
+	; Set initial Y-coord
+xpsy0:	call getnum
+	 ret
+	movem c,xpcury
+	ret
+
+	; Set # pages to skip
+xpsskp:	call getnum
+	 ret
+	movem c,xpskip
+	ret
+
+	; Use rest of line as header text
+xpshdr:
+	; Hack TITLE stuff
+xpstit:
+xpstsk:	ret
+
+	; Make font sample page for specified font
+xpssam:
+	ret
+
+; GET6WD - Get next word in SIXBIT
+;	A/ <# chars>
+;	B/ <BP>
+; Returns
+;	A,B updated
+;	C/ <SIXBIT of word>
+
+get6wd:	pushae p,[d,e]
+	move c,a
+	move d,b
+	call lkgetw
+	 setz a,
+	jumple a,[
+		move a,c
+		move b,d
+		setz c,
+		jrst get6w9]
+	pushae p,[c,d]
+	move e,[440600,,c]
+	setz c,
+get6w3:	ildb d,b
+	cail d,140
+	 subi d,40	; Fix lowercase
+	subi d,40
+	idpb d,e
+	tlne e,770000
+	 sojg a,get6w3
+	popae p,[b,a]
+get6w9:	popae p,[e,d]
+	ret
+
+
+; LKGETW - Get word from string of format "FOO, BAR ZAP, ETC"
+;	Either space or comma ends word.
+;	C/ # chars
+;	D/ BP to string
+; Fails if EOF
+; Return .+2
+;	A/ # chars
+;	B/ BP to word
+
+LKGETW:	CAIG C,
+	 POPJ P,
+	PUSH P,C
+	PUSH P,D
+LKGTW2:	MOVEM D,(P)	; Store BP at beg of word
+	CALL SCNTRM	; Scan for terminators
+	 CAIA
+	  JRST LKGTW2		; Loop till hit first real char.
+	JUMPL A,[SUB P,[2,,2]	; Jump if EOF, nothing to return.
+		POPJ P,]
+	MOVEM C,-1(P)		; Store char cnt at start of word
+	CALL SCNTRM		; scan again for terminators
+	 JUMPGE A,.-1		; scan over text.
+	POP P,B
+	POP P,A
+	SUB A,C		; Find # chars in word.
+	PJRST POPJ1
+
+SCNTRM:	SOJL C,[SETO A, ? POPJ P,]
+	ILDB A,D
+	CAIE A,40
+	 CAIN A,",
+	  AOS (P)
+	POPJ P,
+
+; LASCIZ - Find length of ASCIZ string
+;	B/ <BP>
+; Returns
+;	A/ <# chars>
+
+lasciz:	pushae p,[b,c]
+	setz a,
+lascz2:	ildb c,b
+	caie c,0
+	 aoja a,lascz2
+	popae p,[c,b]
+	ret
+
+subttl Font selection
+
+fndfnt:
+	; First cons up the font ID value
+	move a,optfac
+	lsh a,14.
+	ior a,optsiz
+	lsh a,14.
+	ior a,optsty
+	tlo a,(setz)		; Sign bit means OP-style ID
+fndfnx:
+	camn a,lstfid		; Quick check
+	 jrst [	move fnt,lstfnt
+		ret]
+	movem a,lstfid		; Store ID (we'll eventually set lstfnt)
+	movsi fnt,-maxfnt		; Search for matching ID
+ffnt02:	camn a,fntids(fnt)
+	 jrst [	move fnt,fntptr(fnt)	; Found it, win!
+		movem fnt,lstfnt
+		ret]
+	skipe fntids(fnt)		; Stop if hit zero entry
+	 aobjn fnt,ffnt02		; or counted out.
+	jumpge fnt,[
+		operr(("Too many fonts, table full!"))
+		pjrst opeod]		; Stop processing document.
+
+	; Font not in tables, must figure out which font file
+	; we want, and map it in... sigh.
+	pushae p,[a,b,c,d,e]
+	call ffntb		; Look up in correspondence table
+	 jrst ffnt50		; Got it!
+	operr(("Unknown type face/size/style: "),call(fntido),eol)
+	trze a,<ops%x+ops%sm+ops%cm+ops%uu+ops%ct+ops%sc>
+	 jrst [	call ffntb	; Unused style bit was on, try again.
+		 jrst ffnt48	; Won!
+		jrst .+1]
+	trze a,ops%ul		; Flush underlining
+	 jrst [	call ffntb ? jrst ffnt48 ? jrst .+1]
+	trze a,ops%ms		; Flush monospacing
+	 jrst [	call ffntb ? jrst ffnt48 ? jrst .+1]
+	tdze a,[ops%bm_14.]	; Flush boldness variation
+	 jrst [	call ffntb ? jrst ffnt48 ? jrst .+1]
+	trze a,ops%sl		; Flush slant
+	 jrst [	call ffntb ? jrst ffnt48 ? jrst .+1]
+	move a,deffid		; Give up, use default.
+	call ffntb
+	 jrst ffnt48
+	operr(("Cannot substitute font?!"))
+	pjrst opabrt
+
+ffnt48:	operr(("Substitute font: "),call(fntido),(" file "),tz(@.fntnm(e)),eol)
+ffnt50:	skipe fnt,.fntpt(e)
+	 jrst ffnt90		; Font already read in, just point.
+
+	; Note ptr in E to entry in fnttab is arg to both rtns below
+	move b,.fntnm(e)	; Get filename ptr
+	hrli b,440700
+	call lasciz		; Put length into A
+	call fntfil		; Find font file to use, return JFN in A
+	 pjrst opabrt		; Failed to get JFN...
+	call fntset		; Set up font
+
+ffnt90:	movem fnt,lstfnt
+	popae p,[e,d,c,b,a]
+	ret
+
+	; Output font ID in A on std output
+fntido:	jumpge a,[out(,o(a))		; Just a number
+		ret]
+	push p,a			; OP-style ID
+	ldb a,[.bp <177_28.>,(p)]	; Get Face
+	out(,d(a),("/"))
+	ldb a,[.bp <37777_14.>,(p)]	; Get Size
+	out(,d(a),("/"))
+	ldb a,[.bp <37777>,(p)]		; Get Style
+	out(,d(a))
+	pop p,a
+	ret
+
+ffntb:	move e,[-nfonts,,fnttab]
+ffntb2:	camn a,.fntid(e)	; Matching ID?
+	 ret			; Yup!  Return with E set to entry
+	addi e,.fntl-1
+	aobjn e,ffntb2
+	aos (p)			; Failure return is skip
+	ret
+
+; FNTFIL - Gets JFN for font file
+;	A/ <# chars>
+;	B/ <BP>
+; Returns
+;	A/ <JFN>
+
+fntfil:	pushae p,[c,d,e]
+	move d,a
+	move e,b
+
+	; Try first without extra stuff
+	out(tmpc,open(uc$bpt,[440700,,tmpfnm]),ts(d),c(0))
+	move a,[gj%old+gj%sht]
+	hrroi b,tmpfnm
+	gtjfn
+	 erjmpa .+2
+	  jrst ffnt55		; Won!
+
+	movei c,fntdir			; Get addr of font dir list
+ffnt53:	out(tmpc,open(uc$bpt,[440700,,tmpfnm]))
+	move b,e
+;	ildb a,b
+;	caie a,"<		; > if dir already specified, dont insert.
+	 outcal(tmpc,tz(@(c)))
+	out(tmpc,ts(d),c(0))
+	move a,[gj%old+gj%sht]
+	hrroi b,tmpfnm
+	gtjfn
+	 erjmpa [
+		tlnn c,-1	; If LH flag set, wrapped around table.
+		 jrst [	skipn 1(c)	; Next entry OK?
+			 hrroi c,fntdir-1 ; No, wrap back to 1st and set LH
+			aoja c,ffnt53]
+		; Come here if can't find font file anywhere, but report
+		; error as if for 1st directory in table.
+		operr(("Couldn't get font file "),tz(tmpfnm),(" - "),err,eol)
+		jrst fntfl9]
+ffnt55:	movei c,(a)		; Save JFN
+	move b,[100000,,of%rd]
+	openf
+	 erjmpa [ operr(("Couldn't open font file "),tz(tmpfnm),(" - "),err,eol)
+		move a,c
+		closf
+		 jfcl
+		jrst fntfl9]
+	movei a,(c)
+	aos -3(p)
+fntfl9:	popae p,[e,d,c]
+	ret
+
+fntgen:	move e,[-nfonts,,fnttab]
+fntgn2:	skipn .fntid(e)
+	 jrst [	aos u1,gensid
+		movem u1,.fntid(e)
+		pjrst popj1]
+	addi e,.fntl-1
+	aobjn e,fntgn2
+	ret
+
+	; Have found font file to use, now must map in and set it up.
+
+fntset:	uaropn fnt,[%artzm,, ? [f$len]]	; Create new font block structure
+	move fnt,$arloc(fnt)		; Now point directly to mem
+	movem fnt,.fntpt(e)		; Store in FNTTAB
+
+	movem a,f$jfn(fnt)		; Save JFN in font block
+	setom f$fmt(fnt)		; Say format not known yet.
+	move a,.fntid(e)		; Copy ID value
+	movem a,f$id(fnt)
+	move a,.fntnm(e)		; and filename ptr, for easy ref.
+	movem a,f$fnm(fnt)		; (may be zero, though)
+	aos a,fntnum			; Increment # of fonts and get
+	movem a,f$num(fnt)		; font # to use for this font.
+
+	call fntred			; Now gobble into mem
+	ret
+
+	; Font formats grokked
+fn$kst==:0	; KST (MIT-AI type)
+fn$rst==:1	; RST (Imagen)
+fn$==:2		; # of font formats
+
+comment |
+	Format of KST and AST font files is documented in
+		[MIT-AI] .INFO.;FED >	(AI working paper #78)
+			WP;FED >	(source for above)
+			SYSENG;FED >	(Source for font-editor pgm)
+	Format of RST font files is documented in
+		[SU-AI] RST.INF[CAN,SYS]
+|
+
+define fontid opid,pts,style
+%%opid==-1
+ifse opid,NEWSGOTH,%%opid==<5+200>	; 200 becomes sign bit saying OP-style
+ifse opid,TIMESROM,%%opid==<6+200>
+ifse opid,VCMono,%%opid==<14.+200>
+ifl %%opid, %%opid==opid
+%%siz==<<13888.*pts!.>+500.>/1000.
+	<<<%%opid_14.>+%%siz>_14.>+style
+termin
+define font id,pt,sty,&fname&
+	fontid id,pt,sty
+	[asciz fname]
+	0
+termin
+define fontx id,&fname&
+	id
+	[asciz fname]
+	0
+termin
+
+	; Indices into FNTTAB entries
+.fntid==0	; ID for font
+.fntnm==1	; Ptr to ASCIZ font filename (if 0, use JFN)
+.fntpt==2	; Ptr to font block structure (0 if not read in)
+.fntl==3	; Length of entry
+
+fntdir:	[asciz /FONT:/]	; Font directory
+	[asciz /CANSYS/]
+	0
+deffid:	fontid NEWSGOTH,8,ops.bm	; Default font to use
+gensid:	177				; Start-1 of gensym'd font IDs
+fnttab:
+	.INSRT FNTMAP			; File with FONT declarations
+
+	block xpmaxf*.fntl	; Room for adding extra fonts
+nfonts==<.-fnttab>/.fntl
+
+.scalar tmpfnm(3*40./5)	; Temp space for full font filename
+
+ifndef maxfnt, maxfnt==3*nfonts	; Allow up to this many OP fonts
+fntids:	block maxfnt		; Font ID value
+fntptr:	block maxfnt		; Ptr to corresponding font block structure
+.scalar lstfid			; ID for last font found
+.scalar lstfnt			; Ptr for same
+.scalar fntnum			; Global - # of active fonts (f$num values
+				;	set from this)
+
+; Define offsets into font block structure, pointed to by FNT.
+	offset -.
+
+	; Font globals - all parameters are set for all formats.
+f$num::	0		; Number of this font (# sent to imprint-10)
+f$id::	0		; Internal font ID (= .fntid)
+f$fnm::	0		; Ptr to ASCIZ filename string (= .fntnm)
+f$jfn::	0		; JFN for font file
+f$fmt::	0		; File Format type (KST, RST, etc)
+f$bp::	0		; Address/BP to font file in memory
+f$cha::	block 128.	; Address/BP of char definition
+f$chw:: block 128.	; Char widths for font, in pixels
+f$spw::	0		; Space width in pixels
+f$bskp:: 0		; Baseline skip size in pixels
+f$newc:: block 4	; Bit map - Characters to download
+f$oldc:: block 4	; Bit map - Chars already downloaded
+
+	; KST format parameters - font globals
+f$kstid:: 0		; KSTID value (1st wd of file -- 0 at MIT)
+f$cpa::	0		; Column Position Adjustment (0 at MIT)
+f$bl::	0		; BaseLine (# scan lines above baseline)
+f$khgt:: 0		; Height of entire font in pixels (scan lines)
+
+	; RST format parameters - font globals
+f$ver::	0	; 1 Version #
+f$dirp:: 0	; 3 Pointer to glyph directory
+f$cnf::	0	; 2 Char # of 1st glyph in font (usually 0)
+f$cnl::	0	; 2 Char # of last glyph	(usually 127.)
+f$mag::	0	; 4 Magnification in 1000's
+f$dsize:: 0	; 4 Design size of font, in FIXes
+f$vsp::	0	; 4 Interline spacing in FIXes
+f$hsp::	0	; 4 Interword space width in FIXes (if 0 try dsize*1.2)
+f$rot::	0	; 2 Rotation of font in (ccw, positive) degrees
+f$cadv:: 0	; 1 Char advance direction
+f$ladv:: 0	; 1 Line advance direction
+f$ckid:: 0	; 4 Check identifier
+f$res::	0	; 2 Resolution in pixels (300 for Imprint-10)
+f$sfid:: 0	; S BP to Font identifier string
+f$sfte:: 0	; S BP to "Face-Type encoding" (??) string
+f$sodv:: 0	; S BP to Output device string
+f$sgod:: 0	; S BP to Creator string
+
+f$len::		; Length of font structure
+	offset 0
+
+	; Byte ptrs to individual bits in F$NEWC bitmap field
+	; Indexed by character
+fntbmp:	repeat 128., .bp 1_<35.-<.rpcnt&37>>,(fnt)f$newc+<.rpcnt_-5>
+
+	; 0th entry is sign bit, etc.
+bittab:	repeat 36., 1_<35.-.rpcnt>
+bitbp:	repeat 36., .bp <1_35.-.rpcnt>,0
+
+comment |
+	A value given in FIXes is a sort of fractional integer.
+A "FIX" unit is 1/2^20 of a point (which is claimed to be 1/72.27").
+To convert into pixels at resolution RES:
+	pixels = (FIX*RES / 72.*2^20)
+
+Bit map (oldc, newc) is 32 bits per word, 4 words.  A 1 bit means
+char has been (or wants to be) downloaded.
+|
+
+define getb n,bp
+ifse n,s,{push p,bp
+	ildb a,bp
+	adjbp a,bp
+	movem a,bp
+	pop p,a
+	.stop
+}
+	ildb a,bp
+repeat n-1,[ ildb b,bp
+	lsh a,8.
+	iori a,(b)
+]
+termin
+define getbs n,bp
+	getb n,bp
+	tdne a,[1_<<n*8.>-1>]	; Check sign bit
+	 tdo a,[<-1>_<n*8.>]	; If neg, fill out.
+termin
+
+define setfe n,idx	; Clobbers A,B,C!
+	getb n,c
+	movem a,idx(fnt)
+termin
+
+; FNTRED - Read in font.
+;	FNT/ <ptr to font block with F$JFN set>
+
+fntred:	pushae p,[a,b,c,d]
+	move a,f$jfn(fnt)
+	call filmap		; Returns address in A of mapped file
+
+	; Now determine font file format, if not already determined
+	; by flag bits or whatever
+	skipl b,f$fmt(fnt)	; See if format type set
+	 jrst fntr05		; Yes, go hack type!
+	movei b,fn$kst		; Nope, must guess.  Default to KST
+	move c,(a)		; Get first word of file
+	camn c,[.byte 8 ? "R ? "a ? "s ? "t ]	; RST file?
+	 movei b,fn$rst		; Yup, definite confirmation.
+	movem b,f$fmt(fnt)	; Store font format type
+fntr05:	caige b,fn$
+	 jrst @fntrsw(b)	; Dispatch properly
+fntr09:	operr(("Bad font format type "),d(b),eol)
+	pjrst opabrt
+
+fntrsw:	repeat fn$, fntr09
+
+
+	; RST format file.
+tmploc <fntrsw+fn$rst>, fntr10	; Dispatch here
+fntr10:	hrli a,441000
+	movem a,f$bp(fnt)	; Set up BP to start of mapped font
+	move c,a		; Macro expects BP in C
+	getb 4,c		; Get 1st 4 bytes
+	came a,[<.byte 8 ? "R ? "a ? "s ? "t >_-4]	; Ensure RST file
+	 jrst [	operr(("Font file "),tz(tmpfnm),(" not in RST format!"),eol)
+		jrst opabrt]
+	getb 4,c		; Ignore next 4 bytes
+	getb 2,c		; Get length of rest of preamble
+	caige a,38.		; Must be at least this many
+	 jrst [	operr(("Font file "),tz(tmpfnm),(" has truncated preamble!"),eol)
+		jrst opabrt]
+	setfe 1,f$ver
+	skipe a,f$ver(fnt)	; Ensure we're hacking it correctly
+	 jrst [	operr(("Font file "),tz(tmpfnm),(" has bad version: "),d(a),eol)
+		jrst opabrt]
+	setfe 3,f$dirp
+	setfe 2,f$cnf
+	setfe 2,f$cnl
+	setfe 4,f$mag
+	setfe 4,f$dsize
+	setfe 4,f$vsp
+	setfe 4,f$hsp
+	setfe 2,f$rot
+	setfe 1,f$cadv
+	setfe 1,f$ladv
+	setfe 4,f$ckid
+	setfe 2,f$res
+	setfe s,f$sfid
+	setfe s,f$sfte
+	setfe s,f$sodv
+	setfe s,f$sgod
+
+	; Set up char widths table
+	move b,f$cnl(fnt)
+	sub b,f$cnf(fnt)	; Find # chars in font (less 1)
+	jumpl b,[operr(("Font file "),tz(tmpfnm),(" has bad cnf/cnl"),eol)
+		jrst opabrt]
+	movni b,1(b)
+	hrli c,(b)
+	hrr c,f$cnf(fnt)
+	addi c,f$chw(fnt)	; Now have -<# chars>,,<addr of charw entry>
+	move d,f$dirp(fnt)	; Get offset to start of directory
+	adjbp d,f$bp(fnt)	; Get BP to it
+fntrd3:	movem d,f$cha-f$chw(c)	; Store BP to char definition
+	repeat 2+2+2+2, ibp d	; Advance to printing-width datum
+	getb 4,d		; Get width in FIXes
+	imuli a,300.		; Start conversion to Canon pixels
+	idiv a,[72._20.]
+	movem a,(c)		; Store (pixels) width in table
+	repeat 3,ibp d
+	aobjn c,fntrd3
+
+	; Now set up a couple of other parameters
+	skipn a,f$hsp(fnt)	; Get space width in FIXes
+	 jrst [	move a,f$dsize(fnt)	; Default to 1.2 design size
+		imuli a,12.
+		idivi a,10.
+		jrst .+1]
+	imuli a,300.
+	idiv a,[72._20.]
+	movem a,f$spw(fnt)
+
+	skipn a,f$vsp(fnt)	; Get interline space in FIXes
+	 jrst [	move a,f$dsize(fnt)	; Default to 1.2 design size
+		imuli a,12.
+		idivi a,10.
+		jrst .+1]
+	imuli a,300.
+	idiv a,[72._20.]
+	movem a,f$bskp(fnt)	; Set as baseline skip
+	jrst fntr99		; Done.
+
+	; KST format file
+	tmploc <fntrsw+fn$kst>, fntr20
+fntr20:	movem a,f$bp(fnt)	; Store address of file
+	move b,(a)		; Get KSTID
+	movem b,f$kstid(fnt)	; Store it just in case
+	ldb b,[331100,,1(a)]	; Get Column Position Adjustment
+	movem b,f$cpa(fnt)
+	ldb b,[221100,,1(a)]	; Get BaseLine
+	movem b,f$bl(fnt)
+	hrrz b,1(a)		; Get Height in scan lines
+	movem b,f$khgt(fnt)
+
+	; Now loop to gobble up all chars
+	movei d,2(a)		; Point to start of 1st block
+fntr23:	move a,(d)		; Get 1st wd of header
+	caie a,1		; Should be just 1
+	 jrst [	camn a,[-1]	; Clean EOF?
+		 jrst fntr26	; Yup.
+		operr(("KST font file error - char header not 1 - "),tz(@f$fnm(fnt)),eol)
+		jrst fntr26]	; Assume end of file anyway.
+	hrrz c,1(d)		; Get char code value
+	caile c,177		; Must be ASCII!!
+	 jrst [	operr(("KST file error - char val "),o(c),(" - "),tz(@f$fnm(fnt)),eol)
+		jrst fntr99]	; Probably not worth going on.
+	move b,2(d)		; Get <raster width>,,<char width>
+	movei a,(fnt)
+	addi a,(c)
+	hrrzm b,f$chw(a)	; Store char width in table for fast lookup
+	movem d,f$cha(a)	; OK, now store address to char def.
+
+	hlrz a,b		; Start finding next block; get raster width
+	cain a,0		; If raster width zero,
+	 hrrz a,b		;  convention is to use char width instead.
+	addi a,7
+	lsh a,-3		; Get # of 8-bit bytes per scan line
+	imul a,f$khgt(fnt)	; Mult by # lines to get total # bytes
+	addi a,3
+	lsh a,-2		; Get # of words (4 bytes/wd) for whole char
+	addi d,3(a)		; Increment char address (plus 3 header wds)
+	jrst fntr23
+
+	; Now set up remaining parameters
+fntr26:	move a,f$chw+40(fnt)	; Get width for space char
+	movem a,f$spw(fnt)	; Store as spacing value
+	move a,f$khgt(fnt)	; Get raster height of font
+	movem a,f$bskp(fnt)	; Store as baseline skip value
+	jrst fntr99
+
+fntr99:	popae p,[d,c,b,a]
+	ret
+
+; FNTLOD - Download a font over std output
+;	C/ <char #>
+;	FNT/ <font ptr>
+
+fntlod:	pushae p,[a,b,c,d,e]
+	
+	movei e,(fnt)
+	addi e,(c)		; Get offset for char tables
+	skipn d,f$cha(e)	; Get pointer to char definition
+	 jrst fntl80		;  Error, char not defined!
+	move a,f$fmt(fnt)	; Get font format
+	jrst @.+1(a)		; Dispatch
+fntlsw:	repeat fn$, fntl09
+fntl09:	operr(("Using unknown font format "),d(a),eol)
+	pjrst opabrt
+
+.scalar imflph		; Pixel height of char
+.scalar imflpw		; Pixel width of char
+.scalar imfldx		; X-offset from left to ref pt
+.scalar imfldy		; Y-offset from top to ref pt
+
+	; RST font download
+	tmploc <fntlsw+fn$rst>, fntl10
+fntl10:	getb 2,d	; Pixel height
+	movem a,imflph
+	getb 2,d	; Pixel width
+	movem a,imflpw
+	getbs 2,d	; Y-offset from top to ref pt (pixels)
+	movem a,imfldy
+	getbs 2,d	; X-offset from left to ref pt (pixels)
+	movem a,imfldx
+	repeat 4, ibp d	; Skip over printing-width in FIXes
+	getb 3,d	; Pointer to raster data
+	jumpe a,fntl80	; If no pointer, char is undefined.
+
+	move d,a		; Save ptr in D
+	call fntld		; Invoke subroutine to send glyph-def
+
+	move a,imflpw		; Get pixel width
+	addi a,7		; Round up
+	lsh a,-3		; Get # bytes per pixel line
+	imul a,imflph		; Get # bytes for whole raster image
+	adjbp d,f$bp(fnt)	; Get ptr to start of raster image
+	out(,s(a,d))		; Out it goes!
+	jrst fntl90
+
+
+	; KST format font
+	tmploc <fntlsw+fn$kst>, fntl20
+fntl20:	move a,f$khgt(fnt)	; Get raster height
+	movem a,imflph
+	hlrz a,2(d)		; Get raster width
+	cain a,0		; If raster width is zero,
+	 hrrz a,2(d)		;  convention is to use char width instead.
+	movem a,imflpw
+	hlre a,1(d)		; Get "left kern" (SIGNED)
+	add a,f$cpa(fnt)	; Add "column pos adjustment" (0 at MIT)
+	movem a,imfldx		; Store X offset
+	move a,f$bl(fnt)	; Get Y offset (from top of raster to baseline)
+	movem a,imfldy
+
+	call fntld		; OK, now send out glyph-def command
+
+	move a,imflpw		; Get pixel width
+	addi a,7		; Round up
+	lsh a,-3		; Get # bytes per pixel line
+	imul a,imflph		; Get # bytes for whole raster image
+	jumple a,fntl90		; Just in case...
+	movei c,3(d)
+	hrli c,441000		; Get byte ptr to start of raster image
+	move d,a
+fntl25:	ildb a,c		; Get a byte
+	setz b,			; Bits must be reversed, ugh bletch puke.
+	repeat 8., lshc a,-1 ? rot b,2
+	lsh b,-1
+	out(,c((b)))		; Out it goes!
+	sojg d,fntl25
+	jrst fntl90
+
+fntl80:	operr(("Undefined char "),o(c),(" in font "),tz(@f$fnm(fnt)),eol)
+	; Should map it to something!!!
+
+fntl90:	popae p,[e,d,c,b,a]
+	ret
+
+
+; FNTLD - subroutine to output right glyph-def command.
+;	C/ <char #>
+;	E/ c(FNT)+<char #>
+;	Uses FNT, IMFLPH, IMFLPW, IMFLDX, IMFLDY and F$CHW.
+;	Clobbers A,B
+fntld:
+	hrroi a,-400		; Min value for single byte
+	movei b,377		; Max value for single byte
+	caml b,imflph		; PH and PW are unsigned
+	 camge b,imflpw
+	  jrst fntldb		; Too big, use big-glyph def.
+	camg a,imfldx		; Signed - X offset
+	 camge b,imfldx
+	  jrst fntldb
+	camg a,imfldy		; Signed - Y offset
+	 camge b,imfldy
+	  jrst fntldb
+	camg a,f$chw(e)		; Signed (!?) - advance amt (char width)
+	 camge b,f$chw(e)
+	  jrst fntldb
+
+	; Small glyph download
+	move a,f$num(fnt)
+	lsh a,7
+	iori a,(c)
+	lshc a,-8.
+	lsh b,-<36.-8.>
+	out(,c(IM"C$SGLY),c((a)),c((b)))
+	irp val,,[f$chw(e),imflpw,imfldx,imflph,imfldy]	; adv,wid,lft,hgt,top
+	move a,val
+	out(,c((a)))
+	termin
+	ret
+
+	; Big glyph download
+fntldb:	move a,f$num(fnt)
+	lsh a,7
+	iori a,(c)
+	lshc a,-8.
+	lsh b,-<36.-8.>
+	out(,c(IM"C$BGLY),c((a)),c((b)))
+	irp val,,[f$chw(e),imflpw,imfldx,imflph,imfldy]	; adv,wid,lft,hgt,top
+	movei a,val		; SOUT seems to crap out on idx'd BPs.
+	hrli a,201000
+	out(,s([2],a))
+	termin
+	ret
+
+	subttl IM decode routines
+.scalar imdtct
+
+; IMDECO - Reads 8-bit bytes from std input, outputs decoded form
+;	to std output.
+
+imdeco:	push p,oc
+	movem p,opsavp	; Save for aborts
+	setzm imdtct	; Indicate at BOL
+
+imde10:	stdin		; Get a byte
+	jumpl u1,imde90	; -1 means EOF
+	trze u1,200	; Command byte?
+	 jrst imde20	; Yep, go decode it.
+	stdout		; Plain vanilla char, pass it on.
+	aos imdtct	; Bump text cnt to indicate stuff output
+	jrst imde10
+
+imde20:	movei b,(u1)
+	movei c,200(b)			; Get original value
+	skipe imdtct			; Skip EOL if already sent one
+	 outcal(,eol)
+	skipn a,IM"icmdtb(b)		; See if valid cmd
+	 jrst [	out(,("@--"),d(c),("-- Unknown command byte!! "))
+		jrst imde39]
+	out(,("@"),tz(@IM"icmntb(b)))	; Print name of cmd
+	hlrzs a
+	call (a)		; Invoke specific decode rtn
+
+imde39:	out(,("@"),eol)
+	setzm imdtct
+	jrst imde10		; Return to input loop
+
+imde90:	jrst imde99
+
+imdeof:	out(,("--- Unexpected EOF during command scan! ---"),eol)
+imde99:	move p,opsavp
+	pop p,oc
+	ret
+
+IM"defd.:
+	ret
+
+
+define imin1
+	stdin
+	jumpl u1,imdeof
+	movei a,(u1)
+termin
+define imin2
+	imin1
+	stdin
+	jumpl u1,imdeof
+	lsh a,8.
+	iori a,(u1)
+termin
+define imin2s
+	imin2
+	trne a,<1_15.>
+	 tdo a,[<-1_15.>]
+termin
+define imin1s
+	imin1
+	trne a,<1_7.>
+	 tdo a,[<-1_7.>]
+termin
+
+IM"d.pagor:
+dx.12:	imin1
+	andi u1,3
+	out(,d(u1))
+	ret
+
+IM"d.h:
+	imin2s
+	ashc a,-1
+	lsh b,-34.
+	out(,(" "),d(a),(" "),d(b))
+	ret
+
+IM"d.v:
+	pjrst IM"d.h
+
+IM"d.ms:
+	imin1
+	andi a,3
+	lshc a,-1
+	lsh b,-34.
+	out(,(" "),d(a),(" "),d(b))
+	ret
+
+IM"d.rotms:
+	pjrst IM"d.ms
+
+IM"d.sgly:
+	call dx.ofc
+	call dx.1		; adv
+	call dx.1		; wid
+	movem a,imdwid
+	call dx.1s		; x-off
+	call dx.1		; hgt
+	movem a,imdhgt
+	call dx.1s		; y-off
+	jrst dx.gl2
+
+.scalar imdwid,imdhgt
+IM"d.bgly:
+	call dx.ofc
+	call dx.2		; adv
+	call dx.2		; wid
+	movem a,imdwid
+	call dx.2s		; x-off
+	call dx.2		; hgt
+	movem a,imdhgt
+	call dx.2s		; y-off
+
+dx.gl2:	
+	skipg e,imdhgt
+	 ret
+	skipg d,imdwid
+	 ret
+	addi d,7
+	lsh d,-3
+	
+dx.gl3:	out(,eol)		; Loop for each scan line
+	movei c,(d)
+
+dx.gl4:	movei b,8.		; Loop for each byte on line
+	out(,(" "))
+	imin1	
+	rot a,-9.
+
+dx.gl5:	lsh a,1			; Loop for each bit
+	jumpl a,[ out(,("1"))
+		jrst .+2]
+	outcal(,("0"))
+	sojg b,dx.gl5
+	sojg c,dx.gl4
+	sojg e,dx.gl3
+	ret
+
+IM"d.delg:
+dx.ofc:	imin2
+	lshc a,-14.
+	lshc b,-29.
+	lsh c,-29.
+	out(,(" "),d(a),(" "),d(b),(" "),d(c),eol)
+	ret
+IM"d.delc:
+	imin2
+	lshc a,-32.
+	lshc b,-29.
+	lsh c,-29.
+	out(,(" "),d(b),(" "),d(c))
+	ret
+
+IM"d.delf:
+dx.17:	imin1
+	trz a,200
+	out(,(" "),d(a))
+	ret
+
+IM"d.f:
+	pjrst dx.17
+
+IM"d.setsp:
+	pjrst dx.2
+
+IM"d.m:
+	call dx.1s
+	pjrst dx.1
+
+dx.2s:	imin2s
+	pjrst dx.ret
+dx.1s:	imin1s
+	pjrst dx.ret
+dx.2:	imin2
+	pjrst dx.ret
+dx.1:	imin1
+dx.ret:	out(,(" "),d(a))
+	ret
+
+IM"d.margin:
+	pjrst dx.2
+IM"d.bskip:
+	pjrst dx.2
+
+IM"d.srule:
+	call dx.1
+	call dx.1
+	call dx.1s
+	ret
+IM"d.brule:
+	call dx.2
+	call dx.2
+	call dx.2s
+	ret
+
+imenco:
+
+IM"defe.:
+	ret
+
+	subttl	File input routines
+
+filmap:	pushae p,[b,c,d]
+	call filenw		; Get # wds in B
+	movei c,pg$siz-1(b)
+	lsh c,-pg$bts		; Get # pages in C
+	movei a,1(c)
+	lsh a,pg$bts		; Ask for an extra page's worth
+	uaropn b,[0 ? a]	; Get enough room to straddle page boundaries
+	move b,$arloc(b)	; Get addr
+	addi b,pg$siz-1
+	lsh b,-pg$bts		; Get page # to map file into
+	movei d,(b)		; Save
+
+	hrlz a,f$jfn(fnt)	; From <jfn>,,<page 0>
+	hrli b,.fhslf		; To  <self>,,<allocated page>
+	hrli c,(pm%rd+pm%cpy)	; Sigh, should be pm%cnt too...
+filmp3:	pmap
+	trne c,-1
+	 soja c,[trnn c,-1	; Stop when RH = 0 or 1
+		 jrst .+1
+		aoj a,
+		aoja b,filmp3]
+
+	movei a,(d)		; Return
+	lsh a,pg$bts		; address of mapped stuff
+	popae p,[d,c,b]
+	ret
+
+.scalar injfn
+iflcls:	skipe a,injfn
+	 jrst [	closf
+		 jfcl
+		setzm injfn
+		jrst .+1]
+	ret
+
+
+inopn7:	push p,[070000,,of%rd]
+	caia
+inopn8:	 push p,[100000,,of%rd]
+	call iflcls
+	out(tyoc,tz((b)),(": "))
+	move a,[gj%old+gj%sht+gj%fns+gj%cfm]
+	move b,[.priin,,.priou]
+	gtjfn
+	 erjmpa [ error "Couldn't gtjfn"]
+	hrrzm a,injfn
+	hrrzs a
+	pop p,b
+	openf
+	 erjmpa [error "Couldn't openf"]
+	call in"uopjfn
+	ret
+
+; FILENW - File Length in Words.
+;	A/ <jfn>
+; Returns B/ <# wds of fillen>
+
+FILENW:	PUSH P,C
+	ADD P,[2,,2]		; Get some stack variable space.
+	MOVE B,[2,,.FBBYV]
+	MOVEI C,-1(P)		; Store in stack.
+	GTFDB			; Get .FBBYV and .FBSIZ for record file,
+	LDB C,[.BP FB%BSZ,-1(P)]	; Get byte size
+	MOVEI B,36.
+	IDIVI B,(C)		; Find # bytes in a word.
+	SKIPN C,B
+	 MOVEI C,1		; Shift result to C, handling weird case.
+	MOVE B,(P)		; Get # bytes in whole file,
+	IDIVI B,(C)		; and now get # words...
+	CAILE C,
+	 ADDI B,1		; rounding up.
+	SUB P,[2,,2]		; Pop off stack var space.
+	POP P,C
+	POPJ P,
+
+
+	subttl	File output routines
+
+oc$prm==0	; Index to Prompt string
+oc$mod==1	; Index to openf mode
+oc$opn==2	; Index to outopn type
+oc$oar==3	; Index to outopn arg 1
+oc$oa2==4	;   "    "    "    "  2
+oc$oa3==5	;   "    "    "    "  3
+
+ochwd:	[asciz / to KST file: /]
+	440000,,of%wr
+	uc$iot
+	outjfn ? 0 ? 0
+ochbf8:	[asciz / to 8-bit file: /]
+	100000,,of%wr
+	uc$buf
+	outjfn ? 0 ? 8.
+ochbf7:	[asciz / to ASCII file: /]
+	070000,,of%wr
+	uc$buf
+	outjfn ? 0 ? 7.
+ochb8:	[asciz / to 8-bit file: /]
+	100000,,of%wr
+	uc$iot
+	outjfn ? 0 ? 0
+ochb7:	[asciz / to 7-bit file: /]
+	070000,,of%wr
+	uc$iot
+	outjfn ? 0 ? 0
+ochlst:	[asciz / to listing file: /]
+	070000,,of%wr
+	uc$iot
+	outjfn ? 0 ? 0
+
+
+copenx:	out(tyoc,tz(@oc$prm(e)))
+	push p,oc$mod(e)
+	call ochopn
+	skipn oc$oa2(e)
+	 skipe oc$oa3(e)
+	  jrst [out(,ch(och),open(@oc$opn(e),@oc$oar(e),oc$oa2(e),oc$oa3(e)))
+		ret]
+	out(,ch(och),open(@oc$opn(e),@oc$oar(e)))	; Set to std out
+	ret
+
+
+ochopn:	exch a,(p)
+	exch a,-1(p)
+	exch a,(p)
+	caia
+ochopa:	push p,[070000,,of%wr]
+	pushae p,[a,b]
+	move b,-2(p)	; Recover mode bits pushed on stack
+	move a,outjfn	; Try to make sure old JFN isn't still around.
+	closf
+	 rljfn
+	  jfcl
+	call getjfo
+	movem a,outjfn
+	openf
+	 erjmpa [syserr "Couldn't openf - ",last]
+	popae p,[b,a,junk]
+	ret
+
+getjfo:	push p,b
+	move a,[gj%fou+gj%sht+gj%fns+gj%cfm+gj%new]
+	move b,[.priin,,.priou]
+	gtjfn
+	 jrst [ syserr "Couldn't gtjfn - ",last]
+	movei a,(a)
+	pop p,b
+	ret
+
+ochcls:	push p,a
+	move a,outjfn
+	cain a,.priou
+	 jrst ochcl9
+	out(och,cls)		; Hack forceout etc.
+;	closf
+;	 erjmpa [syserr "Couldn't closf - ",last]
+ochcl9:	setzm outjfn
+	pop p,a
+	ret
+
+.scalar outjfn
+
+
+
+; PARNUM - Parse string as number
+
+getnum:	call parnum
+	 ret
+	move c,a
+	pjrst popj1
+
+parnum:	jumple a,apopj
+	pushae p,[b,c,d]
+	move c,a
+	setz a,
+parnm2:	ildb d,b
+	cail d,"0
+	 caile d,"9
+	  jrst parnm9
+	imuli a,10.
+	addi a,-"0(d)
+	sojg c,parnm2
+	aos -3(p)
+parnm9:	popae p,[d,c,b]
+	ret
+
+
+; MKTBE - Make Table for word entries.
+;	Makes a table with each word containing the address of
+;	one "entry" as defined in the args.  This table can then
+;	be fed to SORT with appropriate compare rtn.
+;	A/ <addr of 1st entry>
+;	B/ <# entries>
+;	C/ <instr to XCT to store table item>
+;		If 0, will use default MOVEM A,(B).
+;		Addr of entry in A, addr of table slot in B.
+;	D/ <# words/entry>
+; Returns .+1:
+;	A/ <addr of table>
+;		To free up the table when done, use
+;		MOVE U1,[<addr of table>]
+;		CALL CORREL
+
+mktbe:	caig b,
+	 ret
+	pushae p,[b,c]
+	movei u1,(b)
+	call corget	; Get a chunk of core (returns addr in u2)
+	movni b,(b)
+	movsi b,(b)
+	hrri b,(u2)	; Set up AOBJN
+
+	push p,b	; save...
+mktbe4:	xct c		; Store entry addr as table item.
+	addi a,(d)	; get next entry addr
+	aobjn b,mktbe4
+	pop p,a		; Restore table addr as returned arg
+			; (actually AOBJN)
+	popae p,[c,b]
+	ret
+
+
+; SORT - General-purpose sort routine.
+;	The algorithm here is the simplest possible (linear exchange)
+;	and wants to be improved later...
+;	A/ <addr of 1st entry>
+;	B/ <# entries>
+;	C/ <instr to xct for compare>
+;		The compare instr/rtn must take two args in A and B,
+;		and skip if A is less than or equal to B.
+
+sort:	caig b,1	; Ignore cretinous # of entries
+	 ret
+	pushae p,[a,b,d,e]
+	movni b,-1(b)	; reduce count by 1.
+	hrli a,(b)	; cons up aobjn to table
+	push p,a	; save...
+
+sort10:	move d,(p)	; Start a pass.  Get aobjn to table...
+	setz e,		; clear # of swaps.
+	move a,(d)	; Get 1st entry
+	jrst sort30	; and jump into loop.
+
+sort20:	movem a,1(d)
+	movem b,(d)
+	aobjp d,sort10	; If count out, start another pass.
+sort30:	move b,1(d)
+	xct c		; Compare...
+	 aoja e,sort20	; Must swap, jump to do it.
+	move a,b	; OK, keep going.  Avoid extra retrieve...
+	aobjn d,sort30	; and go get next entry.
+	jumpn e,sort10	; if any swaps, try another pass.
+
+	pop p,a		; flush stack of the aobjn.
+	popae p,[e,d,b,a]
+	ret
+
+
+	subttl	Global dump-file setup
+
+; SRESET - routine to centralize resets of various
+;	stuff so that new tape can be read, or started over.
+
+sreset:	uarinit mgpags
+	ret
+
+tyi:	pbin
+	ret
+
+tyiu:	call tyi
+	cail a,"a
+	 caile a,"z
+	  caia
+	   subi a,40
+	ret
+
+subttl Picture making cruft
+
+ifn srilog,[
+
+outpix:	call pixini		; Clear pix table
+	movei a,srigly
+	call doglyl		; Set up the pix table
+
+	call scnht		; Find # of scan lines actually used
+	call scnwd		; Find # of cols ditto
+
+	setz u1,		; 1st wd of KST is zero
+	stdout
+	movei u1,(b)		; 2nd - set to height
+	stdout
+
+	movei c,"A
+	setz d,			; <left kern>,,<char width>
+	call kstcho		; Output this char's KST block.
+
+	seto u1,		; File terminates with two -1's
+	stdout
+	seto u1,
+	stdout
+	ret
+
+
+kstcho:	pushae p,[a,b,c,d,e,x,y]
+	movei u1,1
+	stdout			; "1" marker
+	movei u1,(c)
+	hll u1,d
+	stdout			; <left kern>,,<char code>
+	movei u1,(d)
+	hrli u1,(a)		; <raster width>,,<char width>
+	stdout
+
+	; Now must output bits, ugh bletch
+	; C/ # bits to go in byte
+	; D/ # bits to go in line
+	; X, Y/ bit position
+	; E/ BP to U1 to deposit bytes
+	; (P) / # scan lines to go
+	jumple b,kstch9
+	push p,a
+	push p,b
+	move e,[441000,,u1]
+kstch2:	movei c,8.		; For each scan line
+	move d,-1(p)		; Get # bits to go in line
+	push p,x
+
+kstch3:	call getpt		; Get bit into A
+	lshc a,-1		; Put into B
+	sosg c
+	 call kstchb
+	addi x,1
+	sojg d,kstch3
+	pop p,x
+
+	; End of scan line, force out byte
+	cail c,8.
+	 jrst kstch4
+	movni c,(c)
+	lsh b,(c)	; Shove over empty bits
+	call kstchb
+kstch4:	sosle (p)	; Bump down # of scan lines
+	 aoja y,kstch2
+
+	; Done!
+	tlne e,330000
+	 call [stdout
+		ret]
+	sub p,[2,,2]
+	jrst kstch9
+
+
+kstchb:	movei c,8.
+	rot b,8.
+	idpb b,e
+	tlne e,730000	; When P = 04, word ready to go.
+	 ret
+	stdout
+	move e,[441000,,u1]
+	setz u1,
+	ret
+
+kstch9:	popae p,[y,x,e,d,c,b,a]
+	ret
+
+
+pixsho:	pushae p,[a,b,x,y]
+	call pixsiz
+	movei a,79.		; Truncate to this many chars
+	out(tyoc,call(pixo))
+	popae p,[y,x,b,a]
+	ret
+
+pixo:	pushae p,[a,b,c,x,y]
+	addi a,(x)
+	addi b,(y)
+	move c,a
+pixsh2:	move x,-1(p)	; Restore X
+pixsh3:	call getpt
+	move a,(a)[40 ? "*]
+	out(,c((a)))
+	addi x,1
+	camge x,c
+	 jrst pixsh3
+	out(,eol)
+	addi y,1
+	camge y,b
+	 jrst pixsh2
+	popae p,[y,x,c,b,a]
+	ret
+] ;ifn srilog
+
+ifn srilog,[
+
+ifndef maxpx, maxpx==:2000.	; # pixels per scan line
+ifndef maxpy, maxpy==:300.*2	; # scan lines (allow 2")
+
+ppwd==:36.			; Pixels per word
+wdpl==:<maxpx+ppwd-1>/ppwd	; Words per scan line
+pix:	block wdpl*maxpy
+
+setpt:	cail x,0
+	 cail x,maxpx
+	  error "X out of bounds"
+	cail y,0
+	 cail y,maxpy
+	  error "Y out of bounds"
+	movei u3,(x)
+	idivi u3,ppwd
+	movei u1,(y)
+	imuli u1,wdpl
+	addi u1,(u3)
+	move u3,bittab(u4)
+	iorm u3,pix(u1)
+	ret
+
+getpt:	push p,b
+	movei a,(x)
+	idivi a,ppwd
+	push p,y
+	imuli y,wdpl
+	addi a,(y)
+	pop p,y
+	move a,pix(a)
+	tdnn a,bittab(b)
+	 tdza a,a
+	  movei a,1
+	pop p,b
+	ret
+
+pixsiz:	call scnht
+	call scnwd
+	ret
+
+; SCNHT
+; Returns 
+;	Y/ Y-coord of 1st scanline of pix
+;	B/ # scanlines pix takes up
+
+scnht:	pushae p,[c,d]
+	movsi b,-<wdpl*maxpy>
+scnht2:	skipe pix(b)
+	 jrst scnht3
+	aobjn b,scnht2
+	setzb b,y
+	jrst scnht9
+scnht3:	movei c,(b)
+	idivi c,wdpl
+	movei y,(c)	; 1st scanline with something on it.
+	movei b,<wdpl*maxpy>-1
+scnht4:	skipe pix(b)
+	 caia
+	sojg b,scnht4	; Guaranteed not to count out
+	idivi b,wdpl	; Get last scanline with something on it.
+	subi b,(y)	; Get # scanlines
+	addi b,1
+scnht9:	popae p,[d,c]
+	ret
+
+; SCNWD - must have called SCNHT already to set up B, Y
+; Returns
+;	X/ X-coord, 1st col with something on it
+;	A/ # cols pix extends over
+
+scnwd:	jumple b,[setzb a,x ? ret]
+	pushae p,[b,c,d]
+	movei x,0
+	movei a,300.	; Moby puntage!!
+
+
+	movsi d,-wdpl
+scnwd2:	movsi c,-maxpy
+	movei b,(d)	; Get offset within a line
+	setz a,
+scnwd3:	skipe pix(b)	; Check that word for this line
+	 ior a,pix(b)	; Something in word, get its bits.
+	addi b,wdpl
+	aobjn c,scnwd3	; Check this word for all lines.
+	jumpn a,scnwd4	; Exit if found a word
+	aobjn d,scnwd2	; Else try farther along in the lines.
+	setzb a,x
+	jrst scnwd9	; Found no bits set anywhere.
+
+scnwd4:	jffo a,.+1	; Find position of 1st bit
+	movei x,(d)
+	imuli x,ppwd
+	addi x,(b)	; Now have X-coord of leftmost bit in pix.
+
+	movei d,wdpl-1
+scnwd5:	movei c,maxpy-1
+	movei b,(d)
+	setz a,
+scnwd6:	skipe pix(b)
+	 ior a,pix(b)
+	addi b,wdpl
+	sojge c,scnwd6
+	cain a,
+	 sojge d,scnwd5
+
+	movn b,a	; Get least significant bit
+	and a,b		; Neat hack, eh?
+	jffo a,.+1
+	movei a,(d)
+	imuli a,ppwd
+	addi a,1(b)	; Now have X-coord+1 of rightmost bit in pix.
+	subi a,(x)	; Get width
+
+scnwd9:	popae p,[d,c,b]
+	ret
+] ;ifn srilog
+
+ifn srilog,[
+
+; New raster spec format.
+; Raster defined in terms of run lengths; each line is specified as a
+; series of decimal numbers separated by space or comma or whatever.
+; Line starts out with zeros; each number alternates pen on/off.
+; e.g. the line "0 12 3 5" has 12 1's then 3 0's then 5 1's.
+
+; Glyph def structures:
+; Glyph position (X,Y) relative to "master" location
+;	Height, width
+; Glyphs made of list of scanlines:
+;	 Scanline Types:
+;	 (1) Scan line (advance +1Y)
+;	 (2) Run-length (advance +1Y)
+;	 (3) X-coord (advance +1Y)
+;	
+gt$scn==0	; Scanlline [ <# bits> ? <bitstring>]
+gt$run==1	; Runline [<# nums> ? <len1> ? <len2> ... ]
+gt$crd==2	; Coordline [<# nums> ? <coord1> ? <coord2> ...]
+gt$gly==3	; Glyph [gly1 ? gly2 ? ... 0]
+gt$xi==4	; X increment
+gt$yi==5	; Y increment
+gt$x==6		; X set (rel to master)
+gt$y==7		; Y set (rel to master)
+gt%sav==100	; Save/restore X/Y pos
+gt%xin==200	; Invert X (flip over Y axis)
+gt%yin==400	; Invert Y (flip over X axis)
+
+advx:	1
+advy:	1
+pixini:	push p,a
+	setzb x,y
+	movei a,1
+	movem a,advx
+	movem a,advy
+	setzm pix
+	move a,[pix,,pix+1]
+	blt a,pix+<wdpl*maxpy>-1
+	pop p,a
+	ret
+
+	; Address in A of glyph-list to hack
+doglyl:	push p,a	; Save addr
+dogl2:	skipn a,(a)	; Get command word
+	 jrst [	pop p,a ? ret]
+	call dogly
+	aos a,(p)
+	jrst dogl2
+
+
+dogly:	tlne a,<gt%xin+gt%yin>
+	 jrst [	push p,advx
+		push p,advy
+		tlne a,gt%xin
+		 movns advx
+		tlne a,gt%yin
+		 movns advy
+		jrst .+1]
+	tlne a,gt%sav
+	 jrst [	push p,x ? push p,y ? jrst .+1]
+	hlrz b,a
+	andi b,77
+	push p,a	; Save command
+	call @dodsp(b)
+	pop p,a
+	tlne a,gt%sav
+	 jrst [	pop p,y ? pop p,x ? jrst .+1]
+	tlne a,<gt%xin+gt%yin>
+	 jrst [	pop p,advy ? pop p,advx ? jrst .+1]
+	ret
+
+dodsp:	doscn
+	dorun
+	docrd
+	doglyl
+	doxi
+	doyi
+	dox
+	doy
+
+doscn:
+	ret
+
+dorun:	push p,x
+	movei d,1(a)	; save addr
+	movn a,-1(d)	; Get # wds
+	jumpge a,dorun9
+	hrli d,(a)	; Now have aobjn
+dorun2:	move a,(d)	; Get # pixels to skip
+	imul a,advx
+	add x,a
+	aobjp d,dorun9
+	skipg c,(d)	; Get # pixels to blacken
+	 jrst dorun5
+dorun3:	call setpt
+	add x,advx
+	sojg c,dorun3
+dorun5:	aobjn d,dorun2
+dorun9:	pop p,x		; Restore X
+	add y,advy	; Advance one scanline
+	ret
+
+docrd:	push p,x
+	movei d,1(a)
+	movn a,-1(d)
+	jumpge a,docrd9
+	hrli d,(a)	; Now have aobjn
+docrd2:	move x,(d)	; Get X-coord to move to
+	imul x,advx
+	add x,(p)	; From start location
+	aobjp d,docrd9
+	skipg c,(d)	; Get X-coord to move to (blacken as we go)
+	 jrst docrd5
+	imul c,advx
+	add c,(p)	; Find desired new pos
+	sub c,x		; Find diff
+	jumpe c,docrd9
+	movei b,1
+	caige c,
+	 seto b,
+	movm c,c
+docrd3:	call setpt
+	add x,b
+	sojg c,docrd3
+docrd5:	aobjn d,docrd2
+docrd9:	pop p,x		; Restore X
+	add y,advy	; Advance one scanline
+	ret
+
+doxi:	hrrei a,(a)
+	imul a,advx
+	add x,a
+	ret
+
+doyi:	hrrei a,(a)
+	imul a,advy
+	add y,a
+	ret
+dox:	movei x,(a)
+	ret
+doy:	movei y,(a)
+	ret
+] ;ifn srilog
+
+ifn srilog,[
+
+define gly (addr)
+gt$gly,,addr
+termin
+define glyf (flags, addr)
+flags+gt$gly,,addr
+termin
+define glysub (addr)
+glyf <gt%sav>,addr
+termin
+
+define glyrun -line
+%%%n==0
+gt$run,,[
+irpw lin,com,[line]
+  irps a,,[lin]
+  %%%n==%%%n+1
+  termin
+	%%%n	; # numbers
+  irps a,,[lin]
+	a
+  termin
+termin
+]
+termin
+
+define glycrd -line
+%%%n==0
+gt$crd,,[
+irpw lin,com,[line]
+  irps a,,[lin]
+  %%%n==%%%n+1
+  termin
+	%%%n	; # numbers
+  irps a,,[lin]
+	a
+  termin
+termin
+]
+termin
+define glypos x,y
+ifsn [x][] gt$x,,x
+ifsn [y][] gt$y,,y
+termin
+
+] ;ifn srilog
+
+ifn srilog,[
+
+radix 10.	; All numbers base 10!!!
+
+syoff==7	; Y offset from 0 on graph paper
+srigly:	glysub world
+	glypos 0,<53.-syoff>
+	glysub biglet
+	glypos 25.,<106.-syoff>
+	glysub inter
+	0
+world:	glysub wldseg
+	gt$xi,,wsegwd*2-1
+	glyf <gt%sav+gt%xin>,wldseg
+	gt$yi,,wseght*2-1
+	glyf <gt%sav+gt%yin+gt%xin>,wldseg
+	gt$xi,,-<wsegwd*2-1>
+	glyf <gt%sav+gt%yin>,wldseg
+	0
+
+wsegwd==120.
+wseght==83.
+wldseg:
+	glyrun 110 10 0
+	glyrun 100 20 0
+	glyrun 95 25 0
+	glyrun 87 33 0
+	glyrun 84 36 0
+	glyrun 79 24 8 6 1 2 0
+	glyrun 75 25 10 5 3 2 0
+	glyrun 71 24 13 5 5 2 0
+	glyrun 68 15 4 6 13 5 7 2 0
+	glyrun 66 12 8 5 14 5 8 2 0
+	glyrun 62 13 9 5 15 4 10 2 0
+	glyrun 59 12 10 6 16 4 11 2 0
+	glyrun 57 12 11 5 16 5 12 2 0
+	glyrun 55 11 12 5 17 5 13 2 0
+	glyrun 54 10 13 5 18 4 14 2 0
+	glyrun 51 10 14 5 19 4 15 2 0
+	glyrun 49 10 15 5 19 4 16 2 0
+	glyrun 47 11 15 5 19 4 17 2 0
+	glyrun 45 75 0
+	glyrun 43 77 0
+	glyrun 41 79 0
+	glyrun 40 9 19 5 21 4 20 2 0
+	glyrun 38 9 20 5 21 4 21 2 0
+	glyrun 37 8 21 5 22 3 22 2 0
+	glyrun 35 9 21 4 23 3 23 2 0
+	glyrun 34 8 22 4 23 4 23 2 0
+	glyrun 32 9 22 5 23 3 24 2 0
+	glyrun 31 8 23 5 23 3 25 2 0
+	glyrun 30 8 23 5 24 3 25 2 0
+	glyrun 28 8 25 4 24 4 25 2 0
+	glyrun 27 8 25 4 25 3 26 2 0
+	glyrun 26 8 25 4 25 4 26 2 0
+	glyrun 25 7 26 4 26 3 27 2 0
+	glyrun 24 7 26 5 25 4 27 2 0
+	glyrun 23 7 27 4 26 3 28 2 0
+	glyrun 22 7 27 4 26 4 28 2 0
+	glyrun 21 7 27 4 27 3 29 2 0
+	glyrun 20 7 27 5 27 3 29 2 0
+	glyrun 19 101 0
+	glyrun 18 102 0
+	glyrun 17 103 0
+	glyrun 16 7 97 0
+	glyrun 15 7 98 0
+	glyrun 15 6 99 0
+	glyrun 14 6 100 0
+	glyrun 13 7 100 0
+	glyrun 12 7 101 0
+	glyrun 11 7 102 0
+	glyrun 11 7 102 0
+	glyrun 10 7 103 0
+	glyrun 10 6 104 0
+	glyrun 9 7 104 0
+	glyrun 8 7 105 0
+	glyrun 8 6 106 0
+	glyrun 8 6 106 0
+	glyrun 7 6 107 0
+	glyrun 7 6 107 0
+	glyrun 6 6 108 0
+	glyrun 6 6 108 0
+	glyrun 5 6 109 0
+	glyrun 4 7 109 0
+	glyrun 4 6 110 0
+	glyrun 4 6 110 0
+	glyrun 3 6 111 0
+	glyrun 3 6 111 0
+	glyrun 3 6 111 0
+	glyrun 2 7 111 0
+	glyrun 2 6 112 0
+	glyrun 2 6 112 0
+	glyrun 2 6 112 0
+	glyrun 1 7 112 0
+	glyrun 1 6 113 0
+	glyrun 1 6 113 0
+	glyrun 0 7 113 0
+	glyrun 0 7 113 0
+	glyrun 0 6 114 0
+	glyrun 0 6 114 0
+	glyrun 0 6 114 0
+	glyrun 0 6 114 0
+	glyrun 0 6 114 0
+	glyrun 0 6 114 0
+	glyrun 0 6 114 0
+	glyrun 0 6 114 0
+
+	0
+] ;ifn srilog
+
+ifn srilog,[
+
+biglet:
+	glycrd 45 71 102 162 190 216
+	glycrd 37 79 102 168 190 216
+	glycrd 34 83 102 171 190 216
+	glycrd 31 86 102 174 190 216
+	glycrd 29 88 102 176 190 216
+	glycrd 27 90 102 178 190 216
+	glycrd 26 91 102 179 190 216
+	glycrd 25 92 102 180 190 216
+	glycrd 24 93 102 181 190 216
+	glycrd 23 94 102 182 190 216
+	glycrd 23 53 64 94 102 183 190 216
+	glycrd 22 49 67 95 102 128 153 183 190 216
+	glycrd 22 48 69 95 102 128 154 183 190 216
+	glycrd 21 48 70 95 102 128 155 183 190 216
+	glycrd 21 48 70 95 102 128 156 183 190 216
+	glycrd 21 49 70 95 102 128 156 183 190 216
+	glycrd 22 51 102 128 156 182 190 216
+	glycrd 22 57 102 128 156 182 190 216
+	glycrd 23 62 102 128 155 181 190 216
+	glycrd 24 70 102 128 154 181 190 216
+	glycrd 24 74 102 128 153 179 190 216
+	glycrd 25 81 102 129 150 178 190 216
+	glycrd 26 84 102 177 190 216
+	glycrd 28 88 102 174 190 216
+	glycrd 31 91 102 170 190 216
+	glycrd 34 93 102 168 190 216
+	glycrd 38 94 102 167 190 216
+	glycrd 42 95 102 168 190 216
+	glycrd 46 96 102 172 190 216
+	glycrd 54 97 102 175 190 216
+	glycrd 60 98 102 177 190 216
+	glycrd 67 98 102 178 190 216
+	glycrd 70 99 102 129 151 180 190 216
+	glycrd 18 46 71 99 102 128 152 180 190 216
+	glycrd 18 46 72 99 102 128 154 181 190 216
+	glycrd 18 46 73 99 102 128 154 182 190 216
+	glycrd 19 47 73 99 102 128 155 182 190 216
+	glycrd 19 48 72 98 102 128 155 182 190 216
+	glycrd 20 49 71 98 102 128 155 182 190 216
+	glycrd 20 51 69 97 102 128 156 182 190 216
+	glycrd 21 96 102 128 156 182 190 216
+	glycrd 22 95 102 128 156 183 190 216
+	glycrd 23 94 102 128 156 183 190 216
+	glycrd 24 93 102 128 156 183 190 216
+	glycrd 26 92 102 128 156 183 190 216
+	glycrd 28 90 102 128 157 183 190 216
+	glycrd 31 88 102 128 157 183 190 216
+	glycrd 35 84 102 128 157 183 190 216
+	glycrd 39 81 102 128 157 183 190 216
+	glycrd 43 77
+	glycrd 52 72
+
+	0
+] ;ifn srilog
+
+ifn srilog,[
+
+inter:	irp pair,,[[ui,2],[n,1],[t,0],[e,2],[r,1],[n,2],[a,1],[t,1],[i,2],[o,1],[n,2],[a,2],[l,0]]
+	irp let,inc,[pair]
+	gly chr!let
+	gt$xi,,inc
+	.istop
+	termin termin
+	0
+
+; Letter "I" (1st)
+
+chrui:	glysub .+3
+	gt$xi,,7
+	0
+	glyrun 0 7
+	glyrun 0 7
+	glyrun 0 7
+	glyrun 0 7
+	glyrun 0 7
+	glyrun 0 7
+	glyrun 0 7
+	glyrun 0 7
+	glyrun 0 7
+	glyrun 0 7
+	glyrun 0 7
+	glyrun 0 7
+	glyrun 0 7
+	glyrun 0 7
+	glyrun 0 7
+	glyrun 0 7
+	glyrun 0 7
+	glyrun 0 7
+	glyrun 0 7
+	glyrun 0 7
+	glyrun 0 7
+	glyrun 0 7
+	glyrun 7 0
+	0
+
+; Letter "n"
+chrn:	glysub .+3
+	gt$xi,,17
+	0
+	glyrun 17 0
+	glyrun 17 0
+	glyrun 17 0
+	glyrun 17 0
+	glyrun 17 0
+	glyrun 17 0
+	glyrun 0 5 3 5 4 0
+	glyrun 0 5 1 9 2 0
+	glyrun 0 16 1 0
+	glyrun 0 17
+	glyrun 0 17
+	glyrun 0 7 3 7
+	glyrun 0 6 5 6
+	glyrun 0 6 5 6
+	glyrun 0 6 5 6
+	glyrun 0 6 5 6
+	glyrun 0 6 5 6
+	glyrun 0 6 5 6
+	glyrun 0 6 5 6
+	glyrun 0 6 5 6
+	glyrun 0 6 5 6
+	glyrun 0 6 5 6
+	glyrun 17
+	0
+
+; Letter "t"
+chrt:	glysub .+3
+	gt$xi,,11
+	0
+
+	glyrun 11 0
+	glyrun 11 0
+	glyrun 2 6 3 0
+	glyrun 2 6 3 0
+	glyrun 2 6 3 0
+	glyrun 2 6 3 0
+	glyrun 1 10
+	glyrun 0 11
+	glyrun 0 11
+	glyrun 0 11
+	glyrun 2 6 3 0
+	glyrun 2 6 3 0
+	glyrun 2 6 3 0
+	glyrun 2 6 3 0
+	glyrun 2 6 3 0
+	glyrun 2 6 3 0
+	glyrun 2 6 3 0
+	glyrun 2 7 2 0
+	glyrun 2 9
+	glyrun 3 8
+	glyrun 4 7
+	glyrun 5 6
+	glyrun 11 0
+	0
+
+; Letter "e"
+chre:	glysub .+3
+	gt$xi,,18
+	0
+
+	glyrun 18 0
+	glyrun 18 0
+	glyrun 18 0
+	glyrun 18 0
+	glyrun 18 0
+	glyrun 18 0
+	glyrun 6 7 5 0
+	glyrun 4 10 4 0
+	glyrun 3 13 2 0
+	glyrun 2 14 2 0
+	glyrun 2 6 2 7 1 0
+	glyrun 1 6 4 6 1 0
+	glyrun 0 6 6 6
+	glyrun 0 18
+	glyrun 0 18
+	glyrun 0 18
+	glyrun 1 4 13 0
+	glyrun 1 5 12 0
+	glyrun 2 5 5 5 1 0
+	glyrun 2 15 1 0
+	glyrun 4 12 2 0
+	glyrun 5 9 4 0
+	glyrun 7 5 6 0
+	0
+
+; letter "r"
+chrr:	glysub .+3
+	gt$xi,,12
+	0
+
+	glyrun 12 0
+	glyrun 12 0
+	glyrun 12 0
+	glyrun 12 0
+	glyrun 12 0
+	glyrun 12 0
+	glyrun 0 6 2 4
+	glyrun 0 6 1 5
+	glyrun 0 12
+	glyrun 0 12
+	glyrun 0 12
+	glyrun 0 12
+	glyrun 0 7 5 0
+	glyrun 0 6 6 0
+	glyrun 0 6 6 0
+	glyrun 0 6 6 0
+	glyrun 0 6 6 0
+	glyrun 0 6 6 0
+	glyrun 0 6 6 0
+	glyrun 0 6 6 0
+	glyrun 0 6 6 0
+	glyrun 0 6 6 0
+	glyrun 12 0
+	0
+
+; Letter "a"
+chra:	glysub .+3
+	gt$xi,,17
+	0
+
+	glyrun 17 0
+	glyrun 17 0
+	glyrun 17 0
+	glyrun 17 0
+	glyrun 17 0
+	glyrun 17 0
+	glyrun 5 8 4 0
+	glyrun 3 12 2 0
+	glyrun 2 14 1 0
+	glyrun 1 16
+	glyrun 1 6 3 7
+	glyrun 1 5 4 7
+	glyrun 10 7
+	glyrun 8 9
+	glyrun 4 13
+	glyrun 2 9 1 5
+	glyrun 1 7 4 5
+	glyrun 0 6 5 6
+	glyrun 0 6 5 6
+	glyrun 0 7 3 7
+	glyrun 1 16
+	glyrun 2 9 1 5
+	glyrun 4 4 9 0
+	0
+
+; Letter "i"
+chri:	glysub .+3
+	gt$xi,,6
+	0
+
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 6 0
+	glyrun 6 0
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 6 0
+	0
+
+; Letter "o"
+chro:	glysub .+3
+	gt$xi,,18
+	0
+
+	glyrun 18 0
+	glyrun 18 0
+	glyrun 18 0
+	glyrun 18 0
+	glyrun 18 0
+	glyrun 18 0
+	glyrun 6 3 0 3 6 0
+	glyrun 4 5 0 5 4 0
+	glyrun 2 7 0 7 2 0
+	glyrun 1 8 0 8 1 0
+	glyrun 1 8 0 8 1 0
+	glyrun 0 8 1 0 1 8
+	glyrun 0 7 2 0 2 7
+	glyrun 0 6 3 0 3 6
+	glyrun 0 6 3 0 3 6
+	glyrun 0 6 3 0 3 6
+	glyrun 0 6 3 0 3 6
+	glyrun 1 6 2 0 2 6 1 0
+	glyrun 1 7 1 0 1 7 1 0
+	glyrun 2 7 0 7 2 0
+	glyrun 3 6 0 6 3 0
+	glyrun 4 5 0 5 4 0
+	glyrun 6 3 0 3 6 0
+	0
+
+; Letter "l"
+chrl:	glysub .+3
+	gt$xi,,6
+	0
+
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 0 6
+	glyrun 6 0
+	0
+
+] ;ifn srilog
+
+radix 8.
+constants
+variables
+
+mgpags:	<frepag-<<1,,>_-pg$bts>>,,frepag
+frepag==<<.+pg$msk>/pg$siz>+30	; plus 30 for safety
+
+end main

@@ -1,0 +1,3992 @@
+;Merge CMU and BBN code
+;<MONITOR.CMU>ANAUNV.MAC.6, 22-Aug-85 18:56:57, Edit by VAF
+;CS151 Add PROCALL macro.
+;<MONITOR.CMU>ANAUNV.MAC.4, 22-Aug-85 14:28:08, Edit by VAF
+;CS147 Conditionalize statistics space according to MNTM5.
+;<MONITOR.CMU>ANAUNV.MAC.1, 19-Jun-85 14:35:08, Edit by VAF
+;CS147 Make no tracing be the default.
+;CS99 Add CMU network-FE
+;This should be assembled with the site's PARAN.MAC file if MNTMN is to be set
+
+; UPD ID= 192, SNARK:<TCPIP.5.4.MONITOR>ANAUNV.MAC.9,  17-Jun-84 13:07:03 by PAETZOLD
+;NT.DEV initialization should not be under ANXN conditional.
+; UPD ID= 167, SNARK:<TCPIP.5.4.MONITOR>ANAUNV.MAC.8,   9-Jun-84 11:28:49 by PAETZOLD
+;Work on making NI and ANX stuff conditional.  Straighten up some stuff.
+; UPD ID= 145, SNARK:<TCPIP.5.4.MONITOR>ANAUNV.MAC.7,  30-May-84 14:23:56 by PAETZOLD
+;Remove BBN TCP JSYS flags from here.
+; UPD ID= 67, SNARK:<TCPIP.5.4.MONITOR>ANAUNV.MAC.6,   4-May-84 15:18:16 by PRATT
+;Add GH%DMB, use this address, host does not do ARP
+; UPD ID= 38, SNARK:<TCPIP.5.4.MONITOR>ANAUNV.MAC.5,  24-Apr-84 13:06:42 by PRATT
+;Add GH%ARP, this ght entry has been updated by ARP
+; UPD ID= 37, SNARK:<TCPIP.5.4.MONITOR>ANAUNV.MAC.4,  16-Apr-84 13:00:22 by PRATT
+;Add a comment about .NIINT having to be offset zero
+; UPD ID= 11, SNARK:<TCPIP.5.4.MONITOR>ANAUNV.MAC.3,   2-Apr-84 20:21:31 by PRATT
+;IPNI NCT definitions
+; UPD ID= 1, SNARK:<TCPIP.5.4.MONITOR>ANAUNV.MAC.2,  20-Mar-84 19:52:11 by PAETZOLD
+;Add definitions for IPNIDV mapping file offsets
+; UPD ID= 3828, SNARK:<6.MONITOR>ANAUNV.MAC.9,  29-Feb-84 18:17:41 by PAETZOLD
+;More TCO 6.1733 - ANBSEC and MNTSEC removal.  Bug fixes.  Cleanup.
+;<TCPIP.5.3.MONITOR>ANAUNV.MAC.6,  6-Dec-83 23:47:26, Edit by PAETZOLD
+;Add TCDUR. 
+;Get rid of HHSIZ. 
+;TCO 6.1867 - Delete SAVP1 macro. 
+;TCO 6.1866 - Add NTODTI offset to the NCT. Add NTODTI word to AN20 NCT.
+;Move gateway block symbols to here from IPIPIP.
+;<TCPIP.5.1.MONITOR>ANAUNV.MAC.35, 5-Jul-83 22:32:15, Edit by PAETZOLD
+;TCP Changes for 5.1
+
+	UNIVERSAL ANAUNV - Universal for ARPANET TCP/IP
+
+;This software is furnished under a license and may only be used
+;or copied in accordance with the terms of such license.
+;
+;Copyright (C) 1982,1983,1984
+;By Digital Equipment Corporation, Maynard, Mass.
+
+	SALL
+	SEARCH PROLOG,MONSYM,MACSYM
+
+	FT.BCP==1			;ALLOW BBN JSYS FOR NOW
+	IFNDEF FT.BCP,<FT.BCP==:0>	;DEFAULT IS NOT BBN JSYS INTERFACE
+
+
+
+	SUBTTL Definitions for Multinet
+
+;MACROs
+
+;cwl DEFINE SETSEC (AC,SECTION) <HRLI AC,SECTION>
+;cwl DEFINE PUTSEC (AC,SECTION)<HRLZI AC,SECTION>
+;cwl DEFINE GIW (ADDR,X<0>,I<0>) <<I>B1!<X>B5!<ADDR>B35>
+
+;Macro to increment a field with no overflow
+
+DEFINE INCRNO(n,i)<
+	LOAD CX,n,i;;			Get the quantity
+	CAIGE CX,<<1_WID(n)>-1>;;	At maximum value?
+	  ADDI CX,1;;			No, increment it
+	STOR CX,n,i;;			Store the updated value
+>
+
+
+;DEFHDR		Define the start of a table.
+
+DEFINE DEFHDR(TABLE,START,GFLG)
+<IF2 <PRINTX	Defining TABLE format>
+IFB   <GFLG>,<DEFGBL==1>;;		Offsets are global
+IFNB  <GFLG>,<DEFGBL==GFLG>;;		Offsets are as specified
+IFB  <START>,<..OFST==0>
+IFNB <START>,<..OFST==START>>
+
+
+;DEFWRD
+;Define a full word structure, and increment place in table.  Arguments are:
+; A   - Name for offset
+; SIZ - Number of words to reserve ( default to 1)
+
+DEFINE DEFWRD(A,SIZ)
+<IF1 <IFDEF A,<PRINTX ? Multiply defined offset for A in DEFWRD>>
+;;Make symbol printable or not depending on if overlaps AC's
+IFN DEFGBL,<A==:..OFST>;;		Set value as offset into table
+IFE DEFGBL,<A=..OFST>
+	DEFPRT(A,\A)
+IFB  <SIZ>,<..OFST==..OFST+1>;;		Increment offset
+IFNB <SIZ>,<..OFST==..OFST+SIZ>;; 	Increment by buffer size
+> ;End of DEFWRD
+
+
+;DEFPRT
+;Print a table entry.
+
+DEFINE DEFPRT(NAME,BEG)<IF2 <PRINTX	NAME	=	BEG>>
+
+
+;The following macros are used to access routines offset in the NCT
+
+
+;MNTCALL	Call a routine from either the Hardware or the Protocol
+;		vector (dependent on the argument).
+
+DEFINE	MNTCALL(FOO)<
+	MNTCL0(FOO,
+<<<NTPKIL,NTPERR,NTIDUN,NTODUN,NTLLDR,NTPINI,NTPMNT,NTPRMV>,NTPVEC>,
+<<NTHKIL,NTRSRT,NTISRT,NTOSRT,NTSCHK,NTHRMV>,NTHVEC>>)
+	CALL @FOO(CX)
+	PURGE ..FND,..IDX>
+
+
+;MNTJRST	Jump to/Call and return from  a routine from either the
+;		Hardware or the Protocol vector (dependent on the argument).
+
+DEFINE	MNTJRST(FOO)<
+	MNTCL0(FOO,
+<<<NTPKIL,NTPERR,NTIDUN,NTODUN,NTLLDR,NTPINI,NTPMNT,NTPRMV>,NTPVEC>,
+<<NTHKIL,NTRSRT,NTISRT,NTOSRT,NTSCHK,NTHRMV>,NTHVEC>>)
+	JRST @FOO(CX)
+	PURGE ..FND,..IDX>
+
+
+;MNTCL0		Decide which vector to use.
+
+DEFINE	MNTCL0(FOO,VEC)<
+..FND==0
+..IDX==0
+IRP VEC,<MNTCL1(FOO,VEC)>
+IFE ..FND,<PRINTX Unknown offset -- FOO>>
+
+
+DEFINE	MNTCL1(FOO,VEC)<MNTCL2(FOO,VEC)>	;;Strip off brackets
+
+
+DEFINE	MNTCL2(FOO,TEST,VEC)<
+IRP TEST,<IFIDN <FOO>,<TEST>,<
+	SKIPGE CX,NTPSTI(P1)
+	  AOS CELL(MNMVT,\..IDX,(CX));;		Count vector use
+	MOVE CX,VEC(P1)
+..FND==1 >;; End of IFIDN
+..IDX==..IDX+1>>
+
+
+;MNTXCT		Execute an instruction out of the NCT.
+
+DEFINE	MNTXCT(FOO)<XCT FOO(P1)>		;Execute an instruction
+
+
+;To be used at BUGHLT and BUGCHK.
+
+DEFINE	MNTSTP<..N==0
+REPEAT ANXN,<;;cwl ought to do AN20 also
+..N==..N+1>
+DEFINE STOP(INST,DEV,IDX,VAL)<	INST DEV'IDX,VAL>
+..N==0;; From IMPPHY: I.NRL==1B20	;Not Ready-line to IMP, CONO
+REPEAT BBNN,<	JFCL
+;;STOP CONO,IMP,\..N,1B20
+..N==..N+1>
+> ;End of DEFINE MNTSTP
+
+
+
+;Multinet dynamic switches
+
+;Bits in MNTSW
+				;0-5 reserved - due to 32-bit monitoring
+MNS%RF==1B6			;Restricted forewarding is in effect
+MNS%MP==1B7			;Monitoring reported via separate protocol
+MNS%MT==1B8			;Monitoring reported via TCP
+MNS%DS==1B9			;Set to enable collection of driver statistics
+;...
+
+
+..NBY==1_<WID(NTHSH)>;;		Max number of NCTs is # bytes needed
+..NBT==<<<..NBY+2>/3>*3>;;	Rounded up mod 3 bits number of bits per byte
+..BPW==<^D36/..NBT>;;		Number of bytes per word
+..NBT==<^D36/..BPW>;;		Might as well space them out evenly
+..NW==<<..NBY+..BPW-1>/..BPW>;;	Number of words required for all bytes
+
+DEFINE MNTFW.(W,B)<
+	DEFINE MNTFW<
+NTITEM (MNTFWT,2+W,0,G,<<BYTE (6)^D36-B,B,0(18)MNTFWT+2>,W,REST0>,B1,
+<<1,.OGM.,<Forewarding pointer>>,<1,.DEC.,< words in table>>,
+<W,.OGM.,< table of B bit bytes>>>)
+>>
+
+MNTFW.(\..NW,\..NBT)		;Define MNTFW with appropriate constants
+PURGE	..NBY,..NBT,..BPW,..NW
+
+
+;The NE%DRP flag is set in the MNTXxx error codes returned by output queueing
+;routines if a packet could not be sent.
+
+NE%DRP==:1B0			;Packet not sent
+
+
+;Structures in the Host tables.
+
+;HOSTN
+DEFSTR HSTNIC,0,0,1		;Nicname flag
+DEFSTR HSTNMP,0,35,23		;Extended address of name string in HSTNAM
+DEFSTR HSTIDX,1,35,23		;Extended address of address list in HSTNML
+HOSTNW==2			;Number of words per entry
+
+;Structures for Domain Name Service
+
+;In DOMPAR
+DMS%ED==1B4			; Enable domain services
+DMS%EC==1B5			; Enable caching
+DMS%ER==1B6			; Enable resolver
+DMS%ES==1B7			; Enable server
+
+DEFINE INFTTL<DOMPAR+1>		; Limit number times CNAMEs followed
+DEFINE LCKTTL<DOMPAR+2>		; DB lock timeout
+DEFINE INITTL<DOMPAR+3>		; Time to wait before GH%INI return
+DEFINE PLTTL<DOMPAR+4>		; Primative lock (AOSE) timeout
+DEFINE RWAIT<DOMPAR+5>		; Resolver wait timeout
+DEFINE DEFCLA<DOMPAR+6>		; Default Class
+DEFINE LCLDNM<DOMPAR+7>		; Local domain name for completion
+
+
+;In DOMSRV
+DMC%ON==37B4			; On (-1)/ Off(0) flag
+DMC%JS==1B5			; Jsys on
+DMC%ST==1B6			; Stop request
+
+DMC%IN==1B16			; Initialize flag
+DMC%KL==1B17			; Kill flag
+;RH set to error code from above
+
+DEFINE FLIPFS<DOMSRV+1>		; FLIP.DD filespec being used by monitor
+
+	SUBTTL	General Definitions
+
+;Data structure types used in the network
+;cwl don't use zero - "unknown"
+ND.NCT==:0			;Network Control Table
+ND.PKT==:1			;Packet
+ND.BFR==:2			;Buffer
+ND.TCB==:3			;Transmission Control Block
+ND.REG==:4			;Registers (ie. ACs 0 thru 17)
+
+;Level 1 - Definitions of local netowrk hardware interfaces.
+;	Occupy NTDEV field in NCT
+
+;cwl don't use zero - "unknown"
+NH.LNK==:0		;Linked (virtual) NCT (Not stored in the NCT)
+NH.CST==:1		;Reserved for customer
+NH.ALT==:2		;Maxc-Alto-IMP
+NH.ANX==:3		;AN20
+NH.BBN==:4		;IMP10
+NH.CHA==:5		;Chaosnet
+NH.ETH==:6		;Ethernet
+NH.NFE==:7		;Network front-end DTE
+NH.NI==:10		;IP NI
+NH.CMU==:11		;CS99 CMU version of Network-FE
+;Max 4 bits
+
+
+;Level 2 - Definitions of local network protocols.
+;	Occupy NTTYP field in NCT
+
+NL.CST==:1		;Reserved for customer
+NL.CHA==:2		;CHAOSNet
+NL.ETH==:3		;Ethernet
+NL.NCP==:4		;1822 (previously NCP)
+NL.NFE==:5		;Network front end
+NL.CMU==:6		;CS99 CMU version of NFE
+;Max 4 bits
+
+
+;Level 3 - Definition of transport layer protocol type codes.  These are
+;also the NA%PRO field in address codes, used to distingish between
+;different network address name-spaces.  Occupy NTPRO field in NCT.
+;Note that the codes should correspond to the domain "class" code.
+
+NP.GEN==777777		;No protocol
+NP.MIN==:0		;Number of lowest protocol
+
+;cwl want to make zero "unknown" or "default" & NP.IP 1 after code fixed
+;    GTHST% has kludges to get around problem for now
+NP.IP==:0	;*temp	;* Temporary until IP/TCP all converted
+;NP.IP==:1	;notyet	;TCP/IP    -    official domain type
+NP.CS==:2		;CSNet     - (?)official domain type
+NP.CHA==:3		;CHAOS Net -    official domain type
+NP.OSI==:4		;ISO OSI TP4, etc
+
+NP.MAX==:4		;Number of highest protocol
+;Max 3 bits (NA%PRO field)
+
+;following not yet legal ...
+NP.DNA==:7		;DECNet
+NP.PUP==:7		;PUP
+NP.XNS==:7		;Xerox Network Systems
+
+
+;Multinet Address Code field definitions
+
+DEFSTR NA%FLG,0,0,1	;Flag bit, must be 1B0 (SKIPL, etc)
+DEFSTR NA%PRO,0,3,3	;Protocol code (NP.xxx)
+DEFSTR NA%RST,0,35,32	;"Rest" (interpretation depends on NA%PRO)
+
+IFGE NP.MAX-<2_<WID(NA%PRO)>>,<
+PRINTX ? Too many protocol suites (NP.xxx) defined to fit into field>
+
+;CS151 *** Begin ***
+;Macro for dispatching by protocol type.
+;NAM is the name of the dispatch table (e.g., NET becomes PRONET), IX is
+;a register containing the protocol number and EXTRA is a single instruction
+;to execute if the protocol number is out of range.
+
+DEFINE PROCALL(NAM,IX,EXTRA) <
+IFL NP.GEN-NP.MIN,<PRINTX ?PROCALL NP.GEN not ge NP.MIN>
+	CAIE IX,NP.GEN		;;Generic ok (NB: assumes NP.GEN is ge NP.MIN)
+	 CAIG IX,NP.MAX		;;If greater than maximum or
+	  CAIGE IX,NP.MIN	;;Less than minimum then
+IFB  <EXTRA>,<TRNA>		;;No error recovery, skip the call
+IFNB <EXTRA>,<..prcl==.
+	   EXTRA		;;Perform error recovery (NB: only 1 inst)
+IFN <.-1-..prcl>,<PRINTX ? PROCALL NAM error instruction not 1 word>>
+	    CALL @PRO'NAM(IX)	;;Do the function
+> ; End of DEFINE PROCALL
+;CS151 *** End ***
+
+	SUBTTL	Network-interface Control Tables
+
+;Format of an initialization vector.
+;(For precise format see "Multinet Programmers guide".)
+
+DEFSTR(IVLEN,0,17,18)	;First word has NCT length and
+DEFSTR(IVINI,0,35,18)	;Number of initializors
+
+;Words 1-c(IVINI) contain an initializor, followed by initialization code
+
+
+
+;NCT tables for driving Multinet interfaces
+
+;For a general description of the entries in the NCT see the "Multinet
+;Programmers Guide". 
+
+;General NCT and virtual NCT formats. See the individual device driver
+;modules for their extensions to the NCT.
+
+DEFSTR	NTLNK,0,35,36	;Link to next NCT, or 0 if last
+DEFSTR  NTPRO,1,17,18	;High level protocol type (NP.xxx)
+DEFSTR	NTTYP,1,21,4	;Network type code (NL.xxx)
+DEFSTR	NTDEV,1,25,4	;Interface device type code (NH.xxx)
+DEFSTR	NTHSH,1,29,4	;Unique code for NCT
+DEFSTR	NTPRIO,1,35,6	;Priority of this interface
+
+DEFHDR (<NCT>,2)	;Start after the headers
+
+DEFWRD	NTFLAG		;Flag word specifies various optional hardware or
+			;local net configurations.  Note that flags used by
+			;incompatable net/hardware combinations may overlap.
+DEFSTR(A3ENB,NTFLAG,6,1) ;Allow type 3 messages (1822)
+DEFSTR(RFNMC,NTFLAG,7,1) ;Enable RFNM counting (1822)
+DEFSTR(ENHTY,NTFLAG,8,1) ;Enable use of handling type when blocked
+
+DEFWRD	NTNET		;"Network number" of this interface
+			;-1 until initialized, (NA%PRO/NA%REST format)
+DEFWRD	NTLADR		;Local host address on this interface
+			;-1 until initialized, (NA%PRO/NA%REST format)
+DEFWRD	NTSBNM		;Sub-network mask
+DEFWRD	NTNLHM		;Logical Host Mask for this interface's net
+			;0 if none
+DEFWRD	NTNLHB		;Logical Host Field Byte Pointer
+DEFWRD	NTHDRL		;Header fix, this is the difference between
+			;MAXLDR and the leaders used on this network
+DEFWRD	NTPSIZ		;Maximum packet size for this network (bytes)
+			;RH - max (LH - max for low delay)
+
+;Status flags 
+
+;The following act as status flags (and form the GTHST% .GTHNL status table)
+;between them governing the state of the network on that interface.
+ 
+;Software (protocol driver) flags
+
+;***** DO NOT CHANGE - GTHST% .GTHNL table *****
+DEFWRD	NTRDY		;Acutal interface status, 0 = Down,
+			;>0 = (TODCLK to abort) Going down, -1=Up
+DEFWRD	NETON		;Desired interface status, 0 - Network off,
+			;-1 - On, <0,,-1> - Cycle net down & up
+DEFWRD	NTSTCH		;Network has unreported state change if >0
+DEFWRD	NTORDY		;Output enabled on Interface if -1,
+			;otherwise no packets are queued (ICM%SQ)
+DEFWRD	NTIUPT		;T&D of last time Net came up Internally
+			;(for ex. Last time NCP cycled for that net)
+DEFWRD	NTXDNT		;T&D of last time net went off externally
+			;(for ex. readyline drop)
+DEFWRD	NTXUPP		;T&D of last time net came on externally
+			;(for ex. ready-line up)
+DEFWRD	NTDCLK		;"Down clock" TODCLK counter for
+			;timeout's
+DEFWRD	NTIDNT		;T&D of last time Net went down Internally
+
+;***** END OF DO NOT CHANGE - GTHST% .GTHNL table *****
+
+DEFWRD	NTPVEC		;Protocol dependent vector
+
+DEFWRD	NTPSTI		;<-LEN,ADR> of Statistics area, or 0
+
+DEFWRD	NTHDWN		;Last host address that was marked down or 0 if none
+DEFWRD	NTHDWI		;Information about down host, or 0
+DEFWRD	NTPHY		;Link to physical NCT if shared hardware
+VNCTSZ==..OFST		;Size of a virtual NCT
+
+;After this point entries exist only in physical NCT's
+
+;Storage needed by all nets
+
+DEFWRD	NTPSTS		;<-LEN,ADR> of Type/Subtype area, or 0
+
+;Current packet & IO locks.  The NTIB and NTOB entries are used to control
+;input and output operations, respectively.  When zero, there is no operation
+;in progress. Testing for zero (driver not active), PI should be OFF.  When
+;found to be zero, the entry is set to -1 (i.e. 1B0) to indicate driver
+;active.  When a standard form packet buffer is associated with the operation
+;the entry is changed to the extended address of the packet buffer.  Drivers
+;which perform operations with packets NOT in a standard buffer (e.g. control
+;messages associated with the local network protocol, etc.) may place the
+;address of the local leader+IPDV%R into the entry.
+
+DEFWRD	NTIB		;Current input buffer
+DEFWRD	NTOB		;Current output buffer
+
+;Output buffer queues. There is one "normal" priority queue and one "high"
+;priority queue for emergency messages.  These are FIFO queues so each has
+;a head and a tail pointer.
+
+DEFWRD	NTORAT		;Estimated output rate, Usec per octet
+DEFWRD	NTOFCT		;Factor
+DEFWRD	NTOMSC		;Estimated number of msec til output q empty
+
+DEFWRD	NTHOBO		;High priority output list, head pointer
+DEFWRD	NTHOBI		;Tail pointer
+
+DEFWRD	NTLOBO		;Normal (low) priority output list, head 
+DEFWRD	NTLOBI		;Tail pointer
+
+;Hardware (interface driver) flags
+
+DEFWRD	NTHVEC		;Hardware dependent vector
+
+DEFWRD	NTERRF		;Set to -1 when an external error condition has been
+			;noticed by the hardware (i.e. ready-line drop)
+DEFWRD	NTTOUT,2	;Output (input) hung timeout (TODCLK), or 0 if none
+
+DEFWRD	NTINRS		;Input restart needed flag,  0 = none needed,
+			;non-0 = routine to call
+
+;The following locations are used for unspecified communication between the
+;local-net layer and the hardware layer.  See the different modules for
+;specific uses (e.g., HSTGDM and local leader buffer for 1822 type nets).
+
+DEFWRD	NTGEN,6		;General purpose storage
+
+NCTBAS==:..OFST		;Length of the basic NCT
+
+;Individual drivers may specify additional storage (see the initialization
+;vector).  Those offsets are defined in the driver module.
+
+
+
+;NCTVEC
+;Checks that a routine is at the right offset in the vector.
+
+DEFINE	NCTVEC(TABLE,ROUTINE,OFF)<
+	IFN <.-TABLE-OFF>,<PRINTX ?ROUTINE at bad TABLE offset>
+	IFIW+ROUTINE		;;Create instruction
+>
+
+
+;Definition of the Hardware vector.  This contains pointers to routines that
+;are specific to the exact piece of hardware (NH.xxx).
+
+DEFHDR	(<HARDWARE-VECTOR>)
+DEFWRD	NTHKIL		;Shut off the hardware
+DEFWRD	NTRSRT		;Network restart instruction
+DEFWRD	NTISRT		;Start input instruction
+DEFWRD	NTOSRT		;Start output instruction.  NTOB has been set to -1 to
+			;indicate that the driver is busy.  If the driver has
+			;nothing it can do, it must zero NTOB before returning.
+			;It must be set to zero after MNTCALL NTODUN.
+DEFWRD	NTSCHK		;Hardware status check instruction.  Checks on whether
+			;net is on hardware-wise.  Skip return if so. (For an
+			;1822 device, check the ready-line.  Note that not all
+			;network types may have something they can check on.)
+DEFWRD	NTHRMV		;Release NCT's resources before being removed
+NTHVSZ==..OFST
+
+
+
+;Definition of the protocol vector.  This vector contains pointers to
+;routines that are specific to the type of network (NL.xxx, i.e. 1822),
+;as opposed to the particular hardware.
+
+DEFHDR	(<PROTOCOL-VECTOR>)
+DEFWRD	NTPKIL		;Protocol dependent shutdown
+DEFWRD	NTPERR		;Protocol dependent hardware error handler
+DEFWRD	NTIDUN		;End of input. Called with buffer in T1.
+DEFWRD	NTODUN		;End of output. Called with buffer in T1.
+DEFWRD	NTLLDR		;Create a local leader.
+			;Called T1/ (first hop) destination address
+			;	T2/ pointing to an network buffer
+			;	T3/ Protocol message is to
+			;	P1/ address of NCT
+DEFWRD	NTPINI		;Protocol specific "network up" function
+DEFWRD	NTPMNT		;Protocol specific maintenance function
+DEFWRD	NTPRMV		;Release NCT's resources before being removed
+NTPVSZ==..OFST
+
+	PURGE ..OFST
+	SUBTTL	Definitions to support general packet buffer structure.
+
+	COMMENT ^
+
+The general packet buffer begins with a fixed length general header of
+NBHDRL words.  It is followed by packet-related variables for the
+respective protocol layers.  Areas reserved for the maximum legnth
+protocol packet leaders follows, with data for the highest level at the
+end of the packet buffer.
+
+The PROxxx macros are used to allocate and define BITs or blocks of
+fields for the various protocol levels in the "general packet buffer".
+During pass 1 (of compiling ANAUNV), the maximum number of BITs and
+variable words used for an each level is determined.  During pass 2,
+the BITs and variable offsets are "reloacted" (redefined) to be
+positioned one level after another (0 to maximum).
+
+For example, during pass 1
+
+level=	   0	  1	  1	  1	  2	  2	  3
+offset	general	IMP	NFE	Ether	Chaos	PUP	TCP
+  0	  g1	 i1	 n1	 e1	 c1	 p1	 t1
+  1	  g2	 i2		 e2		 p2	 t2
+  2		 i3		 e3			 t3
+  3		 i4					 t4
+
+Become during pass 2
+Level 0
+  0	  g1
+  1	  g2
+Level 1
+  2		 i1	 n1	 e1
+  3		 i2		 e2
+  4		 i3		 e3
+  5		 i4
+Level 2
+  6					 c1	 p1
+  7						 p2
+Level 3
+ 10							 t1
+ 11							 t2
+ 12							 t3
+ 13							 t4
+
+
+
+The "blank level" may be used to specify unrelocated data structures.
+
+
+Useage:
+
+
+PROLVL(lv)	is invoked once to define another protocol level, lv.
+
+
+
+PRONEW(lv,of)	is called before each instance of a level lv set of
+		protocol definitions.  Fields are defined relative
+		to the beginning of the packet buffer if no  of  is
+		specified, or at the given  of  otherwise (e.g. 0)
+
+
+
+PROSTR (level,name,bit-position,field-width/length,function)
+
+is used to define elements of a structure.  The level may be
+blank, for elements in unrelated structures, or specified if the
+element is to be packed into contiguous level-related structures.
+
+It may be used in three basic ways:
+
+  1)	Define a simple field of field-width bits whose right-most
+	bit is in position bit-position.  The field is placed in
+	the current word if it will not overlap the other fields,
+	or in the next word otherwise.
+
+	PROSTR (,TSLFT,35,36)		;Simple field in a structure
+
+	PROSTR (LS.LNL,IHFTY,7,4)	;Element of LS.LNL
+
+	If the field is to overlap another field at the same offset,
+	the function OVR must be specified.
+
+	PROSTR (LS.LNL,IHADR,31,24)	;Composite field containing
+	PROSTR (LS.LNL,IHHST,15,8,OVR)	;This field and
+	PROSTR (LS.LNL,IHIMP,31,16,OVR)	;This one
+
+  2)	Define a symbol at the next offset using the function OFS.
+	The number of words alocated may be spicified by length, or
+	is one otherwise.  The name may be omitted.
+
+	PROSTR (LS.GEN,PKTFLG,,,OFS)	;One-word position in structure
+
+	PROSTR (LS.LNL,,,3,OFS)		;Skip 3 words
+
+  3)	Define the next bit in the (single) bit word by usint the function
+	BIT.  All bits so defined are packed into a single word, with bits
+	defined in different instances of a level overlaying each other.
+	The offset of the bit word must be given as the 4th argument.
+
+	PROSTR (LS.LNV,PLNXO,,PKTFLG,BIT) ;A possibly shared bit
+
+Variables:
+
+Global:
+	.BXX	Right-most unused bit of BIT word.
+	.LXX	Maximum offset used.
+
+Per level:	(append level digit(s) to variable name)
+
+    For BIT word:
+
+	.BI	Left-most bit in BIT word for level.
+	.BM	Next available bit in BIT word for (instance of) level.
+	.BX	Right-most unused bit in BIT word for all instances of level.
+
+    For general fields:
+
+	.LI	Initial offset, minus one, for level (IF2 - relocated).
+	.LO	Current offset for (instance of) level.
+	.LP	Right-most bit position used at current offset.
+	.LX	Maximum offset used for all instances of level.
+
+
+PROLVL(lv)	initializes (defines) variables associated with the
+		specified level;  it is called once per level.
+    IF1
+	.BM,.BX	are set to 1B1 (1B0 isn't used).
+	.LO	is set to -1 ("last" offset used) and
+	.LP	is set to 35 ("last" offset is filled).
+	.LX	is set to 0 (maximum offset)
+
+    IF2
+	.BM	is set to .BI (as set by lower level)
+	.BX	is set to .BI right shifted by number of bits used (from .BX)
+	.LO	is set to .LI (as set by lower level) minus 1
+	.LP	is set to 35
+	.LX	is set to .LI (as set by lower level) plus .LX
+	.BI(next level) is set to .BX (of this level)
+	.LI(next level) is set to .LX (of this level)
+
+
+PRONEW(lvl,of)	resets the "current" variables for the level to the initial
+		values.
+	.LP	is set to 35
+    IF1
+	.BM	is set to 1B1
+	.LO	is set to -1
+
+    IF2
+	.BM	is set to .BI, the "relocated" (right-shifted) field location
+	.LO	of blank	is set to .LI minus 1
+		of non-blank	is set to  of minus 1
+	^ ;End of COMMENT
+
+;Definitions to get everything started
+
+IF1 <.LVX==<.LXX==0>>			;Max # levels, offset used
+
+
+;Macro to initialize a level by defining variables associated with a level.
+;For pass 1, the initial values are "0 based", while for pass 2 they are
+;"relocated" after the previous level.
+
+DEFINE PROLVL(lv)<
+IF1 <IFNB <lv>,<IFG <lv-.LVX>,<.LVX==lv>>;;Maximum level used
+.BX'lv==<.BM'lv==<.BI'lv==1B1>>;;	Initial flag bit, rigth-most for level
+.LX'lv==<.LO'lv==<.LI'lv==-1>>>;;	Initial offset
+IF2 <IFG <.BX'lv-.BM'lv>,<.BX'lv==.BM'lv>;;Max for last instance of level
+IFL <.LX'lv-.LO'lv>,<.LX'lv==.LO'lv>
+IFNB <lv>,<PROLVQ(lv,\<lv+1>)>>;;	Relocate next level after this level
+>;PROLVL
+
+DEFINE PROLVQ(lv,lpo)<;;	Macro needed to convert expression to digit
+.BXX==<.BI'lpo==.BI'lv_<1-<^L<.BX'lv>>>>;;Right-most bit, and next initial
+.LXX==<.LI'lpo==.LI'lv+.LX'lv+1>;;	Maximum offset, and next initial
+>;PROLVQ
+
+
+
+;Macro to begin a new instance of a level by setting instance variables
+;.BM and .LO,.LP to the initial values for the level.
+
+DEFINE PRONEW(lv,of)<
+IF1 <IFG <.BX'lv-.BM'lv>,<.BX'lv==.BM'lv>;;Max for previous instance of level
+IFL <.LX'lv-.LO'lv>,<.LX'lv==.LO'lv>>
+
+.BM'lv==.BI'lv;;			Left-most bit for this level
+IFB  <of>,<.LO'lv==.LI'lv>;;		Relocate words after previous level
+IFNB <of>,<.LO'lv==of-1>;;		Relocate as requested
+.LP'lv==^D35;;				Last bit position used in current word
+>;PRONEW
+
+
+
+;Macro to form internal variable name
+
+DEFINE PROVAL(lv,var)<var'lv>
+
+
+
+;Structure element definition macro.
+
+DEFINE PROSTR(lv,nm,bp,fw,fg)<.PROST==0;;	Have not identified format
+IFB  <fg>,<.PROST==1;;				Simple field (usual format)
+IFB <bp>,<PRINTX % Improper use of PROSTR for element nm>;;Bad format
+IFB <fw>,<PRINTX % Improper use of PROSTR for element nm>;;Bad format
+IFLE <^D<bp-fw+1>-.LP'lv>,<.LO'lv==.LO'lv+1>;;	Move to next word
+DEFSTR (nm,\.LO'lv,bp,fw);;			Define structure element
+.LP'lv==^D<bp>;;				Right-most bit used in word
+>;;End of IFB
+
+IFNB <fg>,<;;					Three possible flags
+IFIDN <fg><BIT>,<.PROST==1;;			Define bit in external word
+IFE .BX'lv,<PRINTX % Too many BITs used in PROSTR, at nm>
+MSKSTR (nm,fw,.BM'lv);;				Define bit
+.BM'lv==.BM'lv_-1;;				Next bit to use
+IFL <.BM'lv-.BX'lv>,<.BX'lv==.BM'lv>;;		Right-most bit for level
+>;;End of IFIDN BIT
+
+IFIDN <fg><OFS>,<.PROST==1;;			Define symbol at next offset
+IFNB  <nm>,<nm==.LO'lv+1>;;			Next word
+IFNB  <fw>,<.LO'lv==.LO'lv+fw>;;		Number of words in element
+IFB   <fw>,<.LO'lv==.LO'lv+1>;;			Default is one word in element
+.LP'lv==^D35;;					Last word filled
+>;;End of IFIDN OFS
+
+IFIDN <fg><OVR>,<.PROST==1;;			Define overlay
+IFB   <bp>,<PRINTX % Improper use of PROSTR for element nm>;;Bad fmt
+IFB   <fw>,<PRINTX % Improper use of PROSTR for element nm>;;Bad fmt
+DEFSTR (nm,\.LO'lv,bp,fw);;			Define structure element
+IFL   <^D<bp>-.LP'lv>,<.LP'lv==^D<bp>>;;	New right-most bit used in word
+>;;End of IFIDN OVR
+>;;End of IFNB
+
+IFE .PROST,<PRINTX % Undefined format used in PROSTR for nm>;;Bad arguments
+> ;End of DEFINE PROSTR
+
+	SUBTTL	General Packet Buffer and Definitions
+
+;Software level definitions, initialization
+
+NS.GEN==0			;General
+PROLVL(\NS.GEN)
+NBHDRL==PROVAL(\NS.GEN,.LX)+1	;Length of general leader
+PFLGP==0			;Initialize packet reader's bit mask
+
+;Hardware interface level
+NS.HIC==1			;Common to all hardware interfaces
+PROLVL(\NS.HIC)
+NS.HIP==2			;Private for each hardware interfaces
+PROLVL(\NS.HIP)
+
+
+;Local network protocol level
+NS.LNC==3			;Common to all local net protocols
+PROLVL(\NS.LNC)
+NS.LNP==4			;Private for each local net protocol
+PROLVL(\NS.LNP)
+
+
+;Transport level
+NS.TPC==5			;Common to all transport levels - IP,ICMP
+PROLVL(\NS.TPC)
+NS.TPP==6			;Private to each transport level - IP,ICMP
+PROLVL(\NS.TPP)
+TPCEND==PROVAL(\NS.TPP,.LX)+1	;Words of parameters through transport level
+
+;Session level
+NS.SSC==7			;Common to all session levels - TCP,UDP
+PROLVL(\NS.SSC)
+NS.SSP==10			;Private to each session level - TCP,UDP
+PROLVL(\NS.SSP)
+
+
+;Application level
+NS.APC==11			;Common to all application levels
+PROLVL(\NS.APC)
+
+
+;Tracing level
+NS.TRC==12			;Information included in local net level trace
+PROLVL(\NS.TRC)			;(SAMPKT)
+SAMPKT==PROVAL(\NS.TRC,.LI)+1	;Start of local-net level tracing information
+
+;Flow control & Tracing variables
+PRONEW(\NS.TRC)			;Trace information (must preceed local leader)
+PROSTR(\NS.TRC,PFLAD,35,36)	;First/Last hop address (w/protocol)
+PROSTR(\NS.TRC,PLNDE,35,36)	;TODCLK local net ended I/O
+PROSTR(\NS.TRC,PLNDB,35,36)	;TODCLK local net began I/O
+PROSTR(\NS.TRC,PLNQD,35,36)	;TODCLK placed into local net's queue
+
+	SUBTTL	Protocol Leader Levels
+
+;Local net leader level
+NS.LNL==13			;Local net leader - 1822,NFE (@ LCLPKT)
+PROLVL(\NS.LNL)
+LCLPKT==PROVAL(\NS.LNL,.LI)+1	;Local net leader
+MAXLDR==PROVAL(\NS.LNL,.LX)+1	;Maximum local net leader
+
+
+;Transport leader level
+NS.TPL==14			;Transport layer leader - IP (@ PKTELI)
+PROLVL(\NS.TPL)
+
+PKTELI==:PROVAL(\NS.TPL,.LI)+1	;Old symbol used by IP
+
+
+;Session leader level
+NS.SSL==15			;Session level leader - ICMP,TCP,UDP
+PROLVL(\NS.SSL)
+NS.SSM==16			;Overlays for ICMP
+PROLVL(\NS.SSM)
+
+
+;Application level data
+NS.APL==17			;Application level data
+PROLVL(\NS.APL)
+
+MAXOVH==:PROVAL(\NS.APL,.LI)+1	;Start of application data
+
+;MAXOVH is the maximum amount of buffer leader overhead for all protocols.
+;When a prptocol allocates and inputs into a buffer it should leave this
+;much space at the top for variable and leader storage.
+
+
+;Macro to load register from PLNDT/PTPDT/PSSDT/PAPDT given pointer into packet
+;Example of use:  PNTLDR reg,PxxDT,<adr of PKT> e.g. PNTLDR T1,PLNDT,-PKTQ(PKT)
+	%PITOS (<;>)			; Define offset for type-of-service
+
+DEFINE PNTLDR(reg,struc,off)<IFNDEF $'struc,<%'struc (<;>) >
+	XMOVEI reg,off;;		Locate top of packet
+IFN struc-777777,<PRINTX ? Fix PNTLDR for non right-halfword structures>
+	HRR reg,$'struc(reg);;		Get specified in-section address
+> ;End of DEFINE PNTLDR
+
+	SUBTTL	Packet Buffer, General Header & Hardware Interface & Local Net
+
+PRONEW(\NS.GEN)			;General buffer header
+PROSTR(\NS.GEN,NBQUE,35,36)	;Linked list pointer
+PROSTR(\NS.GEN,NBSIZ,17,18)	;Allocated length (from top) in words
+PROSTR(\NS.GEN,NBPRO,35,18)	;Protocol which owns packet
+PROSTR(\NS.GEN,NBNCT,35,36)	;NCT address (has NL.xxx, NP.xxx)
+PROSTR(\NS.GEN,PKTFLG,,,OFS)	;General flags (contains the FLAG bits)
+
+
+	SUBTTL	Common Hardware Interface Level Variables  (NH.xxx Level)
+
+PRONEW(\NS.HIC)			;Common to all net interface
+
+;General flags
+;Common net interface flags
+;Common net interface variables
+
+PRONEW(\NS.HIP)			;Private to each net hardware
+
+;General flags
+;Private net interface flags
+;Private net interface variables
+PROSTR(\NS.HIP,PLNFC,35,36)	;Flow control hint
+
+
+	SUBTTL	Common Local Net Level Variables  (NL.xxx Level)
+
+PRONEW(\NS.LNC)			;Common to all local net protocols
+
+;General flags
+PROSTR(\NS.GEN,PINTL,,PKTFLG,BIT) ;1 means Local net level still has pkt
+PFLGP==PFLGP!PINTL		;Possible reader of packet
+
+;Common local net flags
+PROSTR(\NS.LNC,PPRAX,,PKTFLG,BIT) ;1 means LN should not send this pkt
+PROSTR(\NS.LNC,PLNXB,,PKTFLG,BIT) ;1 means LN has begun transmission
+PROSTR(\NS.LNC,PLNXE,,PKTFLG,BIT) ;1 means LN finished transmission
+PROSTR(\NS.LNC,PLNXO,,PKTFLG,BIT) ;1 means LN didn't send this packet
+PROSTR(\NS.LNC,PTRAC,,PKTFLG,BIT) ;1 means trace this packet
+
+;Common local net variables
+PROSTR(\NS.LNC,PLNBZ,17,18)	;Length of local net plus higher levels, bytes
+PROSTR(\NS.LNC,PLNDT,35,18)	;Address of local net level leader
+PROSTR(\NS.LNC,PLNEM,17,18)	;Estimated msec to send packet
+PROSTR(\NS.LNC,PLNAM,35,18)	;Actual msec to send packet
+
+PRONEW(\NS.LNP)			;Private to each local net protocol
+
+;Private local net protocol variables
+PROSTR(\NS.LNP,PLHNT,35,36)	;Hint for protocol (routing)
+
+	SUBTTL	Local Net Protocols - NL.NCP - 1822 Local Leader and Parameters
+
+;Fields in IMP-to-Host leader, defined to use 32 bit mode (no padding required)
+
+PRONEW(\NS.LNL,0)		;Zero-based local net leader for 1822
+PROSTR(\NS.LNL,.NBLD0,,,OFS)	;IMP-to-Host leader, word 0
+ PROSTR(\NS.LNL,IHFTY,7,4,OVR)	;Format type field, 17 for long leaders
+	ITY%LL==17		;Type 17 for long leaders from IMP
+ PROSTR(\NS.LNL,IHNET,15,8,OVR)	;"Network" code (see NTNET in NCT)
+ PROSTR(\NS.LNL,IHLDF,23,4,OVR)	;Leader flags
+ PROSTR(\NS.LNL,IHMTY,31,8,OVR)	;Message type
+
+PROSTR(\NS.LNL,.NBLD1,,,OFS)	;I-H leader, word 1
+ PROSTR(\NS.LNL,IHHTY,7,8,OVR)	;Handling type
+	HTY%NP==7		;Number of packets (never implemented)
+	HTY%HP==200		;High priority bit
+				;Substructure for above
+  PROSTR(\NS.LNL,IHHHP,0,1,OVR)	;Handling Type: High Priority bit
+				;(Mapped to high order bit of PIPRC)
+  PROSTR(\NS.LNL,IHHNP,7,3,OVR)	;Handling Type: Number of Packets
+				;(Currently the PIPRC bits mapped
+				; here directly to allow more than
+				; one Host-to-IMP "connection")
+ PROSTR(\NS.LNL,IHADR,31,24,OVR) ;Address (Host and IMP)
+				;Substructures for above
+  PROSTR(\NS.LNL,IHHST,15,8,OVR) ;Host port
+  PROSTR(\NS.LNL,IHIMP,31,16,OVR) ;IMP number
+
+PROSTR(\NS.LNL,.NBLD2,,,OFS)	;I-H leader, word 2
+ PROSTR(\NS.LNL,IHLNK,7,8,OVR)	;Link, leftmost 8 bits of message id
+  PROSTR(\NS.LNL,IHDAY,2,3,OVR)	;Dead host status day of week back up
+  PROSTR(\NS.LNL,IHHR,7,5,OVR)	;Dead host status hour back up
+ PROSTR(\NS.LNL,IHMI2,11,4,OVR)	;Rightmost 4 bits of message id
+  PROSTR(\NS.LNL,IHMIN,11,4,OVR) ;Dead host status 5-minute back up
+ PROSTR(\NS.LNL,IHSTY,15,4,OVR)	;Subtype
+	STY%FC==0		;Normal flow-controlled
+	STY%UC==3		;Uncontrolled flow
+ PROSTR(\NS.LNL,IHLEN,31,16,OVR) ;Length of message (I-H Type 0 only)
+ PROSTR(\NS.LNL,PLNNT,31,8,OVR)	;# times LN held packet (software in H-I
+				;Type 0 only)
+IF1 <.NBHDL==PROVAL(\NS.LNL,.LO)+1> ;Length of leader (96 bits)
+
+
+;Imp-to-Host parameters
+
+FKHOST==^D252			;Fake hosts are 252. thru 255. on each IMP
+
+;Special link numbers required for dispatching
+
+INTLNK==^D155			;Internet traffic
+
+;Message types in IHMTY (I2H = Imp to Host, & v.v.)
+
+.IHREG==0			;Regular messages (Host-to-host)
+.IHEWO==1			;Error without message ID (H2I)
+.IHEIL==1			;Error in leader (I2H)
+.IHHGD==2			;Host going down (H2I)
+.IHIGD==2			;IMP going down (I2H)
+.IHUNC==3			;Uncontrolled
+.IHNOP==4			;Nop, w/ padding count, tells local address.
+.IHRFN==5			;Ready for next message (I2H)
+.IHDHS==6			;Dead host status (I2H)
+.IHDDD==7			;Destination dead (I2H)
+.IHERW==^D8			;Error with message ID (H2I)
+.IHERD==^D8			;Error in data (I2H)
+.IHINC==^D9			;Incomplete transmission (I2H)
+.IHRES==^D10			;Interface reset (I2H)
+
+	SUBTTL	Local Net Level Protocol - NL.ETH
+
+PRONEW(\NS.LNP)			;Private variables
+
+PRONEW(\NS.LNL,0)		;Local net leader for NL.ETH
+IF1 <.ETFIL==0>			;Want leading filler
+IF2 <.ETFIL==PROVAL(\NS.LNL,.LX)+1-.ETHDL>
+
+PROSTR(\NS.LNL,EN%HD,15,16)	;Hardware address type
+  EN.ET==1			;Ethernet is type 1
+PROSTR(\NS.LNL,EN%PR,31,16)	;Transport protocol suite type
+; ETP.IP==
+PROSTR(\NS.LNL,EN%HL,7,8)	;Bytes in hardware address
+  ETL.ET==6			;Ethernet hardware addresses are 6 bytes long
+PROSTR(\NS.LNL,EN%PL,15,8)	;Bytes in transport protocol address
+  ETL.IP==4			;IP addresses are 4 bytes long
+PROSTR(\NS.LNL,EN%OP,31,16)	;Opcode
+PROSTR(\NS.LNL,EN%S1,31,32)	;Sender's hardware address, field 1
+PROSTR(\NS.LNL,EN%S2,15,16)	;Sender's hardware address, field 2
+PROSTR(\NS.LNL,EN%P1,31,16)	;Sender's protocol address, field 1
+PROSTR(\NS.LNL,EN%P2,15,16)	;Sender's protocol address, field 2
+PROSTR(\NS.LNL,EN%R1,31,16)	;Receiver's hardware address, field 1
+PROSTR(\NS.LNL,EN%R2,31,32)	;Receiver's hardware address, field 2
+PROSTR(\NS.LNL,EN%T1,31,32)	;Target's protocol address, field 1 & 2
+
+IF1 <.ETHDL==PROVAL(\NS.LNL,.LO)+1>
+
+
+
+;Internet-Ethernet Interface Definitions
+
+.NICHK==:0              ;Computed checksum of file
+.NIGTD==:1              ;GTAD format for date/time of when the file was created
+.NIMIR==:2              ;IPHOST version # when created
+.NILEN==:3              ;Number of words which follow
+NIHMHL==:4		;max length of header 
+
+.NIINT==:0              ;the internet host number  ** MUST BE OFFSET ZERO **
+.NIEN1==:1              ;ethernet addr word 1
+.NIEN2==:2              ;ethernet addr word 2
+.NIGCF==:3              ;gateway control flags
+  GH%ARP==1B0		;this ght entry has been updated by arp, adr is valid
+  GH%DMB==1B1		;host does not have arp, use this address
+NIHMDL==:4              ;max length of per host data
+
+	SUBTTL	Local Net Protocols - NL.NFE - NFE Local Leader and Parameters
+
+
+PRONEW(\NS.LNP)			;Private variables
+				;None
+
+PRONEW(\NS.LNL,0)		;Local net leader for NFE
+IF1 <.NFFIL==0>			;Want leading filler
+IF2 <.NFFIL==PROVAL(\NS.LNL,.LX)+1-.NFHDL>
+PROSTR(\NS.LNL,,,.NFFIL,OFS)
+PROSTR(\NS.LNL,.NFLD0,,,OFS)	;Destination address
+IF1 <.NFHDL==PROVAL(\NS.LNL,.LO)+1>
+
+
+
+
+
+
+
+
+;CS99/CS147 *** Begin ***
+	SUBTTL	Local Net level Protocol - NL.CMU
+
+PRONEW(\NS.LNP)			;Private variables
+
+PRONEW(\NS.LNL,0)		;Local net leader for NFE
+IF1 <.CMUFL==0>			;Want leading filler
+IF2 <.CMUFL==PROVAL(\NS.LNL,.LX)+1-.CMHDL>
+PROSTR(\NS.LNL,CM%DA,7,8)	;Hardware destination address (3mb ENET/proNET)
+PROSTR(\NS.LNL,CM%SA,15,8)	;Hardware source address (3mb ENET/proNET)
+PROSTR(\NS.LNL,CM%TY,31,16)	;Protocol type
+    CM.PUP=1000			;PUP is 1000
+    CM.IP=1001			;IP is 1001
+PROSTR(\NS.LNL,,,.CMUFL,OFS)
+IF1 <.CMHDL==PROVAL(\NS.LNL,.LO)+1>
+;CS99/CS147 *** End ***
+
+	SUBTTL	Local Net Level Protocol - xx
+
+REPEAT 0,<
+
+PRONEW(\NS.LNP)			;Private variables
+PROSTR(\NS.LNP,...,...,...,...)
+
+PRONEW(\NS.LNL,0)		;Local net leader for xx
+IF1 <.xxFIL==0>			;Want leading filler
+IF2 <.xxFIL==PROVAL(\NS.LNL,.LX)+1-.xxHDL>
+PROSTR(\NS.LNL,...,...,...,...)
+IF1 <.xxHDL==PROVAL(\NS.LNL,.LO)+1>
+
+> ;End of REPEAT 0
+
+	SUBTTL	Transport Level Protocol Suites  (NP.xxx Level and above)
+
+
+PRONEW(\NS.TPC)			;Common transport level flags and variables
+
+;Common transport protocol flags
+PROSTR(\NS.TPC,PNLCL,,PKTFLG,BIT) ;1 to prevent local delivery
+				;I.E. Send it to the source from the dest
+PROSTR(\NS.TPC,PLCLO,,PKTFLG,BIT) ;0 if packet came from net, 1 if from host
+
+;Common transport protocol variables
+PROSTR(\NS.TPC,PTPBZ,17,18)	;Length of transport plus higher levels, bytes
+PROSTR(\NS.TPC,PTPDT,35,18)	;Address of transport level leader
+
+
+
+	SUBTTL	DARPA Protocol Suite (NP.IP)
+	SUBTTL	Transport Level Protocol - IP Parameters and Definitions
+
+FR==0			;Be sure that AC0 is what we use for flags
+;T1,T2,T3,T4		;Temporary ACs.  Maybe freely clobbered.
+;Q1,Q2,Q3,P1		;Locals.  Always preserved by subrs.
+BFR=P2			;Global ACs.  Implicit args to lower level
+JFN=P2			;TCPJFN
+TPKT=P3			;Subrs.  Changed only with great care.
+PKT=P4
+DEV=P4
+TCB=P5			;Pointer to connection (TCP)
+;P6			;Frame base used by .TRSET
+;CX			;Scratch AC used by Jxxx macros and stack stuff
+;P			;Push pointer.  Always covers the stack.
+
+
+DEFINE MKWAIT(A),<
+	ROT T2,-^D9
+	LSHC T1,^D27
+	HRRI T1,A>
+
+
+
+;Exponential histogram structure
+
+HSQNB==0		;LH=-Squeeze factor(HEXP), RH=number of bins(NHBINS+1)
+ HEXP==0		;0, 2, 8, 32, ...
+HTOTL==1		;Total samples
+HSMPL==2		;Samples
+HBIN0==3		;Bin for less than or equal to zero
+NHBINS==^D14		;Number of real bins, not incl garbage bin
+HISTSZ==HBIN0+NHBINS+1	;Number of words in a histogram (for STG)
+
+INTBLS==2		; Words per INTBLK entry
+
+	SUBTTL	Basic Internet Structures
+
+;Queue structure:
+				;NB. Bit 0 not used, must be 0
+;BEWARE: NQ routine assumes this structure for efficiency
+;1)  QCNT and QMAX must be in the same bit positions
+;2)  QMAX must use bit 0
+DEFSTR(QCNT,0,12,13)		;Count of # of entries in Q
+  DEFSTR(QCNT1,0,12,12)		;Count of entries (without bit 0)
+DEFSTR(QNEXT,0,35,23)		;Next pointer
+DEFSTR(QMAX,1,12,13)		;Maximum Q length
+				;Overlays for QMAX
+  DEFSTR(QMSMP,1,0,1)		;Recorded by monitoring sample
+  DEFSTR(QMAX1,1,12,12)		;Maximum Q length (without bit 0)
+DEFSTR(QPREV,1,35,23)		;Previous pointer
+DEFSTR(QMWHN,2,12,13)		;When the maximum happened
+DEFSTR(QHDR,2,35,23)		;Q header pointer
+	QSZ==3			;Number of words in queue structure
+
+;Lock structure:
+
+DEFSTR(LWORD,0,35,36)		;Lock: -1 = free, ge 0 locked
+DEFSTR(LIDX,1,17,18)		;Wait bit index (9 bits)
+DEFSTR(LLOKR,1,35,18)		;Locker's id
+DEFSTR(LTIME,2,35,36)		;Time spent waiting for lock to unlock
+DEFSTR(LNWAT,3,17,18)		;Number of times had to wait for this lock
+DEFSTR(LOLKR,3,35,18)		;Old locker (conflict, locker's id)
+DEFSTR(LCCNT,4,17,18)		;Conflict count (# times found already locked)
+DEFSTR(LNLKR,4,35,18)		;New locker (conflict, requestor's id)
+	LOCKSZ==5		;Number of words in lock structure
+
+;Internet Addressing
+
+;NA%PRO = NP.IP interpretation of NA%RST field is 32-bits of Internet Address.
+
+DEFSTR IA%NET,0,11,8		;Net Number
+ DEFSTR IA%CLS,0,6,3		;Bits identifying network class.  Used with
+				;INTCLS, INTNET, and INTLNN (in STG).
+
+;Macro for extracting the network number from a host address,
+;DST may not be CX.
+
+DEFINE NETNUM(dst,src)<
+IFIDN <dst><CX>,<PRINTX ? NETNUM destination cannot be CX>
+IFDIF <src><CX>,<MOVE CX,src>;;	CX by any other name is not CX...
+	LOAD dst,IA%CLS,+CX;;	First get network class bits
+	LDB dst,INTLNN(dst);;	Now the network field for that class
+>
+
+	SUBTTL	Internet Packet Buffer Structure
+
+
+;General flags
+PROSTR(\NS.GEN,PIPTR,,PKTFLG,BIT) ;1 means packet in use by IPODN trace
+PFLGP==PFLGP!PIPTR		;Possible reader of packet
+PROSTR(\NS.GEN,PICMP,,PKTFLG,BIT) ;1 means ICMP level still needs pkt
+PFLGP==PFLGP!PICMP		;Possible reader of packet
+
+PRONEW(\NS.TPP)			;IP transport level
+
+;Private transport protocol flags
+PROSTR(\NS.TPP,PKLIM,,PKTFLG,BIT) ;1 means packet locked in memory
+PROSTR(\NS.TPP,PKDUL,,PKTFLG,BIT) ;1 means don't unlock this packet
+PROSTR(\NS.TPP,PSCR,,PKTFLG,BIT) ;1 if packet on a secure connection
+PROSTR(\NS.TPP,PSROU,,PKTFLG,BIT) ;1 if user is source routing
+
+;Private transport protocol variables
+PROSTR(\NS.TPP,PIPRA,35,36)	;Fragmentation reassembly id/send chain
+PROSTR(\NS.TPP,PLPLC,5,6)	;Page lock count
+PROSTR(\NS.TPP,PLHN2,35,30)	;Hint for protocol
+
+
+;IP reassembly is a pseudo-session level (conserve space since session
+;level has several variables which cannont conflict with transport level
+;reassembly).
+
+;Uses PKTQ, which is common, and ...
+
+PRONEW(\NS.SSP)			;IP reassembly variables
+
+;Private session level protocol variables
+PROSTR(\NS.SSP,PIPNF,35,36)	;Fragment offset after end of this packet
+PROSTR(\NS.SSP,PIPRT,35,36)	;Fragment timestamp, -TODCLK fragment received
+PROSTR(\NS.SSP,PIPTO,35,36)	;Fragment discard time
+
+	SUBTTL	IP Packet Structure
+
+PRONEW(\NS.TPL,0);NB 0-based def'ns	;Internet Protocol leader
+
+PROSTR(\NS.TPL,IPVER,3,4)		;Version
+  .INTVR==4				;Current version of IP protocols
+PROSTR(\NS.TPL,IPDO,7,4)		;Data offset
+PROSTR(\NS.TPL,IPTOS,15,8)		;Type of service
+					;Overlays for the above:
+  PROSTR(\NS.TPL,IPPRC,10,3,OVR)	;Precedence
+  PROSTR(\NS.TPL,IPLDY,11,1,OVR)	;Low delay
+  PROSTR(\NS.TPL,IPHTR,12,1,OVR)	;High throughput
+  PROSTR(\NS.TPL,IPHRL,13,1,OVR)	;High reliability
+					;2 Unused bits
+PROSTR(\NS.TPL,IPPL,31,16)		;Packet length
+
+PROSTR(\NS.TPL,IPSID,15,16)		;Segment ID
+PROSTR(\NS.TPL,IPFLG,18,3)		;Flags
+					;Overlays for the above:
+					;1 Unused bit
+  PROSTR(\NS.TPL,IPDF,17,1,OVR)		;Dont fragment
+  PROSTR(\NS.TPL,IPMF,18,1,OVR)		;More fragments
+PROSTR(\NS.TPL,IPFO,31,13)		;Fragment offset
+
+PROSTR(\NS.TPL,IPTTL,7,8)		;Time to live
+PROSTR(\NS.TPL,IPPRO,15,8)		;Next higher protocol
+  .ICMFM==1				;Internet Control Message protocol
+  .GGPFM==3				;Gateway-gateway protocol
+  .TCPFM==6				;TCP format
+  .CHAFM==20				;CHAOS format
+PROSTR(\NS.TPL,IPCKS,31,16)		;Header checksum
+
+PROSTR(\NS.TPL,IPSH,31,32)		;Source host address
+
+PROSTR(\NS.TPL,IPDH,31,32)		;Destination host address
+
+IF1 <MINIHS==<PROVAL(\NS.TPL,.LO)+1>*4>	;Minimum header length (bytes)
+MAXIOS==<.RTJST(-1,IPDO)*4-MINIHS>	;Maximum # Option bytes possible
+
+PROSTR(\NS.TPL,,,<<<MAXIOS+3>/4>>,OFS)	;Internet options, if any, are here.
+
+
+
+PRONEW(\NS.TPL);NB PKT-based def'ns	;Internet Protocol leader
+
+PROSTR(\NS.TPL,PIVER,3,4)		;Version
+PROSTR(\NS.TPL,PIDO,7,4)		;Data offset
+PROSTR(\NS.TPL,PITOS,15,8)		;Type of service
+					;Overlays for the above:
+  PROSTR(\NS.TPL,PIPRC,10,3,OVR)	;Precedence
+  PROSTR(\NS.TPL,PILDY,11,1,OVR)	;Low delay
+  PROSTR(\NS.TPL,PIHTR,12,1,OVR)	;High throughput
+  PROSTR(\NS.TPL,PIHRL,13,1,OVR)	;High reliability
+					;2 Unused bits
+PROSTR(\NS.TPL,PIPL,31,16)		;Packet length
+
+PROSTR(\NS.TPL,PISID,15,16)		;Segment ID
+PROSTR(\NS.TPL,PIFLG,18,3)		;Flags
+					;Overlays for the above:
+					;1 Unused bit
+  PROSTR(\NS.TPL,PIDF,17,1,OVR)		;Dont fragment
+  PROSTR(\NS.TPL,PIMF,18,1,OVR)		;More fragments
+PROSTR(\NS.TPL,PIFO,31,13)		;Fragment offset
+
+PROSTR(\NS.TPL,PITTL,7,8)		;Time to live
+PROSTR(\NS.TPL,PIPRO,15,8)		;Next higher protocol
+PROSTR(\NS.TPL,PICKS,31,16)		;Header checksum
+
+PROSTR(\NS.TPL,PISH,31,32)		;Source host address
+
+PROSTR(\NS.TPL,PIDH,31,32)		;Destination host address
+
+	SUBTTL	IP Options
+
+;All options are included under the appropriate checksum.
+
+;IP Options are copied on fragmentation if this bit is set
+
+CPYOPT==200
+
+;Case 1: A single byte of option code
+;ENDOPT is and must be 0.  This marks the end of the option list.
+;NOPOPT is and must be 1.  This is one byte long and has no purpose.
+
+;Case 2: General form of options is 1 byte of "kind", 1 byte of total
+;length, and N-2 bytes of data, where N is read from the length byte.
+; END	End of options		ENDOPT
+; NOP	Filler			NOPOPT
+; LSR	Loose Source Routing	LSROPT,Len,ptr.ge.4,<route data>
+; RRT	Record Route		RRTOPT,Len,ptr.ge.4,<route data>
+; SID	Stream ID		SIDOPT,4,I,D
+; SSR	Strict Source Routing	SSROPT,Len,ptr.ge.4,<route data>
+; STY	Autodin II security	STYOPT,^D11,S,S,C,C,H,H,TCC,TCC,TCC
+; TSP	Timestamp		TSPOPT,Len,Ptr,OFLW/FLAG,[<inet adr>],<tsmp>
+; Flag 0 <timestamp> only
+;      1 <internet adr>,<timestamp> pairs
+;      3 <internet adr>,<timestamp> pairs with <internet adr> pre-specified
+
+;General IP Option generation macro
+
+DEFINE IPOPTS (USER,RECV,ECHO)<
+OPTION(I,END,,^D0,^D1,USER,RECV,ECHO)
+OPTION(I,NOP,,^D1,^D1,USER,RECV,ECHO)
+OPTION(I,LSR,C,^D3,^D7,USER,RECV,ECHO)
+OPTION(I,RRT,,^D7,^D7,USER,RECV,ECHO)
+OPTION(I,SID,C,^D8,^D4,USER,RECV,ECHO)
+OPTION(I,SSR,C,^D9,^D7,USER,RECV,ECHO)
+OPTION(I,STY,C,^D2,^D11,USER,RECV,ECHO)
+OPTION(I,TSP,,^D68,^D8,USER,RECV,ECHO)
+> ;End of DEFINE IPOPTS
+
+;Define Option Names
+
+DEFINE OPTION(TYPE,NAME,COPY,NUMBER,LENGTH,USER,RECV,ECHO)<
+IFDIF <COPY>,<C>,<NAME'OPT==NUMBER>
+IFIDN <COPY>,<C>,<NAME'OPT==CPYOPT+NUMBER>>
+
+IPOPTS
+	PURGE OPTION
+
+;IP Switches (INPSW)
+				;0-5 reserved - due to 32-bit monitoring
+IPS%LP==1B6			;Allow IP to loop if INTFLG set
+IPS%FR==1B7			;Use fragment chains
+IPS%IL==1B8			;Report local errors to self via ICMP
+IPS%SC==1B9			;Secure mode
+
+;Host Status Update Block Definitions
+
+.HSQUE==0			;Offset of queue
+DEFSTR(HSCNT,\QSZ,35,36)	;Count of valid entries
+.HSEN0==QSZ+1			;Offset of first entry
+DEFSTR(HSCRD,0,5,6)		;Credibility
+DEFSTR(HSWHT,0,35,24)		;What (e.g. HSTUP or HSTDWN)
+DEFSTR(HSHST,1,35,36);32	;Host
+DEFSTR(HSWHO,2,35,36);32	;Who reported status
+DEFSTR(HSWHN,3,35,36)		;TODCLK of report
+DEFSTR(HSAUX,4,35,36)		;Auliliary information
+.HSENS==5			;Size of an entry
+
+
+;Format of when/credibility word
+
+DEFSTR (HS%WHN,0,35,36)		;When
+DEFSTR (HS%CRD,0,35,3)		;Credibility overlay
+
+
+;Routing definitions
+
+NETHES==1			;Size of an entry in the routing table
+
+RTCRLN==5			;Credibility for local network
+RTCRIC==4			;Credibility for ICMP
+RTCRTP==3			;Credibility for transport protocol
+RTCRGW==2			;Credibility for gateway
+RTCRPG==1			;Credibility for PINGER
+RTCRI0==0			;Credibility for none of the above
+
+;Pinger definitions
+
+DEFINE PNGUP<PNGT0+4>
+DEFINE PNGDN<PNGT0+3>
+DEFINE PNGMN<PNGT0+1>
+DEFINE PNGTL<PNGT0+2>
+DEFINE PNGIX<PNGTM+1>
+
+DEFINE INTFK2<INTFRK+1>		;FORKX of internet utility fork
+
+
+;Structure of a Gateway block:
+
+DEFSTR(GWSTS,0,2,3)		;Gateway status
+  .GWUP==2			;Appears to be up
+  .GWTY==3			;Worth trying
+  .GWUN==1			;Unreliable
+  .GWDN==0			;Down
+  DEFSTR(GWUP,0,1,1)		;Gateway should be useable
+  DEFSTR(GWDN,0,2,1)		;Gateway may not be useable
+DEFSTR(GWTYP,0,5,3)		;Gateway type
+  GW%PRM==1			;Prime: Speaks ICMP
+  GW%DUM==2			;Dumb: Fwd's pkts, but that's all
+  GW%HST==3			;Host: Avoid except in emergency
+  GW%AUP==4			;Always-up: Fwds but doesn't reflect
+DEFSTR(GWPIP,0,6,1)		;Ping in progress
+DEFSTR(GWPNG,0,7,1)		;Ping this gateway
+DEFSTR(GWHIS,0,14,7)		;Ping history bits
+DEFSTR(GWSPC,0,17,3)		;Successful ping count
+  .THRUP==<6*WID(GWHIS)>/8	;Threshold to say it is up (.gt.)
+  .THRDN==<3*WID(GWHIS)>/8	;Threshold to say it is down (.le.)
+  IFL <<1_WID(GWSPC)>-1>-WID(GWHIS), PRINTX ?GWSPC too small
+DEFSTR(GWICT,0,35,18)		;Interface count
+DEFSTR(GWWHO,1,35,36)		;Internet address of reporter
+MSKSTR(GWWHN,2,HS%WHN)		;TODCLK when reported
+MSKSTR(GWCRD,2,HS%CRD)		;Credibility of reporter
+.GWILS==3			;Where in block to find the list
+	;NB: The FIRST ENTRY in the list is on a connected net
+MXGWIC==14			;Maximum number of interfaces
+
+GWBKSZ==.GWILS+MXGWIC		;Size of a gateway block
+
+
+;Tables kept and used by ICMP
+
+;GWTAB is a list of pointers to gateway blocks that we know about.
+
+MAXGWA==:^D50		;Maximum number of gateways supported
+
+DEFINE GWCNT0<GWTAB+1>	;-#,,# of gateways in table
+DEFINE NXTGWY<GWTAB+2>	;AOBJN to search for a gateway 0 .le. i .lt. MAXGWY
+DEFINE GFCTAD<GWTAB+3>	;Gateway file creation time and date
+
+
+	SUBTTL	Linkages from IP transport Level to Higher Level Protocols
+
+;Protocol Table Definitions
+
+.INTPC==0	;(Extended) address of Time Check routine (xxxCHK)
+.INTPF==1	;Run request flag (xxxFLG)
+.INTPI==2	;(Extended) address of Initialization routine (xxxINI)
+.INTPQ==3	;(Extended) address of Input Queue head (xxxIPQ)
+.INTPO==4	;Protocol ON flag (0 is off) (xxxON)
+.INTPL==5	;Protocol number (.xxxFM)
+.INTPP==6	;(Extended) address of Processing routine (xxxPRC)
+.INTPS==7	;Protocol Segment Id (xxxSID)
+.INTPT==^D8	;Next run Time, msec (xxxTIM)
+.INTPE==^D9	;Handle an ICMP error message for this protocol (xxxICM)
+.INTPM==^D10	;-n,,address of input queue statistics
+.INTKJ==^D11	;Kill job cleanup
+.INTKF==^D12	;Kill fork cleanup
+.INTCZ==^D13	;Kill files cleanup
+.INTPZ==^D14	;Table length
+
+
+
+	SUBTTL	Internet User Queues - QDB Definitions
+
+;Note: Offsets are defined in MONSYM
+
+DEFSTR(IQPRV,.IQPRV,31,32)	;Logical Host and Protocol Number
+  DEFSTR(IQLHV,.IQPRV,23,24)	;Logical Host Value
+  DEFSTR(IQPNV,.IQPRV,31,8)	;Protocol Number
+DEFSTR(IQFHV,.IQFHV,31,32)	;Foreign Host INET Address Value
+DEFSTR(IQSHV,.IQSHV,31,32)	;Local (Source) Host INET Address Value
+DEFSTR(IQPTV,.IQPTV,31,32)	;Local and Foreign Ports
+  DEFSTR(IQSPV,.IQPTV,15,16)	;Local (Source) Port Value
+  DEFSTR(IQFPV,.IQPTV,31,16)	;Foreign Port Value
+DEFSTR(IQPRM,.IQPRM,31,32)	;Logical Host and Protocol Masks
+  DEFSTR(IQLHM,.IQPRM,23,24)	;Logical Host Mask
+  DEFSTR(IQPNM,.IQPRM,31,8)	;Protocol Mask
+DEFSTR(IQFHM,.IQFHM,31,32)	;Foreign Host INET Address Mask
+DEFSTR(IQSHM,.IQSHM,31,32)	;Local (Source) Host INET Address Mask
+DEFSTR(IQPTM,.IQPTM,31,32)	;Local and Foreign Ports Mask
+  DEFSTR(IQSPM,.IQPTM,15,16)	;Local (Source) Port Mask
+  DEFSTR(IQFPM,.IQPTM,31,16)	;Foreign Port Mask
+
+	SUBTTL	Session Level Protocols
+
+
+PRONEW(\NS.SSC)			;Session level packet variables
+
+;General flags
+PROSTR(\NS.GEN,PPROG,,PKTFLG,BIT) ;1 means session level still needs pkt
+PFLGP==PFLGP!PPROG		;Possible reader of packet
+
+;Common session level flags
+PROSTR(\NS.SSC,PRXD,,PKTFLG,BIT) ;1 means packet has been retrans'd
+
+;Common session level variables
+PROSTR(\NS.SSC,PSSBZ,17,18)	;Length of session plus higher levels, bytes
+PROSTR(\NS.SSC,PSSDT,35,18)	;Address of session level leader
+PROSTR(\NS.SSC,PLNCR,35,36)	;(Ext) address of completion  routine
+				;(Common due to linkage from lower level)
+PROSTR(\NS.SSC,PKTQ,,QSZ,OFS)	;Offset of packet queue (QNEXT/QPREV)
+				;(Common since most session levels need one)
+
+
+	SUBTTL	Application Level
+
+
+PRONEW(\NS.APC)			;Application level packet variables
+
+;General flags
+;Common session level flags
+;Common session level variables
+PROSTR(\NS.APC,PAPBZ,17,18)	;Length of application level, bytes
+PROSTR(\NS.APC,PAPDT,35,18)	;Address of application level data
+
+
+PRONEW(\NS.APL)			;Application level data
+
+
+	SUBTTL	Session Level Protocol - Internet Control Message Protocol
+
+;ICMP packet structure and error codes.  Note: 1B0 in type code allows error
+;message to be sent about errors in packets of that type.
+
+DEFINE ICMPDF(A1,A2)<
+ICMPTP(<Echo Reply>,ER,^D0!1B0,^D0,
+<<TYP,1>,<COD,2>,<CKS,4>,<ID,6>,<SEQ,^D8>>,<>,A1,A2)
+
+ICMPTP(<Destination Unreachable>,DU,^D3,^D5,
+<<TYP,1>,<COD,2>,<CKS,4>,<INH,^D36>>,
+<<NET,<Net>>,<HST,<Host>>,<PRO,<Protocol>>,<PRT,<Port>>,
+<FRG,<Fragmentation Required>>,<SRF,<Source Route Failed>>>,A1,A2)
+
+ICMPTP(<Source Quench>,SQ,^D4,^D0,
+<<TYP,1>,<COD,2>,<CKS,4>,<INH,^D36>>,<>,A1,A2)
+
+ICMPTP(<Redirect>,RD,^D5,^D3,
+<<TYP,1>,<COD,2>,<CKS,4>,<GWA,^D8>,<INH,^D36>>,
+<<NET,<Net>>,<HST,<Host>>,<TSN,<TOS to Net>>,<TSH,<TOS to Host>>>,A1,A2)
+
+ICMPTP(<Echo>,EC,^D8!1B0,^D0,
+<<TYP,1>,<COD,2>,<CKS,4>,<ID,6>,<SEQ,^D8>>,<>,A1,A2)
+
+ICMPTP(<Time Exceeded>,TE,^D11,^D1,<<TYP,1>,<COD,2>,<CKS,4>,<INH,^D36>>,
+<<TTL,<Time to Live>>,<RTE,<Fragmentation Reassembly>>>,A1,A2)
+
+ICMPTP(<Parameter Problem>,PP,^D12,^D0,
+<<TYP,1>,<COD,2>,<CKS,4>,<PTR,5>,<INH,^D36>>,<<PTR,<At Pointer>>>,A1,A2)
+
+ICMPTP(<Timestamp>,TM,^D13!1B0,^D0,
+<<TYP,1>,<COD,2>,<CKS,4>,<ID,6>,<SEQ,^D8>,<TIM,^D20>>,<>,A1,A2)
+
+ICMPTP(<Timestamp Reply>,TR,^D14!1B0,^D0,
+<<TYP,1>,<COD,2>,<CKS,4>,<ID,6>,<SEQ,^D8>,<TIM,^D20>>,<>,A1,A2)
+
+ICMPTP(<Information Request>,IQ,^D15!1B0,^D0,
+<<TYP,1>,<COD,2>,<CKS,4>,<ID,6>,<SEQ,^D8>>,<>,A1,A2)
+
+ICMPTP(<Information Reply>,IR,^D16!1B0,^D0,
+<<TYP,1>,<COD,2>,<CKS,4>,<ID,6>,<SEQ,^D8>>,<>,A1,A2)
+> ;End of DEFINE ICMPDF
+
+
+
+;Define ICMP Type and Code Symbols
+
+DEFINE ICMPTP(nam,sym,val,cod,fields,codsym,a1,a2)<ICM%'sym==val&177777
+..icm==0
+IRP codsym,<ICMPCD sym,codsym>
+> ;End of DEFINE ICMPTP
+
+DEFINE ICMPCD(cod,typnam)<ICMPCE(cod,typnam)>
+
+DEFINE ICMPCE(cod,typ,nam)<cod'%'typ==..icm
+..icm==..icm+1
+> ;End of DEFINE ICMPCE
+
+
+ICMPDF
+
+PURGE ..icm,ICMPTP,ICMPCD,ICMPCE
+
+
+
+	SUBTTL	Internet Control Message Protocol Packet Leader
+
+PRONEW(\NS.SSL,0)		;Zero-based ICMP fields
+
+;ICMP Packet format, offset from 0 (preceded by an internet header)
+
+PROSTR(\NS.SSL,CMTYP,7,8)	;Type of message
+PROSTR(\NS.SSL,CMCOD,15,8)	;Code for messages
+PROSTR(\NS.SSL,CMCKS,31,16)	;Checksum
+IF1 <.CMOVR==PROVAL(\NS.SSL,.LO)+1> ;Words in common area
+
+;The following structures are only used by some message types.
+
+PRONEW(\NS.SSM,.CMOVR)
+PROSTR(\NS.SSM,CMID,15,16)	;ID number in ICM%EC,R ICM%TM,R ICM%IQ,R
+PROSTR(\NS.SSM,CMSEQ,31,16)	;Sequence number in same
+
+PROSTR(\NS.SSM,CMTSO,31,32)	;Originate timestamp
+PROSTR(\NS.SSM,CMTSR,31,32)	;Receive timestamp
+PROSTR(\NS.SSM,CMTST,31,32)	;Transmit timestamp
+
+PRONEW(\NS.SSM,.CMOVR)
+PROSTR(\NS.SSM,CMPTR,7,8)	;Pointer for ICM%PP messages
+
+PRONEW(\NS.SSM,.CMOVR)
+PROSTR(\NS.SSM,CMGWA,31,32)	;Gateway address for ICM%RD messages
+
+IF1 <.CMINH==PROVAL(\NS.SSM,.LO)+1> ;IP header in ICM%SQ,ICM%RD,ICM%DU etc.
+
+	SUBTTL	Session Level Protocol - Transmission Control Protocol
+
+;JSB Definitions (in JCNTCB word)
+
+DEFSTR(JCNFX,JCNTCB,8,9)	; Owning FORKX
+DEFSTR(JCNTC,JCNTCB,35,23)	; Extended address of TCB
+
+
+;TCP Parameters and Packet Structure
+
+MAXSEQ==1_^D32		;STG	;32 bit sequence numbers
+SEQMSK==MAXSEQ-1		;Mask for doing mod MAXSEQ by AND op.
+DEFINE MODSEQ(A)<TLZ A,(-MAXSEQ)>
+
+CYCTIM==^D<2*60*60>	;STG	;Network cycle time in seconds
+SNSTEP==MAXSEQ/CYCTIM		;A second's worth of sequence numbers
+
+DEFINE TCBDQK<TCBDQ+1>		;Queue of dead TCBs retained for debugging
+DEFINE TCBDH<TCBDQ+2>		;Queue head for TCB DQ
+DEFINE TCBDHK<TCBDQ+2+QSZ>	;Queue head for debug TCB DQ
+
+;TCP Switch Bits (in TCPSW)
+				;0-5 reserved - due to 32-bit monitoring
+TCS%BD==1B6	;1 if packets ACKed much longer than current Round Trip
+		;Time are to be included in update, 0 if they are omitted
+TCS%LA==1B7	;1 if retransmission interval should be lower bounded by
+		;system load average.
+TCS%RX==1B8	;1 if retransmitted packets should be included in Round
+		;Trip Time computations.
+TCS%LP==1B9	;Allow TCP to loop if TCPFLG set
+DECOK==1B10	;Allow DEC JSYS calls
+BBNOK==1B11	;Allow BBN JSYS calls
+TCS%O1==1B12	;Enable "optimization 1" use of PURGP
+TCS%O2==1B13	;Enable "optimization 2" hashing by Initial Sequence Number
+TCS%BR==1B14	;Enable retransmission interval based on measured baud rate
+
+	SUBTTL	TCP Private Packet Variables
+
+PRONEW(\NS.SSP)			;TCP packet variables
+
+;Private session level protocol variables
+PROSTR(\NS.SSP,PESEQ,35,36)	;Packet End Sequence
+PROSTR(\NS.SSP,PTS,35,36)	;Packet Timestamp
+PROSTR(\NS.SSP,PDCT,35,36)	;Packet Discard Time
+PROSTR(\NS.SSP,PRXI,35,36)	;Packet Rexmit Interval
+PROSTR(\NS.SSP,PTG,35,36)	;Packet Time Generated
+PROSTR(\NS.SSP,PXT,35,36)	;Packet Xmit Time
+PROSTR(\NS.SSP,PMXSZ,15,16)	;Max PIPL for packet sent
+PROSTR(\NS.SSP,PLBYT,35,9)	;Octet corresponding to PESEQ, or 777
+PROSTR(\NS.SSP,PHINT,35,36)	;Hint for protocol
+
+	SUBTTL	TCP Protocol Leader (indexed by TPKT):
+
+PRONEW(\NS.SSL,0)		;Zero-based TCP packet leader
+
+PROSTR(\NS.SSL,PSP,15,16)	;Source port
+PROSTR(\NS.SSL,PDP,31,16)	;Destination port
+
+PROSTR(\NS.SSL,PSEQ,31,32)	;Sequence
+
+PROSTR(\NS.SSL,PACKS,31,32)	;ACK sequence
+
+PROSTR(\NS.SSL,PCTL,35,36)	;Word containing control flags
+				;Substructures and overlays for above
+ PROSTR(\NS.SSL,PTDO,3,4,OVR)	;TCP data offset (32-bit units)
+				;4 Unused bits
+ PROSTR(\NS.SSL,PTCTL,15,8,OVR)	;TCP controls
+    				;2 Unsed bits
+  PROSTR(\NS.SSL,PURG,10,1,OVR)	;URGENT
+  PROSTR(\NS.SSL,PACK,11,1,OVR)	;ACK
+  PROSTR(\NS.SSL,PPSH,12,1,OVR)	;PUSH
+  PROSTR(\NS.SSL,PRST,13,1,OVR)	;RESET
+  PROSTR(\NS.SSL,PSYN,14,1,OVR)	;SYN
+  PROSTR(\NS.SSL,PFIN,15,1,OVR)	;FIN
+ PROSTR(\NS.SSL,PWNDO,31,16,OVR) ;Window
+
+PROSTR(\NS.SSL,PTCKS,15,16)	;Checksum
+PROSTR(\NS.SSL,PURGP,31,16)	;Urgent pointer
+				;Overlays for "optimization 1"
+ PROSTR(\NS.SSL,PO1RX,18,3,OVR)	;0-7th retransmission of this packet
+ PROSTR(\NS.SSL,PO1AK,21,3,OVR)	;This ACKs packet whose PO1RX was ...
+ PROSTR(\NS.SSL,PO1LS,31,10,OVR) ;There is a gap of n octets after PACK
+
+
+IF1 <MINTHS==<PROVAL(\NS.SSL,.LO)+1>*4> ;Minimum TCP header size (bytes)
+MAXTOS==<.RTJST(-1,PTDO)*4-MINTHS>	;Maximum # Option bytes possible
+
+PROSTR(\NS.SSL,,,<<<MAXTOS+3>/4>>,OFS)	;TCP Options, if any
+
+;Derive some useful numbers from the above:
+
+TCPNPW==<<<1_^D<WID(PIPL)-WID(PIFO)>>+3>/4>	; One fragment block
+TCPNPW==PKTELI+.RTJST(-1,IPDO)+.RTJST(-1,PTDO)+TCPNPW
+;	Local info + IP + TCP =  Minimum TCP packet, Words
+
+	SUBTTL	TCP Options
+
+;Options: ;All options are included under the appropriate checksum. Two cases.
+;Case 1: A single byte of option code
+; END	End of options		ENDOPT must be 0.  Marks the end of options.
+; NOP	Filler			NOPOPT must be 1.  One byte of "padding"
+;Case 2: General form of options is 1 byte of "kind", 1 byte of total
+;length, and N-2 bytes of data, where N is read from the length byte.
+; MSL	Maximul Segment Length	MSLOPT,4,len,gth
+
+;General TCP Option generation macro
+
+DEFINE TCPOPTS (USER,RECV,ECHO)<
+OPTION(T,END,,^D0,^D1,USER,RECV,ECHO);;		End of options
+OPTION(T,NOP,,^D1,^D1,USER,RECV,ECHO);;		NOP or padding
+OPTION(T,MSL,,^D2,^D4,USER,RECV,ECHO);;		Maximum Segment Length
+OPTION(T,LBL,,^D33,^D4,USER,RECV,ECHO);;	Label (obsolete?)
+OPTION(T,OMZ,,^D34,^D3,USER,RECV,ECHO);;	Will do "optimization"
+> ;End of DEFINE TCPOPTS
+
+;Define Option Names
+
+DEFINE OPTION(TYPE,NAME,COPY,NUMBER,LENGTH,USER,RECV,ECHO)<
+IFDIF <COPY>,<C>,<NAME'OPT==NUMBER>
+IFIDN <COPY>,<C>,<NAME'OPT==CPYOPT+NUMBER>
+>
+
+TCPOPTS
+	PURGE OPTION
+
+	SUBTTL	TCP Connection Block Structure (TCB)
+
+TCBQ==<.T==0>				;Queue (TCBH, DeadQ, etc)
+TCBLCK==<.T==.T+QSZ>			;Lock
+.T==.T+LOCKSZ
+DEFSTR(TOWNR,\<.T>,17,18)		;Owner	(job #)
+DEFSTR(TJCN,\<.T>,35,18)		;JCN	(n of JCNTCB+n)
+.T=.T+1
+TCBFH==.T				;remember this offset
+DEFSTR(TFH,\<.T>,35,36)			;Foreign host address
+DEFSTR(TFHC,\<.T>,6,3)			;Foreign host net class
+.T=.T+1
+DEFSTR(TLH,\<.T>,35,36)			;Local host address
+.T=.T+1
+DEFSTR(TFP,\<.T>,35,36)			;Foreign port
+.T=.T+1
+DEFSTR(TLP,\<.T>,35,36)			;Local Port
+.T=.T+1					;TCB Flags
+DEFSTR(TERR,\<.T>,7,8)			;Error (Zeroed-ACTTCB, set-USRERR)
+DEFSTR(TSTAT,\<.T>,35,26)		;State
+					;Overlays for above
+  DEFSTR(TSRX,\<.T>,8,1)		;Don't kill connection on RTX timeout
+  DEFSTR(TSFR,\<.T>,9,1)		;Flush RECV data after CLOSE
+  DEFSTR(TWFR,\<.T>,10,1)		;We did Flush RECV data after CLOSE
+  DEFSTR(TSFP,\<.T>,11,1)		;Send force packet
+  DEFSTR(TSEP,\<.T>,12,1)		;Send encourage packet
+  DEFSTR(TPOMZ,\<.T>,13,1)		;Packet options enabled
+  DEFSTR(TRPP,\<.T>,14,1)		;Receive parital packet
+  DEFSTR(TSCR,\<.T>,15,1)		;Secure connection
+  DEFSTR(TTVT,\<.T>,16,1)		;TCP virtual terminal
+					;1 bit
+  DEFSTR(TERRT,\<.T>,18,1)		;Error trace
+  DEFSTR(TDEC,\<.T>,19,1)		;DEC JSYS TCB
+					;1 bit
+  DEFSTR(TRSYN,\<.T>,23,3)		;Receive synchronization
+  DEFSTR(TSSYN,\<.T>,26,3)		;Send synchronization
+					;State codes for connections
+	SYNABL==4			;SYNCHABLE: Activated by user call
+	SYNSNT==<SYNRCV==5>		;SYN sent or received
+	SYNCED==7			;SYN acked
+	FINSNT==<FINRCV==2>		;FIN sent or received but not ACKd
+	TIMWAT==1			;In TIME WAIT state (rcv)
+	NOTSYN==0			;Connection fully closed or not open
+
+  DEFSTR(TSTMW,\<.T>,28,1)		;Need Time Wait state
+  DEFSTR(TSUOP,\<.T>,29,1)		;User OPENed (1), CLOSEd (0)
+;TSUOP is set via OPEN1 (OPEN%) after successful ACTTCB, and is cleared by
+;CLOSE1 (CLOSE% or TVTDET) or TVTCLS (no tvt/rx timeout) or ABTTCB (ABORT%
+;or CLZFF% or RESET%) or PKTIZE via ABTTCB due to TSABT 
+  DEFSTR(TSOPN,\<.T>,30,1)		;Said OPEN
+;TSOPN is set by USREVT when connection fully synchronized, it's never cleared
+  DEFSTR(TSPRS,\<.T>,31,1)		;Persistent
+  DEFSTR(TSABT,\<.T>,32,1)		;ABORTed
+;TSABT is set by ABTTCB (ABORT% or CLZFF% or RESET%), it's never cleared
+  DEFSTR(TSSV,\<.T>,33,1)		;Send sequence valid
+  DEFSTR(TSURG,\<.T>,34,1)		;Send urgent mode
+  DEFSTR(TRURG,\<.T>,35,1)		;Receive urgent mode
+.T=.T+1
+
+;Send variables
+
+DEFSTR(TSLFT,\<.T>,35,36)		;Send left
+.T=.T+1
+DEFSTR(TSSEQ,\<.T>,35,36)		;Send sequence
+.T=.T+1
+DEFSTR(TSURP,\<.T>,35,36)		;Send urgent pointer
+.T=.T+1
+DEFSTR(TSWND,\<.T>,17,18)		;Send window
+DEFSTR(TCSMO,\<.T>,23,6)		;Maximum outstanding packets
+DEFSTR(TSLBY,\<.T>,35,9)		;Octet for TSLFT, or 777 if none
+.T=.T+1
+DEFSTR(TSCB,\<.T>,35,36)		;Send current buffer (24)
+.T=.T+1
+DEFSTR(TSTO,\<.T>,35,36)		;Send transmission timeout, msec
+TCBSBQ==<.T=.T+1>			;Send Buffer Header queue
+TCBRXQ==<.T=.T+QSZ>			;Send retransmit queue
+.T==.T+QSZ
+DEFSTR(TCRXC,\<.T>,35,13)		;QCNT of TCBRXQ at time of last RX
+
+;Receive variables
+
+.T==.T+1
+DEFSTR(TRIS,\<.T>,35,36)		;Receive initial sequence, inited -1
+.T=.T+1
+DEFSTR(TRLFT,\<.T>,35,36)		;Receive left
+.T=.T+1
+DEFSTR(TRURP,\<.T>,35,36)		;Receive urgent pointer
+.T=.T+1
+DEFSTR(TRWND,\<.T>,17,18)		;Receive window
+DEFSTR(TCRMW,\<.T>,23,6)		;Level at which to shut window
+DEFSTR(TCRMQ,\<.T>,29,6)		;Level at which to send source quench
+.T=.T+1
+DEFSTR(TRCB,\<.T>,35,36)		;Receive current buffer (24)
+.T=.T+1
+DEFSTR(TRBS,\<.T>,35,36)		;Receive buffer space
+TCBRBQ==<.T=.T+1>			;Receive Buffer header queue
+TCBRPQ==<.T=.T+QSZ>			;Receive packet queue
+
+;PSI variables
+
+TCPIC==<.T=.T+QSZ>			;PSI channels
+DEFSTR(TPSIC,TCPIC,35,36)		;All PSI channels
+					;Overlays for above
+  DEFSTR(TPICU,TCPIC,5,6)		;Urgent data arrived
+  DEFSTR(TPICR,TCPIC,11,6)		;RECV done
+  DEFSTR(TPICS,TCPIC,17,6)		;SEND done
+  DEFSTR(TPICE,TCPIC,23,6)		;Error
+  DEFSTR(TPICX,TCPIC,29,6)		;State change
+  DEFSTR(TPICA,TCPIC,35,6)		;PUSH ACK (Unimplemented)
+					;Following must have same order
+TCPIF==.T+1				;PSI FORKXs
+DEFSTR(TPIFU,TCPIF+0,17,18)		;Urgent data arrived
+DEFSTR(TPIFR,TCPIF+0,35,18)		;RECV done
+DEFSTR(TPIFS,TCPIF+1,17,18)		;SEND done
+DEFSTR(TPIFE,TCPIF+1,35,18)		;Error
+DEFSTR(TPIFX,TCPIF+2,17,18)		;State change
+DEFSTR(TPIFA,TCPIF+2,35,18)		;PUSH ACK (Unimplemented)
+
+.T==TCPIF+3
+DEFSTR(TOPNF,\<.T>,8,9)			;OPEN/CLOSE wait flag index
+;TOPNF's wait bit is set when the connection is fully established and
+;cleared when it becomes fully closed
+DEFSTR(TERRF,\<.T>,17,9)		;Error wait flag index
+DEFSTR(TOFRK,\<.T>,35,18)		;Owning FORKN
+
+;Retransmission variables
+
+.T=.T+1
+DEFSTR(TMNRT,\<.T>,35,36)		;Minimum round trip, msec
+.T=.T+1
+DEFSTR(TMXRT,\<.T>,35,36)		;Maximum round trip, msec
+.T=.T+1
+DEFSTR(TRXI,\<.T>,35,36)		;Retransmit interval, msec (static)
+.T=.T+1
+DEFSTR(TSMRT,\<.T>,35,36)		;Smoothed round trip, msec (dynamic)
+.T=.T+1
+DEFSTR(TUNRT,\<.T>,35,36)		;Unreliable component, msec (dynamic)
+.T=.T+1
+DEFSTR(TRXP,\<.T>,35,36)		;Retransmission parameters
+					;Substructures of the above:
+  DEFSTR(TRXPN,\<.T>,8,9)		;Numberator of backoff fraction
+  DEFSTR(TRXPD,\<.T>,17,9)		;Denominator thereof
+  DEFSTR(TRXPI,\<.T>,35,18)		;Initial interval, msec
+
+;Queues and wakeup times for TCP processes:
+
+TCQRA==<.T=.T+1>			;Reassembler queue (or 0)
+TCTRA==<.T=.T+QSZ>			;When RA needed (a TODCLK)
+TCQPZ==<.T=.T+1>			;Packetizer
+TCTPZ==<.T=.T+QSZ>
+TCQRX==<.T=.T+1>			;Retransmitter
+TCTRX==<.T=.T+QSZ>
+TCQDY==<.T=.T+1>			;Delay Actions
+TCTDY==<.T=.T+QSZ>
+
+.T==.T+1
+DEFSTR(TIFDF,\<.T>,0,1)			;IP Don't-Fragment flag
+DEFSTR(TTTL,\<.T>,8,8)			;IP Time-to-live
+DEFSTR(TTOSU,\<.T>,9,1)			;User-specified TOS
+DEFSTR(TTOS,\<.T>,17,8)			;IP Type-of-service
+ DEFSTR(TTOSC,\<.T>,12,3)		; Precedence
+ DEFSTR(TTOSD,\<.T>,13,1)		; Low delay
+ DEFSTR(TTOST,\<.T>,14,1)		; High throughput
+ DEFSTR(TTOSR,\<.T>,15,1)		; High reliability
+DEFSTR(TABTFX,\<.T>,35,18)		;FORKX of ABORTer
+.T=.T+1
+DEFSTR(TSLVN,\<.T>,17,18)		;Next Security Level (16)
+DEFSTR(TSLVC,\<.T>,35,18)		;Current Security Level (16)
+.T=.T+1
+DEFSTR(TSSCP,\<.T>,17,18)		;Security Compartment (16)
+DEFSTR(TSSHR,\<.T>,35,18)		;Handling Restrictions (16)
+.T=.T+1
+DEFSTR(TSSTC,\<.T>,35,36)		;Transmission Control (24)
+.T=.T+1
+					;2 bits really unused
+DEFSTR(TOPFP,\<.T>,17,18)		;Foreign port at open
+DEFSTR(TNUFM,\<.T>,18,1)		;OPENed with new formats
+					;1 unused bit
+DEFSTR(TDBGW,\<.T>,20,1)		;Debug: Send 0 receive window
+DEFSTR(TDBGQ,\<.T>,21,1)		;Debug: Fake 0 send window
+DEFSTR(TDBGK,\<.T>,22,1)		;Debug: Place TCB in TCBDQK when dead
+					;4 unused bits
+DEFSTR(TVTL,\<.T>,35,9)			;Virtual terminal line number
+.T=.T+1
+DEFSTR(TOPFH,\<.T>,35,36)		;Foreign host address at OPEN
+.T=.T+1
+DEFSTR(TOPLH,\<.T>,35,36)		;Local host address at OPEN
+.T=.T+1
+DEFSTR(TSBYT,\<.T>,35,36)		;Bytes left to send
+.T=.T+1
+DEFSTR(TRLAK,\<.T>,35,36)		;Seq # of last PACKS sent
+.T=.T+1
+DEFSTR(TRLWN,\<.T>,35,36)		;Seq # of last PWNDO sent or -1
+.T=.T+1
+DEFSTR(TSMXB,\<.T>,35,36)		;Max send rate
+.T=.T+1
+DEFSTR(TSESB,\<.T>,35,36)		;Estimated send rate
+.T=.T+1
+DEFSTR(TSBFP,\<.T>,17,18)		;# unprocessed send buffers with PUSH
+DEFSTR(TSMXS,\<.T>,35,18)		;Max send segment length (exc headers)
+
+;Option Variables
+
+.T=.T+1
+DEFSTR(TIPDO,\<.T>,5,4)			;IP Data offset, words
+DEFSTR(TIPOR,\<.T>,11,6)		;IP Received options, bytes
+DEFSTR(TIPOU,\<.T>,17,6)		;IP User options, bytes
+DEFSTR(TIOPF,\<.T>,35,18) ;** MB RH	;IP User option flags
+.T=.T+1
+DEFSTR(TTPDO,\<.T>,5,4)			;TCP Data offset, words
+DEFSTR(TTPOR,\<.T>,11,6)		;TCP Received options, bytes
+DEFSTR(TTPOU,\<.T>,17,6)		;TCP User options, bytes
+DEFSTR(TTOPF,\<.T>,35,18) ;** MB RH	;TCP User option flags
+
+TCBIO==<.T=.T+1>			;IP Option list (send)
+TCBIR==<.T=.T+<MAXIOS+3>/4>		;Last IP Options received
+TCBIU==<.T=.T+<MAXIOS+3>/4>		;IP Options from User
+
+TCBTO==<.T=.T+<MAXIOS+3>/4>		;TCP Option list (send)
+TCBTR==<.T=.T+<MAXTOS+3>/4>		;Last TCP Options received
+TCBTU==<.T=.T+<MAXTOS+3>/4>		;TCP Options from User
+
+.T=.T+<MAXTOS+3>/4
+DEFSTR(TERBF,\<.T>,17,18)		;Error/Trace (user) buffer adr
+DEFSTR(TERJN,\<.T>,35,18)		;Error/trace (user) JFN
+.T=.T+1
+DEFSTR(TCTBS,\<.T>,17,18)		;Count of no-buffer errors
+DEFSTR(TCTSQ,\<.T>,35,18)		;Count of sequence # pauses
+.T=.T+1
+DEFSTR(TSCPK,\<.T>,35,36)		;Send current packet (24)
+.T=.T+1
+DEFSTR(TPRS1,\<.T>,17,18)		;Persistance parameter one
+DEFSTR(TPRS2,\<.T>,35,18)		;Persistance parameter two
+.T=.T+1					;DEC JFN Interface Flags
+DEFSTR(TCDWT,\<.T>,0,1)			;DEC Wait mode flag
+DEFSTR(TCDHT,\<.T>,1,1)			;DEC High Throughput Mode flag
+DEFSTR(TCDFS,\<.T>,2,1)			;DEC Active Flag
+DEFSTR(TCDOW,\<.T>,3,1)			;DEC OPENF block flag
+DEFSTR(TCDGN,\<.T>,4,1)			;DEC GTJFN Name done once flag
+DEFSTR(TCDGE,\<.T>,5,1)			;DEC GTJFN Extension done once flag
+DEFSTR(TCDPS,\<.T>,6,1)			;DEC Persist flag
+DEFSTR(TCDOB,\<.T>,7,1)			;DEC Output TJOBF buffer setup to fill
+DEFSTR(TCDIB,\<.T>,8,1)			;DEC Input TJIBE buffer setup to read
+DEFSTR(TCDCW,\<.T>,9,1)			;DEC CLOSF Block flag
+DEFSTR(TCDB8,\<.T>,10,1)		;DEC OPENF 8 bit byte mode
+DEFSTR(TCDOQ,\<.T>,11,1)		;DEC Output buffer Queued
+DEFSTR(TCDPU,\<.T>,12,1)		;DEC Do a PUSH flag
+DEFSTR(TCDUR,\<.T>,13,1)		;DEC Do an URGENT flag
+DEFSTR(TJFN,\<.T>,35,18)		;DEC TCB.JFN (JFN*MLJFN)
+.T=.T+1
+TJOBF=.T				;DEC TCB output buffer	for filling
+.T=.T+1
+TJOBA=.T       				;DEC TCB output buffer active
+.T=.T+1
+TJIBE=.T				;DEC TCB output buffer for emptying
+.T=.T+1
+TJIBA=.T				;DEC TCB output buffer active
+.T=.T+1
+TCBCO=.T      				;DEC TCB real FILBCO
+.T=.T+1
+TCBCI=.T				;DEC TCB real FILBCI
+.T=.T+1
+DEFSTR(TCLTM,\<.T>,35,36)		;TODCLK of last packet to arrive
+.T=.T+1
+DEFSTR(TSPRB,\<.T>,35,36)		;TODCLK of next closed window probe
+.T=.T+1
+DEFSTR(TSIS,\<.T>,35,36)		;Initial Send Sequence #
+.T=.T+1
+DEFSTR(TCBTP,\<.T>,35,36)		;TODCLK of last inactivity probe
+.T=.T+1
+DEFSTR(TCRTM,\<.T>,35,36)		;TODCLK TCB was created
+.T=.T+1
+DEFSTR(TCATM,\<.T>,35,36)		;TODCLK TCB sent/received first packet
+.T=.T+1
+DEFSTR(TCSAG,\<.T>,2,3)			;# times connection resynchronized
+DEFSTR(TCABI,\<.T>,3,1)			;Aborted due to prolonged inactivity
+DEFSTR(TCFAK,\<.T>,4,1)			;DY faked an ACK
+DEFSTR(TCABR,\<.T>,5,1)			;Aborted due to RX timeout
+DEFSTR(TCTOC,\<.T>,8,3)			;# Telnet negotiations cancelled
+DEFSTR(TCFWP,\<.T>,17,9)		;# full window probes
+DEFSTR(TCBID,\<.T>,35,18)		;Unique # (n-th created)
+.T=.T+1
+DEFSTR(TCROS,\<.T>,2,3)			;# packets received out of sequence
+DEFSTR(TCRZW,\<.T>,5,3)			;# times received a zero window
+DEFSTR(TCEWN,\<.T>,8,3)			;# times receive window exceeded
+DEFSTR(TCPCC,\<.T>,11,3)		;# packets on closed connection
+DEFSTR(TCRST,\<.T>,14,3)		;# RSTs received
+DEFSTR(TCTOR,\<.T>,17,3)		;Telnet options received
+DEFSTR(TCIGN,\<.T>,23,6)		;# packets ignored
+DEFSTR(TCDUP,\<.T>,35,12)		;# duplicates received
+.T=.T+1
+DEFSTR(TCRCV,\<.T>,17,18)		;# RECVs
+DEFSTR(TCRPC,\<.T>,35,18)		;# packets received
+.T=.T+1
+DEFSTR(TCRPU,\<.T>,17,18)		;# PUSHs received
+DEFSTR(TCRUR,\<.T>,35,18)		;# URGENTs received
+.T=.T+1
+DEFSTR(TCSND,\<.T>,17,18)		;# SENDs
+DEFSTR(TCSPC,\<.T>,35,18)		;# packets sent
+.T=.T+1
+DEFSTR(TCSPU,\<.T>,17,18)		;# PUSHs sent
+DEFSTR(TCSUR,\<.T>,35,18)		;# URGENTs send
+.T=.T+1
+DEFSTR(TCPZA,\<.T>,17,18)		;# times PZ gave up
+DEFSTR(TCFWN,\<.T>,35,18)		;# times send window full
+.T=.T+1
+DEFSTR(TCFWT,\<.T>,35,36)		;Time send window was zero, msec
+.T=.T+1
+DEFSTR(TCRXF,\<.T>,17,18)		;# times retransmit failed (slow net)
+DEFSTR(TCRXP,\<.T>,35,18)		;# packets retransmited
+.T=.T+1
+DEFSTR(TCICM,\<.T>,5,6)			;# ICMP messages received
+DEFSTR(TCIDU,\<.T>,11,6)		;# Destination unreachable messages
+DEFSTR(TCIPB,\<.T>,17,6)		;# Parameter problem messages
+DEFSTR(TCIRD,\<.T>,23,6)		;# Redirect messages
+DEFSTR(TCISQ,\<.T>,29,6)		;# Source-Quench messages
+DEFSTR(TCITE,\<.T>,35,6)		;# Time exceeded messages
+.T=.T+1
+DEFSTR(TSFHOP,\<.T>,35,36);32		;First-hop route (Redirect), or 0
+.T=.T+1
+DEFSTR(TSFHT,\<.T>,35,36)		;TODCLK special route was specified
+.T=.T+1
+DEFSTR(TSFHW,\<.T>,35,36);32		;Who set special route (address)
+.T=.T+1
+DEFSTR(TCRUT,\<.T>,35,36);24		;Address of last regular route block
+.T=.T+1
+DEFSTR(TCBAD,\<.T>,35,36);24		;Symbol to allow STAT of TCB address
+.T=.T+1
+DEFSTR(TCSQT,\<.T>,35,36)		;TODCLK received source quench expires
+.T=.T+1
+DEFSTR(TCPZT,\<.T>,35,36)		;TODCLK block on new PZ pkts expires
+.T=.T+1
+DEFSTR(TCERR,\<.T>,35,36)		;TOPS-20 error code
+.T=.T+1
+DEFSTR(TCCIU,\<.T>,17,18)		;Count of URGENT interrupts
+DEFSTR(TCCIR,\<.T>,35,18)		;Count of RECV interrupts
+.T=.T+1
+DEFSTR(TCCIS,\<.T>,17,18)		;Count of SEND interrupts
+DEFSTR(TCCIE,\<.T>,35,18)		;Count of ERROR interrupts
+.T=.T+1
+DEFSTR(TCCIX,\<.T>,17,18)		;Count of STATE CHANGE interrupts
+DEFSTR(TCCIA,\<.T>,35,18)		;Count of DATA ACK interrupts
+.T=.T+1
+DEFSTR(TCOMZ,\<.T>,35,18)		;Optimization configuration
+.T=.T+1
+DEFSTR(TRLRX,\<.T>,2,3)			;Holds PO1RX
+					;1 Unused bit
+DEFSTR(TRLST,\<.T>,35,32)		;Holds PO1LS
+.T=.T+1
+DEFSTR(TSPET,\<.T>,35,36)		;Pipe Empty Time (flow control)
+.T=.T+1
+DEFSTR(TSEPT,\<.T>,35,36)		;Encourage Packet Time
+.T=.T+1
+DEFSTR(THPRS,\<.T>,35,36)		;Starting high precision run time
+.T=.T+1
+DEFSTR(THPRT,\<.T>,35,36)		;High precision run time
+.T=.T+1
+DEFSTR(TCSQF,\<.T>,35,36)		;TODCLK of next time can send a SQuench
+.T=.T+1					;Spare
+;Don't forget to add new entries to TCBTCB macro
+TCBSIZ==.T+1				;Size of a TCB
+	PURGE .T
+
+;The following definition must match that in TTTVDV.MAC
+
+TTNETW==4 			;(i.e. TTDEV)
+DEFSTR(PTVT,TTNETW,35,23)	;Holds pointer to TVT's TCB
+
+	SUBTTL	TCP User Interface (BBN), Buffer Header
+
+;Flag bit definitions:
+
+TCP%ER==1B0			;ERROR
+TCP%LE==1B1			;Local error flag (0 is remote)
+TCP%PE==1B2			;Permanent error (0 is temporary)
+TCP%EC==37B7			;Error code w/o flags
+TCP%DN==1B12			;DONE
+TCP%UR==1B15			;URGENT data
+TCP%PU==1B16			;PUSH buffered data
+TCP%WM==1B17			;WORD mode (unimplemented)
+.TCPBF==^D0			;Buffer Flags, RH for use by user
+.TCPBA==^D1			;Buffer data address, data in bits 0-31
+.TCPBC==^D2			;Buffer data count
+				;Octets to send, octets unsent (SEND)
+				;Octets available, octets unused (RECV)
+.TCPBO==^D3			;Buffer option addresses
+ .TCPOW==^D10			;Buffer option address word count
+.TCPBI==^D4			;Buffer IP info
+.TCPBS==^D5			;Buffer header size
+
+;CHKARG stack parameter block definitions
+;		Caller				Callee
+;	TRVAR <<ARGBLK,CHKADW>,...>
+;	CHKADL <<locals>>			CHKADL <<locals>>
+;	XMOVEI PARAMS,ARGBLK			MOVEM T1,PARAMS
+;	...code...				...code...
+;	CHKADR					CHKADR
+;	ENDTV.
+
+DEFINE CHKADL (LOCL)<
+IFB  <LOCL>,<ACVAR <PARAMS>>
+IFNB <LOCL>,<ACVAR <PARAMS,LOCL>>
+LALL
+DEFINE LH<0(PARAMS)>
+DEFINE LP<1(PARAMS)>
+DEFINE FH<2(PARAMS)>
+DEFINE FP<3(PARAMS)>
+DEFINE JCN<4(PARAMS)>
+DEFINE WILDOK<5(PARAMS)>
+DEFINE FN<6(PARAMS)>
+DEFINE ARG1<7(PARAMS)>
+DEFINE ARG2<10(PARAMS)>
+SALL
+> ;End of DEFINE CHKADL
+
+CHKADW==11
+
+DEFINE CHKADR <PURGE LH,LP,FH,FP,JCN,WILDOK,FN,ARG1,ARG2
+ENDAV.
+> ;End of CHKADR
+	SUBTTL	TCP User Interface (BBN), Internal Buffer Structure
+
+				;BUFFER Structure:
+BFRQ==<.B==0>			;Queue
+
+BFRSUI==<.B==.B+QSZ>		;Start of user information
+BFRFLG==BFRSUI+.TCPBF		;Flag word (from user -ER,LE,PE,EC,DN)
+DEFSTR(BURG,BFRFLG,^L<TCP%UR>,1);URGENT
+DEFSTR(BPSH,BFRFLG,^L<TCP%PU>,1);PUSH
+;DEFSTR(BWM,BFRFLG,^L<TCP%WM>,1);Word mode (not implemented)
+BFRDAD==BFRSUI+.TCPBA
+DEFSTR(BDADR,BFRDAD,35,36)	;User's data buffer address
+				;Overlays for above
+  DEFSTR(BDAPO,BFRDAD,5,6)	;Byte Position
+  DEFSTR(BDASZ,BFRDAD,11,6)	;Byte Size
+  DEFSTR(BDAIN,BFRDAD,12,1)	;Indirect bit (not used)
+  DEFSTR(BDASE,BFRDAD,17,5)	;Section number
+  DEFSTR(BDAAD,BFRDAD,35,18)	;Address
+BFRCNT==BFRSUI+.TCPBC
+DEFSTR(BCNT,BFRCNT,35,36)	;Count (Down, words/bytes)
+BFROPT==BFRSUI+.TCPBO
+
+BFREUI==<.B==BFRSUI+.TCPBS>	;End of user info
+DEFSTR(BHADR,\<.B>,35,36)	;User's (pseudo BFRQ) header address
+ DEFSTR(BHDSE,\<.B>,17,5)	;Section number of buffer header
+
+.B==.B+1
+DEFSTR(BICNT,\<.B>,35,36)	;Initial count (words/bytes)
+
+.B==.B+1
+DEFSTR(BFRKX,\<.B>,17,18)	;Owning FORKX
+DEFSTR(BFRMN,\<.B>,18,1)	;Buffer in monitor address space
+DEFSTR(BFSRC,\<.B>,19,1)	;Set when BxSPT's share count is to be changed
+DEFSTR(BIDX,\<.B>,35,9)		;Wait bit index (if waiting), else 0
+
+.B==.B+1
+DEFSTR(BHSPT,\<.B>,17,18)	;SPT index of section map containing header
+DEFSTR(BDSPT,\<.B>,35,18)	;SPT index of section map containing data
+
+BFRPTR==<.B==.B+1>
+DEFSTR(BPTR,BFRPTR,35,36)	;Data pointer
+				;Overlays for above:
+  DEFSTR(BPTRP,BFRPTR,5,6)	;Position field (^D36, initially)
+  DEFSTR(BPTRS,BFRPTR,11,6)	;Size field (8 (or ^D36 if TCP%WM))
+  DEFSTR(BPTRA,BFRPTR,35,18)	;Address field
+
+.B==.B+1
+DEFSTR(BTCB,\<.B>,35,36)	;Extended TCB address
+
+.B==.B+1
+DEFSTR(BTS,\<.B>,35,36)		;Timestamp (a TODCLK)
+	BFRSIZ==.B+1
+
+
+;Event codes:
+
+E.BIT==200			;ERROR bit
+L.BIT==100			;LOCAL condition bit
+P.BIT==040			;PERMANENT condition bit
+
+OK==0*E.BIT+0*L.BIT+0*P.BIT	;General success code
+XFT==0*L.BIT+0*P.BIT		;Temporary Foreign condition
+XFP==0*L.BIT+1*P.BIT		;Permanent Foreign condition
+XLP==1*L.BIT+1*P.BIT		;Permanent Local condition
+XLT==1*L.BIT+0*P.BIT		;Temporary Local condition
+EFT==1*E.BIT+0*L.BIT+0*P.BIT	;Temporary Foreign Error
+EFP==1*E.BIT+0*L.BIT+1*P.BIT	;Permanent Foreign Error
+ELT==1*E.BIT+1*L.BIT+0*P.BIT	;Temporary Local Error
+ELP==1*E.BIT+1*L.BIT+1*P.BIT	;Permanent Local Error
+
+;Other codes:
+
+IGN==100		        ;Packet is to be ignored
+DUP==10			        ;Packet is a duplicate (in TCPIP)
+ERR==1			        ;Packet is in error (in TCPIP)
+
+	SUBTTL	TCP Process Structure & Macros
+
+;TCP process block
+
+PRCQ==<.F==0>		;(Ext) ptr to input queue head (TCBs, etc)
+PRCLCK==<.F==.F+1>	;Lock
+PRCROU==<.F==.F+LOCKSZ>	;(Ext) address of routine
+PRCWAK==<.F==.F+1>	;-1 or TODCLK of wakeup
+PRCQOF==<.F==.F+1>	;TCB,,m	Pointer to queue in TCB
+PRCWOF==<.F==.F+1>	;TCB,,n	Pointer to wakeup in TCB
+PRCSGT==<.F==.F+1>	;TODCLK of most recent signal
+PRCQH==<.F==.F+1>	;Queue header
+  PROCNZ==<.F==.F+QSZ>	;Number of not-to-be-cleared words
+PRCRNC==<.F==.F+0>	;Run counter
+PRCTMR==<.F==.F+1>	;Process timer
+PRCTSG==<.F==.F+1>	;Number of signals received
+PRCTCC==<.F==.F+1>	;Number of TCBs examined
+PRCTCP==<.F==.F+1>	;Number of TCBs processed
+  PROCSZ==<.F==.F+1>	;Size of a process block
+
+;Macro  which  expands  into  code  to cause a process to run after a
+;specified delay. The interesting  case  is  0  delay  in  which  the
+;routine  may be called directly, without the overhead of locking and
+;unlocking the process Q twice, and locking the TCB again etc.
+
+DEFINE $SIGNL(TPROC,DELTA,%TAGQ,%TAGX)<
+	XMOVEI T1,TPROC;;	Process to signal
+  IFE DELTA,<
+	MOVE T3,TODCLK;;	Now
+	SKIPL T2,PRCWAK(T1);;	If no wakeup set, NOW is ok
+	 CAMLE T2,T3;;		If past due, queue
+	  SKIPLE NSKED;;	NOW is ok unless NOSKED
+	   JRST %TAGQ;;		No.  Get in Q for FIFO behavior
+	PUSH P,PROC;;		Do it NOW
+	MOVEM T3,PRCSGT(T1);;	TODCLK of most recent SIGNAL
+	CALL TCPTSK;;		Call the task
+	POP P,PROC;;		Restore our ID as running process
+	JRST %TAGX;;		All done
+%TAGQ:!	>;;IFE DELTA
+	MOVX T2,DELTA;;		Number of milliseconds
+	CALL SIGNAL
+  IFE DELTA,<
+%TAGX:! >
+IF2 <PURGE %TAGX,%TAGQ>
+> ;End of DEFINE $SIGNL
+
+;Structure definitions for TCP constant fields
+
+;Maximums for RECV
+DEFSTR(TPRMH,TPRMAX,17,18)	;Max # of RECV buffers to hold for user
+DEFSTR(TPRMW,TPRMAX,23,6)	;Level at which to shut the window
+DEFSTR(TPRMQ,TPRMAX,29,6)	;Level at wichh to send a source quench
+DEFSTR(TPRMF,TPRMAX,35,6)	;Level at which to flush packets
+
+;Maximums for SEND
+DEFSTR(TPSMH,TPSMAX,17,18)	;Max # of SEND buffer to hold for user
+DEFSTR(TPSMO,TPSMAX,35,18)	;Max # of outstanding packets willing
+				;to generate for user
+
+	SUBTTL	Other Protocol Suites
+
+
+
+;End of highest level protocol
+
+	SUBTTL	Network Tracing
+
+MNTPTS==PGSIZ			;(Default) length of tracing buffer
+DEFINE MNTCPT<MNTRAC+3>		;TCP user who is tracing
+DEFINE MNTPTD<MNTRAC+5>		;# samples dropped at interrupt level
+DEFINE MNTPTB<MNTRAC+6>		;Beginning address of in-core buffer
+DEFINE MNTPTC<MNTRAC+7>		;Address of next free word
+DEFINE MNTPTE<MNTRAC+10>	;Last address for writing sample
+DEFINE MNTPTO<MNTRAC+11>	;Last address containing data (overflow)
+DEFINE MNTPTT<MNTRAC+12>	;TCB sample word:
+  DEFSTR(MNPTN,MNTPTT,8,9)	; # of words to sample (if 0 then TCBSIZ) used
+  DEFSTR(MNPTO,MNTPTT,17,9)	; Starting offset in the TCB
+  DEFSTR(MNPTJ,MNTPTT,35,18)	; Job # to set TERRT bit in upon TCB creation
+
+;Packet Printer Buffer
+
+DEFSTR(DPRO,0,5,6)		;Transport protocol code (NP.xxx)
+DEFSTR(DTYP,0,11,6)		;Local net protocol code (NL.xxx)
+DEFSTR(DDEV,0,17,6)		;Local net device type code (NH.xxx)
+DEFSTR(DLENW,0,35,18)		;Length, words, including this word
+DEFSTR(DPTRC,1,35,36)		;Trace code and flags (I.e. PT%xxx)
+DEFSTR(DTIME,2,35,36)		;Timestamp (I.e. a TODCLK)
+DEFSTR(DSTAT,3,35,36)		;TCB TSTAT word
+DEFSTR(DAUXI,4,35,36)		;Auxiliary info (e.g. number of lost samples)
+DEFSTR(DPKTP,5,35,36)		;Packet memory address
+DEFSTR(DTYPE,6,17,18)		;Type of data structure traced (ie ND.xxx)
+DEFSTR(DTCBN,6,26,9)		;TCB trace: Number of words sampled
+DEFSTR(DTCBO,6,35,9)		;	    Offset of first word traced
+PPPKTO==7			;Followed by packet sample
+
+;Must make assumption about the size of the per-protocol area in the packet:
+
+;Assume max ICMP at 2+(max IP=17(8))+2)			=23
+;Assume max TCP at 17(8) words & allow 4 words of data	=23
+
+;Size of a packet header including options:
+
+PPPKSZ==PKTELI+.RTJST(-1,IPDO)+23
+
+;Allow for the largest block we will be placing in PPBUF
+; Use the MAX(TCBSIZ,PPPKSZ,BFRSIZ)
+		   PPBFSZ==TCBSIZ
+IFG PPPKSZ-PPBFSZ,<PPBFSZ==PPPKSZ>
+IFG BFRSIZ-PPBFSZ,<PPBFSZ==BFRSIZ>
+
+;Size of the Packet Printer Buffer including control words:
+
+PPBWDS==PPPKTO+PPBFSZ+1		;Guard word
+
+
+;Packet Printer Trace Codes
+;(NB don't use 400000,,0, reserved for connection tracing)
+
+			;Bit indicating validity
+PT%%VR==100000,,0		;Registers valid
+PT%%VH==040000,,0		;Connection known, TCB/IQ=14 is valid
+PT%%VB==020000,,0		;BFR=11 is valid
+PT%%VP==010000,,0		;T/CPKT=12 is valid
+PT%%VI==004000,,0		;PKT=13 is valid
+;     ==002000,,0		;
+;     ==001000,,0		;
+			;Bit indicating error level
+PT%%EI==000400,,0		;Internal error
+PT%%EU==000200,,0		;Unimplemented
+PT%%ER==000100,,0		;Resource
+PT%%EN==000040,,0		;Normal
+			;Trap
+PT%%TR==000020,,0		;Log event
+			;Bit indicating level of detail
+PT%%LH==000010,,0		;High level
+PT%%LF==000004,,0		;Filter
+PT%%LM==000002,,0		;Medium
+PT%%LL==000001,,0		;Low
+			;Bit indicating "protocol"
+PT%%TC==200000			;TCP
+PT%%UQ==100000			;IP User Queues
+;     ==040000
+PT%%IC==020000			;ICMP
+PT%%IP==010000			;IP
+PT%%GW==004000			;Gateway
+PT%%NT==002000			;Local Net
+			;Agent & Direction
+PT%%SY==001000			;System
+PT%%UR==000400			;User
+PT%%OU==000200			;Output
+PT%%IN==000100			;Input
+
+;Plus an ID code
+
+
+DEFINE PT%XXX<;;		Local net
+PT(RLN,30,<SY,IN,NT,LL,VI,EN>);;	Packet received from local net
+PT(KLI,10,<SY,IN,NT,LL,VI,ER>);;	Note of samples being dropped
+PT(KIL,11,<SY,IN,NT,LL,VI,ER>);;	Input packet flushed by local net
+PT(KOL,11,<SY,OU,NT,LL,VI,ER>);;	Output packet flushed by local net
+PT(KLO,10,<SY,OU,NT,LL,VI,ER>);;	Note of samples being dropped
+PT(SLN,30,<SY,OU,NT,LL,VI,EN>);;	Packet sent over local net
+;;				Input, gateway level
+PT(RGW,30,<SY,IN,GW,LL,VI>);;		Packet received at gateway from net
+PT(KIP,11,<SY,IN,GW,LL,VI,EN>);;	Killed invalid format
+PT(KCS,13,<SY,IN,GW,LL,VI,EN,TR>);;	Killed checksum
+PT(KDP,14,<SY,IN,GW,LL,VI,EN>);;	Killed duplication
+PT(KIS,20,<SY,IN,GW,LL,VI,ER>);;	Killed no space to reassemble
+PT(KIT,21,<SY,IN,GW,LL,VI,EN>);;	Killed reassembly timeout
+PT(QIF,40,<SY,IN,GW,LL,VI>);;		Internet fragment queued (INTRAQ)
+PT(DIF,44,<SY,IN,GW,LL,VI>);;		Dequeued and reassembled
+PT(IRA,45,<SY,IN,GW,LL,VI>);;		Reassembled packet created
+;;				Special codes used by TCPUtility
+PT(A2B,70,<SY,IN,OU,GW,LH,VI>);;	Packet passing from A to B
+PT(B2A,71,<SY,IN,OU,GW,LH,VI>);;	Packet passing from B to A
+PT(I2A,72,<SY,OU,EN,GW,LH,VI>);;	ICMP message sent to A
+PT(I2B,73,<SY,OU,EN,GW,LH,VI>);;	ICMP message sent to B
+PT(KLA,74,<SY,IN,EN,GW,LH,VI>);;	Packet from A dropped
+PT(KLB,75,<SY,IN,EN,GW,LH,VI>);;	Packet from B dropped
+PT(X2A,76,<SY,IN,OU,GW,LH,VI>);;	Packet from X to A
+PT(X2B,77,<SY,IN,OU,GW,LH,VI>);;	Packet from X to B
+;;				Input, IP level
+PT(IDD,30,<SY,IN,IP,LL,VI>);;		Dequeued for dispatch
+PT(IKC,13,<SY,IN,IP,LL,VI,EN,TR>);;	Killed due to invalid checksum
+PT(IKP,16,<SY,IN,IP,LL,VI,EU>);;	Killed due to invalid protocol
+PT(IQP,57,<SY,IN,IP,LL,VI>);;		Queued for protocol module
+;;				Output, IP level
+PT(IDO,57,<SY,OU,IP,LL,VI>);;		Dequeued packet for output
+PT(IQG,30,<SY,OU,IP,LL,VI>);;		Queued packet for gateway
+;;				Output, Gateway level
+PT(RGI,57,<SY,OU,GW,LL,VI>);;		Received at gateway from IP
+PT(KDF,24,<SY,OU,GW,LL,VI,EN>);;	Killed fragmentation not allowed
+PT(KIA,23,<SY,OU,GW,LL,VI,EN>);;	Killed addressing failure
+PT(KPT,21,<SY,OU,GW,LL,VI,EN>);;	Killed packet (fragmentation) timeout
+PT(KIO,22,<SY,OU,GW,LL,VI,EN>);;	Killed ill formated options
+PT(KFS,20,<SY,OU,GW,LL,VI,ER>);;	Killed insufficient space to fragment
+PT(KLN,25,<SY,OU,GW,LL,VI,EN>);;	Killed local net refused
+PT(BYP,34,<SY,OU,GW,LL,VI>);;		Queued for GW input
+PT(IFR,33,<SY,OU,GW,LL,VI>);;		Internet fragment created
+PT(QLN,30,<SY,OU,GW,LL,VI>);;		Queued for local net
+PT(FIN,60,<SY,OU,GW,LL,VI>);;		Packet released
+;;				ICMP
+PT(CDI,30,<SY,IN,IC,LM,VI>);;		ICMP received packet
+PT(CKS,12,<SY,IN,IC,LL,VI,EN>);;	Killed due to truncated packet
+PT(CKC,13,<SY,IN,IC,LL,VI,EN,TR>);;	Killed due to bad checksum
+PT(CKT,16,<SY,IN,IC,LL,VI,EN>);;	Killed due to bad ICMP Type
+PT(CKX,17,<SY,IN,IC,LL,VI,EN>);;	Killed due to bad ICMP Code
+;;				Traps (some, see also checksum failures, etc)
+PT(SQI,42,<SY,NT,LM,EN,TR>);;		Source quench from net interface
+PT(SQX,47,<SY,IC,LM,EN,TR>);;		Source quench
+PT(RNE,53,<SY,IC,LM,EN,TR>);;		Redirect net
+PT(RNT,54,<SY,IC,LM,EN,TR>);;		Redirect net+TOS
+PT(RHO,55,<SY,IC,LM,EN,TR>);;		Redirect host
+PT(RHT,56,<SY,IC,LM,EN,TR>);;		Redirect host+TOS
+PT(IDN,62,<SY,NT,LM,EN,TR>);;		Interface went down
+PT(NDN,63,<SY,IC,LM,EN,TR>);;		Net unreachable
+PT(GDN,64,<SY,IC,LM,EN,TR>);;		Gateway (host) unreachable
+PT(HDN,65,<SY,IC,LM,EN,TR>);;		Host unreachable
+PT(PDN,66,<SY,IC,LM,EN,TR>);;		Protocol unreachable
+PT(CDN,67,<SY,IC,LM,EN,TR>);;		Port unreachable
+PT(IUP,72,<SY,NT,LM,EN,TR>);;		Interface came up
+PT(NUP,73,<SY,GW,LM,EN,TR>);;		Traffic from net
+PT(GUP,74,<SY,GW,LM,EN,TR>);;		Traffic from gateway (host)
+PT(HUP,75,<SY,GW,LM,EN,TR>);;		Traffic from host
+PT(PUP,76,<SY,TC,LM,EN,TR>);;		Traffic from protocol
+PT(CUP,77,<SY,TC,LM,EN,TR>);;		Traffic from port
+;;				Input, Internet User Queues
+PT(UDI,30,<SY,IN,UQ,LM>);;		Received packet
+PT(UKQ,16,<SY,IN,UQ,LL,VI,EN>);;	Killed due to no such queue
+PT(UKS,20,<SY,IN,UQ,LL,VI,ER>);;	No space in RECIN queue
+PT(UKT,21,<SY,IN,UQ,LL,VI,EN>);;	RCVIN queue timedout
+PT(UQU,57,<SY,IN,UQ,LM>);;		Passed to user
+;;				User Interface, Internet User Queues
+PT(UQA,02,<UR,IN,UQ,LM>);;		User queue assigned
+PT(URJ,30,<UR,IN,UQ,LM>);;		User receive
+PT(USJ,57,<UR,OU,UQ,LM>);;		User send
+PT(UQD,02,<UR,OU,UQ,LM>);;		User queue deassigned
+;;				Output, Internet User Queues
+PT(UDU,57,<SY,OU,UQ,LH,VI>);;		Received from user
+PT(UKP,11,<SY,OU,UQ,LL,VI>);;		Killed
+PT(UQO,30,<SY,OU,UQ,LL,VI>);;		Queued for output
+;;				Input, TCP level
+PT(TDI,30,<SY,IN,TC,LH,VH,VP,VI>);;	Received packet
+PT(TKI,31,<SY,IN,TC,LH,VH,VP,VI,EN>);;	Killed ICMP packet, no connection
+PT(TIC,32,<SY,IN,TC,LH,VH,VP,VI,EN>);;	Received ICMP packet, have connection
+PT(TRS,01,<SY,IN,TC,LL,VH,VP,VI,EN>);;	Reset received
+PT(TKR,10,<SY,IN,TC,LL,VH,VP,VI,EN>);;	Killed & sent RST
+PT(TKC,13,<SY,IN,TC,LL,VH,VP,VI,EN,TR>);; Killed due to bad checksum
+PT(TKD,14,<SY,IN,TC,LL,VH,VP,VI,EN>);;	Killed due to duplicate
+PT(TKS,15,<SY,IN,TC,LL,VH,VP,VI,EN>);;	Killed due to sequence error
+PT(TKX,16,<SY,IN,TC,LL,VH,VP,VI,EN>);;	Killed due to no local connection
+PT(TKN,17,<SY,IN,TC,LL,VH,VP,VI,EN>);;	Killed due to closed connection
+PT(TKT,20,<SY,IN,TC,LL,VH,VP,VI,EN>);;	Killed due to no available TVTs
+PT(TKQ,21,<SY,IN,TC,LL,VH,VP,VI,EN>);;	Killed due to input queue too long
+;;PT(TTP,37,<SY,IN,TC,LL,VH,VP,VI>);;	TRMPKT trimming packet
+PT(TQR,40,<SY,IN,TC,LL,VH,VP,VI>);;	Queued for reassembly
+PT(TRA,42,<SY,IN,TC,LM,VH,VP,VI>);;	Being reassembled
+PT(TDR,44,<SY,IN,TC,LL,VH,VP,VI>);;	Dequeued from reassembly
+PT(TID,60,<SY,IN,TC,LL,VH,VP,VI>);;	Done with packet
+PT(TIR,01,<SY,OU,TC,LL,VH,VP,VI,EN>);;	Reset sent in response to input pkt
+;;				User Interface, TCP level
+PT(TST,10,<UR,TC,LM>);;			User status request
+PT(TOJ,02,<UR,TC,LM,VH>);;		User Open
+PT(TIS,03,<UR,TC,LM,VH>);;		Interrupt levels specified
+PT(TSL,05,<UR,TC,LM,VH>);;		User security level change
+PT(TSM,42,<UR,TC,LM,VH,VB>);;		Map set to user
+PT(TUM,44,<UR,TC,LM,VH,VB>);;		Map reset
+PT(TRD,30,<UR,IN,TC,LM,VH,VB>);;	User receive data
+PT(TIO,34,<UR,IN,TC,LM,VH,VB>);;	Options to user
+PT(TOO,35,<UR,OU,TC,LM,VH,VB>);;	User options processed
+PT(TSD,57,<UR,OU,TC,LM,VH,VB>);;	User send data
+PT(TBF,60,<UR,IN,TC,LM,VH,VB>);;	User buffer filled
+PT(TBE,60,<UR,OU,TC,LM,VH,VB>);;	User buffer emptied
+PT(TKB,12,<UR,TC,LM,VH,VB>);;		User buffer killed due to error
+PT(TER,11,<UR,TC,LM,VH>);;		Error
+PT(TIU,06,<UR,TC,LM,VH>);;		Interrupt to user
+PT(TSC,04,<UR,OU,TC,LM,VH,VI>);;	Secure close
+PT(TVT,07,<UR,TC,LM,VH>);;		ATNVT for TVT
+PT(TCJ,02,<UR,OU,TC,LM,VH>);;		User Close
+PT(TAJ,01,<UR,TC,LM,VH>);;		User Abort
+PT(TAB,01,<SY,TC,LM,VH>);;		Abort (not user)
+;;				Output, TCP level
+PT(TPZ,60,<SY,OU,TC,LM,VH,VP,VI>);;	TCP packet generated (Normal)
+PT(TQX,40,<SY,OU,TC,LM,VH,VP,VI>);;	TCP PKT queued for RX
+PT(TRX,42,<SY,OU,TC,LM,VH,VP,VI>);;	TCP PKT being RX'd
+PT(TDX,44,<SY,OU,TC,LM,VH,VP,VI>);;	TCP PKT dequeued from RX
+PT(TRT,46,<SY,OU,TC,LM,VR>);;		TCP round trip time update
+PT(TTR,30,<SY,OU,TC,LM,VH,VP,VI>);;	TCP packet transmitted
+PT(TSC,04,<SY,OU,TC,LM,VH,VP,VI>);;	TCP secure close generated
+PT(TOR,03,<SY,OU,TC,LM,VH,VP,VI>);;	TCP Reset generated by output
+> ;End of DEFINE PT%XXX
+
+;Macro to define trace codes
+
+DEFINE PT(NAM,VAL,LST)<	.X==VAL
+IRP LST,<.X==.X+PT%%'LST>
+PT%'NAM==.X>
+
+	PT%XXX				;Define PT% codes
+
+	PURGE PT			;Flush macro definition
+
+	SUBTTL	Network Variables and Monitoring Information
+
+COMMENT	\	Monitoring
+
+NTITEM macro defines one or more named cells. The arguments are
+	DEFINE NTITEM (nam,len,lvl,typ,init,fmt,symb)
+
+nam  is	the symbolic name of the cell (vector)
+
+len  is	the length (words) of the vector (must be specified, ge 1)
+
+lvl  is the minimum monitoring level required for this info to be collected
+
+typ  is	G	"nam" is a global symbol, defining the beginning of a
+		block.  Subsequent NTITEMs in the same block have
+	O	"nam" is an offset (not global) from the last "G".
+(obs)	R	Kludge to get TCB address from register TCB via an LDB.
+	S	"nam" is a previously defined block not in the stat area.
+	T	"nam" is a TCB structure entry (no associated block).
+
+init is	a list of initial values;  ** BEWARE **  blank entries are cleared
+	by the STSINI call; non-blank entries are not cleared.
+	The symbol REST0 may be used to leave the rest of the area to zeros.
+
+fmt	describes the format of the vector
+	B1	n,<x>*(n-1)	count, block of n-1 words consisting of
+	V1	<x>*(n)		a list of n words, or
+	V2	n,x,<y,z>*(n)	count,x, list of n <count,value> pairs, or
+	M1	n,<x>*(n)	count, a list of n words, or
+	M2	n,x,<y,oM1>*(n)	count,x, list of n <count,offset to an M1>
+
+symb	List of names for individual entries
+	B1	block name, n-1 names
+	V1	n names
+	V2	name,name, n names
+	M1	name, n names
+	M2	name,name, n names
+
+References to the entries defined by NTITEM are made via the CELL macro.
+Its arguments are:
+
+  nam	is a nam appearing in an NTITEM
+
+  off	is the offset from nam, in the range 0 to len-1
+	[CELL makes sure the offset is within the range]
+
+  idx	is an index, typically (T1) [the range cannot be validated be CELL]
+
+  blk	is the id of the block in which nam appears [first three characters
+	of nam, unless the base address will be contained in the idx]
+
+   \
+
+
+;Set default tracing level to 2 if site has not specified otherwise
+
+IFDEF CMU,<
+IFNDEF MNTMN,<MNTMN==0>		;CS147 No tracing is default
+IFNDEF IPMONF,<IPMONF==0>	;CS147 No monitoring is default
+> ; End of IFDEF CMU
+IFNDEF MNTMN,<MNTMN==2>		; Low statistic gathering
+IFNDEF IPMONF,<IPMONF==1>	; Report statistics for later analysis
+
+;Define macros for conditional code assembly
+
+DEFINE MNTM0(code),<IFGE MNTMN-0,<code>>	;Minimal monitoring
+DEFINE MNTM2(code),<IFGE MNTMN-2,<code>>	;Low monitoring
+DEFINE MNTM5(code),<IFGE MNTMN-5,<code>>	;Medium monitoring
+DEFINE MNTM9(code),<IFGE MNTMN-9,<code>>	;Maximal monitoring
+
+
+
+;Define macros to access and check use of monitoring variables
+
+;CELL(name,offset,index,monitoring block)  accesses the named
+;entry at the specified offset.  In the usual case, index is
+;omitted and the monitoring block is specified (first 3 letters
+;of the name).  The offset may be increased by the contents of
+;an index register (e.g.  (T2)  ), or may be used instead of the
+;base when the index register points to the block (i.e. the "G"
+;entry, NOT the named entry, "O") (multiple instances of a block).
+
+
+;XCELL(name,offset,index,base) should be used when the index points
+;to the named entry.  It does not use name or base but they may be
+;included for documentation purposes.
+
+
+DEFINE CELL(nam,off,idx,blk<,>)<CELL1(idx,O'nam+off,blk,+blk'AA)
+IFGE off-M'nam,<CELLER(nam,\off,\M'nam,\.)>>
+
+DEFINE CELL1(idx,symoff,xxxx,base)<symoff'base'idx>
+
+DEFINE CELLER(symb,off,max,pc)<
+PRINTX ? Offset for symb exceeds length (off .ge. max) at location pc'.>
+
+
+DEFINE XCELL(nam,off,idx,blk)<off'idx>
+
+
+;In-line code segments to histogram data, by value or by list of values
+
+;Histogram the value contained in register "val" into the vector "nam"
+;(which has fmt V2 - bucket ranges) using registers pt and rx
+;(which are NOT preserved).  If "nam" is NOT specified, register "pt"
+;is assumed to contain a pointer to the vector at the 0th count entry,
+;(ie. at the n,sum,cnt triple).
+
+;Format is:	n,sum,cnt,<y,z>*(n)
+;		number,sum,count, list of n <occurances,limit> pairs
+
+
+DEFINE INHIST(nam,blk,val,pt,rx,%lab1,%lab2)<
+IFNB <nam>,<
+ IFNB <blk>,<MOVEI pt,CELL(nam,3,,blk)>;;	Point to 0th bin
+ IFB  <blk>,<MOVEI pt,CELL(nam,3)>>;;		Point to 0th bin
+IFB <nam>,<ADDI pt,3>;;				Point to 0th bin
+	AOS XCELL(,-1,(pt));;			Count INHISTs
+	ADDM val,XCELL(,-2,(pt));;	 	Sum the values
+	MOVN rx,XCELL(,-3,(pt));;		Number of bins
+	HRL pt,rx;;				AOBJN pointer
+%lab1:!	CAMG val,XCELL(,1,(pt));;		This bin (.le.limit)
+	  JRST %lab2;;				Yes
+	ADDI pt,1;;				Two words per bin
+	AOBJN pt,%lab1;;			Try next
+	SUBI pt,2;;				Back to last bin
+	SKIPGE XCELL(,1,(pt));;			Last bin "all" (negative)?
+%lab2:!	  AOS XCELL(,0,(pt));;			Yes, count (overflows)
+IF2 <PURGE %lab1,%lab2>
+> ;End of DEFINE INHIST
+
+
+;Histogram the value (0 to n-1) contained in register "val" into the
+;vector "nam" (which has fmt M1 or M2) using registers pt and rx
+;(which are NOT preserved).  If "nam" is NOT specified, register "pt"
+;is assumed to contain a pointer to the 0th count entry
+;(ie., the n,sum,cnt triple).  Leaves pt pointing to cell inc'd.
+
+;Format is:	n,sum,cnt,<x>*(n)	# bins,sum,count,   n bins
+;		n,sum,cnt,<y,z>*(n)	# bins,sum,count,   n pairs of bins
+
+
+DEFINE INHSTI(nam,blk,val,pt,rx,siz<1>,%lab1)<
+IFN <siz-1>*<siz-2>,<PRINTX ? INHSTI bin size (siz) must be 1 or 2>
+IFNB <nam>,<
+ IFNB <blk>,<MOVEI pt,CELL(nam,3,,blk)>;;	Point to 0th bin
+ IFB  <blk>,<MOVEI pt,CELL(nam,3)>>;;		Point to 0th bin
+IFB <nam>,<ADDI pt,3>;;				Point to 0th bin
+	AOS XCELL(,-1,(pt));;			Count INHSTIs
+	ADDM val,XCELL(,-2,(pt));;		Sum the value
+	SETZ rx,;;				Bin 0
+	JUMPLE val,%lab1;;			Less than 0 into bin 0
+	HRRZ rx,XCELL(,-3,(pt));;		Number of bins
+	SUBI rx,1;;				Index of last bin
+	CAIGE val,(rx);;			Have a bin?
+	  MOVE rx,val;;				Yes, use it
+IFE <siz-2>,<	LSH rx,1>;;			Two words per bin
+	ADDI pt,(rx);;				Locate slot
+%lab1:!	AOS XCELL(,0,(pt));;			Count entry
+IF2 <PURGE %lab1>
+> ;End of DEFINE INHSTI
+
+;Multinet Statistics Blocks
+
+;Driver ring buffer
+IPDVTM==0			;TODCLK
+IPDVBF==1			;Buffer address, containing flags...
+  IPDV%D==1B2			;Buffer (will be) dropped (e.g., NTSCHK)
+  IPDV%R==1B3			;Buffer is special (e.g., canned)
+  IPDV%I==0B4			;Buffer is for input, or
+  IPDV%O==1B4			;Buffer is for output
+  IPDV%B==0B5			;Buffer processing beginning, or
+  IPDV%E==1B5			;Buffer processing completed
+  IPDV%==IPDV%D!IPDV%R!IPDV%I!IPDV%O!IPDV%B!IPDV%E ;All flags
+IPDVLL==2			;Local leader
+IPDVSZ==IPDVLL+MAXLDR+2		;Size of an entry
+IPDVNT==100			;Entries in ring
+
+
+;*************************************************
+MNMVER==10			;Version number *
+;*************************************************
+
+
+;Local Network Interface Monitoring Variables
+
+DEFINE MNMSTS(nctn<N>,which<4>)<;;	Statistics Information for Multinet
+IFDIF <nctn><N>,<IFN .ntias,<NCT'nctn'A::>;;	NTPSTI points here
+  NTITEM (NCT'nctn'A,NCT'nctn'B,0,S,,V1,<<NCT'nctn'B,.SDO.,<NCT nctn>>>)>
+
+NTITEM (M'nctn'MAA,1,0,G,LNCT'nctn,B1,<<1,.SDD.,<NCT Length>>>)
+IF2 <IFN VNCTSZ-30,<PRINTX % Fix M'nct'MNC to correspond to modified NCT>>
+NTITEM (M'nctn'MNC,VNCTSZ,0,O,<REST0>,V1,<<1,.SDO.,< NCT Link to next>>,
+<1,<.MSK.,.SDD.,NTPRO,NTTYP,NTDEV,NTHSH,NTPRIO>,< Pro Typ Dev Hsh Prio>>,
+<1,FMT%SD+.OMG.,< Flags>>,<1,FMT%SD+.HAD.,< Net>>,
+<1,FMT%SD+.HST.,< Address>>,<2,FMT%SD+.HAD.,< Mask: Subnet,  Logical host>>,
+<1,FMT%SD+.OMG.,<  Byte ptr>>,<1,.SDD.,< Lcl ldr gap>>,
+<1,FMT%SD+.DHW.,< Max pkt (Lo dly & reg)>>,
+<4,FMT%SD+.OMG.,< Status - desired,  actual,  sts change,  output on>>,
+<3,FMT%SD+.TAD.,< When hrdwr Up (int),  Down (ext),  Up (ext)>>,
+<1,FMT%SD+.TOD.,<  Error timeout>>,<1,.TAD.,<  Down (int)>>,
+<2,FMT%SD+.OGM.,< Protocol vector, Stat-i ptr>>,
+<1,FMT%SD+.HST.,< Unreported down host>>,
+<2,FMT%SD+.OMG.,<  aux info, Link to physical>>>)
+NTITEM (M'nctn'MRC,^D18,0,O,<,,,,,,,,,,,,,0,0,0>,V1,
+<<15,.DEC.,<Received: pkts, ip pkt, ok drop, error drop, busy, false,
+ overrun, no buf imp,  int, vanished, hung, interrupt error, clear buf>>,
+<1,.SDD., timek>,<1,FMT%SD+.TOD.,< timer>>,
+<2,.SDD.,< last cnt, peak>>,<1,FMT%SD+.TOD.,< when>>>)
+NTITEM (M'nctn'MSC,^D18,0,O,<,,,,,,,,,,,,,0,0,0>,V1,
+<<15,.DEC.,<Sent: pkts, ip pkt,,, retry, nothing, overrun,,,
+ vanished, hung, interrupt error, clear buf>>,
+<1,.SDD., timek>,<1,FMT%SD+.TOD.,< timer>>,
+<2,.SDD.,< last cnt, peak>>,<1,FMT%SD+.TOD.,< when>>>)
+NTITEM (M'nctn'MSQ,5,0,O,<0>,V1,<<5,.QUE.,<Send queue length>>>)
+NTITEM (M'nctn'MSR,8,0,O,,V1,<<1,.DEC.,<RFNM blocks>>,<1,.CMS.,< duration>>,
+<5,.DEC.,< RFNM equivalents, timeouts, clear table, n pkts hld, peak>>,
+<1,.TOD.,< when>>>)
+NTITEM (M'nctn'MST,2,0,O,,V1,<<2,.DEC.,<Status change, NTSCHK failed>>>)
+NTITEM (M'nctn'MVT,<NTPVSZ+NTHVSZ>,0,O,,V1,
+<<NTPVSZ,.DEC.,<Protocol: kill, error, input done, output done,
+ leaders, init, maintenance, removed>>,
+<NTHVSZ,.DEC.,<Hardware: kill, resrt, input start, output start,
+ check, removed>>>)
+NTITEM (M'nctn'MWR,^D16,0,O,<,,,3720,0,,,,,,,,,,0,0>,V1,
+<<3,.DEC.,<Recv rates: sum pkts,  bytes,  ms>>,<2,.SDD.,< baud, ts>>,
+<3,.SDD.,< inc pkts,  bytes,  ms>>,
+<6,.DEC.,< idle,  ms, pkt,  ms, runs,  ms>>,
+<2,FMT%SD+.TOD.,< time begin cb, time last b/e>>>)
+NTITEM (M'nctn'MWS,^D16,0,O,<,,,3720,0,,,,,,,,,,0,0>,V1,
+<<3,.DEC.,<Send rates: sum pkts,  bytes,  ms>>,<2,.SDD.,< baud, ts>>,
+<3,.SDD.,< inc pkts,  bytes,  ms>>,
+<6,.DEC.,< idle,  ms, pkt,  ms, runs,  ms>>,
+<2,FMT%SD+.TOD.,< time begin cb, time last b/e>>>)
+NTITEM (M'nctn'MWT,^D21,0,O,
+<11,,,,62,,144,,764,,1750,,3720,,5670,,11610,,23420,,-1>,V2,
+<<25,FMT%DV+.BH2.,<Transmission Queue Delay Hist(ms)>>>)
+NTITEM (M'nctn'MWU,^D21,0,O,
+<11,,,,1,,4,,20,,100,,400,,2000,,10000,,40000,,-1>,V2,
+<<25,FMT%DV+.BH2.,<Receiver Idle Time Hist(ms)>>>)
+NTITEM (M'nctn'MWV,^D21,0,O,
+<11,,,,1,,4,,20,,100,,400,,2000,,10000,,40000,,-1>,V2,
+<<25,FMT%DV+.BH2.,<Receiver Busy with Packet Hist(ms)>>>)
+NTITEM (M'nctn'MWW,^D21,0,O,
+<11,,,,1,,4,,20,,100,,400,,2000,,10000,,40000,,-1>,V2,
+<<25,FMT%DV+.BH2.,<Receiver Continually Busy Hist(ms)>>>)
+NTITEM (M'nctn'MWX,^D21,0,O,
+<11,,,,1,,4,,20,,100,,400,,2000,,10000,,40000,,-1>,V2,
+<<25,FMT%DV+.BH2.,<Transmitter Idle Time Hist(ms)>>>)
+NTITEM (M'nctn'MWY,^D21,0,O,
+<11,,,,1,,24,,50,,54,,67,,70,,175,,400,,-1>,V2,
+<<25,FMT%DV+.BH2.,<Transmitter Busy with Packet Hist(ms)>>>)
+NTITEM (M'nctn'MWZ,^D21,0,O,
+<11,,,,1,,4,,20,,100,,400,,2000,,10000,,40000,,-1>,V2,
+<<25,FMT%DV+.BH2.,<Transmitter Continually Busy Hist(ms)>>>)
+
+IFDIF <nctn><N>,<IFN .ntias,<NCT'nctn'B==:.-NCT'nctn'A>>
+
+IFGE which-2,<;;			NTPSTS points here
+IFDIF <nctn><N>,<IFN .ntias,<NCT'nctn'C::>;;Type of Local Net Messages Received
+  NTITEM (NCT'nctn'C,NCT'nctn'D,0,S,,V1,<<NCT'nctn'D,FMT%SD+.OMG.,<NCT nctn>>>)>
+
+NTITEM (M'nctn'MXR,105,0,O,<^D16,,,,.+37,,.+45,,,,,,,,,,,,.+41,,,,.+45,
+,,,,,,,,,,,,5,,,,,,,,5,,,,,,,,5,,,,,,,,7,,,,,,,,,>,M2,
+<<43,FMT%SS+FMT%SV+FMT%SZ+.BH2.,<Datagrams Received by Type/Subtype,
+Reg,Err,IMP go down,,NOP,RFNM,Dead host stat,Dest dead,Err data,Inc,Reset>>,
+<10,FMT%SS+FMT%SZ+.BH1.,<0 Regular>>,
+<10,FMT%SS+FMT%SZ+.BH1.,<1 Error>>,
+<10,FMT%SS+FMT%SZ+.BH1.,<7 Dst Dead, IMP, Host,, Prohibited>>,
+<12,FMT%SS+FMT%SZ+.BH1.,<9 Incomplete, Slow, Long, 15 s, Msg lost, Resource>>>)
+
+IFDIF <nctn><N>,<IFN .ntias,<NCT'nctn'D==.-NCT'nctn'C>>
+>;;End of IFGE which-2
+
+
+IFGE which-3,<
+IFDIF <nctn><N>,<IFN .ntias,<NCT'nctn'E::>;;Type of Local Net Messages Sent
+  NTITEM (NCT'nctn'E,NCT'nctn'F,0,S,,V1,<<NCT'nctn'F,.SDO.,<NCT nctn>>>)>
+
+NTITEM (M'nctn'MXS,56,0,O,<^D10,,,,.+23,,.+31,,,,,,.+32,,,,,,,,,,,
+5,,,,,,,,4,,,,,,,5,,,,,,,>,M2,
+<<27,FMT%SS+FMT%SV+FMT%SZ+.BH2.,<Messages Sent by Type/Subtype,
+Reg,Err,Host go down,,NOP,,,,Err+ID>>,
+<10,FMT%SS+FMT%SZ+.BH1.,<0 Regular>>,<7,FMT%SS+FMT%SZ+.BH1.,<1 Error>>,
+<10,FMT%SS+FMT%SZ+.BH1.,<4 NOP>>>)
+
+IFDIF <nctn><N>,<IFN .ntias,<NCT'nctn'F==.-NCT'nctn'E>>
+>;;End of IFGE which-3
+
+
+IFGE which-4,<
+IFDIF <nctn><N>,<IFN .ntias,<NCT'nctn'G::>;;	Local Net Packet Trace Ring
+  NTITEM (NCT'nctn'G,NCT'nctn'H,0,S,,V1,<<NCT'nctn'H,.SDO.,<NCT nctn>>>)>
+
+NTITEM (M'nctn'MXX,<2+IPDVSZ*IPDVNT>,0,O,<IPDVSZ*IPDVNT,0>,V1,
+<<2,FMT%SD+.OMG.,<Offset max, current>>,<IPDVSZ*IPDVNT,.PKT.,>>)
+
+IFDIF <nctn><N>,<IFN .ntias,<NCT'nctn'H==.-NCT'nctn'G>>
+>;;End of IFGE which-4
+
+IFDIF <nctn><N>,<.ntitx==.ntitx+1;;	Increment instance counter
+  IFN .ntias,<LNCT'nctn==.-NCT'nctn'A>>;;Length of this instance of MNMSTS
+;;IFIDN <nctn><N>,<LNCTN==.ntiti-LNCT>;;	Generic length
+> ;End of DEFINE MNMSTS
+
+
+
+;Multinet Monitoring Variables
+
+DEFINE MNTSTS<;;	Multinet
+NTITEM (MNTAA,1,5,G,LMNTAA,B1,<<1,.SDD.,<Multinet - Len>>>)
+NTITEM (MNTFF,3,5,O,,V1,<<3,.DEC.,< MNETLP,  sum MNTFLG>>>)
+NTITEM (CMNTEIN,1,5,O,,V1,<<1,.DEC.,<MNTEIN>>>)
+NTITEM (CNTSNDI,3,5,O,,V1,<<3,.DEC.,<NTSNDI, NTLLDR failed, NTLSND failed>>>)
+NTITEM (CNTHSND,2,5,O,,V1,<<2,.DEC.,<NTHSND, failed>>>)
+NTITEM (CNTLSND,2,5,O,,V1,<<2,.DEC.,<NTLSND, failed>>>)
+NTITEM (CNTQPKT,2,5,O,,V1,<<2,.DEC.,<NTQPKT, failed - output off>>>)
+NTITEM (CMNTUNQ,3,5,O,,V1,<<3,.DEC.,<MNTUNQ, none, pprax>>>)
+NTITEM (CMNTODN,3,5,O,,V1,<<3,.DEC.,<MNTODN, plnxo, bad prot.>>>)
+NTITEM (MNTBF,^D14,5,O,,V1,<<^D14,.DEC.,<GETBUF, RETBUF, GETPAG,  ok,
+  PGR run HP,   sum,  PRG elaps ms,   sum, STEALP, RETRNP, GCBUF, GC1B,
+ LINK, UNLINK>>>)
+NTITEM (MNTSB,^D20,5,O,,V1,<<^D20,.DEC.,<ATNVT%,CVHST%,ADRINI,ETHRAH,FHPADR,
+HSHADR,HSHNET,HSTHSH,HSTINI,LCLHST,LCLNET,MNTHLT,MNTRED,MNTSET,NCTDWN,
+NCTUP,NETCHK,NETLUK,NETNCT,PVNCT>>>)
+NTITEM (JGTHST,<3+12+1>,5,O,12+1,M1,
+<<<3+12+1>,FMT%SS+FMT%SZ+.BH1.,<GTHST%, .GTHSZ, .GTHIX, .GTHNS, .GTHSN,
+ .GTHHN, .GTHHI, .GTHLN, .GTHNT, .GTHRT, .GTHRR>>>)
+NTITEM (MNTBH,21,5,O,<7,,,,20,,40,,100,,200,,400,,1000,,-1>,V2,
+<<21,.BH2.,<GETBUF block size hist(words)>>>)
+NTITEM (DOMCT,11,5,O,,V1,<<11,.DEC.,
+<Domini, Failed, Gen, CDirty,  Flush,  Dirty, Walkn, Domkil,  Error>>>)
+NTITEM (DOMSB,4,5,O,,V1,<<4,.DEC.,<Dsetup, Trying,  Off,  Abort>>>)
+NTITEM (DOMTM,HBIN0+NHBINS+1,5,O,<<0,,NHBINS+1>>,
+V1,<<HBIN0+NHBINS+1,.EXP.,<Resolution Delay Histogram>>>)
+NTITEM (DOMCN,3+12+1,5,O,<12+1>,
+M1,<<<3+12+1>,FMT%SS+FMT%SZ+.BH1.,<CName Count Histogram>>>)
+NTITEM (DOMNS,11,5,O,,V1,<<11,.DEC.,
+<GTDNUM, Need name,  Found,  Failed, PsuId, Adr, Port, D-H+, D-H->>>)
+NTITEM (DOMSN,11,5,O,,V1,<<11,.DEC.,
+<GTDSTR, Parsed, Need lookup, Found, W/port, D+, D-, D-H+, D-H->>>)
+NTITEM (DOMST,10,5,O,,V1,<<10,.DEC.,
+<SINDN, RRF, Labels, Dnmcmp, PsuId,  Bad, PRONUM,  Failed>>>)
+NTITEM (DOMLK,23,5,O,,V1,<<23,.DEC.,<DLOOK, Auth,  Dele,  * chk, NonEx,
+ Cache,  Dele,   Node,   No data,   No cname,  Rsolve not try,  Tried,
+   Found, Anhere,  No data,  No cname, Cnamel, Relook,  Loop>>>)
+> ;End of DEFINE MNTSTS
+
+
+
+;IP Statistics Blocks
+
+DEFINE ICMSTS<;;	Statistics Information for INCMP
+NTITEM (ICMAA,6,0,G,LICMAA,B1,<<1,.SDD.,<ICMP - Len>>,
+<5,.DEC.,<ICMERR, omit to self, bad code, no space, sent>>>)
+NTITEM (ICMAB,5,2,O,<0>,V1,<<5,.QUE.,< Input Q [cksum/len]>>>)
+NTITEM (ICMIQ,QSZ,0,O,<REST0>,V1,<<QSZ,FMT%SD+.QUH.,<ICMIPQ input queue head>>>)
+NTITEM (ICMPF,4,5,O,,V1,<<4,.DEC.,<ICMDSP, bad checksum,  type,  length>>>)
+NTITEM (ICMPG,11,0,O,,V1,
+<<2,.DEC.,<PINGER,PNGWAY>>,<1,.SDD.,< # GW being pinged>>,
+<6,.DEC.,< # GW came up, # GW went down, Lcl net down, to host omitted,
+ no buffers, pings sent>>>)
+NTITEM (ICMRP,^D13,5,O,<^D10>,M1,
+<<^D13,FMT%SZ+FMT%SS+.BH1.,<ICMP msgs for protocol, drop, 1-ICMP,, 3-GGP,,
+ 5-ST, 6-TCP, 7-EGP, 8-IGP, other>>>)
+NTITEM (ICMTR,221,5,O,<22,,,,.+43,,,,,,.+42,,.+52,,.+55,,,,,,.+57,,,,,,.+56,
+,.+62,,.+137,,.+142,,.+145,,.+150,,,
+2,,,,,7,,,,,,,,,,2,,,,,5,,,,,,,,2,,,,,3,,,,,,
+54,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,2,,,,,2,,,,,2,,,,,2,,,,>,M2,
+<<47,FMT%SS+FMT%SV+FMT%SZ+.BH2.,<ICMP codes recv,Echo Rep,,,Dst Unr,Src Qnch,
+Redirect,,,Echo,,,Time Exceeded,Par Prob,Timestamp,Time Reply,Info Req,
+Info Reply>>,<5,FMT%SS+FMT%SZ+.BH1.,<0 Echo Reply, regular, other>>,
+<12,FMT%SS+FMT%SZ+.BH1.,<3 Dest. Unreachable, net, host, protocol, port,
+ fragmentation, route, other>>,
+<5,FMT%SS+FMT%SZ+.BH1.,<4 Source Quench, regular, other>>,
+<10,FMT%SS+FMT%SZ+.BH1.,<5 Redirect, net, host, net+tos, host+tos, other>>,
+<5,FMT%SS+FMT%SZ+.BH1.,<8 Echo, regular, other>>,
+<6,FMT%SS+FMT%SZ+.BH1.,<11 Time Exceeded, ttl, frag ra, other>>,
+<57,FMT%SS+FMT%SZ+.BH1.,<12 Parameter Problem, IP ver/len, tos, other>>,
+<5,FMT%SS+FMT%SZ+.BH1.,<13 Timestamp, regular, other>>,
+<5,FMT%SS+FMT%SZ+.BH1.,<14 Timestamp Reply, regular, other>>,
+<5,FMT%SS+FMT%SZ+.BH1.,<15 Info Request, regular, other>>,
+<5,FMT%SS+FMT%SZ+.BH1.,<16 Info Reply, regular, other>>>)
+NTITEM (ICMTS,77,5,O,<22,,,,,,,,,,.+35,,,,.+43,,,,,,,,,,,,.+37,,,,,,,,,,,,,
+7,,,,,,,,,,5,,,,,,,,3,,,,,>,M2,
+<<47,FMT%SS+FMT%SV+FMT%SZ+.BH2.,<ICMP Codes Sent,Echo Reply,,,Dst Unr,
+Src Quench,Redirect,,,Echo,,,Time Exceeded,Par Prob>>,
+<12,FMT%SS+FMT%SZ+.BH1.,<3 Dest. Unreachable, net, host, protocol, port,
+ fragmentation, route, other>>,
+<10,FMT%SS+FMT%SZ+.BH1.,<5 Redirect, net, host, net+tos, host+tos, other>>,
+<6,FMT%SS+FMT%SZ+.BH1.,<11 Time Exceeded, ttl, frag ra, other>>>)
+NTITEM (ICMSS,77,5,O,<22,,,,,,,,,,.+35,,,,.+43,,,,,,,,,,,,.+37,,,,,,,,,,,,,
+7,,,,,,,,,,5,,,,,,,,3,,,,,>,M2,
+<<47,FMT%SS+FMT%SV+FMT%SZ+.BH2.,<ICMP Codes Sent to SELF,Echo Reply,,
+,Dst Unr, Src Quench,Redirect,,,Echo,,,Time Exceeded,Par Prob>>,
+<12,FMT%SS+FMT%SZ+.BH1.,<3 Dest. Unreachable, net, host, protocol, port,
+ fragmentation, route, other>>,
+<10,FMT%SS+FMT%SZ+.BH1.,<5 Redirect, net, host, net+tos, host+tos, other>>,
+<6,FMT%SS+FMT%SZ+.BH1.,<11 Time Exceeded, ttl, frag ra, other>>>)
+> ;End of DEFINE ICMSTS
+
+
+
+DEFINE INFSTS<;;	Statistics Information for INFREE
+NTITEM (INFAA,6,5,G,LINFAA,B1,<<1,.SDD.,<IP Free Storage - Len>>,
+<5,.DEC.,<RETBLK,GCARVE,SPLIT,GC,CLRBLK>>>)
+NTITEM (INFBC,2,5,O,,V1,<<2,.DEC.,<BULKCV, failed>>>)
+NTITEM (INFGB,2,5,O,,V1,<<2,.DEC.,<GETBLK, failed>>>)
+NTITEM (INFGK,2,5,O,,V1,<<2,.DEC.,<GETBBK, failed>>>)
+NTITEM (INFHS,21,5,O,<7,,,,20,,40,,100,,200,,400,,1000,,-1>,V2,
+<<21,.BH2.,<Block Size Hist(words)>>>)
+> ;End of DEFINE INFSTS
+
+
+DEFINE INGSTS<;;	Statistics Information for INGWAY/INGLUK
+NTITEM (INGAA,13,0,G,LINGAA,B1,<<1,.SDD.,<IP Gateway - Len>>,
+<12,.DEC.,<INTDWN,HSTDWN, useful,INTUP,HSTUP, useful,NETHSI,NETHSH,RCVGAL,
+SNDGAT>>>)
+NTITEM (INGFR,11,5,O,,V1,
+<<11,.DEC.,<RCVFR+RCVFLS, timeout,  q time, duplicates,  q time,
+ no space,  q time, RA,  q time>>>)
+NTITEM (INGFS,5,5,O,,V1,
+<<5,.DEC.,<SNDFR, failed DF, failed TTL, failed space, frags formed>>>)
+NTITEM (INGGL,5,5,O,,V1,
+<<5,.DEC.,<GWYLUK, # FNDGWY,  recall, fail, # to GW>>>)
+NTITEM (INGGY,6,5,O,,V1,<<6,.DEC.,<IP Datagrams received,  to be forwarded,
+   not allowed, sent,  bypassed, net rejected>>>)
+NTITEM (INGIQ,5,0,O,<0>,V1,<<5,.QUE.,<IP Input Q>>>)
+NTITEM (INGLU,5,5,O,,V1,
+<<5,.DEC.,<INTLKB, pages locked,INTULK, pages unlocked, omit unlock>>>)
+NTITEM (INGOR,25,5,O,
+<^D9,,,,<ENDOPT&177>,,<NOPOPT&177>,,<LSROPT&177>,,<RRTOPT&177>,,<SIDOPT&177>,
+,<SSROPT&177>,,<STYOPT&177>,,<TSPOPT&177>,,-1>,V2,
+<<25,FMT%SS+FMT%SZ+.BH2.,<IP messages received w/options,END,NOP,LSR,RRT,SUD,
+SSR,STY,TSP,other>>>)
+NTITEM (INGOS,25,5,O,
+<^D9,,,,<ENDOPT&177>,,<NOPOPT&177>,,<LSROPT&177>,,<RRTOPT&177>,,<SIDOPT&177>,
+,<SSROPT&177>,,<STYOPT&177>,,<TSPOPT&177>,,-1>,V2,
+<<25,FMT%SS+FMT%SZ+.BH2.,<IP messages sent w/options,END,NOP,LSR,RRT,SUD,SSR,
+STY,TSP,other>>>)
+> ;End of INGSTS
+
+
+DEFINE INLSTS<;;	Statistics Information for INLOCK
+NTITEM (INLAA,5,5,G,LINLAA,B1,<<1,.SDD.,<INLOCK - Len>>,
+<4,.DEC.,<CLRLCK,RELLCK,UNLCK,LCKCAL>>>)
+NTITEM (INLSL,4,5,O,,V1,<<4,.DEC.,<SETLCK, waited, long wait, ms>>>)
+> ;End of DEFINE INLSTS
+
+
+
+DEFINE INMSTS<;;	Statistics Information for Monitoring
+NTITEM (INMAA,1,0,G,LINMAA,B1,<<1,.SDD.,<Monitoring Process - Len>>>)
+NTITEM (INMAD,1,0,O,<1200600005>,V1,<<1,FMT%SD+.HST.,< Report to>>>)
+NTITEM (INMBH,.TCPBS,0,O,<REST0>,V1,<<.TCPBS,FMT%SD+.OMG.,< TCP Buffer header>>>)
+NTITEM (INMCB,.TCPCS,0,O,<REST0>,V1,<<1,FMT%SD+.HST.,< Conn blk: LH>>,
+<1,.SDD.,<  LP>>,<1,FMT%SD+.HST.,<  FH>>,<1,.SDD.,<  FP>>,
+<.TCPCS-4,FMT%SD+.OMG.,<  param>>>)
+NTITEM (INMCN,1,0,O,0,V1,<<1,FMT%SD+.OMG.,< TCP connection id>>>)
+NTITEM (INMER,2,0,O,<0,0>,V1,<<2,.DEC.,< Error count>>>)
+NTITEM (INMID,1,0,O,<0>,V1,<<1,FMT%SD+.DHW.,< Probe/Report ids>>>)
+NTITEM (INMPR,2,0,O,<^D<60*60*1000>,^D<5*60*1000>>,V1,
+<<2,.SDD.,< Mon freq(ms), probe freq(ms)>>>)
+NTITEM (INMPT,2,0,O,<INMNPR,INMNPT>,V1,<<2,.SDD.,< Protocol & Port>>>)
+NTITEM (INMRT,2,0,O,<^D<5*60*1000>,1B1>,V1,
+<<2,.SDD.,< Retry freq(ms), Retry time(ms)>>>)
+NTITEM (INMTM,2,0,O,<^D<10*60*1000>,0>,V1,
+<<2,FMT%SD+.TOD.,< Next report, Probes blocked>>>)
+NTITEM (INMUQ,1,0,O,<-1>,V1,<<1,.SDD.,< User Queue Handle>>>)
+> ;End of INMSTS
+
+
+DEFINE INPSTS<;;	Statistics Information for INPROC
+NTITEM (INPAA,2,5,G,LINPAA,B1,<<1,.SDD.,<IP Process - Len>>,
+<1,.DEC.,<INETUT>>>)
+NTITEM (INPHR,25,5,O,
+<^D9,,,,0,,^D5,,^D10,,^D25,,^D50,,^D100,,^D250,,^D500,,-1>,V2,
+<<25,FMT%DV+.BH2.,<INTFRK Run Time(ms)>>>)
+NTITEM (INPHS,25,5,O,
+<^D9,,,,0,,^D25,,^D50,,^D100,,^D300,,^D600,,^D1000,,^D5000,,-1>,V2,
+<<25,FMT%DV+.BH2.,<INTFRK Reschedule Interval(ms)>>>)
+NTITEM (INPIP,5,5,O,,V1,
+<<5,.DEC.,<INTBP1 loop,  INTFLG was 0,  sum INTFLG, times set again,  sum>>>)
+NTITEM (INPKT,3,5,O,,V1,<<3,.DEC.,<INTNRB, none, sum>>>)
+NTITEM (INPRP,3,5,O,,V1,<<3,.DEC.,<RETPKT, special, IPODN>>>)
+NTITEM (INPIT,3,9,O,,V1,<<3,.DEC.,<INTBPT, failed, suceeded(INTTIM)>>>)
+> ;End of DEFINE INPSTS
+
+
+DEFINE INQSTS<;;	Statistics Information for INQ
+NTITEM (INQAA,4,0,G,LINQAA,B1,
+<<1,.SDD.,<IP Queue Routines - Len>>,<3,.DEC.,<INITQ,NQ,DQ>>>)
+NTITEM (INQIQ,QSZ,0,O,<REST0>,V1,
+<<QSZ,.QUH.,<User queue input queue head INQIPQ>>>)
+NTITEM (INQAB,5,2,O,<0>,V1,<<5,.QUE.,<User Queue Input Q>>>)
+> ;End of DEFINE INQSTS
+
+
+
+DEFINE INUSTS<;;	Statistics Information for INUQ
+NTITEM (INUAA,4,5,G,LINUAA,B1,
+<<1,.DEC.,<User Queues - Len>>,<3,.DEC.,<INTLGO,RELIQ,INQPRC>>>)
+NTITEM (INUAQ,3,5,O,,V1,<<3,.DEC.,<ASNIQ, all in use, conflict>>>)
+NTITEM (INUCK,3,5,O,,V1,<<3,.DEC.,<INQCH0, none, timedout>>>)
+NTITEM (INUDS,6,5,O,,V1,
+<<6,.DEC.,<INTDSP, had pkts, pkts recv, pkts to a prot, pkts dropped,
+ overflow>>>)
+NTITEM (INUHS,25,5,O,
+<^D9,,,,0,,^D25,,^D50,,^D100,,^D300,,^D600,,^D1000,,^D5000,,-1>,V2,
+<<25,FMT%DV+.BH2.,<User Q Reschedule Interval(ms)>>>)
+NTITEM (INUIC,4,5,O,,V1,<<4,.DEC.,<INQICM, delivered, drop, refused(na)>>>)
+NTITEM (INUQD,5,5,O,,V1,
+<<5,.DEC.,<INQDSP, delivered, no q, overflow, refused(na)>>>)
+NTITEM (INURM,5,5,O,,V1,
+<<5,.DEC.,<RCVIN, user error, q was empty, pkt returned, pkt was truncated>>>)
+NTITEM (INUSM,7,5,O,,V1,
+<<7,.DEC.,<SNDIN, user error, no space,SNDIN., failed, pkt sent, refused>>>)
+> ;End of DEFINE INUSTS
+
+
+DEFINE INWSTS<;;	Statistics Information for INWAIT
+NTITEM (INWAA,4,5,G,LINWAA,B1,<<1,.SDD.,<IP Wait Routines - Len>>,
+<3,.DEC.,<RELWTB,SETWTB,CLRWTB>>>)
+NTITEM (INWAW,2,5,O,,V1,<<2,.DEC.,<ASNWTB, failed>>>)
+NTITEM (INWBO,2,9,O,,V1,<<2,.DEC.,<INTBOT, failed>>>)
+NTITEM (INWBZ,2,9,O,,V1,<<2,.DEC.,<INTBZT, failed>>>)
+NTITEM (INWOO,2,9,O,,V1,<<2,.DEC.,<INTOOT, failed>>>)
+NTITEM (INWZO,2,9,O,,V1,<<2,.DEC.,<INTZOT, failed>>>)
+> ;End of DEFINE INWSTS
+
+
+;TCP Statistics Blocks
+
+DEFINE TCASTS<;;	Statistics Information for TCPRA
+NTITEM (TCAAA,4,5,G,LTCAAA,B1,<<1,.DEC.,<TCP RA - Len>>,
+<3,.DEC.,<PRCDAT,PRCPSH,PRCFIN>>>)
+NTITEM (TCAFB,3,5,O,,V1,<<3,.DEC.,<FLSRBF, none, flushed>>>)
+NTITEM (TCAFX,3,5,O,,V1,<<3,.DEC.,<FLSRBX, none, flushed>>>)
+NTITEM (TCANW,3,5,O,,V1,<<3,.DEC.,<NUWNDO, updated, PZ notified>>>)
+NTITEM (TCARA,21,5,O,,V1,
+<<10,.DEC.,<REASEM, for TVT,  synced,  attached,  lock failed, Loop,
+  have pkt, new pkt>>,
+<10,.DEC.,<  in window,  has recv-left, process pkt,  PRCTVT,  Chk PUSH FIN,
+  bfr empty,  controls,  USRBFF>>,
+<1,.DEC.,<  RCV Bf Fl aft Close>>>)
+>;;End of DEFINE TCASTS
+
+
+DEFINE TCCSTS<;;	Statistics Information for TCPCRC
+NTITEM (TCCAA,5,5,G,LTCCAA,B1,<<1,.DEC.,<Checksum Routines - Len>>,
+<4,.DEC.,<GENCKS+DATCKS,INTCKS,ICMCKS,TCPCKS>>>)
+>;;End of DEFINE TCCSTS
+
+
+DEFINE TCDSTS<;;	Statistics Information for TCPDY
+NTITEM (TCDAA,1,5,G,LTCDAA,B1,<<1,.SDD.,<TCP DY - Len>>>)
+NTITEM (TCDFA,2,5,O,,V1,<<2,.DEC.,<Exited time-wait,Fake ACK by RX>>>)
+>;;End of DEFINE TCDSTS
+
+
+DEFINE TCFSTS<;;	Statistics Information for TCPBFR
+NTITEM (TCFAA,5,5,G,LTCFAA,B1,<<1,.DEC.,<TCP Buffers - Len>>,
+<4,.DEC.,<SETTUM,USTTUM,RSTBFR,XFRDAT>>>)
+NTITEM (TCFHR,21,5,O,<7,,,,0,,4,,126,,324,,522,,1100,,-1>,V2,
+<<21,.BH2.,<TCP data per receive(octets)>>>)
+NTITEM (TCFHS,21,5,O,<7,,,,0,,4,,126,,324,,522,,1100,,-1>,V2,
+<<21,.BH2.,<TCP data per send (octets)>>>)
+>;;End of DEFINE TCFSTS
+
+
+
+DEFINE TCISTS<;;	Statistics Information for TCPIP
+NTITEM (TCIAA,10,5,G,LTCIAA,B1,<<1,.SDD.,<TCP Input Process - Len>>,
+<7,.DEC.,<CKACKS,PRCURG,SNDRST,ABTCON,SYNAGN,RSTADR,ICMP DU>>>)
+NTITEM (TCICK,2,5,O,,V1,<<2,.DEC.,<CKSYNS, no syn>>>)
+NTITEM (TCIIN,3,5,O,,V1,<<3,.DEC.,<INPUT, notnot, dup>>>)
+NTITEM (TCIIP,6,5,O,,V1,
+<<6,.DEC.,<INPROC, no pkt, pkts, bad checksum, conn closed, RST sent>>>)
+NTITEM (TCIPA,10,5,O,,V1,
+<<10,.DEC.,<PRCACK, more, end urg, RA syn, RA pp, want PZ, no window, RX>>>)
+NTITEM (TCIPP,5,5,O,,V1,<<5,.DEC.,<PRCPKT, rst, null, trmpkt, RA signal>>>)
+NTITEM (TCIPR,3,5,O,,V1,<<3,.DEC.,<PRCRST, not.finsnt, pack>>>)
+NTITEM (TCIPS,2,5,O,,V1,<<2,.DEC.,<PRCSYN, finrcv>>>)
+NTITEM (TCIPW,4,5,O,,V1,<<4,.DEC.,<PRCWND, zero, opened, RX signal>>>)
+NTITEM (TCIRM,2,5,O,,V1,<<2,.DEC.,<REMCHK, deleted>>>)
+NTITEM (TCIRS,3,5,O,,V1,<<3,.DEC.,<REMRXQ, checked, RX signal>>>)
+>;;End of DEFINE TCISTS
+
+
+DEFINE TCJSTS<;;	Statistics Information for TCPJS
+NTITEM (TCJAA,4,5,G,LTCJAA,B1,<<1,.DEC.,<BBN TCP JSYS Interface>>,
+<3,.DEC.,<SETURP,RETJCN,FREBFR>>>)
+NTITEM (TCJAB,2,5,O,,V1,<<2,.DEC.,<ABORT%, ok>>>)
+NTITEM (TCJAJ,2,5,O,,V1,<<2,.DEC.,<TCPCZF, no tcb>>>)
+NTITEM (TCJAN,2,5,O,,V1,<<2,.DEC.,<ABTJCN, cross job>>>)
+NTITEM (TCJAT,2,5,O,,V1,<<2,.DEC.,<ABTTCB, PZ>>>)
+NTITEM (TCJBF,2,5,O,,V1,<<2,.DEC.,<ABTBUF, no tcb>>>)
+NTITEM (TCJCJ,2,5,O,,V1,<<2,.DEC.,<CHKJCN, error>>>)
+NTITEM (TCJCK,7,5,O,,V1,
+<<7,.DEC.,<CHKARG, JCN, CDB,  old fmt, TVT, idx, error>>>)
+NTITEM (TCJCL,5,5,O,,V1,<<5,.DEC.,<CLOSE%,  ok, wait,  ok, frcpkt>>>)
+NTITEM (TCJCN,2,5,O,,V1,<<2,.DEC.,<CHANL%, ok>>>)
+NTITEM (TCJGJ,2,5,O,,V1,<<2,.DEC.,<GETJCN, failed>>>)
+NTITEM (TCJMB,2,5,O,,V1,<<2,.DEC.,<MAKBFR, ok>>>)
+NTITEM (TCJOP,10,5,O,,V1,
+<<10,.DEC.,<OPEN%, act, useable, ok, new-, active-, wait-, err>>>)
+NTITEM (TCJRV,7,5,O,,V1,<<7,.DEC.,<RECV%,  ok, wait,  ok,  ok, act, RA>>>)
+NTITEM (TCJSC,2,5,O,,V1,<<2,.DEC.,<SCSLV%, ok>>>)
+NTITEM (TCJSN,^D11,5,O,,V1,
+<<13,.DEC.,<SEND%,  ok, wait,  lost tcb,  error, ok,  was open,  not open,
+ act, new fmt, PZ>>>)
+NTITEM (TCJSU,^D8,5,O,,V1,
+<<10,.DEC.,<STAT%,  ok, TVT, idx, stats,  symb, tcb,  symb>>>)
+NTITEM (TCJTV,2,5,O,,V1,<<2,.DEC.,<TATNVT, ok>>>)
+>;;End of DEFINE TCJSTS
+
+
+
+DEFINE TCKSTS<;;	Statistics Information for TCPBG
+NTITEM (TCKAA,2,5,G,LTCKAA,B1,<<1,.SDD.,<TCP Background - Len>>,
+<1,.DEC.,<FUNCS>>>)
+NTITEM (TCKBG,3,5,O,,V1,<<3,.DEC.,<TCPBG, Times waited, Ms waited>>>)
+NTITEM (TCKDP,4,5,O,,V1,
+<<4,.DEC.,<DEADP, inactivity probes,  aborts, window probes>>>)
+NTITEM (TCKRB,3,5,O,,V1,<<3,.DEC.,<REMBFS, checked, released>>>)
+NTITEM (TCKSV,2,5,O,,V1,<<2,.DEC.,<SCAVNG, dropped>>>)
+>;;End of DEFINE TCKSTS
+
+
+DEFINE TCMSTS<;;	Statistics Information for TCPMSC
+NTITEM (TCMAA,5,0,G,LTCMAA,B1,<<1,.DEC.,<Misc. TCP Routines - Len>>,
+<4,.DEC.,<GETISN,PKTEND,TCPMXS,TCPIPK>>>)
+NTITEM (TCMCA,^D10,5,O,,V1,
+<<12,.DEC.,<CHKADD, (fct) failed, Times waited,   ms,  page traps,   ms,
+ Times searched,   ms,  page traps,   ms>>>)
+NTITEM (TCMCW,2,5,O,,V1,<<2,.DEC.,<CHKWND, failed>>>)
+NTITEM (TCMLT,2,5,O,,V1,<<2,.DEC.,<ONLCLT, failed>>>)
+NTITEM (TCMNP,2,5,O,,V1,<<2,.DEC.,<NULPKT, not null>>>)
+NTITEM (TCMNT,4,5,O,,V1,
+<<4,.DEC.,<NEWTCB, failed MAXTCB,  space,  wait bit>>>)
+NTITEM (TCMOL,2,5,O,,V1,<<2,.DEC.,<OVRLAP, no overlap>>>)
+NTITEM (TCMTC,5,0,O,<0,MAXTCB>,V1,<<5,.QUE.,<TCBs [max]>>>)
+;;obs NTITEM (TCMTP,2,5,O,,V1,<<2,.DEC.,<TRMPKT, trimmed>>>)
+>;;End of DEFINE TCMSTS
+
+
+DEFINE TCBCNT<CELL(TCMTC,0,,TCM)>
+DEFINE TCBMAX<CELL(TCMTC,1,,TCM)>
+DEFINE TCBIDX<CELL(TCMTC,4,,TCM)>
+
+
+
+DEFINE TCOSTS<;;	Statistics Information for TCPOPT
+NTITEM (TCOAA,6,5,G,LTCOAA,B1,<<1,.SDD.,<TCP Option Processing - Len>>,
+<5,.DEC.,<TCPIIO,TCPITO,MERGED,SNDSCL,GETTSO>>>)
+NTITEM (TCOMG,2,5,O,,V1,<<2,.DEC.,<MERGE, failed>>>)
+NTITEM (TCOMX,2,5,O,,V1,<<2,.DEC.,<MSLXCT, failed>>>)
+NTITEM (TCOOP,3,5,O,,V1,<<3,.DEC.,<OMZXCT, failed, non-default>>>)
+NTITEM (TCOPO,2,5,O,,V1,<<2,.DEC.,<PARSOP, failed>>>)
+NTITEM (TCOPR,27,5,O,<^D10,,,,<ENDOPT&177>,,<NOPOPT&177>,,<MSLOPT&177>,,
+<LSROPT&177>,,<RRTOPT&177>,,<SIDOPT&177>,,<SSROPT&177>,,<STYOPT&177>,,
+<TSPOPT&177>,,-1>,V2,
+<<27,FMT%SS+FMT%SZ+.BH2.,<TCP options received,END,NOP,MSL,LSR,RRT,SUD,SSR,
+STY,TSP,other>>>)
+NTITEM (TCOPS,27,5,O,<^D10,,,,<ENDOPT&177>,,<NOPOPT&177>,,<MSLOPT&177>,,
+<LSROPT&177>,,<RRTOPT&177>,,<SIDOPT&177>,,<SSROPT&177>,,<STYOPT&177>,,
+<TSPOPT&177>,,-1>,V2,
+<<27,FMT%SS+FMT%SZ+.BH2.,<TCP options sent,END,NOP,MSL,LSR,RRT,SUD,SSR,
+STY,TSP,other>>>)
+NTITEM (TCORC,4,5,O,,V1,
+<<4,.DEC.,<LSRCPY,SSRCPY, route dropped, route failed>>>)
+NTITEM (TCORK,3,5,O,,V1,<<3,.DEC.,<LSRCHK,SSRCHK, route errors>>>)
+NTITEM (TCORR,2,5,O,,V1,<<2,.DEC.,<RRTCPY, failed>>>)
+NTITEM (TCOSC,2,5,O,,V1,<<2,.DEC.,<SIDCPY, error>>>)
+NTITEM (TCOTC,2,5,O,,V1,<<2,.DEC.,<TSPCPY, dropped>>>)
+NTITEM (TCOUO,2,5,O,,V1,<<2,.DEC.,<TCPUOP, failed>>>)
+NTITEM (TCOXI,2,5,O,,V1,<<2,.DEC.,<TCPXIO, failed>>>)
+NTITEM (TCOXT,2,5,O,,V1,<<2,.DEC.,<TCPXTO, failed>>>)
+>;;End of DEFINE TCOSTS
+
+
+DEFINE TCPSTS<;;	Statistics Information for TCP input queue
+NTITEM (TCPAA,1,0,G,LTCPAA,B1,<<1,.SDD.,<Len>>>)
+NTITEM (TCPAB,5,2,O,<0>,V1,<<5,.QUE.,<TCP Input Q [cksum]>>>)
+NTITEM (TCPIQ,QSZ,0,O,<REST0>,V1,
+<<QSZ,.QUH.,<TCP input queue head TCPIPQ>>>)
+>;;End of DEFINE TCPSTS
+
+
+
+DEFINE TCTSTS<;;	Statistics Information for TCPPRC
+NTITEM (TCTAA,2,5,G,LTCTAA,B1,<<1,.DEC.,<TCP Process - Len>>,
+<1,.DEC.,<TCPCHK>>>)
+NTITEM (TCTDQ,3,5,O,,V1,<<3,.DEC.,<DQTASK, succeeded, more remain>>>)
+NTITEM (TCTHS,25,5,O,<^D9,,,,0,,^D25,,^D50,,^D100,,^D300,,^D600,,^D1000,
+,^D5000,,-1>,V2,
+<<25,FMT%DV+.BH2.,<TCP Reschedule Interval(ms)>>>)
+NTITEM (TCTPR,6,5,O,,V1,
+<<6,.DEC.,<TCPPRC, Pre-TCPFLG,  sum, no input, post-TCPFLG,  sum>>>)
+NTITEM (TCTSG,3,5,O,,V1,<<3,.DEC.,<SIGNAL, sooner, same>>>)
+>;;End of DEFINE TCTSTS
+
+
+DEFINE TCUSTS<;;	Statistics Information for TCPUSR
+NTITEM (TCUAA,4,0,G,LTCUAA,B1,<<1,.SDD.,<TCP to User Routines - Len>>,
+<3,.DEC.,<USRBFE,USRBFF,USRABD>>>)
+NTITEM (TCUBD,2,5,O,,V1,<<2,.DEC.,<BFRDUN, psi>>>)
+NTITEM (TCUEH,<<3+1+.RTJST(-1,TCP%EC)>>,5,O,<<1+.RTJST(-1,TCP%EC)>>,M1,
+<<<<3+1+.RTJST(-1,TCP%EC)>>,FMT%SS+FMT%SZ+.BH1.,<User Error Codes Hist,
+ 0-Ok, 1-Bad Arg, 2-Bad opt, 3-Not open, 4-Resource, 5-Bad wild,
+ 6-Already exists, 7-Reset, 8, 9-Send timeout, 10, 11, 12-Closed/ing,
+ 13-Bad lcl port, 14-Reset/Timeout, 15-Bad bfr, 16-Resource/bfr,
+ 17-Bad channel, 18, 19, 20-Bad offset, 21-Bad count, 22-Bad name, 23, 24,
+ 25, 26, 27, 28, 29-Security, 30-TVT, 31-Off>>>)
+NTITEM (TCUUA,2,5,O,,V1,<<2,.DEC.,<USRACK, psi>>>)
+NTITEM (TCUUE,2,5,O,,V1,<<2,.DEC.,<USRERR, psi>>>)
+NTITEM (TCUUS,2,5,O,,V1,<<2,.DEC.,<USRSYN, psi>>>)
+NTITEM (TCUUU,2,5,O,,V1,<<2,.DEC.,<USRURG, psi>>>)
+NTITEM (TCUUV,5,5,O,,V1,
+<<5,.DEC.,<USREVT, notnot, synsyn, 1st, TVTOPN failed>>>)
+NTITEM (TCUVT,<<3+1+.RTJST(-1,TCP%EC)>>,5,O,<<1+.RTJST(-1,TCP%EC)>>,M1,
+<<<<3+1+.RTJST(-1,TCP%EC)>>,FMT%SS+FMT%SZ+.BH1.,<TVT USREVT hist,
+ 0-Ok, 1-Bad Arg, 2-Bad opt, 3-Not open, 4-Resource, 5-Bad wild,
+ 6-Already exists, 7-Reset, 8, 9-Send timeout, 10, 11, 12-Closed/ing,
+ 13-Bad lcl port, 14-Reset/Timeout, 15-Bad bfr, 16-Resource/bfr,
+ 17-Bad channel, 18, 19, 20-Bad offset, 21-Bad count, 22-Bad name, 23, 24,
+ 25, 26, 27, 28, 29-Security, 30-TVT, 31-Off>>>)
+NTITEM (TCUVU,<<3+1+.RTJST(-1,TCP%EC)>>,5,O,<<1+.RTJST(-1,TCP%EC)>>,M1,
+<<<<3+1+.RTJST(-1,TCP%EC)>>,FMT%SS+FMT%SZ+.BH1.,<User USREVT hist,
+ 0-Ok, 1-Bad Arg, 2-Bad opt, 3-Not open, 4-Resource, 5-Bad wild,
+ 6-Already exists, 7-Reset, 8, 9-Send timeout, 10, 11, 12-Closed/ing,
+ 13-Bad lcl port, 14-Reset/Timeout, 15-Bad bfr, 16-Resource/bfr,
+ 17-Bad channel, 18, 19, 20-Bad offset, 21-Bad count, 22-Bad name, 23, 24,
+ 25, 26, 27, 28, 29-Security, 30-TVT, 31-Off>>>)
+>;;End of DEFINE TCUSTS
+
+
+
+DEFINE TCVSTS<;;	Statistics Information for TTANDV
+NTITEM (TCVAA,7,5,G,LTCVAA,B1,<<1,.SDD.,<TVTs - Len>>,
+<6,.DEC.,<TVTCAP,TVTCIB,TVTCSO,TVTDTS,TVTIGA,TVTOPR>>>)
+NTITEM (TCVAS,2,5,O,,V1,<<2,.DEC.,<ASNTVT, assigned>>>)
+NTITEM (TCVCL,7,5,O,,V1,<<7,.DEC.,<TVTCLS, for closing/ed, lcl closed,
+ no TVT, timeout, detach, retjcn>>>)
+NTITEM (TCVCO,3,5,O,,V1,<<3,.DEC.,<TVTCOB, new DM, INSKED>>>)
+NTITEM (TCVCT,2,5,O,,V1,<<2,.DEC.,<CHKTVT, ok>>>)
+NTITEM (TCVDO,2,5,O,,V1,<<2,.DEC.,<TVTDOB, NVTDOB negotiations>>>)
+NTITEM (TCVDT,7,5,O,,V1,
+<<7,.DEC.,<TVTDTT,TVTDET, assigned, CLOSE, bad desc, PSI, CTTY>>>)
+NTITEM (TCVHR,21,5,O,<7,,,,0,,2,,4,,10,,^D84,,^D200,,-1>,V2,
+<<21,FMT%DV+.BH2.,<TVT bytes received>>>)
+NTITEM (TCVHS,21,5,O,<7,,,,0,,2,,4,,10,,^D84,,^D200,,-1>,V2,
+<<21,FMT%DV+.BH2.,<TVT bytes sent>>>)
+NTITEM (TCVIS,2,5,O,,V1,<<2,.DEC.,<TVTISP>>>)
+NTITEM (TCVKS,2,5,O,,V1,<<2,.DEC.,<TVMNTR, cancelled>>>)
+NTITEM (TCVLS,2,5,O,,V1,<<2,.DEC.,<LISTEN, permitted>>>)
+NTITEM (TCVNC,2,5,O,,V1,<<2,.DEC.,<TVTNCK,TVTNC1>>>)
+NTITEM (TCVOP,2,5,O,,V1,<<2,.DEC.,<TVTOPN, no TVTs>>>)
+NTITEM (TCVOS,2,5,O,,V1,<<2,.DEC.,<TVTOSP, ^S>>>)
+NTITEM (TCVPZ,17,5,O,<6,,,,0,,1,,2,,4,,10,,-1>,V2,
+<<17,FMT%DV+.BH2.,<Hist PZs per OPSCAN>>>)
+NTITEM (TCVRA,17,5,O,<6,,,,0,,1,,2,,4,,10,,-1>,V2,
+<<17,FMT%DV+.BH2.,<Hist RAs per OPSCAN>>>)
+NTITEM (TCVRT,2,5,O,,V1,<<2,.DEC.,<PRCTVT, IAC>>>)
+NTITEM (TCVSA,2,5,O,,V1,<<2,.DEC.,<TVMSNT, send>>>)
+NTITEM (TCVSE,2,5,O,,V1,<<2,.DEC.,<TVSBE1, Not empty>>>)
+NTITEM (TCVSN,3,5,O,,V1,<<3,.DEC.,<OPSCAN, RA, PZ>>>)
+NTITEM (TCVST,4,5,O,,V1,<<4,.DEC.,<SNDTVT, break, xfer, no char>>>)
+NTITEM (TCVTC,2,5,O,,V1,<<2,.DEC.,<TVTCHK, ok>>>)
+>;;End of DEFINE TCVSTS
+
+DEFINE TVTS0<TVTPR+0>	; Telnet Sync timeout(s)
+DEFINE TVTE0<TVTPR+1>	; Estab timeout(s)
+DEFINE TVTM0<TVTPR+2>	; Msg ms/char
+DEFINE TVTN0<TVTPR+3>	; Negotiation timeout(ms)
+DEFINE TVTI0<TVTPR+4>	; Check listener(ms)
+DEFINE TVTW0<TVTPR+5>	; Probe window(ms)
+DEFINE TVTRX<TVTPR+6>	; Default RX pars (& spare)
+DEFINE TVTCB<TVTPR+10>	; Telnet CDB
+
+
+
+DEFINE TCXSTS<;;	Statistics Information for TCPRX
+NTITEM (TCXAA,2,5,G,LTCXAA,B1,<<1,.DEC.,<TCP RX Routines - Len>>,
+<1,.DEC.,<SETRXP>>>)
+NTITEM (TCXRP,2,5,O,,V1,<<2,.DEC.,<RXPARS, changed>>>)
+NTITEM (TCXRX,13,5,O,,V1,
+<<13,.DEC.,<REXMIT,  Q empty,  slow net,  wait, either,  TVT, 1 st, abort,
+ 0 window, RSRE, RXed>>>)
+NTITEM (TCXRZ,3,5,O,,V1,<<3,.DEC.,<REPKTZ, enlarged, combined>>>)
+>;;End of DEFINE TCXSTS
+
+
+DEFINE TCZSTS<;;	Statistics Information for TCPPZ
+NTITEM (TCZAA,4,5,G,LTCZAA,B1,<<1,.DEC.,<TCP PZ Routines - Len>>,
+<3,.DEC.,<SETISN,SNDSYN,SGNLDG>>>)
+NTITEM (TCZAB,2,5,O,,V1,<<2,.DEC.,<ABTNTC, ok>>>)
+NTITEM (TCZDY,2,5,O,,V1,<<2,.DEC.,<DLAYPZ, no>>>)
+NTITEM (TCZEM,3,5,O,,V1,<<3,.DEC.,<EMTPKT, in use, urgents>>>)
+NTITEM (TCZEP,2,5,O,,V1,<<2,.DEC.,<ENCPKT, no>>>)
+NTITEM (TCZFB,3,5,O,,V1,<<3,.DEC.,<FLSSBF, none, bufs>>>)
+NTITEM (TCZFP,2,5,O,,V1,<<2,.DEC.,<FRCPKT, no>>>)
+NTITEM (TCZFX,3,5,O,,V1,<<3,.DEC.,<FLSSBX, none, bufs>>>)
+NTITEM (TCZPD,10,5,O,,V1,<<10,.DEC.,<PZ delay-short block,  time(ms),
+ source quench,  time(ms), outstanding pkts,  time(ms),
+ pipe not empty,  time(ms)>>>)
+NTITEM (TCZPZ,17,5,O,,V1,
+<<17,.DEC.,<PKTIZE, abort, frc, enc, both, 0 wndo, force 0, give up,
+ hold, sent, 0 TVT wndo, TVT give up, 0 usr wndo, no core, q len>>>)
+NTITEM (TCZSD,5,5,O,,V1,
+<<5,.DEC.,<SNDDAT, loop, bfr empty, pkt full, no bfr>>>)
+NTITEM (TCZSF,2,5,O,,V1,<<2,.DEC.,<SNDFIN, no DY sig>>>)
+>;;End of DEFINE TCZSTS
+
+
+
+DEFINE TCPTCB<;;TCP TCB Fields
+NTITEM (TABTFX,1,0,T,,V1,<<0,.SDO.,<ABORTER Forkx>>>)
+NTITEM (TCABI,1,0,T,,V1,<<0,.SDD.,< Inactivity abort>>>)
+NTITEM (TCABR,1,0,T,,V1,<<0,.SDD.,<Aborted by RX>>>)
+NTITEM (TCATM,1,0,T,,V1,<<0,.SDD.,<Time 1st pkt>>>)
+NTITEM (TCBAD,1,0,T,,V1,<<0,.SDO.,<TCB address>>>)
+NTITEM (TCBCI,1,0,T,,V1,<<0,.SDD.,< Real FILBCI>>>)
+NTITEM (TCBCO,1,0,T,,V1,<<0,.SDD.,< Real FILBCO>>>)
+NTITEM (TCBID,1,0,T,,V1,<<0,.SDD.,<TCB Id>>>)
+NTITEM (TCBIO,<1_<WID(IPDO)>-1-<MINIHS+3>/4>,0,T,,V1,
+<<0,FMT%SD+.4DB.,<IP Option list (send)>>>)
+NTITEM (TCBIR,<1_<WID(IPDO)>-1-<MINIHS+3>/4>,0,T,,V1,
+<<0,FMT%SD+.4DB.,<Last IP Options received>>>)
+NTITEM (TCBIU,<1_<WID(IPDO)>-1-<MINIHS+3>/4>,0,T,,V1,
+<<0,FMT%SD+.4DB.,<IP Options from User>>>)
+NTITEM (TCBLCK,LOCKSZ,0,T,,V1,<<0,.LCK.,<TCB lock>>>)
+NTITEM (TCBQ,1,0,T,,V1,<<0,.SDD.,<Queue (TCBH, DeadQ, etc)>>>)
+NTITEM (TCBRBQ,QSZ,0,T,<REST0>,V1,<<QSZ,FMT%SD+.QUH.,<Recv bfr queue head>>>)
+NTITEM (TCBRPQ,QSZ,0,T,<REST0>,V1,<<QSZ,FMT%SD+.QUH.,<Recv pkt queue head>>>)
+NTITEM (TCBRXQ,QSZ,0,T,<REST0>,V1,<<QSZ,FMT%SD+.QUH.,<Send rx queue head>>>)
+NTITEM (TCBSBQ,QSZ,0,T,<REST0>,V1,<<QSZ,FMT%SD+.QUH.,<Send bfr queue head>>>)
+NTITEM (TCBTO,<1_<WID(PTDO)>-1-<MINTHS+3>/4>,0,T,,V1,
+<<0,FMT%SD+.4DB.,<TCP send Options>>>)
+NTITEM (TCBTP,1,0,T,,V1,<<0,FMT%SD+.TOD.,<TODCLK of last inactivity probe>>>)
+NTITEM (TCBTR,<1_<WID(PTDO)>-1-<MINTHS+3>/4>,0,T,,V1,
+<<0,FMT%SD+.4DB.,<Last TCP Options recvd>>>)
+NTITEM (TCBTU,<1_<WID(PTDO)>-1-<MINTHS+3>/4>,0,T,,V1,
+<<0,FMT%SD+.4DB.,<TCP Options from User>>>)
+NTITEM (TCCIA,1,0,T,,V1,<<0,.DEC.,< Acked intrpt>>>)
+NTITEM (TCCIE,1,0,T,,V1,<<0,.DEC.,< Error intrpt>>>)
+NTITEM (TCCIR,1,0,T,,V1,<<0,.DEC.,< Recv intrpt>>>)
+NTITEM (TCCIS,1,0,T,,V1,<<0,.DEC.,< Send intrpt>>>)
+NTITEM (TCCIU,1,0,T,,V1,<<0,.DEC.,< Urgent intrpt>>>)
+NTITEM (TCCIX,1,0,T,,V1,<<0,.DEC.,< State intrpt>>>)
+NTITEM (TCDB8,1,0,T,,V1,<<0,.SDD.,< 8bit>>>)
+NTITEM (TCDCW,1,0,T,,V1,<<0,.SDD.,< CLOSF block>>>)
+NTITEM (TCDFS,1,0,T,,V1,<<0,.SDD.,< JFN active>>>)
+NTITEM (TCDGE,1,0,T,,V1,<<0,.SDD.,< GTJFN extension done>>>)
+NTITEM (TCDGN,1,0,T,,V1,<<0,.SDD.,< GTJFN name done>>>)
+NTITEM (TCDHT,1,0,T,,V1,<<0,.SDD.,< JFN high throughput>>>)
+NTITEM (TCDIB,1,0,T,,V1,<<0,.SDD.,< TJIBE vaild>>>)
+NTITEM (TCDOB,1,0,T,,V1,<<0,.SDD.,< TJOBF valid>>>)
+NTITEM (TCDOQ,1,0,T,,V1,<<0,.SDD.,< TJOBF queued>>>)
+NTITEM (TCDOW,1,0,T,,V1,<<0,.SDD.,< JFN OPENF block>>>)
+NTITEM (TCDPS,1,0,T,,V1,<<0,.SDD.,< JFN persist>>>)
+NTITEM (TCDPU,1,0,T,,V1,<<0,.SDD.,< JFN push>>>)
+NTITEM (TCDUP,1,0,T,,V1,<<0,.DEC.,<# dups recvd>>>)
+NTITEM (TCDUR,1,0,T,,V1,<<0,.SDD.,< JFN urgent>>>)
+NTITEM (TCDWT,1,0,T,,V1,<<0,.SDD.,< JFN wait>>>)
+NTITEM (TCERR,1,0,T,,V1,<<0,.SDD.,< TOPS20 error>>>)
+NTITEM (TCEWN,1,0,T,,V1,<<0,.DEC.,<# recvd pkts exceeded window>>>)
+NTITEM (TCFAK,1,0,T,,V1,<<0,.DEC.,<DY faked ACK>>>)
+NTITEM (TCFWN,1,0,T,,V1,<<0,.DEC.,<# full send window>>>)
+NTITEM (TCFWP,1,0,T,,V1,<<0,.DEC.,<# full window probes>>>)
+NTITEM (TCFWT,1,0,T,,V1,<<0,.DEC.,<Time send window zero>>>)
+NTITEM (TCICM,1,0,T,,V1,<<0,.DEC.,<# ICMP msgs recvd>>>)
+NTITEM (TCIDU,1,0,T,,V1,<<0,.DEC.,< Dest unreachable>>>)
+NTITEM (TCIGN,1,0,T,,V1,<<0,.DEC.,<# pkts ignored>>>)
+NTITEM (TCIPB,1,0,T,,V1,<<0,.DEC.,< Param prob>>>)
+NTITEM (TCIRD,1,0,T,,V1,<<0,.DEC.,<# Redirect msgs recvd>>>)
+NTITEM (TCISQ,1,0,T,,V1,<<0,.DEC.,<# Source Quench msgs recvd>>>)
+NTITEM (TCITE,1,0,T,,V1,<<0,.DEC.,< Time exceeded>>>)
+NTITEM (TCLTM,1,0,T,,V1,<<0,FMT%SD+.TOD.,<TODCLK last recvd pkt>>>)
+NTITEM (TCOMZ,1,0,T,,V1,<<0,.SDD.,< Opt. byte>>>)
+NTITEM (TCPCC,1,0,T,,V1,<<0,.DEC.,<# pkts closed conn>>>)
+NTITEM (TCPIC,1,0,T,,V1,<<0,FMT%SD+.6OB.,<Psi channels>>>)
+NTITEM (TCPIF,3,0,T,,V1,<<0,FMT%SD+.OHW.,<PSI ForkXs>>>)
+NTITEM (TCPZA,1,0,T,,V1,<<0,.DEC.,<PZ gave up>>>)
+NTITEM (TCPZT,1,0,T,,V1,<<0,.SDD.,< Todclk block>>>)
+NTITEM (TCQDY,QSZ,0,T,,V1,<<0,.SDO.,<Qd for DY>>>)
+NTITEM (TCQPZ,QSZ,0,T,,V1,<<0,.SDO.,<Qd for PZ>>>)
+NTITEM (TCQRA,QSZ,0,T,,V1,<<0,.SDO.,<Qd for RA>>>)
+NTITEM (TCQRX,QSZ,0,T,,V1,<<0,.SDO.,<Qd for RX>>>)
+NTITEM (TCRCV,1,0,T,,V1,<<0,.DEC.,<RECVs>>>)
+NTITEM (TCRMQ,1,0,T,,V1,<<0,.SDD.,< Level to source quench>>>)
+NTITEM (TCRMW,1,0,T,,V1,<<0,.SDD.,< Level to close window>>>)
+NTITEM (TCROS,1,0,T,,V1,<<0,.DEC.,<R out seq>>>)
+NTITEM (TCRPC,1,0,T,,V1,<<0,.DEC.,<Pkt r>>>)
+NTITEM (TCRPU,1,0,T,,V1,<<0,.DEC.,<PUSH r>>>)
+NTITEM (TCRST,1,0,T,,V1,<<0,.DEC.,<RST r>>>)
+NTITEM (TCRTM,1,0,T,,V1,<<0,FMT%SD+.TOD.,<TODCLK TCB created>>>)
+NTITEM (TCRUR,1,0,T,,V1,<<0,.DEC.,<URG r>>>)
+NTITEM (TCRUT,1,0,T,,V1,<<0,.SDD.,<Route block>>>)
+NTITEM (TCRXC,1,0,T,,V1,<<0,.SDD.,<QCNT of TCBRXQ at time of last RX>>>)
+NTITEM (TCRXF,1,0,T,,V1,<<0,.DEC.,<# RX slo>>>)
+NTITEM (TCRXP,1,0,T,,V1,<<0,.DEC.,<Pkt RX>>>)
+NTITEM (TCRZW,1,0,T,,V1,<<0,.DEC.,<R 0 wndo>>>)
+NTITEM (TCSAG,1,0,T,,V1,<<0,.DEC.,<Resynched>>>)
+NTITEM (TCSMO,1,0,T,,V1,<<0,.SDD..<Max outstanding packets>>>)
+NTITEM (TCSND,1,0,T,,V1,<<0,.DEC.,<SENDs>>>)
+NTITEM (TCSPC,1,0,T,,V1,<<0,.DEC.,<Pkt s>>>)
+NTITEM (TCSPU,1,0,T,,V1,<<0,.DEC.,<PUSH s>>>)
+NTITEM (TCSQF,1,0,T,,V1,<<0,.SDD.,<TODCLK can send quench>>>)
+NTITEM (TCSQT,1,0,T,,V1,<<0,.SDD.,<TODCLK quench over>>>)
+NTITEM (TCSUR,1,0,T,,V1,<<0,.DEC.,<URG s>>>)
+NTITEM (TCTBS,1,0,T,,V1,<<0,.DEC.,<# no buffer errors>>>)
+NTITEM (TCTDY,1,0,T,,V1,<<0,FMT%SD+.TOD.,<TODCLK for DY>>>)
+NTITEM (TCTOC,1,0,T,,V1,<<0,.DEC.,<Telnet negotiations cancelled>>>)
+NTITEM (TCTOR,1,0,T,,V1,<<0,.DEC.,<Telnet options received>>>)
+NTITEM (TCTPZ,1,0,T,,V1,<<0,FMT%SD+.TOD.,<TODCLK for PZ>>>)
+NTITEM (TCTRA,1,0,T,,V1,<<0,FMT%SD+.TOD.,<TODCLK for RA>>>)
+NTITEM (TCTRX,1,0,T,,V1,<<0,FMT%SD+.TOD.,<TODCLK for RX>>>)
+NTITEM (TCTSQ,1,0,T,,V1,<<0,.DEC.,<# sequence # pauses>>>)
+NTITEM (TDBGK,1,0,T,,V1,<<0,.SDD.,< Keep tcb on abort>>>)
+NTITEM (TDBGQ,1,0,T,,V1,<<0,.SDD.,<Debug:Fake 0 send window>>>)
+NTITEM (TDBGW,1,0,T,,V1,<<0,.SDD.,<Debug:Send 0 receive window>>>)
+NTITEM (TDEC,1,0,T,,V1,<<0,.SDD.,< Jfn interface>>>)
+NTITEM (TERBF,1,0,T,,V1,<<0,.SDO.,<Error/Trace (user) buffer adr>>>)
+NTITEM (TERJN,1,0,T,,V1,<<0,.SDD.,<Error/trace (user) JFN>>>)
+NTITEM (TERR,1,0,T,,V1,<<0,.SDD.,<Error>>>)
+NTITEM (TERRF,1,0,T,,V1,<<0,.SDD.,<Error wait idx>>>)
+NTITEM (TERRT,1,0,T,,V1,<<0,.SDD.,<Trace connection>>>)
+NTITEM (TFH,1,0,T,,V1,<<0,FMT%SD+.HST.,<FH>>>)
+NTITEM (TFHC,1,0,T,,V1,<<0,.SDD.,<FH net class>>>)
+NTITEM (TFP,1,0,T,,V1,<<0,.SDD.,<FP>>>)
+NTITEM (THPRS,1,0,T,,V1,<<0,.SDD.,<Starting HP time>>>)
+NTITEM (THPRT,1,0,T,,V1,<<0,.DEC.,<HP runtime>>>)
+NTITEM (TIFDF,1,0,T,,V1,<<0,.SDD.,<IP DF>>>)
+NTITEM (TIOPF,1,0,T,,V1,<<0,.SDD.,<IP User opt>>>)
+NTITEM (TIPDO,1,0,T,,V1,<<0,.SDD.,<IP DO>>>)
+NTITEM (TIPOR,1,0,T,,V1,<<0,.SDD.,<IP bytes Recvd opts>>>)
+NTITEM (TIPOU,1,0,T,,V1,<<0,.SDD.,<IP bytes User opts>>>)
+NTITEM (TJCN,1,0,T,,V1,<<0,.SDD.,<JCN>>>)
+NTITEM (TJFN,1,0,T,,V1,<<0,.SDD.,<  Jfn*mljfn>>>)
+NTITEM (TJIBA,1,0,T,,V1,<<0,.SDD.,< Input active>>>)
+NTITEM (TJIBE,1,0,T,,V1,<<0,.SDD.,< Input emptying>>>)
+NTITEM (TJOBA,1,0,T,,V1,<<0,.SDD.,< Output active>>>)
+NTITEM (TJOBF,1,0,T,,V1,<<0,.SDD.,< Output filling>>>)
+NTITEM (TLH,1,0,T,,V1,<<0,FMT%SD+.HST.,<LH>>>)
+NTITEM (TLP,1,0,T,,V1,<<0,.SDD.,<LP>>>)
+NTITEM (TMNRT,1,0,T,,V1,<<0,.SDD.,<Min round trip(ms)>>>)
+NTITEM (TMXRT,1,0,T,,V1,<<0,.SDD.,<Max round trip(ms)>>>)
+NTITEM (TNUFM,1,0,T,,V1,<<0,.SDD.,<OPENed new format>>>)
+NTITEM (TOFRK,1,0,T,,V1,<<0,.SDO.,<Owning Forkn>>>)
+NTITEM (TOPFH,1,0,T,,V1,<<0,FMT%SD+.HST.,<Open FH>>>)
+NTITEM (TOPFP,1,0,T,,V1,<<0,.SDD.,<Open FP>>>)
+NTITEM (TOPLH,1,0,T,,V1,<<0,FMT%SD+.HST.,<Open LH>>>)
+NTITEM (TOPNF,1,0,T,,V1,<<0,.SDD.,<OPEN wait idx>>>)
+NTITEM (TOWNR,1,0,T,,V1,<<0,.SDD.,<Owning job>>>)
+NTITEM (TPICA,1,0,T,,V1,<<0,.SDD.,< Data acked>>>)
+NTITEM (TPICE,1,0,T,,V1,<<0,.SDD.,<Error PI>>>)
+NTITEM (TPICR,1,0,T,,V1,<<0,.SDD.,<Recv done PI>>>)
+NTITEM (TPICS,1,0,T,,V1,<<0,.SDD.,<Send done PI>>>)
+NTITEM (TPICU,1,0,T,,V1,<<0,.SDD.,<Urgent data arrived PI>>>)
+NTITEM (TPICX,1,0,T,,V1,<<0,.SDD.,<State change PI>>>)
+NTITEM (TPIFA,1,0,T,,V1,<<0,.SDD.,< Data acked FX>>>)
+NTITEM (TPIFE,1,0,T,,V1,<<0,.SDO.,<Error FX>>>)
+NTITEM (TPIFR,1,0,T,,V1,<<0,.SDO.,<RECV done FX>>>)
+NTITEM (TPIFS,1,0,T,,V1,<<0,.SDO.,<SEND done FX>>>)
+NTITEM (TPIFU,1,0,T,,V1,<<0,.SDO.,<Urgent data arrived FX>>>)
+NTITEM (TPIFX,1,0,T,,V1,<<0,.SDO.,<State change FX>>>)
+NTITEM (TPOMZ,1,0,T,,V1,<<0,.SDD.,< Optimization on>>>)
+NTITEM (TPRS1,1,0,T,,V1,<<0,.SDD.,< Persistance 1>>>)
+NTITEM (TPRS2,1,0,T,,V1,<<0,.SDD.,< Persistance 2>>>)
+NTITEM (TPSIC,1,0,T,,V1,<<0,FMT%SD+.6OB.,<PSI channels>>>)
+NTITEM (TRBS,1,0,T,,V1,<<0,.SDD.,<RECV bfr space>>>)
+NTITEM (TRCB,1,0,T,,V1,<<0,.SDO.,<RECV current bfr>>>)
+NTITEM (TRIS,1,0,T,,V1,<<0,.SDD.,<RECV initial sequence>>>)
+NTITEM (TRLAK,1,0,T,,V1,<<0,.SDD.,<Last PACKS sent>>>)
+NTITEM (TRLFT,1,0,T,,V1,<<0,.SDD.,<RECV left>>>)
+NTITEM (TRLRX,1,0,T,,V1,<<0,.SDD.,< Po1rx>>>)
+NTITEM (TRLST,1,0,T,,V1,<<0,.SDD.,< Po1ls>>>)
+NTITEM (TRLWN,1,0,T,,V1,<<0,.SDD.,<Last PWNDO sent>>>)
+NTITEM (TRPP,1,0,T,,V1,<<0,.SDD.,<RECV parital pkt>>>)
+NTITEM (TRSYN,1,0,T,,V1,<<0,.SDD.,<RECV state>>>)
+NTITEM (TRURG,1,0,T,,V1,<<0,.SDD.,<RECV urgent mode>>>)
+NTITEM (TRURP,1,0,T,,V1,<<0,.SDD.,<RECV urgent pointer>>>)
+NTITEM (TRWND,1,0,T,,V1,<<0,.SDD.,<RECV window>>>)
+NTITEM (TRXI,1,0,T,,V1,<<0,.SDD.,<RX interval(ms)>>>)
+NTITEM (TRXP,1,0,T,,V1,<<0,.SDD.,<RX params>>>)
+NTITEM (TRXPD,1,0,T,,V1,<<0,.SDD.,<RX Denominator>>>)
+NTITEM (TRXPI,1,0,T,,V1,<<0,.SDD.,<RX initial interval(ms)>>>)
+NTITEM (TRXPN,1,0,T,,V1,<<0,.SDD.,<RX Numberator>>>)
+NTITEM (TSABT,1,0,T,,V1,<<0,.SDD.,<Abort>>>)
+NTITEM (TSBFP,1,0,T,,V1,<<0,.SDD.,< Buffers to be pushed>>>)
+NTITEM (TSBYT,1,0,T,,V1,<<0,.SDD.,<Bytes to send>>>)
+NTITEM (TSCB,1,0,T,,V1,<<0,.SDO.,<SEND current bfr>>>)
+NTITEM (TSCPK,1,0,T,,V1,<<0,.SDO.,<Send current pkt>>>)
+NTITEM (TSCR,1,0,T,,V1,<<0,.SDD.,<Secure connection>>>)
+NTITEM (TSEP,1,0,T,,V1,<<0,.SDD.,<SEND encourage pkt>>>)
+NTITEM (TSEPT,1,0,T,,V1,<<0,.SDD.,<Encourage Packet Time>>>)
+NTITEM (TSESB,1,0,T,,V1,<<0,.SDD.,<Estimated send rate>>>)
+NTITEM (TSFHOP,1,0,T,,V1,<<0,.SDD.,< First hop route>>>)
+NTITEM (TSFHT,1,0,T,,V1,<<0,.SDD.,< Todclk of route>>>)
+NTITEM (TSFHW,1,0,T,,V1,<<0,.SDD.,< Who set route>>>)
+NTITEM (TSFP,1,0,T,,V1,<<0,.SDD.,<SEND force pkt>>>)
+NTITEM (TSFR,1,0,T,,V1,<<0,.SDD.,< Flush on close>>>)
+NTITEM (TSIS,1,0,T,,V1,<<0,.SDD.,<Initial send sequence #>>>)
+NTITEM (TSLBY,1,0,T,,V1,<<0,.SDD.,< Last byte sent>>>)
+NTITEM (TSLFT,1,0,T,,V1,<<0,.SDD.,<SEND left>>>)
+NTITEM (TSLVC,1,0,T,,V1,<<0,.SDD.,<Current Security Level>>>)
+NTITEM (TSLVN,1,0,T,,V1,<<0,.SDD.,<Next Security level>>>)
+NTITEM (TSMRT,1,0,T,,V1,<<0,.SDD.,<Smoothed round trip>>>)
+NTITEM (TSMXB,1,0,T,,V1,<<0,.SDD.,<Max send rate>>>)
+NTITEM (TSMXS,1,0,T,,V1,<<0,.SDD.,<Max send pkt len (inc header)>>>)
+NTITEM (TSOPN,1,0,T,,V1,<<0,.SDD.,<Said open>>>)
+NTITEM (TSPET,1,0,T,,V1,<<0,.SDD.,<Pipe Empty Time>>>)
+NTITEM (TSPRB,1,0,T,,V1,<<0,FMT%SD+.TOD.,<TODCLK next closed window probe>>>)
+NTITEM (TSPRS,1,0,T,,V1,<<0,.SDD.,<Persistent>>>)
+NTITEM (TSRX,1,0,T,,V1,<<0,.SDD.,< No rx abort>>>)
+NTITEM (TSSCP,1,0,T,,V1,<<0,.SDD.,< Compartment>>>)
+NTITEM (TSSEQ,1,0,T,,V1,<<0,.SDD.,<SEND sequence>>>)
+NTITEM (TSSHR,1,0,T,,V1,<<0,.SDD.,< Handling restrictions>>>)
+NTITEM (TSSTC,1,0,T,,V1,<<0,.SDD.,< Transmission control>>>)
+NTITEM (TSSV,1,0,T,,V1,<<0,.SDD.,<Sequence valid>>>)
+NTITEM (TSSYN,1,0,T,,V1,<<0,.SDD.,<SEND state>>>)
+NTITEM (TSTAT,1,0,T,,V1,<<0,.SDO.,<State>>>)
+NTITEM (TSTMW,1,0,T,,V1,<<0,.SDD.,<Need Time Wait State>>>)
+NTITEM (TSTO,1,0,T,,V1,<<0,.SDD.,<SEND time out(ms)>>>)
+NTITEM (TSUOP,1,0,T,,V1,<<0,.SDD.,<User open>>>)
+NTITEM (TSURG,1,0,T,,V1,<<0,.SDD.,<SEND urgent mode>>>)
+NTITEM (TSURP,1,0,T,,V1,<<0,.SDD.,<SEND urgent pointer>>>)
+NTITEM (TSWND,1,0,T,,V1,<<0,.SDD.,<SEND window>>>)
+NTITEM (TTOPF,1,0,T,,V1,<<0,.SDO.,<TCP User option flags>>>)
+NTITEM (TTOS,1,0,T,,V1,<<0,.SDO.,<IP TOS>>>)
+NTITEM (TTOSC,1,0,T,,V1,<<0,.SDO.,<IP TOS Prc>>>)
+NTITEM (TTOSD,1,0,T,,V1,<<0,.SDO.,<IP TOS LDly>>>)
+NTITEM (TTOSR,1,0,T,,V1,<<0,.SDO.,<IP TOS HRel>>>)
+NTITEM (TTOST,1,0,T,,V1,<<0,.SDO.,<IP TOS HThru>>>)
+NTITEM (TTOSU,1,0,T,,V1,<<0,.SDO.,<User TOS>>>)
+NTITEM (TTPDO,1,0,T,,V1,<<0,.SDD.,<TCP DO>>>)
+NTITEM (TTPOR,1,0,T,,V1,<<0,.SDD.,<TCP bytes Recvd opts>>>)
+NTITEM (TTPOU,1,0,T,,V1,<<0,.SDD.,<TCP bytes User opts>>>)
+NTITEM (TTTL,1,0,T,,V1,<<0,.SDD.,<IP TTL>>>)
+NTITEM (TTVT,1,0,T,,V1,<<0,.SDD.,<TVT>>>)
+NTITEM (TUNRT,1,0,T,,V1,<<0,.SDD.,<Unreliable RTT component estimate>>>)
+NTITEM (TVTL,1,0,T,,V1,<<0,.SDO.,<TVT line #>>>)
+NTITEM (TWFR,1,0,T,,V1,<<0,.SDD.,< Something flushed on close>>>)
+> ;End of DEFINE TCPTCB
+
+
+
+;Define the symbolic offsets and lengths
+
+DEFINE DEFNAM(name,base)<DEFINE SETNAM(next)<name==next-base>
+.ntit0==base>
+
+
+DEFINE NTITEM(nam,len,lvl,typ,init,fmt,symb)<
+IFIDN <typ><G>,<DEFNAM(L'nam,\.ntiti)>
+IFIDN <typ><G>,<M'nam==len
+ O'nam==.ntiti-.ntit0
+ .ntiti==.ntiti+len
+ SETNAM(.ntiti)>;; End of IFDIF
+IFIDN <typ><O>,<M'nam==len
+ O'nam==.ntiti-.ntit0
+ .ntiti==.ntiti+len
+ SETNAM(.ntiti)>;; End of IFDIF
+> ;End of DEFINE NTITEM
+
+.ntiti==0			;Initialize offset counter
+.ntias==0
+	MNMSTS			;Define generic offsets for all information
+	MNTSTS
+
+.ntiti==0
+	ICMSTS			;Define IP offsets
+	INFSTS
+	INGSTS
+	INLSTS
+IFN IPMONF,<	INMSTS>
+	INPSTS
+	INQSTS
+	INUSTS
+	INWSTS
+
+.ntiti==0
+	TCASTS			;Define TCP offsets
+	TCCSTS
+	TCDSTS
+	TCFSTS
+	TCISTS
+	TCJSTS
+	TCKSTS
+	TCMSTS
+	TCOSTS
+	TCPSTS
+	TCTSTS
+	TCUSTS
+	TCVSTS
+	TCXSTS
+	TCZSTS
+PURGE .ntiti,.ntias,DEFNAM,NTITEM
+
+	SUBTTL	Internet Parameter, Variable, and Monitoring Variables
+
+;The following macro lists each block in the Internet Statistics Area.
+
+DEFINE DEFSTS(arg<0>)<.ntias==arg;;		Non-zero to assign storage
+
+NTITEM (AAAST,1,0,G,<<STATZZ-STAT0>>,V1,
+<<1,.SDD.,<Network Statistics Area - Len>>>)
+NTITEM (AASDT,4,0,G,<,,0,0>,V1,
+<<1,FMT%SD+.TAD.,<Sample GTAD>>,<1,FMT%SD+.TOD.,<Sample TODCLK>>,
+<1,FMT%SD+.TAD.,<Init GTAD>>,<1,FMT%SD+.TOD.,<Init TODCLK>>>)
+NTITEM (AAVER,3,0,O,<<.ntitx,,MNMVER>,NIQ,<NFIXED,,NTWBWD>>,V1,
+<<3,FMT%SD+.DHW.,<# NCTs/Version,0/NIQ,NFIXED/NTWBWD>>>)
+NTITEM (ABLKO,4,0,O,<STAT0,STSTAB-STAT0,STATCT-STAT0,STATPT-STAT0>,V1,
+<<4,.SDD.,<STAT0,Offset to STSTAB,  STATCT,  STATPT>>>)
+
+;;System Constants
+
+NTITEM (MNTB0,1,0,G,^D600000,V1,<<1,.SDD.,<Multinet buffer GC interval(ms)>>>)
+NTITEM (MNTSW,1,0,G,<0*MNS%RF+0*MNS%MP+1*MNS%MT>,V1,
+<<1,<.MSK.,.SDO.,MNS%RF,MNS%MP,MNS%MT>,
+<Multinet switches RF MP MT xx>>>)
+NTITEM (MNTI0,1,0,G,^D60000,V1,<<1,.SDD.,< background check(ms)>>>)
+NTITEM (TPQMAX,1,0,G,^D200,V1,<<1,.SDD.,<BUGCHK max Q len>>>)
+
+;;Domain Name System Constants
+
+NTITEM (DOMPAR,16,0,G,<1*DMS%ED+1*DMS%EC+0*DMS%ER+1*DMS%ES,
+^D10,^D2000,^D500,^D200,^D30000,0,0,REST0>,V1,
+<<1,<.MSK.,.SDO.,DMS%ED,DMS%EC,DMS%ER,DMS%ES>,
+<Domain switches ED EC ER ES xx>>,
+<6,.SDD.,< Depth CNAMEs, DB lock(ms), NoWait(ms), Prim lock(ms),
+ Resolv(ms), Def. Class>>,<7,.SDO.,< labels,,,,,,>>>)
+
+;;Local Net Constants
+
+..MXSZ==^D<<776-PKTELI>*4>;; Max packet over all interfaces (GETBUF limit)
+NTITEM (INXPB,1,0,G,<..MXSZ>,V1,<<1,.SDD.,<Max packet len(octets)>>>)
+NTITEM (INXPW,1,0,G,<<PKTELI+<<..MXSZ+3>/4>+1>>,V1,
+<<1,.SDD.,<PFSIZ pkt len(w)>>>)
+NTITEM (NTHT0,3,0,G,<^D<300*1000>,^D<30*1000>,<^D30*1000>>,V1,
+<<3,.SDD.,<Clear routing table(ms), stale route(ms),  status(ms)>>>)
+NTITEM (PNGT0,5,0,G,<^D<60*60*1000>,^D1000,^D15,.THRDN,.THRUP>,V1,
+<<5,.SDD.,<GW ping interval(ms), min ping interval(ms),
+ time to live(s), threshold down (le),  up (ge)>>>)
+NTITEM (RFNM0,3,0,G,<^D8,^D57000,^D3600000>,V1,
+<<3,.SDD.,<RFNM max out, Flush block interval(ms), GC interval(ms)>>>)
+
+
+;;IP Constants
+
+NTITEM (INFT0,2,0,G,<10,^D60000>,V1,
+<<2,.SDD.,<INTFRK min interval(ms), Utility interval(ms)>>>)
+NTITEM (INPSW,1,0,G,<0*IPS%LP!0*IPS%FR!0*IPS%IL!0*IPS%SC>,V1,
+<<1,<.MSK.,.SDO.,IPS%LP,IPS%FR,IPS%IL,IPS%SC>,
+<IP switches LP FR IL SCR xx>>>)
+NTITEM (INTLHX,1,0,G,<3>,V1,<<1,.SDD.,<Max logical host # for host>>>)
+NTITEM (INQMX,1,0,G,<^D8>,V1,<<1,.SDD.,<IP User Q max queue len>>>)
+NTITEM (INQT0,1,0,G,<^D30000>,V1,<<1,.SDD.,<  Timeout(ms)>>>)
+
+
+;;TCP Constants
+
+NTITEM (STATF,1,0,G,<-1>,V1,<<1,.SDD.,<Collect TCP Delay Stats>>>)
+NTITEM (TCBSZ,1,0,G,TCBSIZ,V1,<<1,.SDD.,<Length of TCB>>>)
+NTITEM (TCPCKT,1,0,G,<^D10000>,V1,<<1,.SDD.,<TCP check interval(ms)>>>)
+NTITEM (TCPDTL,1,0,G,<^D60>,V1,<<1,.SDD.,<Def Time to live(s)>>>)
+NTITEM (TCPFAT,1,0,G,<^D<1*60*60*1000>>,V1,
+<<1,.SDD.,<Inactivity abort time(ms)>>>)
+NTITEM (TCPISN,2,0,G,<^D<<MAXSEQ/8>*<<24*60*60>/CYCTIM>>,3>,V1,
+<<2,FMT%SD+.DMG.,<TCP seq # per sec, scale factor (MUL overflow)>>>)
+NTITEM (TCPBRD,1,0,G,<^D600>,V1,
+<<1,.SDD.,< Baud rate divisor for # pkts in pipe>>>)
+NTITEM (TCPOMZ,1,0,G,<1>,V1,<<1,.SDO.,<Default optimization level>>>)
+NTITEM (TCPPST,1,0,G,<^D120*^D1000>,V1,
+<<1,.SDD.,<Inactivity probe interval(ms)>>>)
+NTITEM (TCPPTM,1,0,G,<^D<60*60>>,V1,<<1,.SDD.,<Max send timeout(s)>>>)
+NTITEM (TCPRA0,1,0,G,<^D100>,V1,<<1,.SDD.,<Delay ACK for RA(ms)>>>)
+NTITEM (TCPSW,1,0,G,
+<<0*TCS%BD+0*TCS%LA+1*TCS%RX+0*TCS%LP+1*DECOK+1*BBNOK+0*TCS%O1+0*TCS%O2+0*TCS%BR>>,
+V1,<<1,<.MSK.,.SDO.,TCS%LP,TCS%BD,TCS%LA,TCS%RX,DECOK,BBNOK,TCS%O1,TCS%O2,TCS%BR>,
+<TCP Switches BD LA RX LP DEC BBN O1 O2 BR xx>>>)
+NTITEM (TCPSY0,1,0,G,<^D2000>,V1,<<1,.SDD.,<Re-sync delay(ms)>>>)
+NTITEM (TCPBGT,1,0,G,<^D30000>,V1,<<1,.SDD.,<BG run interval(ms)>>>)
+NTITEM (TPMSL,1,0,G,<^D<2*60*1000>>,V1,
+<<1,.SDD.,<Maximum pkt lifetime(ms)>>>)
+NTITEM (TPNOW,2,0,G,<^D100,0>,V1,<<2,.SDD.,<Min scheduling(ms), rx interval>>>)
+NTITEM (TPSB0,2,0,G,<^D200,^D3000>,V1,
+<<2,.SDD.,<PZ short block min(ms), max(ms)>>>)
+NTITEM (TPSQ0,4,0,G,<^D5000,^D200,^D10000,^D2000>,V1,
+<<4,.SDD.,<Source quench (ms) block,  PZ block min,   max, send freq>>>)
+NTITEM (TPRMAX,1,0,G,
+<<FLD(^D20,TPRMH)!FLD(^D10,TPRMW)!FLD(^D20,TPRMQ)!FLD(^D30,TPRMF)>>,
+V1,<<1,<.MSK.,.SDD.,TPRMH,TPRMW,TPRMQ,TPRMF>,
+<Max RECV buf & close window & quench & flush>>>)
+NTITEM (TPSMAX,1,0,G,<<FLD(^D20,TPSMH)!FLD(^D5,TPSMO)>>,V1,
+<<1,<.MSK.,.SDD.,TPSMH,TPSMO>,<Max SEND buf & outstanding>>>)
+NTITEM (TPPZ0,1,0,G,^D200,V1,<<1,.SDD.,<Delay on full RX queue(ms)>>>)
+
+;;TCP RX
+
+NTITEM (TPDXN,1,0,G,<^D3>,V1,<<1,.SDD.,<TCP RX def numerator>>>)
+NTITEM (TPDXD,1,0,G,<^D2>,V1,<<1,.SDD.,< def denominator>>>)
+NTITEM (TPDXI,1,0,G,<^D3>,V1,<<1,.SDD.,< def interval(s)>>>)
+NTITEM (TPRX0,1,0,G,<^D<3*1000>>,V1,<<1,.SDD.,< initial interval(ms)>>>)
+NTITEM (TPRXN,1,0,G,<^D1000>,V1,<<1,.SDD.,< min interval(ms)>>>)
+NTITEM (TPRXX,1,0,G,<^D<60*1000>>,V1,<<1,.SDD.,< max interval(ms)>>>)
+NTITEM (TPRXF,1,0,G,<<0,,-4>>,V1,<<1,FMT%SD+.DHW.,< scale factor>>>)
+NTITEM (TPRXD,1,0,G,<13>,V1,<<1,.SDD.,<  f1(decay)=11/16>>>)
+NTITEM (TPRXI,1,0,G,<14>,V1,<<1,.SDD.,<  f2(rise)=3/4>>>)
+NTITEM (TPRXV,1,0,G,<30>,V1,<<1,.SDD.,<  g(thresh)=3/2>>>)
+
+;;TCP probes
+
+NTITEM (TPRXW,1,0,G,<^D120000>,V1,<<1,.SDD.,<RX into zero window(ms)>>>)
+
+;;Telnet Constants
+
+NTITEM (TVTPTR,1,0,G,0,V1,<<1,FMT%SD+.DOH.,<# TVTs & first>>>)
+NTITEM (TVTWTM,1,0,G,<^D<1*60*1000>>,V1,<<1,.SDD.,<Full window probe(ms)>>>)
+NTITEM (TVTPR,10+.TCPCS,0,G,<^D30,^D900,^D500,^D30000,^D60000,^D60000,0,0,
+0,^D23,REST0>,V1,
+<<6,.SDD.,<Telnet Sync timeout(s), Estab timeout(s), Msg ms/char,
+ Negotiation timeout(ms), Check listener(ms), Probe window(ms)>>,
+<2,.OCT.,< Default RX pars,>>,<.TCPCS,.SDD.,<Telnet CDB>>>)
+
+
+;;Multinet Fork Variables
+
+NTITEM (MNTFRK,2,0,G,<-2,-2>,V1,<<2,.SDO.,<Multinet FORKX,  Utility FORKX>>>)
+NTITEM (MNTFLG,2,0,G,<0,0>,V1,<<2,.SDD.,< Run flag,  Utility flag>>>)
+NTITEM (MNTIM,2,0,G,<0,0>,V1,<<2,.SDD.,< Check interval(ms),  Utility (na)>>>)
+
+;;Multinet variables
+
+NTITEM (NETSUP,1,0,G,400001,V1,<<1,FMT%SD+.OMG.,<Multinet inited>>>)
+NTITEM (LOGHST,1,0,G,0,V1,<<1,.SDO.,<Logical host support>>>)
+NTITEM (MNTBT,1,0,G,0,V1,<<1,FMT%SD+.TOD.,<Multinet buffer GC time>>>)
+NTITEM (DOMSRV,1+20,0,G,<0,REST0>,V1,<<1,<.MSK.,.SDO.,DMC%ON,DMC%JS,DMC%ST>,
+<Domain control: On JSYS Stop Errcode>>,
+<20,.SDO.,< FLIP.DD filespec>>>)
+NTITEM (HTBLCK,7,0,G,<-1,<HOSTN>,NHSTNL*HOSTNW,<HSTNAM>,
+NHSTN,<HSTNML>,NHSTNL>,V1,
+<<2,.SDO.,<Host table lock, NAMIDX>>,<1,.SDD.,< NAMCNT>>,
+<1,.SDO.,< NAMPTR>>,<1,.SDD.,< NAMSPC>>,
+<1,.SDO.,< NUMIDX>>,<1,.SDD.,< NUMSPC>>>)
+NTITEM (MHOSTS,1,0,G,0,V1,<<1,.SDD.,<-# HOSTS>>>)
+;;These are part of the NETRDY GETAB Table 
+;;cwl following used?
+NTITEM (NETENT,1,0,G,0,V1,<<1,FMT%SD+.OMG.,<NETSER flags>>>)
+NTITEM (IGDMSG,1,0,G,0,V1,<<1,.SDO.,<IMP Going down msg>>>)
+NTITEM (IGDTIM,1,0,G,0,V1,<<1,FMT%SD+.TAD.,< when>>>)
+;;cwl obsolete
+NTITEM (ABFCNT,1,0,G,0,V1,<<1,.SDD.,<# NETABF BUGINFs>>>)
+;;Keep these cells together. The ARPA GETAB% .LHOSTN requires this
+;;cwl obsolete NOHOST
+NTITEM (NOHOST,1,0,G,-1,V1,<<1,FMT%SD+.HST.,<Old format host number>>>)
+;;cwl following used?
+NTITEM (NVTPTR,1,0,G,1,V1,<<1,FMT%SD+.DOH.,<-# nvt's,,first nvt>>>)
+;;End
+NTITEM (RFN8TO,1,0,G,0,V1,<<1,FMT%SD+.TOD.,< Check RFNTAB>>>);;	1822DV
+NTITEM (RFNGCT,1,0,G,0,V1,<<1,FMT%SD+.TOD.,< GC RFNTAB>>>);;	1822DV
+
+MNTFW;;					Forwarding restrictions table
+
+
+;;Internet Fork Variables
+
+NTITEM (INTFRK,2,0,G,<-2,-2>,V1,<<2,.SDO.,<Internet FORKX,  utility FORKX>>>)
+NTITEM (INTFLG,2,0,G,<0,0>,V1,<<2,.SDD.,<< run flag>,<  run flag>>>>)
+NTITEM (INTON,1,0,G,<1B18+1B35>,V1,<<1,FMT%SD+.OMG.,< initialized flag>>>)
+NTITEM (INTTIM,2,0,G,<0,0>,V1,<<2,FMT%SD+.TOD.,<< next run at>,<  next run at>>>>)
+
+;Internet Free Storage Variables
+
+NTITEM (FRELCK,LOCKSZ,0,G,REST0,V1,<<LOCKSZ,.LCK.,<IP Free Storage>>>);;NR
+NTITEM (BULKST,1,0,G,0,V1,<<1,.SDO.,<Start bulk storage>>>);;NR
+NTITEM (BULKND,1,0,G,0,V1,<<1,.SDO.,<End bulk storage>>>);;NR
+NTITEM (INSVC,1,0,G,,V1,<<1,.DEC.,<Storage scavenges>>>)
+NTITEM (INSVR,1,0,G,0,V1,<<1,.SDD.,<TCP scavenge flag>>>)
+NTITEM (INSVT,1,0,G,0,V1,<<1,FMT%SD+.TOD.,<Last scavenge>>>)
+NTITEM (MRGFLG,1,0,G,0,V1,<<1,.SDD.,<Garbage collect flag>>>);;NR
+NTITEM (INTFSP,1,0,G,0,V1,<<1,.SDO.,<Internet free space>>>)
+NTITEM (ODDBLK,INTBLS,0,G,<0,REST0>,V1,
+<<INTBLS-1,.SDD.,<Unused size>>,
+<1,.SDO.,<Odd size block list>>>)
+NTITEM (INTBLK,NFIXED*INTBLS,0,G,REST0,V1,
+<<NFIXED*INTBLS,FMT%SD+.OMG.,<Size & address lists>>>)
+
+;;Packet Tracing Variables (see DEFINE MNTPTB, etc if change offsets)
+
+NTITEM (MNTRAC,^D11,0,G,<0,0,0,0,<MNTPTP-STAT0>,0,<MSEC1,,MNTPTP>,
+<MSEC1,,MNTPTP>,<MSEC1,,MNTPTP+MNTPTS-2*PPBWDS>,0,0>,V1,
+<<1,FMT%SD+.OMG.,<Packet tracing switch>>,<1,FMT%SD+.HST.,< host>>,
+<4,.SDD.,< port, TCP user, offset to bfr, dropped>>,
+<4,.SDO.,< MNTPT-B -C -E -O>>,
+<1,<.MSK.,.SDD.,MNPTN,.OCT.,MNPTO,.DEC.,MNPTJ>,
+< MNTPTT: TCB trace: NumWords Offset Job>>>)
+NTITEM (PPBLCK,LOCKSZ,0,G,REST0,V1,<<LOCKSZ,.LCK.,<Packet Printer Buffer>>>)
+
+
+;;Local Network Variables
+
+NTITEM (NTHTM,1,0,G,0,V1,<<1,FMT%SD+.TOD.,<Flush old routes>>>)
+
+;;IP Fragmentation Variables
+
+NTITEM (IPRAN,1,0,G,0,V1,<<1,.SDD.,<IP reassembly id>>>);;NR
+NTITEM (IPRAQ,1,0,G,<0>,V1,<<1,.SDO.,< fragment ra forward ptr>>>);;NR
+NTITEM (IPRAT,1,0,G,0,V1,<<1,FMT%SD+.TOD.,< fragment timeout>>>);;NR
+
+
+;;Internet Packet Queues (See also INGIQ)
+
+NTITEM (IPIQ,2,0,G,<0,0>,V1,<<2,.SDO.,<Gateway input chain head/tail>>>)
+NTITEM (NTFRO,2,0,G,<0,0>,V1,<<2,.SDO.,<Completed output chain head/tail>>>)
+NTITEM (NTFRI,1,0,G,0,V1,<<1,.SDO.,<Free input packet list ptr>>>)
+NTITEM (GWTAB,4,0,G,<0,<-1,,1>,0,0>,V1,<<1,.SDO.,<Gateway Table>>,
+<2,FMT%SD+.DHW.,<< -# GW,,# GW>,< next search -#,,i>>>,
+<1,FMT%SD+.TAD.,< file creation>>>)
+NTITEM (PNGTM,2,0,G,<0,0>,V1,
+<<1,FMT%SD+.TOD.,<Ping next gateway>>,<1,.SDD.,< next to ping>>>)
+
+
+;;Internet User Queue Storage
+
+NTITEM (INQLK,LOCKSZ,0,G,REST0,V1,<<LOCKSZ,.LCK.,<User Queue>>>);;NR
+NTITEM (INQFK,NIQ,0,S,,V1,<<0,.SDO.,< Waiting FORKX>>>);;RS
+NTITEM (INQJB,NIQ,0,S,,V1,<<0,FMT%SD+.ODH.,< Flag: AQ%SPT/ICM/SCR & Job (-1 free)>>>)
+NTITEM (INQM0,NIQ,0,S,,V1,<<0,FMT%SD+.HAD.,< Protocol Mask>>>);;NR
+NTITEM (INQM1,NIQ,0,S,,V1,<<0,FMT%SD+.HAD.,< Foreign Host Mask>>>);;NR
+NTITEM (INQM2,NIQ,0,S,,V1,<<0,FMT%SD+.HAD.,< Local Host Mask>>>);;NR
+NTITEM (INQM3,NIQ,0,S,,V1,<<0,FMT%SD+.HAD.,< Port (F/L) Mask>>>);;NR
+NTITEM (INQV0,NIQ,0,S,,V1,<<0,FMT%SD+.HST.,< Protocol>>>);;NR
+NTITEM (INQV1,NIQ,0,S,,V1,<<0,FMT%SD+.HST.,< Foreign Host>>>);;NR
+NTITEM (INQV2,NIQ,0,S,,V1,<<0,FMT%SD+.HST.,< Local Host>>>);;NR
+NTITEM (INQV3,NIQ,0,S,,V1,<<0,FMT%SD+.HST.,< Port (F/L)>>>);;NR
+NTITEM (INQHD,1,0,G,0,V1,<<1,.SDO.,< Queue head table>>>);;NR
+NTITEM (INQRS,NIQ,0,S,,V1,<<0,.DHW.,< Recv/Sent counts>>>);;NR
+NTITEM (INQSP,NIQ,0,S,,V1,<<0,.SDD.,< Datagrams queued>>>);;NR
+NTITEM (INQTM,NIQ,0,S,,V1,<<0,FMT%SD+.TOD.,< Timeout TODCLK>>>);;NR
+
+;;ICMP Variables
+
+
+;;TCP Variables
+
+NTITEM (TCBDQ,2+2*QSZ,0,G,<0,0,REST0>,V1,<<2,.SDO.,<Dead TCB Q (& debug)>>,
+<2*QSZ,FMT%SD+.QUH.,< Dead TCB Q heads>>>)
+;;cwl in-place queue heads?? smaller nfixed & harger tcbh...
+NTITEM (TCBH,2,0,G,<0,TCBHSZ>,V1,
+<<1,.SDO.,<TCB Hash Table>>,<1,.SDD.,< size>>>)
+NTITEM (TCBHLK,LOCKSZ,0,G,REST0,V1,<<LOCKSZ,.LCK.,< Lock>>>)
+NTITEM (TCBHUC,1,0,G,0,V1,<<1,.SDD.,< # readers>>>)
+NTITEM (TCPBDQ,1+QSZ,0,G,<0,REST0>,V1,<<1,.SDO.,<Buffer done queue>>,
+<QSZ,FMT%SD+.QUH.,<  queue head>>>)
+NTITEM (TCPIDQ,1+QSZ,0,G,<0,REST0>,V1,<<1,.SDO.,< dead TCB buffer queue>>,
+<QSZ,FMT%SD+.QUH.,<  queue head>>>)
+NTITEM (TCPUS0,2,0,G,<0,0>,V1,<<2,FMT%SD+.OMG.,<TCP fkx saved UPT, PCSect>>>)
+;;
+NTITEM (PROC,1,0,G,0,V1,<<1,.SDO.,<Current TCP Process>>>)
+NTITEM (TIMPTR,1,0,G,0,V1,<<1,.SDO.,<Current timer>>>)
+NTITEM (OHUSE,1,0,G,,V1,<<1,.DEC.,<Overhead Time>>>)
+IFN PROCNZ-16,<PRINTX % Fix number of zeros in TCP process block NTITEMs BG>
+NTITEM (BG,PROCSZ,0,G,<0,0,0,0,0,0,0,0,0,0,0,0,0,0>,
+V1,<<PROCSZ,.PRC.,<TCP BG>>>)
+NTITEM (DY,PROCSZ,0,G,<0,0,0,0,0,0,0,0,0,0,0,0,0,0>,
+V1,<<PROCSZ,.PRC.,<TCP DY>>>)
+NTITEM (IP,PROCSZ,0,G,<0,0,0,0,0,0,0,0,0,0,0,0,0,0>,
+V1,<<PROCSZ,.PRC.,<TCP IP>>>)
+NTITEM (OP,PROCSZ,0,G,<0,0,0,0,0,0,0,0,0,0,0,0,0,0>,
+V1,<<PROCSZ,.PRC.,<TCP OP>>>)
+NTITEM (PZ,PROCSZ,0,G,<0,0,0,0,0,0,0,0,0,0,0,0,0,0>,
+V1,<<PROCSZ,.PRC.,<TCP PZ>>>)
+NTITEM (RA,PROCSZ,0,G,<0,0,0,0,0,0,0,0,0,0,0,0,0,0>,
+V1,<<PROCSZ,.PRC.,<TCP RA>>>)
+NTITEM (RX,PROCSZ,0,G,<0,0,0,0,0,0,0,0,0,0,0,0,0,0>,
+V1,<<PROCSZ,.PRC.,<TCP RX>>>)
+
+;;Telnet Variables
+
+NTITEM (TVMSTM,1,0,G,0,V1,<<1,FMT%SD+.TOD.,<TVT sendall timeout>>>)
+NTITEM (TVTLSN,1,0,G,0,V1,<<1,FMT%SD+.OHW.,< listening JCN or JFN & err>>>)
+NTITEM (TVTTIM,1,0,G,0,V1,<<1,FMT%SD+.TOD.,< when to check>>>)
+;;NTITEM (TVTNIF,1,0,G,0,V1,<<1,.SDD.,< scan flag (ra)>>>)
+NTITEM (TVTNOF,1,0,G,0,V1,<<1,.SDD.,< scan flag (pz)>>>)
+NTITEM (TVTNTM,1,0,G,0,V1,<<1,FMT%SD+.TOD.,< negotiation timeout>>>)
+
+
+;;Basic Monitoring Variables
+
+NTITEM (ASNWTF,1,0,G,,V1,<<1,.DEC.,<No free wait bits>>>)
+NTITEM (GENCFL,1,0,G,,V1,<<1,.DEC.,<Total lock conflicts>>>)
+NTITEM (BADPCT,1,0,G,,V1,<<1,.DEC.,<Bad checksum version etc>>>)
+
+;;TCP
+
+NTITEM (SYNRCT,1,0,G,,V1,<<1,.DEC.,<TCP SYNs received>>>)
+NTITEM (SYNSCT,1,0,G,,V1,<<1,.DEC.,< SYNs Sent>>>)
+NTITEM (PRPKCT,2,0,G,,V1,<<2,.DEC.,< probes>>>)
+NTITEM (RSTRCT,1,0,G,,V1,<<1,.DEC.,< RSTs received>>>)
+NTITEM (RSTSCT,1,0,G,,V1,<<1,.DEC.,< RSTs sent>>>)
+NTITEM (FINRCT,1,0,G,,V1,<<1,.DEC.,< FINs received>>>)
+NTITEM (FINSCT,1,0,G,,V1,<<1,.DEC.,< FINs sent>>>)
+NTITEM (IPPKCT,1,0,G,,V1,<<1,.DEC.,< pkts received>>>)
+NTITEM (DUPKCT,2,0,G,,V1,<<2,.DEC.,< duplicates>>>)
+NTITEM (RAPKCT,1,0,G,,V1,<<1,.DEC.,< reassembled>>>)
+NTITEM (BYTRCT,1,0,G,,V1,<<1,.DEC.,< bytes received>>>)
+NTITEM (BYTSCT,1,0,G,,V1,<<1,.DEC.,< bytes sent>>>)
+NTITEM (PZPKCT,1,0,G,,V1,<<1,.DEC.,< packets formed>>>)
+NTITEM (RXPKCT,1,0,G,,V1,<<1,.DEC.,< retransmitted>>>)
+NTITEM (OPPKCT,1,0,G,,V1,<<1,.DEC.,< packets output>>>)
+NTITEM (TASKCT,1,0,G,,V1,<<1,.DEC.,<TCP tasks run>>>)
+
+NTITEM (ACDLAY,HBIN0+NHBINS+1,0,G,<<0,,NHBINS+1>>,
+V1,<<HBIN0+NHBINS+1,.EXP.,<Activation Delay Histogram>>>)
+NTITEM (IPDLAY,HBIN0+NHBINS+1,0,G,<<0,,NHBINS+1>>,
+V1,<<HBIN0+NHBINS+1,.EXP.,<IP Delay Histogram>>>)
+NTITEM (OPDLAY,HBIN0+NHBINS+1,0,G,<<0,,NHBINS+1>>,
+V1,<<HBIN0+NHBINS+1,.EXP.,<OP Delay Histogram>>>)
+NTITEM (PZDLAY,HBIN0+NHBINS+1,0,G,<<0,,NHBINS+1>>,
+V1,<<HBIN0+NHBINS+1,.EXP.,<Activation Delay Histogram>>>)
+NTITEM (RADLAY,HBIN0+NHBINS+1,0,G,<<0,,NHBINS+1>>,
+V1,<<HBIN0+NHBINS+1,.EXP.,<RA Delay Histogram>>>)
+NTITEM (RXDLAY,HBIN0+NHBINS+1,0,G,<<0,,NHBINS+1>>,
+V1,<<HBIN0+NHBINS+1,.EXP.,<RX Delay Histogram>>>)
+
+;;Extended Monitoring Variables
+IFN IPMONF,<INMSTS>;;CS147 Monitoring parameters (ANAUNV.MAC)
+INFSTS;;		INFREE Statistics Block
+INLSTS;;		INLOCK Statistics Block
+INQSTS;;		INQ Statistics Block
+INWSTS;;		INWAIT Statistics Block
+INGSTS;;		INGWAY/INGLUK Statistics Block
+INPSTS;;		INPROC Statistics Block
+INUSTS;;		INUQ Statistics Block
+ICMSTS;;		INCMP Statistics Block
+TCPTCB;;		TCB definitions
+TCASTS;;		TCPRA information
+TCCSTS;;		TCPCRC information
+TCDSTS;;		TCPDY information
+TCFSTS;;		TCPBFR information
+TCISTS;;		TCPIP information
+TCJSTS;;		TCPJS information
+TCKSTS;;		TCPBG information
+TCMSTS;;		TCPMSC information
+TCOSTS;;		TCPOPT information
+TCPSTS;;		TCP input queue information
+TCTSTS;;		TCPPRC information
+TCUSTS;;		TCPUSR information
+TCVSTS;;		TTTVDV information
+TCXSTS;;		TCPRX information
+TCZSTS;;		TCPPZ information
+
+MNTSTS;;		Multinet background
+.ntitx==0;;			Initialize NCT monitoring instance counter
+	     MNMSTS (\.ntitx,1);; Space for Loopback Interface Statistics
+REPEAT ALTN,<MNMSTS (\.ntitx,1)>;;Space for Alto Interface Statistics
+REPEAT ANXN,<MNMSTS (\.ntitx,4)>;;Space for AN20 Interface Statistics
+REPEAT BBNN,<MNMSTS (\.ntitx,4)>;;Space for IMP10 Interface Statistics
+IFDEF CMU,<			;;CS99
+REPEAT CMUN,<MNMSTS (\.ntitx,4)>;;CS99 Space for CMU-NFE Interface Statistics
+    >				;;CS99
+REPEAT IPNIN,<MNMSTS (\.ntitx,4)>;;Space for IP NI Interface Statistics
+REPEAT NFEN,<MNMSTS (\.ntitx,4)>;;Space for NFE Interface Statistics
+
+NTITEM (ZZZST,1,0,G,,V1,<<1,.OCT.,<End Statistics area>>>)
+
+PURGE .ntias
+> ;End of DEFINE DEFSTS
+
+
+	END		;Of ANAUNV

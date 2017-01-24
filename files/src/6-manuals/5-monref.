@@ -1,0 +1,5793 @@
+                                   MONSYM
+
+
+
+
+      SUBTTL  HARDWARE BITS OF INTEREST TO USERS
+
+   ;PC FLAGS
+
+   PC%OVF==:1B0                              ;OVERFLOW
+   PC%CY0==:1B1                              ;CARRY 0
+   PC%CY1==:1B2                              ;CARRY 1
+   PC%FOV==:1B3                              ;FLOATING OVERFLOW
+   PC%BIS==:1B4                              ;BYTE INCREMENT SUPPRESSION
+   PC%USR==:1B5                              ;USER MODE
+   PC%UIO==:1B6                              ;USER IOT MODE
+   PC%LIP==:1B7                              ;LAST INSTRUCTION PUBLIC
+   PC%AFI==:1B8                              ;ADDRESS FAILURE INHIBIT
+   PC%ATN==:3B10                             ;APR TRAP NUMBER
+   PC%FUF==:1B11                             ;FLOATING UNDERFLOW
+   PC%NDV==:1B12                             ;NO DIVIDE
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-101
+                                   MONSYM
+
+
+
+
+   ;THE FOLLOWING MACRO MAY BE USED TO SUPPRESS CREF ENTRIES FOR
+   ;ALL THE JUNK SYMBOLS USED INTERNALLY WITHIN MACROS IN MACSYM
+
+   DEFINE .XCMSY <
+      .XCREF
+      .XCRF1 <..ACT,..CSC,..CSN,..IFT,..JX1,..MSK,..MX1,..MX2>
+      .XCRF1 <..NAC,..NRGS,..NS,..NV,..PST,..STKN,..STKQ,..STKR>
+      .XCRF1 <..TRR,..TSA1,..TX1,..TX2,.FP,.FPAC,.NAC,.SAC,.SAV1>
+      .XCRF1 <.SAV2,.SAV3,POINTR,POS,WID,..CAS1,..CNS,..CNS2>
+      .XCRF1 <..DPB,..GNCS,..ICNS,..JE,..LDB,..STR0,..STR1,..STR2>
+      .XCRF1 <..STR4,..TQO,..TQZ,..TSAC,..TSIZ,..TX,..TY,.ACV1,.ACV2>
+      .XCRF1 <.ACV3,.CASE,.DECR0,.IF0,.INCR0,.OPST1,.OPST2,.STKV1>
+      .XCRF1 <.STKV2,.STKV3,.TRV1,.TRV2,.TRV3>
+      .CREF
+      >
+   DEFINE .XCRF1 (SYMS)<
+      IRP SYMS,<
+       IFDEF SYMS,< .XCREF SYMS>>>
+
+      SUBTTL  MACROS FOR FIELD MASKS
+
+   ;STANDARD MACROS
+
+   ;MACROS TO HANDLE FIELD MASKS
+
+   ;COMPUTE LENGTH OF MASK, I.E. LENGTH OF LEFTMOST STRING OF ONES
+   ;REMEMBER THAT ^L DOES 'JFFO', I.E. HAS VALUE OF FIRST ONE BIT IN WORD
+
+   ;COMPUTE WIDTH OF MASK, I.E. LENGTH OF LEFTMOST STRING OF ONES
+
+   DEFINE WID(MASK)<<^L<-<<MASK>_<^L<MASK>>>-1>>>
+
+   ;COMPUTE POSITION OF MASK, I.E. BIT POSITION OF RIGHTMOST ONE IN MASK
+
+   DEFINE POS(MASK)<<^L<<MASK>&<-<MASK>>>>>
+
+   ;CONSTRUCT BYTE POINTER TO MASK
+
+   DEFINE POINTR(LOC,MASK)<<POINT WID(MASK),LOC,POS(MASK)>>
+
+   ;PUT RIGHT-JUSTIFIED VALUE INTO FIELD SPECIFIED BY MASK
+
+   DEFINE FLD(VAL,MSK)<<<<VAL>B<POS(MSK)>>&<MSK>>>
+
+   ;MAKE VALUE BE RIGHT JUSTIFIED IN WORD.
+
+   DEFINE .RTJST(VAL,MSK)<<<<VAL>&<MSK>>B<^D70-POS(MSK)>>>
+
+   ;CONSTRUCT MASK FROM BIT AA TO BIT BB. I.E. MASKB 0,8 = 777B8
+
+   DEFINE MASKB(AA,BB)<<1B<<AA>-1>-1B<BB>>>
+
+   ;MODULE - GIVES REMAINDER OF DEND DIVIDED BY DSOR
+
+   DEFINE MOD.(DEND,DSOR)<<<DEND>-<<DEND>/<DSOR>>*<DSOR>>>
+
+
+
+
+
+
+
+
+
+                                   B-102
+                                   MONSYM
+
+
+
+
+   ;REPEAT WITH SUBSTITUTION OF NUMERIC INDEX
+
+   DEFINE FORN. (LOW,HIGH,ARGS,STRING,%MN1)<
+     DEFINE %MN1(ARGS)<STRING>
+   ..FORN==LOW
+   REPEAT HIGH-LOW+1,<
+      .FORN1 (%MN1)
+      ..FORN=..FORN+1>>
+
+   DEFINE .FORN1 (MACN)<
+      MACN (\..FORN)>
+
+   ;REPEAT WITH GENERAL STRING SUBSTITUTION
+
+   DEFINE FORX. (ARGS,SYMS,STRING,%MN1)<
+     DEFINE %MN1 (SYMS)<STRING>
+     IRP ARGS,<
+      .FORX1 %MN1,ARGS>>
+
+     DEFINE .FORX1 (MACN,ARGS)<
+      MACN ARGS>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-103
+                                   MONSYM
+
+
+
+
+      SUBTTL MOVX
+
+   ;MOVX - LOAD AC WITH CONSTANT
+
+   DEFINE MOVX (AC,MSK)<
+      ..MX1==MSK                             ;;EVAL EXPRESSION IF ANY
+      .IFN ..MX1,ABSOLUTE,<
+      MOVE AC,[MSK]>
+      .IF ..MX1,ABSOLUTE,<
+      ..MX2==0                     ;;FLAG SAYS HAVEN'T DONE IT YET
+      IFE <..MX1>B53,<
+        ..MX2==1
+        MOVEI AC,..MX1>  ;;LH 0, DO AS RH
+      IFE ..MX2,<                  ;;IF HAVEN'T DONE IT YET,
+      IFE <..MX1>B17,<
+        ..MX2==1
+        MOVSI AC,(..MX1)>>         ;;RH 0, DO AS LH
+      IFE ..MX2,<                  ;;IF HAVEN'T DONE IT YET,
+      IFE <<..MX1>B53-^O777777>,<
+        ..MX2==1
+        HRROI AC,<..MX1>>>         ;;LH -1
+      IFE ..MX2,<                  ;;IF HAVEN'T DONE IT YET,
+      IFE <<..MX1>B17-^O777777B17>,<
+        ..MX2==1
+        HRLOI AC,(..MX1-^O777777)>> ;;RH -1
+      IFE ..MX2,<                  ;;IF STILL HAVEN'T DONE IT,
+        MOVE AC,[..MX1]> ;;GIVE UP AND USE LITERAL
+     >>
+
+   ;MV., MVI. - Move from memory to memory or immediate to memory
+
+   DEFINE MV. (FROM,TOO)<
+      MOVE .SAC,FROM
+      MOVEM .SAC,TOO>
+
+   DEFINE MVI. (STUFF,DEST)<
+      MOVX .SAC,<STUFF>
+      MOVEM .SAC,DEST>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-104
+                                   MONSYM
+
+
+
+   ;VARIENT MNEMONICS FOR TX DEFINITIONS
+
+   DEFINE IORX (AC,MSK)<
+      TXO AC,<MSK>>
+
+   DEFINE ANDX (AC,MSK)<
+      TXZ AC,<^-<MSK>>>
+
+   DEFINE XORX (AC,MSK)<
+      TXC AC,<MSK>>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-105
+                                   MONSYM
+
+
+
+
+      SUBTTL TX -- TEST MASK
+
+   ;CREATE THE TX MACRO DEFINITIONS
+
+   ;THIS DOUBLE IRP CAUSES ALL COMBINATIONS OF MODIFICATION AND TESTING
+   ;TO BE DEFINED
+
+   DEFINE ..DOTX (M,T)<
+      IRP M,<
+      IRP T,<
+        DEFINE TX'M'T (AC,MSK)<
+              ..TX(M'T,AC,<MSK>)>>>>
+
+      ..DOTX (<N,O,Z,C>,<,E,N,A>) ;DO ALL DEFINITIONS
+      PURGE ..DOTX
+
+   ;..TX
+   ;ALL TX MACROS JUST CALL ..TX WHICH DOES ALL THE WORK
+
+   DEFINE ..TX(MT,AC,MSK)<
+      ..TX1==MSK                             ;;EVAL EXPRESSION IF ANY
+      .IFN ..TX1,ABSOLUTE,<
+      TD'MT AC,[MSK]>
+      .IF ..TX1,ABSOLUTE,<                   ;;MASK MUST BE TESTABLE
+      ..TX2==0                     ;;FLAG SAYS HAVEN'T DONE IT YET
+      IFE <..TX1&^O777777B17>,<
+        ..TX2==1                   ;;LH 0, DO AS RH
+        TR'MT AC,..TX1>
+      IFE ..TX2,<                  ;;IF HAVEN'T DONE IT YET,
+      IFE <..TX1&^O777777>,<
+        ..TX2==1                   ;;RH 0, DO AS LH
+        TL'MT AC,(..TX1)>>
+      IFE ..TX2,<                  ;;IF HAVEN'T DONE IT YET,
+        IFE <<..TX1>B53-^O777777>,< ;;IF LH ALL ONES, 
+          ..TX3 (MT,AC)>>          ;;TRY Z,O,C SPECIAL CASES
+      IFE ..TX2,<                  ;;IF HAVEN'T DONE IT YET,
+        IFE <..TX1+1>,<  ;;TRY WORD ALL ONES
+          ..TX4 (MT,AC)>>
+      IFE ..TX2,<                  ;;IF STILL HAVEN'T DONE IT,
+        TD'MT AC,[..TX1]>          ;;MUST GIVE UP AND USE LITERAL
+     >>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-106
+                                   MONSYM
+
+
+
+   ;SPECIAL CASE FOR LH ALL ONES
+
+   DEFINE ..TX3 (MT,AC)<
+      IFIDN <MT><Z>,<              ;;IF ZEROING WANTED
+        ..TX2==1
+        ANDI AC,^-..TX1> ;;CAN DO IT WITH ANDI
+      IFIDN <MT><O>,<              ;;IF SET TO ONES WANTED
+        ..TX2==1
+        ORCMI AC,^-..TX1>          ;;CAN DO IT WITH IORCM
+      IFIDN <MT><C>,<              ;;IF COMPLEMENT WANTED
+        ..TX2==1
+        EQVI AC,^-..TX1>>          ;;CAN DO IT WITH EQV
+
+   ;SPECIAL CASE OF WORD ALL ONES
+
+   DEFINE ..TX4 (MT,AC)<
+      IFIDN <MT><NN>,<
+        ..TX2==1
+        CAIN AC,0>                 ;;CAN DO FULL WORD COMPARE
+      IFIDN <MT><NE>,<
+        ..TX2==1
+        CAIE AC,0>>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-107
+                                   MONSYM
+
+
+
+
+      SUBTTL JX -- JUMP ON MASK
+
+   ;JXE -- JUMP IF MASKED BITS ARE EQUAL TO 0
+   ;JXN -- JUMP IF MASKED BITS ARE NOT EQUAL TO 0
+   ;JXO -- JUMP IF MASKED BITS ARE ALL ONES
+   ;JXF -- JUMP IF MASKED BITS ARE NOT ALL ONES (FALSE)
+
+   DEFINE JXE (AC,MSK,BA)<
+      ..JX1==MSK                   ;;EVAL EXPRESSION IF ANY
+      .IFN ..JX1,ABSOLUTE,<PRINTX MSK NOT ABSOLUTE
+              ..JX1==0>
+      .IF ..JX1,ABSOLUTE,<
+      .IF0 <<..JX1>-1B0>,<         ;;IF MASK IS JUST B0,
+              JUMPGE AC,BA>,<
+      .IF0 <<..JX1>+1>,< ;;IF MASK IF FULL WORD,
+        JUMPE AC,BA>,<   ;;USE GIVEN CONDITION
+              TXNN (AC,..JX1)
+              JRST BA>>>>
+
+   DEFINE JXN (AC,MSK,BA)<
+      ..JX1==MSK                   ;;EVAL EXPRESSION IF ANY
+      .IFN ..JX1,ABSOLUTE,<PRINTX MSK NOT ABSOLUTE
+              ..JX1==0>
+      .IF ..JX1,ABSOLUTE,<
+      .IF0 <<..JX1>-1B0>,<         ;;IF MASK IS JUST B0,
+              JUMPL AC,BA>,<
+      .IF0 <<..JX1>+1>,< ;;IF MASK IF FULL WORD,
+        JUMPN AC,BA>,<   ;;USE GIVEN CONDITION
+              TXNE (AC,..JX1)
+              JRST BA>>>>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-108
+                                   MONSYM
+
+
+
+
+   DEFINE JXO (AC,MSK,BA)<
+      ..JX1==MSK                   ;;EVAL EXPRESSION
+      .IFN ..JX1,ABSOLUTE,<PRINTX MSK NOT ABSOLUTE
+              ..JX1==0>
+      .IF ..JX1,ABSOLUTE,<
+      .IF0 <<..JX1>-1B0>,<
+              JUMPL AC,BA>,<
+      ..ONEB (..BT,MSK)  ;;TEST MASK FOR ONLY ONE BIT ON
+      .IF0 ..BT,<
+        SETCM .SAC,AC              ;;GENERAL CASE, GET COMPLEMENTS OF BITS
+        JXE (.SAC,..JX1,BA)>,< ;;JUMP IF BITS WERE ORIGINALLY ONES
+          TXNE AC,..JX1  ;;TEST AND JUMP
+          JRST BA>>>>
+
+   DEFINE JXF (AC,MSK,BA)<
+      ..JX1==MSK                   ;;EVAL EXPRESSION
+      .IFN ..JX1,ABSOLUTE,<PRINTX MSK NOT ABSOLUTE
+              ..JX1==0>
+      .IF ..JX1,ABSOLUTE,<
+      .IF0 <<..JX1>-1B0>,<
+              JUMPGE AC,BA>,<
+      ..ONEB (..BT,MSK)  ;;TEST MASK FOR ONLY ONE BIT ON
+      .IF0 ..BT,<
+        SETCM .SAC,AC              ;;GENERAL CASE, GET COMPLEMENT OF BITS
+        JXN (.SAC,..JX1,BA)>,< ;;JUMP IF SOME ZEROS ORIGINALLY
+          TXNN AC,..JX1  ;;TEST AND JUMP
+          JRST BA>>>>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-109
+                                   MONSYM
+
+
+
+
+      SUBTTL SUBFUNCTION MACROS
+
+   ;.IF0 CONDITION, ACTION IF CONDITION 0, ACTION OTHERWISE
+
+   DEFINE .IF0 (COND,THEN,ELSE)<
+      ..IFT==COND                  ;;GET LOCAL VALUE FOR CONDITION
+      IFE ..IFT,<
+      THEN
+      ..IFT==0>                    ;;RESTORE IN CASE CHANGED BY NESTED .IF0
+      IFN ..IFT,<
+      ELSE>>
+
+   ;CASE (NUMBER,<FIRST,SECOND,...,NTH>)
+
+   DEFINE .CASE (NUM,LIST)<
+      ..CSN==NUM
+      ..CSC==0
+      IRP LIST,<
+      IFE ..CSN-..CSC,<
+        STOPI
+        ..CAS1 (LIST)>
+      ..CSC==..CSC+1>>
+
+   DEFINE ..CAS1 (LIST)<
+      LIST>
+
+   ;TEST FOR FULL WORD, RH, LH, OR ARBITRARY BYTE
+
+   DEFINE ..TSIZ (SYM,MSK)<
+      SYM==3                       ;;ASSUME BYTE UNLESS...
+      IFE <MSK>+1,<SYM=0>          ;;FULL WORD IF MASK IS -1
+      IFE <MSK>-^O777777,<SYM==1> ;;RH IF MASK IS 777777
+      IFE <MSK>-^O777777B17,<SYM==2>> ;;LH IF MAST IS 777777,,0
+
+   ;TEST FOR LOC BEING AN AC -- SET SYM TO 1 IF AC, 0 IF NOT AC
+
+   DEFINE ..TSAC (SYM,LOC)<
+      SYM==0                       ;;ASSUME NOT AC UNLESS...
+      ..TSA1==<Z LOC>              ;;LOOK AT LOC
+      .IF ..TSA1,ABSOLUTE,<        ;;SEE IF WE CAN TEST VALUE
+        IFE ..TSA1&^O777777777760,<SYM==1>> ;;AC IF VALUE IS 0-17
+      >
+
+   ;TEST FOR SPECIFIC NTH CHARACTER OF ARG
+
+   DEFINE ..TSNC (SYM,NTH,STR,CH)<
+      SYM==0                       ;;ASSUME NO
+      ..TSA1==0                    ;;COUNT CHARS
+      IRPC STR,<
+        ..TSA1=..TSA1+1
+        IFE ..TSA1-NTH,<
+         IFIDN <STR><CH>,<
+              SYM==1>              ;;YES
+         STOPI>>>
+
+   ;FUNCTION TO TEST FOR MASK CONTAINING EXACTLY ONE BIT. RETURNS
+   ;1 IFF LEFTMOST BIT AND RIGHTMOST BIT ARE SAME
+
+   DEFINE ..ONEB (SYM,MSK)<
+      SYM==<<<-<MSK>>&<MSK>>&<1B<^L<MSK>>>>>
+
+   ;DEFAULT SCRACH AC
+
+   .SAC=16
+                                   B-110
+                                   MONSYM
+
+
+
+
+      SUBTTL DEFSTR -- DEFINE DATA STRUCTURE
+
+   ;DEFINE DATA STRUCTURE
+   ; NAM - NAME OF STRUCTURE AS USED IN CODE
+   ; LOCN - ADDRESS OF DATA
+   ; POS - POSITION OF DATA WITHIN WORD (RIGHTMOST BIT NUMBER)
+   ; SIZ - SIZE OF DATA (IN BITS) WITHIN WORD
+
+   DEFINE DEFSTR (NAM,LOCN,POS,SIZ)<
+      NAM==<-1B<POS>+1B<POS-SIZ>> ;;ASSIGN SYMBOL TO HOLD MASK
+      IF1,<IFDEF %'NAM,<PRINTX ?NAM ALREADY DEFINED>>
+      DEFINE %'NAM (OP,AC,Y,MSK)<
+      $'NAM==<Z LOCN>              ;;LOCATION SYMBOL FOR DDT
+      OP (<AC>,LOCN''Y,MSK)>>      ;;DEFINE MACRO TO HOLD LOCATION
+
+   ;ALTERNATE FORM OF DEFSTR -- TAKES MASK INSTEAD OF POS,SIZ
+
+   DEFINE MSKSTR (NAM,LOCN,MASK)<
+      NAM==MASK                    ;;ASSIGN SYMBOL TO HOLD MASK
+      IF1,<IFDEF %'NAM,<PRINTX ?NAM ALREADY DEFINED>>
+      DEFINE %'NAM (OP,AC,Y,MSK)<
+      $'NAM==<Z LOCN>              ;;LOCATION SYMBOL FOR DDT
+      OP (<AC>,LOCN''Y,MSK)>>      ;;DEFINE MACRO TO HOLD LOCATION
+
+   ;..STR0 - PROCESS INSTANCE OF STRUCTURE USAGE, SINGLE STRUCTURE CASE.
+
+   DEFINE ..STR0 (OP,AC,STR,Y)<
+      IFNDEF STR,<PRINTX ?STR IS NOT DEFINED
+        OP (<AC>,Y,.FWORD)>        ;;RESERVE A WORD, ASSUME WORD MASK
+      IFDEF STR,<
+      IFNDEF %'STR,<
+        OP (<AC>,Y,STR)> ;;ASSUME NO OTHER LOCN
+      IFDEF %'STR,<
+        %'STR (OP,<AC>,Y,STR)>>> ;;DO IT
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-111
+                                   MONSYM
+
+
+
+   ;..STR1, ..STR2, ..STR3, AND ..STR4 ARE INTERNAL MACROS FOR PROCESSING
+   ;INSTANCES OF STRUCTURE USAGE.
+
+   DEFINE ..STR1 (OP,AC,STR,Y,CLL)<
+      ..NS==0                      ;;INIT COUNT OF STR'S
+      IRP STR,<..NS=..NS+1>        ;;COUNT STR'S
+      IFE ..NS,<PRINTX ?EMPTY STRUCTURE LIST, OP>
+      IFE ..NS-1,<                 ;;THE ONE CASE, CAN DO FAST
+        ..STR0 (OP,<AC>,<STR>,Y)>
+      IFG ..NS-1,<                 ;;MORE THAN ONE, DO GENERAL CASE
+      ..ICNS                       ;;INIT REMOTE MACRO
+      ..CNS (<CLL (OP,<AC>,,>) ;;CONS ON CALL AND FIRST ARGS
+      IRP STR,<                    ;;DO ALL NAMES IN LIST
+        IFNDEF STR,<PRINTX STR NOT DEFINED>
+        IFDEF STR,<
+        IFNDEF %'STR,<
+        ..CNS (<,STR,Y>)>          ;;ASSUME NO OTHER LOCN
+        IFDEF %'STR,<
+        %'STR (..STR2,,Y,STR)> ;;STR MACRO WILL GIVE LOCN TO ..STR2
+        ..CNS (<)>)                ;;CLOSE ARG LIST
+        ..GCNS                     ;;DO THIS AND PREVIOUS NAME
+        ..ICNS                     ;;REINIT CONS
+        ..CNS (<CLL (OP,<AC>>) ;;PUT ON FIRST ARGS
+        IFNDEF %'STR,<
+        ..CNS (<,STR,Y>)>          ;;ASSUME NO OTHER LOCN
+        IFDEF %'STR,<
+        %'STR (..STR2,,Y,STR)>>> ;;PUT ON THIS ARG, END IRP
+      ..CNS (<,,)>)                ;;CLOSE ARG LIST
+      ..GCNS>>                     ;;DO LAST CALL
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-112
+                                   MONSYM
+
+
+
+
+   ;..STR2 -- CALLED BY ABOVE TO APPEND STRUCTURE NAME AND LOC TO ARG LIST
+
+   DEFINE ..STR2 (AA,LOC,STR)<
+      ..CNS (<,STR,LOC>)>          ;;CONS ON NEXT ARG PAIR
+
+   ;..STR3 -- CHECK FOR ALL STRUCTURES IN SAME REGISTER
+
+   DEFINE ..STR3 (OP,AC,S1,L1,S2,L2)<
+      IFDIF <L1><L2>,<
+        IFNB <L1>,<
+          OP (<AC>,L1,..MSK)       ;;DO ACCUMULATED STUFF
+          IFNB <L2>,<PRINTX S1 AND S2 ARE IN DIFFERENT WORDS>>
+        ..MSK==0>                  ;;INIT MASK
+      IFNB <L2>,<
+        ..MSK=..MSK!<S2>>>
+
+   ;..STR4 -- COMPARE SUCCESSIVE ITEMS, DO SEPARATE OPERATION IF
+   ;DIFFERENT WORDS ENCOUNTERED
+
+   DEFINE ..STR4 (OP,AC,S1,L1,S2,L2)<
+      IFDIF <L1><L2>,<   ;;IF THIS DIFFERENT FROM PREVIOUS
+        IFNB <L1>,<
+          OP (<AC>,L1,..MSK)>      ;;DO PREVIOUS
+        ..MSK==0>                  ;;REINIT MASK
+      IFNB <L2>,<
+        ..MSK=..MSK!<S2>>>         ;;ACCUMULATE MASK
+
+   ;..STR5 - SAME AS ..STR4 EXCEPT GIVES EXTRA ARG IF MORE STUFF TO
+   ;FOLLOW.
+
+   DEFINE ..STR5 (OP,AC,S1,L1,S2,L2)<
+      IFDIF <L1><L2>,<   ;;IF THIS DIFFERENT FROM PREVIOUS,
+        IFNB <L1>,<
+          IFNB <L2>,<              ;;IF MORE TO COME,
+              OP'1 (AC,L1,..MSK)> ;;DO VERSION 1
+          IFB <L2>,<               ;;IF NO MORE,
+              OP'2 (AC,L1,..MSK)>> ;;DO VERSION 2
+        ..MSK==0>                  ;;REINIT MASK
+      IFNB <L2>,<
+        ..MSK=..MSK!<S2>>>         ;;ACCUMULATE MASK
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-113
+                                   MONSYM
+
+
+
+
+   ;'REMOTE' MACROS USED TO BUILD UP ARG LIST
+
+   ;INITIALIZE CONS -- DEFINES CONS
+
+   DEFINE ..ICNS <
+      DEFINE ..CNS (ARG)<
+      ..CNS2 <ARG>,>
+
+      DEFINE ..CNS2 (NEW,OLD)<
+      DEFINE ..CNS (ARG)<
+        ..CNS2 <ARG>,<OLD'NEW>>>
+      >
+
+   ;GET CONS -- EXECUTE STRING ACCUMULATED
+
+   DEFINE ..GCNS <
+      DEFINE ..CNS2 (NEW,OLD)<
+        OLD>                       ;;MAKE ..CNS2 DO THE STUFF
+      ..CNS ()>                    ;;GET ..CNS2 CALLED WITH THE STUFF
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-114
+                                   MONSYM
+
+
+
+
+   ;SPECIFIC CASES
+
+   ;LOAD, STORE
+   ; AC - AC OPERAND
+   ; STR - STRUCTURE NAME
+   ; Y - (OPTIONAL) ADDITIONAL SPECIFICATION OF DATA LOCATION
+
+   DEFINE LOAD (AC,STR,Y)<
+      ..STR0 (..LDB,AC,STR,Y)>
+
+      DEFINE ..LDB (AC,LOC,MSK)<
+      ..TSIZ (..PST,MSK)
+      .CASE ..PST,<<
+              MOVE AC,LOC>,<
+              HRRZ AC,LOC>,<
+              HLRZ AC,LOC>,<
+              LDB AC,[POINTR (LOC,MSK)]>>>
+
+   DEFINE STOR (AC,STR,Y)<
+      ..STR0 (..DPB,AC,STR,Y)>
+
+      DEFINE ..DPB (AC,LOC,MSK)<
+      ..TSIZ (..PST,MSK)
+      .CASE ..PST,<<
+              MOVEM AC,LOC>,<
+              HRRM AC,LOC>,<
+              HRLM AC,LOC>,<
+              DPB AC,[POINTR (LOC,MSK)]>>>
+
+   ;SET TO ZERO
+
+   DEFINE SETZRO (STR,Y)<
+      ..STR1 (..TQZ,,<STR>,Y,..STR4)>
+
+      DEFINE ..TQZ (AC,LOC,MSK)<
+      ..TSIZ (..PST,MSK) ;;SET ..PST TO CASE NUMBER
+      .CASE ..PST,<<
+              SETZM LOC>,<         ;;FULL WORD
+              HLLZS LOC>,<         ;;RH
+              HRRZS LOC>,<         ;;LH
+        ..TSAC (..ACT,LOC)         ;;SEE IF LOC IS AC
+        .IF0 ..ACT,<
+              MOVX .SAC,MSK        ;;NOT AC
+              ANDCAM .SAC,LOC>,<
+              ..TX (Z,LOC,MSK)>>>>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-115
+                                   MONSYM
+
+
+
+
+   ;SET TO ONE
+
+   DEFINE SETONE (STR,Y)<
+      ..STR1 (..TQO,,<STR>,Y,..STR4)>
+
+      DEFINE ..TQO (AC,LOC,MSK)<
+      ..TSIZ (..PST,MSK)
+      .CASE ..PST,<<
+              SETOM LOC>,<
+              HLLOS LOC>,<
+              HRROS LOC>,<
+        ..TSAC (..ACT,LOC)
+        .IF0 ..ACT,<
+              MOVX .SAC,MSK
+              IORM .SAC,LOC>,<
+              ..TX (O,LOC,MSK)>>>>
+
+   ;SET TO COMPLEMENT
+
+   DEFINE SETCMP (STR,Y)<
+      ..STR1 (..TQC,,<STR>,Y,..STR4)>
+
+      DEFINE ..TQC (AC,LOC,MSK)<
+      ..TSIZ (..PST,MSK)
+      .IF0 ..PST,<                 ;;IF FULL WORD,
+              SETCMM LOC>,<        ;;CAN USE SETCMM
+        ..TSAC (..ACT,LOC)         ;;OTHERWISE, CHECK FOR AC
+        .IF0 ..ACT,<
+              MOVX .SAC,MSK
+              XORM .SAC,LOC>,<
+              ..TX(C,LOC,MSK)>>>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-116
+                                   MONSYM
+
+
+
+
+   ;INCREMENT, DECREMENT FIELD
+
+   DEFINE INCR (STR,Y)<
+      ..STR0 (.INCR0,,<STR>,Y)>
+
+      DEFINE .INCR0 (AC,LOC,MSK)<
+      ..PST==MSK&<-MSK>  ;;GET LOWEST BIT
+      .IF0 ..PST-1,<
+              AOS LOC>,< ;;BIT 35, CAN USE AOS
+              MOVX .SAC,..PST      ;;LOAD A ONE IN THE APPROPRIATE POSITION
+              ADDM .SAC,LOC>>
+
+   DEFINE DECR (STR,Y)<
+      ..STR0 (.DECR0,,<STR>,Y)>
+
+      DEFINE .DECR0 (AC,LOC,MSK)<
+      ..PST==MSK&<-MSK>
+      .IF0 ..PST-1,<
+              SOS LOC>,< ;;BIT 35, CAN USE SOS
+              MOVX .SAC,-..PST ;;LOAD -1 IN APPROPRIATE POSITION
+              ADDM .SAC,LOC>>
+
+   ;GENERAL DEFAULT, TAKES OPCODE
+
+   DEFINE OPSTR (OP,STR,Y)<
+      ..STR0 (.OPST1,<OP>,<STR>,Y)>
+
+      DEFINE .OPST1 (OP,LOC,MSK)<
+      ..TSIZ (..PST,MSK)
+      .IF0 ..PST,<
+              OP LOC>,<  ;;FULL WORD, USE GIVEN OP DIRECTLY
+              ..LDB .SAC,LOC,MSK ;;OTHERWISE, GET SPECIFIED BYTE
+              OP .SAC>>
+
+   DEFINE OPSTRM (OP,STR,Y)<
+      ..STR0 (.OPST2,<OP>,<STR>,Y)>
+
+      DEFINE .OPST2 (OP,LOC,MSK)<
+      ..TSIZ (..PST,MSK)
+      .IF0 ..PST,<
+              OP LOC>,<  ;;FULL WORD, USE OP DIRECTLY
+              ..LDB .SAC,LOC,MSK
+              OP .SAC
+              ..DPB .SAC,LOC,MSK>>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-117
+                                   MONSYM
+
+
+
+
+   ;JUMP IF ALL FIELDS ARE 0 (ONE REGISTER AT MOST)
+
+   DEFINE JE (STR,Y,BA)<
+      ..STR1 (..JE,<BA>,<STR>,Y,..STR3)>
+
+      DEFINE ..JE (BA,LOC,MSK)<
+      ..TSAC (..ACT,LOC) ;;SEE IF AC
+      .IF0 ..ACT,<
+        ..TSIZ (..PST,MSK)         ;;SEE WHICH CASE
+        .CASE ..PST,<<
+              SKIPN LOC  ;;FULL WORD, TEST IN MEMORY
+              JRST BA>,<
+              HRRZ .SAC,LOC        ;;RIGHT HALF, GET IT
+              JUMPE .SAC,BA>,<
+              HLRZ .SAC,LOC        ;;LEFT HALF, GET IT
+              JUMPE .SAC,BA>,<
+              MOVE .SAC,LOC        ;;NOTA, GET WORD
+              JXE (.SAC,MSK,<BA>)>>>,<
+        JXE (LOC,MSK,<BA>)>>
+
+   ;JUMP IF NOT ALL FIELDS ARE 0 (ONE REGISTER AT MOST)
+
+   DEFINE JN (STR,Y,BA)<
+      ..STR1 (..JN,<BA>,<STR>,Y,..STR3)>
+
+      DEFINE ..JN (BA,LOC,MSK)<
+      ..TSAC (..ACT,LOC) ;;SEE IF AC
+      .IF0 ..ACT,<
+        ..TSIZ (..PST,MSK)
+        .CASE ..PST,<<
+              SKIPE LOC  ;;FULL WORD, TEST IN MEMORY
+              JRST BA>,<
+              HRRZ .SAC,LOC        ;;RIGHT HALF, GET IT
+              JUMPN .SAC,BA>,<
+              HLRZ .SAC,LOC        ;;LEFT HALF, GET IT
+              JUMPN .SAC,BA>,<
+              MOVE .SAC,LOC        ;;NOTA, GET WORD
+              JXN (.SAC,MSK,<BA>)>>>,<
+        JXN (LOC,MSK,<BA>)>>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-118
+                                   MONSYM
+
+
+
+
+   ;JOR - JUMP ON 'OR' OF ALL FIELDS
+
+   DEFINE JOR (STR,Y,BA)<
+      ..STR1 (..JN,<BA>,<STR>,Y,..STR4)>
+
+   ;JNAND - JUMP ON NOT 'AND' OF ALL FIELDS
+
+   DEFINE JNAND (STR,Y,BA)<
+      ..STR1 (..JNA3,<BA>,<STR>,Y,..STR4)>
+
+      DEFINE ..JNA3 (BA,LOC,MSK)<
+      ..TSAC (..ACT,LOC)
+      .IF0 ..ACT,<
+        SETCM .SAC,LOC   ;;NOT AC, GET COMPLEMENT OF WORD
+        JXN (.SAC,MSK,<BA>)>,<     ;;JUMP IF ANY BITS ORIGINALLY OFF
+        JXF (LOC,MSK,<BA>)>>       ;;DO AC CASE
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-119
+                                   MONSYM
+
+
+
+
+   ;JAND - JUMP ON 'AND' OF ALL FIELDS
+
+   DEFINE JAND (STR,Y,BA,%TG)<
+      ..STR1 (..JAN,<%TG,<BA>>,<STR>,Y,..STR5)
+   %TG:>
+
+      DEFINE ..JAN1 (BA1,BA2,LOC,MSK)<
+      ..JNA3 (BA1,LOC,MSK)>        ;;DO JUMP NAND TO LOCAL TAG
+
+      DEFINE ..JAN2 (BA1,BA2,LOC,MSK)<
+      ..TSAC (..ACT,LOC)
+      .IF0 ..ACT,<
+        SETCM .SAC,LOC   ;;NOT AC, GET COMPLEMENT OF WORD
+        JXE (.SAC,MSK,<BA2>)>,<    ;;JUMP IF ALL BITS ORIGINALLY ONES
+        JXO (LOC,MSK,<BA2>)>> ;;DO AC CASE
+
+   ;JNOR - JUMP ON NOT 'OR' OF ALL FIELDS
+
+   DEFINE JNOR (STR,Y,BA,%TG)<
+      ..STR1 (..JNO,<%TG,<BA>>,<STR>,Y,..STR5)
+   %TG:>
+
+      DEFINE ..JNO1 (BA1,BA2,LOC,MSK)<
+      ..JN (BA1,LOC,MSK)>          ;;DO JUMP OR TO LOCAL TAG
+
+      DEFINE ..JNO2 (BA1,BA2,LOC,MSK)<
+      ..JE (<BA2>,LOC,MSK)>        ;;DO JUMP NOR TO GIVEN TAG
+
+   ;TEST AND MODIFY GROUP USING DEFINED STRUCTURES.  TEST-ONLY AND
+   ;MODIFY-ONLY PROVIDED FOR COMPLETENESS.
+   ;GENERATES EXACTLY ONE INSTRUCTION
+
+   DEFINE ..DOTY (M,T)<            ;;MACRO TO DEFINE ALL CASES
+      IRP M,<
+      IRP T,<
+        DEFINE TQ'M'T (STR,Y)<
+          ..STR1 (..TY,M'T,<STR>,Y,..STR3)>>>>
+
+      ..DOTY (<N,O,Z,C>,<,E,N,A>) ;DO 16 DEFINES
+      PURGE ..DOTY
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-120
+                                   MONSYM
+
+
+
+
+   ;SPECIAL DEFINE FOR THE TWO CASES WHICH CAN TAKE MEMORY ARG
+   ;*NOTE* MAY GENERATE MORE THAN ONE INSTRUCTION - CANNOT BE SKIPPED
+
+   DEFINE TMNE (STR,Y)<
+      ..STR1 (..TYNE,,<STR>,Y,..STR3)>
+
+   DEFINE ..TYNE (MT,LOC,MSK)<
+      ..TSAC (..ACT,LOC) ;;SEE IF LOC IS AC
+      .IF0 ..ACT,<
+        ..JX1==MSK
+        .IF0 <..JX1-1B0>,<
+              SKIPGE LOC>,<
+          .IF0 <..JX1+1>,<
+              SKIPE LOC>,<
+              MOVE .SAC,LOC
+              TXNE .SAC,MSK>>>,<
+              TXNE LOC,MSK>>
+
+   DEFINE TMNN (STR,Y)<
+      ..STR1 (..TYNN,,<STR>,Y,..STR3)>
+
+   DEFINE ..TYNN (MT,LOC,MSK)<
+      ..TSAC (..ACT,LOC) ;;SEE IF LOC IS AC
+      .IF0 ..ACT,<
+        ..JX1==MSK
+        .IF0 <..JX1-1B0>,<
+              SKIPL LOC>,<
+          .IF0 <..JX1+1>,<
+              SKIPN LOC>,<
+              MOVE .SAC,LOC
+              TXNN .SAC,MSK>>>,<
+              TXNN LOC,MSK>>
+
+   ;ALL TY MACROS CALL ..TY AFTER INITIAL STRUCTURE PROCESSING
+
+   DEFINE ..TY (MT,LOC,MSK)<
+      ..TSAC (..ACT,LOC) ;;SEE IF LOC IS AC
+      .IF0 ..ACT,<
+              PRINTX ?TQ'MT - LOC NOT IN AC>,<
+              TX'MT LOC,MSK>>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-121
+                                   MONSYM
+
+
+
+
+      SUBTTL BLOCK MACROS
+
+   ;MACROS TO PROVIDE SOME BLOCK HANDLING OF CODE
+
+   ;DO. - LOOP STRUCTURE, DECLARES TOP OF LOOP
+   ; LOOP. - JUMPS TO TOP OF LOOP
+   ; EXIT. - EXITS LOOP
+   ; TOP. - TAG AT TOP OF LOOP FOR JUMPS, E.G. SOJG T4,TOP.
+   ; ENDLP. - TAG AT END OF LOOP FOR JUMPS, E.G. SOJL T4,ENDLP.
+
+   DEFINE DO. (%TGB,%TGE)<
+      ..SVLD                       ;;SAVE CURRENT BLOCK
+   %TGB:!                                    ;;TOP OF LOOP
+     DEFINE OD. <
+   %TGE:!                                    ;;END OF LOOP
+      .POPX>                       ;;RESTORE DEFS
+     DEFINE LOOP. <
+      JRST %TGB>                   ;;LOOP TO TOP
+     DEFINE TOP. <%TGB>            ;;LABEL AT TOP FOR JUMPS
+     DEFINE ENDLP. <%TGE>                    ;;LABEL AT END FOR JUMPS
+     DEFINE EXIT. <
+      JRST %TGE>>                  ;;EXIT LOOP
+
+   DEFINE ENDDO. <
+      OD.>
+
+   DEFINE ..SVLD (%SY1,%SY2,%SY3,%SY4)<
+      SYN OD.,%SY1
+      SYN LOOP.,%SY2
+      SYN TOP.,%SY3
+      SYN EXIT.,%SY4
+      .PSHX <
+       SYN %SY1,OD.
+       SYN %SY2,LOOP.
+       SYN %SY3,TOP.
+       SYN %SY4,EXIT.>>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-122
+                                   MONSYM
+
+
+
+
+   ;IFNSK., IFSKP. - "IF NO SKIP", "IF SKIP"
+
+   ;These macros cause the following code to be conditionally executed
+   ;depending on whether the preceding instruction(s) skipped or not.
+   ;The following code is ended with ENDIF., with ELSE. optional
+   ;within the range.
+
+   ;Note: both of these result in the same or fewer instructions than
+   ;the use of literals to handle the same cases.
+   ;Also, since the code is not in literals, the binary appears in the
+   ;listing, and the code is easier to follow with DDT.
+   ;If the preceding skip can be written in either sense, it is better
+   ;to use IFSKP. because one fewer instructions will be generated.
+
+   ;IFSKP. and IFNSK. have an alternate form where the consequence code
+   ;is given as a macro argument.  In the normal case, no macro argument is given.
+
+   ;"IF NO SKIP" CONSEQUENCE-CODE ALTERNATIVE-CODE
+   ;If the instruction(s) preceding the macro does not skip, the 'consequence
+   ; code' will be executed; otherwise (i.e. if the instruction skips) the
+   ; 'alternative code' will be executed.
+
+   DEFINE IFNSK. (NSCOD,SKCOD,%TG1,%TG2)<
+      IFB <NSCOD'SKCOD>,<                    ;;THE REGULAR FORM
+      ..SVDF                       ;;SAVE DEFINITIONS OF OUTER BLOCK
+      TRNA                         ;;SKIP
+      JRST %TG1                    ;;JUMP PAST CODE
+      DEFINE ..TAGF (INST,PCT)<
+      INST %TG1''PCT>              ;;SAVE THE FALSE TAG
+      DEFINE ..TAGE (INST,PCT)<
+      INST %TG2''PCT>              ;;SAVE THE END TAG
+      >
+      IFNB <NSCOD'SKCOD>,<                   ;;THE ALTERNATE FORM
+      JRST %TG1                    ;;THE NOSKIP CASE
+      SKCOD
+      JRST %TG2
+   %TG1:!     NSCOD
+   %TG2:!>>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-123
+                                   MONSYM
+
+
+
+
+   ;If JSYS Error
+
+   DEFINE IFJER. (NSCOD,SKCOD,%TG1,%TG2,%TG3)<
+      IFB <NSCOD'SKCOD>,<                    ;;THE REGULAR FORM
+      ..SVDF                       ;;SAVE DEFINITIONS OF OUTER BLOCK
+      ERJMP %TG3                   ;;SKIP
+      JRST %TG1                    ;;JUMP PAST CODE
+   %TG3:!
+      DEFINE ..TAGF (INST,PCT)<
+      INST %TG1''PCT>              ;;SAVE THE FALSE TAG
+      DEFINE ..TAGE (INST,PCT)<
+      INST %TG2''PCT>              ;;SAVE THE END TAG
+      >
+      IFNB <NSCOD'SKCOD>,<                   ;;THE ALTERNATE FORM
+      ERJMP %TG1                   ;;THE NOSKIP CASE
+      SKCOD
+      JRST %TG2
+   %TG1:!     NSCOD
+   %TG2:!>>
+
+   ;OBSOLETE NAME
+
+   DEFINE IFNES. (ARG1,ARG2)<
+      PRINTX % IFNES. should be changed to IFJER.
+      IFJER. <ARG1>,<ARG2>>
+
+
+   ;"IF SKIP" CONSEQUENCE-CODE
+   ;If the instruction(s) preceding the macro skips, the 'consequence
+   ; code' will be executed.
+
+   DEFINE IFSKP. (SKCOD,%TG,%TG2)<
+      IFB <SKCOD>,<                ;;REGULAR FORM
+      ..SVDF                       ;;SAVE DEFINITIONS OF OUTER BLOCK
+      JRST %TG
+      DEFINE ..TAGF (INST,PCT)<
+      INST %TG''PCT>               ;;SAVE FALSE TAG
+      DEFINE ..TAGE (INST,PCT)<
+      INST %TG2''PCT>              ;;SAVE END TAG
+      >
+      IFNB <SKCOD>,<
+      JRST %TG
+      SKCOD
+   %TG:!>>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-124
+                                   MONSYM
+
+
+
+
+   ;if no jsys error
+
+   define ifnje. (skcod,%tg,%tg2)<
+      ifb <skcod>,<                ;;regular form
+      ..svdf                       ;;save definitions of outer block
+      erjmp %tg
+      define ..tagf (inst,pct)<
+      inst %tg''pct>               ;;save false tag
+      define ..tage (inst,pct)<
+      inst %tg2''pct>              ;;save end tag
+      >
+      ifnb <skcod>,<
+      erjmp %tg
+      skcod
+   %tg:!>>
+
+   ;obsolete name
+
+   define ifesk. (arg)<
+      printx % ifesk. should be changed to ifnje.
+      ifnje. <arg>>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-125
+                                   MONSYM
+
+
+
+
+   ;CONDITIONALS WHICH REPRESENT JUMP CASES - I.E. AC L, LE, G, ETC.
+   ; IF CONDITION IS SATISFIED, DO BRACKETTED CODE
+
+   DEFINE IFE. (AC,%TG1,%TG2)<
+      JUMPN AC,%TG1                ;;JUMP IF NOT CONDITION
+      ..SVDF                       ;;SAVE OUTER BLOCK
+      DEFINE ..TAGF (INST,PCT)<
+      INST %TG1''PCT>              ;;DEFINE FALSE TAG
+      DEFINE ..TAGE (INST,PCT)<
+      INST %TG2''PCT>              ;;DEFINE END TAG
+      >
+
+   DEFINE IFN. (AC,%TG1,%TG2)<
+      JUMPE AC,%TG1                ;;JUMP IF NOT CONDITION
+      ..SVDF                       ;;SAVE OUTER BLOCK
+      DEFINE ..TAGF (INST,PCT)<
+      INST %TG1''PCT>              ;;DEFINE FALSE TAG
+      DEFINE ..TAGE (INST,PCT)<
+      INST %TG2''PCT>              ;;DEFINE END TAG
+      >
+
+   DEFINE IFG. (AC,%TG1,%TG2)<
+      JUMPLE AC,%TG1               ;;JUMP IF NOT CONDITION
+      ..SVDF                       ;;SAVE OUTER BLOCK
+      DEFINE ..TAGF (INST,PCT)<
+      INST %TG1''PCT>              ;;DEFINE FALSE TAG
+      DEFINE ..TAGE (INST,PCT)<
+      INST %TG2''PCT>              ;;DEFINE END TAG
+      >
+
+   DEFINE IFGE. (AC,%TG1,%TG2)<
+      JUMPL AC,%TG1                ;;JUMP IF NOT CONDITION
+      ..SVDF                       ;;SAVE OUTER BLOCK
+      DEFINE ..TAGF (INST,PCT)<
+      INST %TG1''PCT>              ;;DEFINE FALSE TAG
+      DEFINE ..TAGE (INST,PCT)<
+      INST %TG2''PCT>              ;;DEFINE END TAG
+      >
+
+   DEFINE IFLE. (AC,%TG1,%TG2)<
+      JUMPG AC,%TG1                ;;JUMP IF NOT CONDITION
+      ..SVDF                       ;;SAVE OUTER BLOCK
+      DEFINE ..TAGF (INST,PCT)<
+      INST %TG1''PCT>              ;;DEFINE FALSE TAG
+      DEFINE ..TAGE (INST,PCT)<
+      INST %TG2''PCT>              ;;DEFINE END TAG
+      >
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-126
+                                   MONSYM
+
+
+
+
+   DEFINE IFL. (AC,%TG1,%TG2)<
+      JUMPGE AC,%TG1               ;;JUMP IF NOT CONDITION
+      ..SVDF                       ;;SAVE OUTER BLOCK
+      DEFINE ..TAGF (INST,PCT)<
+      INST %TG1''PCT>              ;;DEFINE FALSE TAG
+      DEFINE ..TAGE (INST,PCT)<
+      INST %TG2''PCT>              ;;DEFINE END TAG
+      >
+
+   DEFINE IFXE. (AC,MASK,%TG1,%TG2)<
+      JXN AC,MASK,%TG1   ;;JUMP IF NOT CONDITION
+      ..SVDF                       ;;SAVE OUTER BLOCK
+      DEFINE ..TAGF (INST,PCT)<
+      INST %TG1''PCT>              ;;DEFINE FALSE TAG
+      DEFINE ..TAGE (INST,PCT)<
+      INST %TG2''PCT>              ;;DEFINE END TAG
+      >
+
+   DEFINE IFXN. (AC,MASK,%TG1,%TG2)<
+      JXE AC,MASK,%TG1   ;;JUMP IF NOT CONDITION
+      ..SVDF                       ;;SAVE OUTER BLOCK
+      DEFINE ..TAGF (INST,PCT)<
+      INST %TG1''PCT>              ;;DEFINE FALSE TAG
+      DEFINE ..TAGE (INST,PCT)<
+      INST %TG2''PCT>              ;;DEFINE END TAG
+      >
+
+   DEFINE IFQE. (STR,Y,%TG1,%TG2)<
+      JN <STR>,<Y>,%TG1  ;;JUMP IF NOT CONDITION
+      ..SVDF                       ;;SAVE OUTER BLOCK
+      DEFINE ..TAGF (INST,PCT)<
+      INST %TG1''PCT>              ;;DEFINE FALSE TAG
+      DEFINE ..TAGE (INST,PCT)<
+      INST %TG2''PCT>              ;;DEFINE END TAG
+      >
+
+   DEFINE IFQN. (STR,Y,%TG1,%TG2)<
+      JE <STR>,<Y>,%TG1  ;;JUMP IF NOT CONDITION
+      ..SVDF                       ;;SAVE OUTER BLOCK
+      DEFINE ..TAGF (INST,PCT)<
+      INST %TG1''PCT>              ;;DEFINE FALSE TAG
+      DEFINE ..TAGE (INST,PCT)<
+      INST %TG2''PCT>              ;;DEFINE END TAG
+      >
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-127
+                                   MONSYM
+
+
+
+
+   ;GENERAL CASES WITHIN CONDITIONALS
+
+   ;"AND SKIP"
+
+   DEFINE ANSKP. <
+      ..TAGF (JRST,)>              ;;JUMP TO 'FALSE'
+
+   DEFINE ANNSK. <
+      TRNA
+      ..TAGF (JRST,)>              ;;JUMP TO 'FALSE'
+
+   DEFINE ELSE. <....U>            ;;UNDEFINED UNTIL BLOCK ENTERED
+   DEFINE ENDIF. <....U>
+   DEFINE ..TAGF <....U>
+   DEFINE ..TAGE <....U>
+
+   ;"AND E" ETC.
+
+   DEFINE ANDE. (AC)<
+      ..TAGF (<JUMPN AC,>,)>       ;;JUMP IF NOT CONDITION
+
+   DEFINE ANDN. (AC)<
+      ..TAGF (<JUMPE AC,>,)>       ;;JUMP IF NOT CONDITION
+
+   DEFINE ANDG. (AC)<
+      ..TAGF (<JUMPLE AC,>,)>      ;;JUMP IF NOT CONDITION
+
+   DEFINE ANDGE. (AC)<
+      ..TAGF (<JUMPL AC,>,)>       ;;JUMP IF NOT CONDITION
+
+   DEFINE ANDLE. (AC)<
+      ..TAGF (<JUMPG AC,>,)>       ;;JUMP IF NOT CONDITION
+
+   DEFINE ANDL. (AC)<
+      ..TAGF (<JUMPGE AC,>,)>      ;;JUMP IF NOT CONDITION
+
+   DEFINE ANDXE. (AC,MASK)<
+      ..TAGF (<JXN AC,MASK,>,)> ;;JUMP IF NOT CONDITION
+
+   DEFINE ANDXN. (AC,MASK)<
+      ..TAGF (<JXE AC,MASK,>,)> ;;JUMP IF NOT CONDITION
+
+   DEFINE ANDQE. (STR,Y)<
+      ..TAGF (<JN <STR>,<Y>,>,)> ;;JUMP IF NOT CONDITION
+
+   DEFINE ANDQN. (STR,Y)<
+      ..TAGF (<JE <STR>,<Y>,>,)> ;;JUMP IF NOT CONDITION
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-128
+                                   MONSYM
+
+
+
+
+   ;LOCAL WORKER MACROS
+
+   ;THIS INITS THE DEFINITIONS OF ELSE. AND ENDIF. WHEN ENTERING A
+   ;NEW BLOCK.
+
+   DEFINE ..INDF <
+    DEFINE ELSE. <
+      ..TAGE (JRST,)               ;;JUMP TO END
+      ..TAGF (,<:!>)               ;;DEFINE THE FALSE TAG
+      SYN ..TAGE,..TAGF  ;;MAKE FALSE EQUIVALENT TO END
+      DEFINE ELSE. <....U>>        ;;ELSE CAN APPEAR ONCE ONLY
+
+    DEFINE ENDIF. <
+      ..TAGF (,<:!>)               ;;DEFINE FALSE TAG
+      ..RSDF>                      ;;RESTORE DEFINITIONS OF OUTER BLOCK
+      >
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-129
+                                   MONSYM
+
+
+
+
+   ;SAVE DEFINITIONS
+
+   DEFINE ..SVDF (%SY1,%SY2,%SY3,%SY4)<
+      SYN ELSE.,%SY1
+      SYN ENDIF.,%SY2
+      SYN ..TAGF,%SY3
+      SYN ..TAGE,%SY4
+      .PSHX <
+        SYN %SY1,ELSE.
+        SYN %SY2,ENDIF.
+        SYN %SY3,..TAGF
+        SYN %SY4,..TAGE>
+      ..INDF                       ;;REINIT DEFS
+            >
+
+   DEFINE ..RSDF <
+      .POPX>
+
+   ;MACROS TO PUSH/POP STRINGS
+
+   DEFINE .PSHX (STUFF)<
+      .PSHX1 (.PSHX2,<STUFF>)>
+
+   DEFINE .PSHX1 (WCH,STUFF)<
+      WCH (<STUFF>)>
+
+   DEFINE .PSHX2 (OLD)<
+      DEFINE .PSHX1 (WCH,STUFF)<
+      WCH (<<STUFF>,<OLD>>)>>
+
+   DEFINE .POPX <
+      .PSHX1 (.POPX2)>
+
+   DEFINE .POPX2 (STUFF)<
+      .POPX4 STUFF>
+
+   DEFINE .POPX4 (JUNK,STUFF)<
+      .POPX3 STUFF>
+
+   DEFINE .POPX3 (TOP,REST)<
+      TOP
+      DEFINE .PSHX1 (WCH,STUFF)<
+      WCH (<<STUFF>,<REST>>)>>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-130
+                                   MONSYM
+
+
+
+
+      SUBTTL CALL, RET, JSERR
+
+      IFE REL,<
+      EXTERN JSERR0,JSMSG0,JSHLT0,R,RSKP>
+
+   ;CALL AND RETURN
+
+   .AC1==1                                   ;ACS FOR JSYS ARGS
+   .AC2==2
+   .AC3==3
+   .A16==16                        ;TEMP FOR STKVAR AND TRVAR
+   P=17                                      ;STACK POINTER
+
+   OPDEF CALL [PUSHJ P,0]
+   OPDEF RET [POPJ P,0]
+
+   ;ABBREVIATION FOR  CALL, RET, RETSKP
+
+   OPDEF CALLRET [JRST]
+   .NODDT CALLRET
+
+   DEFINE RETSKP <JRST RSKP>
+
+   ;MACRO TO PRINT MESSAGE ON TERMINAL
+
+   DEFINE TMSG ($MSG)<
+      HRROI .AC1,[ASCIZ \$MSG\]
+      PSOUT>
+
+   ;MACRO TO OUTPUT MESSAGE TO FILE
+   ; ASSUMES JFN ALREADY IN .AC1
+
+   DEFINE FMSG ($MSG)<
+      HRROI .AC2,[ASCIZ \$MSG\]
+      MOVEI .AC3,0
+      SOUT>
+
+   ;MACRO TO PRINT MESSAGE FOR LAST ERROR, RETURNS +1
+
+   DEFINE PERSTR ($MSG)<
+      IFNB <$MSG>,<
+      TMSG <$MSG>>
+      CALL JSMSG0>
+
+   ;MACRO TO PRINT JSYS ERROR MESSAGE, RETURNS +1 ALWAYS
+
+   OPDEF JSERR[<CALL JSERR0>]
+   OPDEF EJSERR[<JUMP 17,JSERR0>]  ;Since MACRO couldn't handle OPDEF of an OPDEF
+                                   ;  (i.e. ERCAL) defined elsewhere, use JUMP 17,
+                                   ;  instead
+
+   ;MACRO FOR FATAL JSYS ERROR, PRINTS MSG THEN HALTS
+
+   OPDEF JSHLT[<CALL JSHLT0>]
+   OPDEF EJSHLT[<JUMP 17,JSHLT0>]  ;Since MACRO couldn't handle OPDEF of an OPDEF
+                                   ;  (i.e. ERCAL) defined elsewhere, use JUMP 17,
+                                   ;  instead
+
+   ;PRINT ERROR MESSAGE IF JSYS FAILS
+
+   DEFINE ERMSG(TEXT),<
+      ERJMP   [TMSG <? TEXT>
+
+
+                                   B-131
+                                   MONSYM
+
+
+
+               JSHLT]
+   >
+
+   ;MAKE SYMBOLS EXTERN IF NOT ALREADY DEFINED
+
+   DEFINE EXT (SYM)<
+      IF2,<
+      IRP SYM,<
+      IFNDEF SYM,<EXTERN SYM
+      SUPPRE SYM>>>>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-132
+                                   MONSYM
+
+
+
+
+   ;MACRO TO ADD BREAK CHARACTER TO FOUR WORD BREAK MASK (W0., W1., W2., W3.)
+
+   DEFINE BRKCH. (%%V,V2)
+   <
+   %%FOO==%%V
+      BRK0 (%%FOO,V2,0)
+   >
+
+   ;MACRO TO REMOVE CHARACTER
+
+   DEFINE UNBRK. (%%V,V2)
+   <
+   %%FOO==%%V
+      BRK0 (%%FOO,V2,1)
+   >
+
+   DEFINE BRK0 (%%11,V2,FLAVOR)
+   <  ..V22==%%11
+      ..V1==%%11
+      IFNB <V2>,<..V22==V2>
+   REPEAT ..V22-<%%11>+1,<         ;;BRACKETS AROUND %%11 IN CASE ITS AN EXPRESSION
+      %%W==..V1/^D32     ;;DECIDE WHICH WORD CHARACTER GOES IN
+      %%X==..V1-%%W*^D32 ;;CALCULATE BIT POSITION WITHIN WORD
+      IFE FLAVOR,BRKC1 \"<%%W+"0"> ;;MODIFY CORRECT MASK WORD
+      IFN FLAVOR,BRKC2 \"<%%W+"0">
+      ..V1==..V1+1
+                 >
+   >
+
+   DEFINE BRKC1 (ARG1)
+   <  W'ARG1'.==W'ARG1'.!<1B<%%X>>
+   >
+
+   DEFINE BRKC2 (ARG1)
+   <  W'ARG1'.==W'ARG1'.&<-1-1B<%%X>>
+   >
+
+   ;MACRO TO INITIALIZE 4-WORD 12-BIT CHARACTER BREAK MASK
+
+   DEFINE BRINI.(A0<0>,A1<0>,A2<0>,A3<0>)
+   <
+   W0.==A0
+   W1.==A1                                   ;INITIALIZE BREAK MASK
+   W2.==A2
+   W3.==A3
+   >
+
+   ;MACRO TO DEFINE A BREAK SET
+
+   DEFINE BRMSK. (INI0,INI1,INI2,INI3,ALLOW,DISALW)
+   <  BRINI. INI0,INI1,INI2,INI3   ;;SET UP INITIAL MASK
+      IRPC ALLOW,<       UNBRK. "ALLOW">     ;;DON'T BREAK ON CHARS TO BE ALLOWED IN FIELD
+      IRPC DISALW,<      BRKCH. "DISALW">    ;;BREAK ON CHARACTERS NOT ALLOWED
+      EXP W0.,W1.,W2.,W3.                    ;;STORE RESULTANT MASK IN MEMORY
+   >
+
+
+
+
+
+
+
+
+
+                                   B-133
+                                   MONSYM
+
+
+
+
+   ;COMND - MACRO FOR BUILDING FUNCTION DESCRIPTOR BLOCK
+   ;THIS IS THE OLD ONE, BEFORE .CMBRK EXISTED.  USE FLDBK. FOR SPECIFYING
+   ;BREAK SETS
+
+   DEFINE FLDDB. (TYP,FLGS,DATA,HLPM,DEFM,LST)<
+      ..XX==<FLD(TYP,CM%FNC)>+FLGS+<0,,LST>
+      IFNB <HLPM>,<..XX=CM%HPP!..XX>
+      IFNB <DEFM>,<..XX=CM%DPP!..XX>
+      ..XX
+      IFNB <DATA>,<DATA>
+      IFB <DATA>,<0>
+      IFNB <HLPM>,<POINT 7,[ASCIZ HLPM]>
+      IFB <HLPM>,<IFNB <DEFM>,<0>>
+      IFNB <DEFM>,<POINT 7,[ASCIZ \DEFM\]>>
+
+   ;COMND - MACRO FOR BUILDING FUNCTION DESCRIPTOR BLOCK
+
+   DEFINE FLDBK. (TYP,FLGS,DATA,HLPM,DEFM,BRKADR,LST)<
+      ..XX==<FLD(TYP,CM%FNC)>+FLGS+<Z LST>
+      IFNB <HLPM>,<..XX=CM%HPP!..XX>
+      IFNB <DEFM>,<..XX=CM%DPP!..XX>
+      IFNB <BRKADR>,<..XX=CM%BRK!..XX>
+      ..XX
+      IFNB <DATA>,<DATA>
+      IFB <DATA>,<0>
+      IFNB <HLPM>,<POINT 7,[ASCIZ HLPM]>
+      IFB <HLPM>,<IFNB <DEFM'BRKADR>,<0>>
+      IFB <DEFM>,<IFNB <BRKADR>,<0>>
+      IFNB <DEFM>,<POINT 7,[ASCIZ \DEFM\]>
+      IFNB <BRKADR>,<BRKADR>
+      >
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-134
+                                   MONSYM
+
+
+
+
+   ;USEFUL EXTENDED ADDRESSING DEFINITIONS
+
+   OPDEF      XMOVEI [SETMI]                 ;EXTENDED MOVE IMMEDIATE
+   OPDEF      XHLLI [HLLI]                   ;NOT YET IN MACRO
+
+   DEFINE XBLT. (A)<
+      EXTEND A,[XBLT]>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-135
+                                   MONSYM
+
+
+
+
+      SUBTTL SUPPORT CODE FOR JSERR
+
+      IFN REL,<
+
+   A=1
+   B=2
+   C=3
+   D=4
+
+   ;JSYS ERROR HANDLER
+   ;  CALL JSERR0
+   ; RETURNS +1: ALWAYS, CAN BE USED IN +1 RETURN OF JSYS'S
+
+   JSERR0::MOVEI A,.PRIIN
+      CFIBF                        ;CLEAR TYPAHEAD
+      MOVEI A,.PRIOU
+      DOBE                         ;WAIT FOR PREVIOUS OUTPUT TO FINISH
+      TMSG <
+   ? JSYS ERROR: >
+   JSMSG0::MOVEI A,.PRIOU
+      HRLOI B,.FHSLF               ;SAY  THIS FORK ,, LAST ERROR
+      SETZ C,
+      ERSTR
+       JFCL
+       JFCL
+      TMSG <
+   >
+      RET
+
+   ;FATAL JSYS ERROR - PRINT MESSAGE AND HALT
+   ;  CALL JSHLT0
+   ; RETURNS: NEVER
+
+   JSHLT0::CALL JSERR0             ;PRINT THE MSG
+   JSHLT1:    HALTF
+      TMSG <PROGRAM CANNOT CONTINUE
+   >
+      JRST JSHLT1                  ;HALT AGAIN IF CONTINUED
+      >                                      ;END OF IFN REL,
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-136
+                                   MONSYM
+
+
+
+
+      SUBTTL STKVAR - STACK VARIABLE FACILITY
+
+   ;MACRO FOR ALLOCATING VARIABLES ON THE STACK. ITS ARGUMENT IS
+   ;A LIST OF ITEMS.  EACH ITEM MAY BE:
+   ; 1. A SINGLE VARIABLE WHICH WILL BE ALLOCATED ONE WORD
+   ; 2. A VARIABLE AND SIZE PARAMETER WRITTEN AS <VAR,SIZ>.  THE
+   ;  VARIABLE WILL BE ALLOCATED THE SPECIFIED NUMBER OF WORDS.
+   ;RETURN FROM A SUBROUTINE USING THIS FACILITY MUST BE VIA
+   ;RET OR RETSKP.  A DUMMY RETURN WHICH FIXES UP THE STACK IS PUT ON
+   ;THE STACK AT THE POINT THE STKVAR IS ENCOUNTERED.
+   ;WITHIN THE RANGE OF A STKVAR, PUSH/POP CANNOT BE USED AS THEY WILL
+   ;CAUSE THE VARIABLES (WHICH ARE DEFINED AS RELATIVE STACK LOCATIONS)
+   ;TO REFERENCE THE WRONG PLACE.
+   ;TYPICAL USE:   STKVAR <AA,BB,<QQ,5>,ZZ>
+   ;          ENDSV.               ;END OF SCOPE OF NAMES
+
+      IFE REL,<
+      EXTERN .STKST,.STKRT>
+
+   DEFINE STKVAR (ARGS)<
+      ..STKR==10                   ;;REMEMBER RADIX
+      RADIX 8
+      ..STKN==0
+      IRP ARGS,<
+        .STKV1 (ARGS)>
+      JSP .A16,.STKST
+       ..STKN,,..STKN
+      RADIX ..STKR
+      DEFINE ENDSV.<.ENSV1 <ARGS>>
+      >
+
+   ;INTERMEDIATE MACRO TO PEAL OFF ANGLEBRACKETS IF ANY
+
+   DEFINE .STKV1 (ARG)<
+      .STKV2 (ARG)>
+
+   ;INTERMEDIATE MACRO TO CALCULATE OFFSET AND COUNT VARIABLES
+
+   DEFINE .STKV2 (VAR,SIZ)<
+      IFB <SIZ>,<..STKN==..STKN+1>
+      IFNB <SIZ>,<..STKN==..STKN+SIZ>
+      ..STKQ==..STKN+1
+      .STKV3 (VAR,\..STKQ)>
+
+   ;INNERMOST MACRO TO DEFINE VARIABLE
+
+   DEFINE .STKV3 (VAR,LOC)<
+      IFDEF VAR,<.IF VAR,SYMBOL,<PRINTX STKVAR VAR ALREADY DEFINED>>
+      DEFINE VAR<-^O'LOC(P)>
+      $'VAR==<Z VAR>>              ;SYMBOL FOR DDT
+
+   ;CLEANUP NAMES
+
+   DEFINE .ENSV1 (ARGS)<
+      IRP ARGS,<
+        .ENSV2 (ARGS)>>
+
+     DEFINE .ENSV2 (ARG)<
+      .ENSV3 (ARG)>
+
+     DEFINE .ENSV3 (ARG,SIZ)<
+      DEFINE ARG<....U>>
+
+
+                                   B-137
+                                   MONSYM
+
+
+
+
+      IFN REL,<
+
+   ;COMMON ENTRY AND EXIT ROUTINE FOR STACK VARIABLE
+
+      ENTRY .STKST
+
+   .STKST::ADD P,0(.A16)           ;BUMP STACK FOR VARIABLES USED
+      JUMPGE P,STKSOV              ;TEST FOR STACK OVERFLOW
+   STKSE1:    PUSH P,0(.A16)                 ;SAVE BLOCK SIZE FOR RETURN
+      PUSHJ P,1(.A16)              ;CONTINUE ROUTINE, EXIT TO .+1
+   .STKRT::JRST STKRT0             ;NON-SKIP RETURN COMES HERE
+      POP P,.A16                   ;SKIP RETURN COMES HERE-RECOVER COUNT
+      SUB P,.A16                   ;ADJUST STACK TO REMOVE BLOCK
+      AOS 0(P)                     ;NOW DO SKIP RETURN
+      RET
+
+   STKRT0:    POP P,.A16           ;RECOVER COUNT
+      SUB P,.A16                   ;ADJUST STACK TO REMOVE BLOCK
+      RET                          ;DO NON-SKIP RETURN
+
+   STKSOV:    SUB P,0(.A16)                  ;STACK OVERFLOW- UNDO ADD
+      HLL .A16,0(.A16)   ;SETUP TO DO MULTIPLE PUSH, GET COUNT
+   STKSO1:    PUSH P,[0]           ;DO ONE PUSH AT A TIME, GET REGULAR
+      SUB .A16,[1,,0]              ; ACTION ON OVERFLOW
+      TLNE .A16,777777   ;COUNT DOWN TO 0?
+      JRST STKSO1                  ;NO, KEEP PUSHING
+      JRST STKSE1
+      >                                      ;END OF IFN REL,
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-138
+
+                                   MONSYM
+
+
+
+
+      SUBTTL TRVAR - TRANSIENT VARIABLE FACILITY
+
+   ;TRANSIENT (STACK) VARIABLE FACILITY - EQUIVALENT TO STKVAR
+   ;EXCEPT ALLOWS VARIABLES TO BE USED WITHIN LOWER LEVEL ROUTINES
+   ;AND AFTER OTHER THINGS HAVE BEEN PUSHED ON STACK.
+   ;N.B. USES .FP AS FRAME POINTER - MUST NOT BE CHANGED WHILE
+   ;VARIABLES IN USE.
+
+   .FP==15                                   ;DEFAULT FRAME POINTER
+
+      IFE REL,<
+      EXTERN .TRSET,.TRRET,.ASSET,.SASET,.ASRET>
+
+   DEFINE TRVAR (VARS)<
+      ..TRR==10                    ;;REMEMBER CURRENT RADIX
+      RADIX 8
+      ..NV==1                      ;;INIT COUNT OF STACK WORDS
+      IRP VARS,<
+        .TRV1 (VARS)>              ;;PROCESS LIST
+      JSP .A16,.TRSET              ;;ALLOCATE STACK SPACE, SETUP .FP
+       ..NV-1,,..NV-1
+      RADIX ..TRR                  ;;RESTORE RADIX
+      DEFINE ENDTV.<.ENSV1 <VARS>>
+      >
+
+   DEFINE .TRV1 (VAR)<
+      .TRV2 (VAR)>                 ;;PEEL OFF ANGLEBRACKETS IF ANY
+
+   DEFINE .TRV2 (NAM,SIZ)<
+      .TRV3 (NAM,\..NV)  ;;DEFINE VARIABLE
+      IFB <SIZ>,<..NV=..NV+1>
+      IFNB <SIZ>,<..NV=..NV+SIZ>>
+
+   DEFINE .TRV3 (NAM,LOC)<
+      IFDEF NAM,<.IF NAM,SYMBOL,<PRINTX TRVAR NAM ALREADY DEFINED>>
+      DEFINE NAM<^O'LOC(.FP)>
+      $'NAM==<Z NAM>>              ;;SYMBOL FOR DDT
+
+   ;AC SUBROUTINE - ENTRY FOR SUBROUTINE CALLED WITH 1-4 ARGS IN ACS T1-T4.
+   ;USES .FP AS FRAME PTR LIKE TRVAR
+
+   DEFINE ASUBR (ARGS)<
+      ..TRR==10                    ;;SAVE RADIX
+      RADIX 8
+      ..NV==1                      ;;INIT ARG COUNT
+      IRP ARGS,<
+        .TRV1 (ARGS)>              ;;DEFINE ARG SYMBOL
+      IFG ..NV-5,<PRINTX ?TOO MANY ARGUMENTS: ARGS>
+      JSP .A16,.ASSET              ;;SETUP STACK
+      RADIX ..TRR                  ;;RESTORE RADIX
+      DEFINE ENDAS.<.ENSV1 <ARGS>>
+      >
+   ;SAME AS ABOVE EXCEPT ALSO RESTORES T1-T4 FROM STACK
+
+
+
+
+
+
+
+
+
+
+
+                                   B-139
+                                   MONSYM
+
+
+
+   DEFINE SASUBR (ARGS)<
+      ..TRR==10                    ;;SAVE RADIX
+      RADIX 8
+      ..NV==1                      ;;INIT ARG COUNT
+      IRP ARGS,<
+        .TRV1 (ARGS)>              ;;DEFINE ARG SYMBOL
+      IFG ..NV-5,<PRINTX ?TOO MANY ARGUMENTS: ARGS>
+      JSP .A16,.SASET              ;;SETUP STACK
+      RADIX ..TRR                  ;;RESTORE RADIX
+      DEFINE ENDSA.<.ENSV1 <ARGS>>
+      >
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-140
+
+                                   MONSYM
+
+
+
+
+      IFN REL,<
+   ;SUPPORT ROUTINE FOR TRVAR
+
+   .TRSET::PUSH P,.FP              ;PRESERVE OLD .FP
+      MOVE .FP,P                   ;SETUP FRAME PTR
+      ADD P,0(.A16)                ;ALLOCATE SPACE
+      JUMPGE P,TRSOV
+   TRSET1:    PUSHJ P,1(.A16)                ;CONTINUE ROUTINE, EXIT VIA .+1
+   .TRRET::JRST [        MOVEM .FP,P         ;CLEAR STACK
+              POP P,.FP  ;RESTORE OLD .FP
+              POPJ P,]
+      MOVEM .FP,P                  ;HERE IF SKIP RETURN
+      POP P,.FP
+      AOS 0(P)                     ;PASS SKIP RETURN
+      POPJ P,
+
+   TRSOV:     MOVE P,.FP           ;STACK OVERFLOW, UNDO ADD
+      PUSH P,.A16                  ;SAVE LOCAL RETURN
+      HRRZ .A16,0(.A16)  ;GET COUNT
+      ADJSP P,-1(.A16)   ;ADJUST STACK, GET TRAP HERE OR ON PUSH
+      MOVE .A16,1(.FP)   ;RESTORE LOCAL RETURN
+      JRST TRSET1                  ;NOW CHARGE AHEAD
+
+   ;SUPPORT ROUTINE FOR ASUBR
+
+   .ASSET::PUSH P,.FP              ;SAVE .FP
+      MOVE .FP,P                   ;SETUP FRAME POINTER
+      ADJSP P,4                    ;BUMP STACK
+      DMOVEM A,1(.FP)    ;SAVE ARGS
+      DMOVEM C,3(.FP)
+      PUSHJ P,0(.A16)              ;CONTINUE ROUTINE
+   .ASRET:: JRST [       MOVEM .FP,P         ;NO-SKIP RETURN, CLEAR STACK
+              POP P,.FP
+              POPJ P,]
+      MOVEM .FP,P                  ;SKIP RETURN, CLEAR STZCK
+      POP P,.FP
+      AOS 0(P)
+      POPJ P,
+
+   ;SUPPORT ROUTINE FOR SASUBR
+
+   .SASET::PUSH P,.FP              ;SAVE .FP
+      MOVE .FP,P                   ;SETUP FRAME POINTER
+      ADJSP P,4                    ;BUMP STACK
+      DMOVEM A,1(.FP)    ;SAVE ARGS
+      DMOVEM C,3(.FP)
+      PUSHJ P,0(.A16)              ;CONTINUE ROUTINE
+   .SARET:: JRST [       DMOVE A,1(.FP)      ;RESTORE
+              DMOVE C,3(.FP)
+              MOVEM .FP,P          ;NO-SKIP RETURN, CLEAR STACK
+              POP P,.FP
+              POPJ P,]
+      DMOVE A,1(.FP)               ;RESTORE
+      DMOVE C,3(.FP)
+      MOVEM .FP,P                  ;SKIP RETURN, CLEAR STACK
+      POP P,.FP
+      AOS 0(P)
+      POPJ P,
+      >                                      ;END OF IFN REL,
+
+
+
+
+
+                                   B-141
+
+                                   MONSYM
+
+
+
+
+
+   ;AC VARIABLE FACILITY
+
+      IFE REL,<
+      EXTERN .SAV1,.SAV2,.SAV3,.SAV4,.SAV8>
+
+   .FPAC==5                        ;FIRST PRESERVED AC
+   .NPAC==10                       ;NUMBER OF PRESERVED ACS
+
+   DEFINE ACVAR (LIST)<
+      ..NAC==0                     ;;INIT NUMBER OF ACS USED
+      IRP LIST,<
+        .ACV1 (LIST)>              ;;PROCESS ITEMS
+      .ACV3 (\..NAC)               ;;SAVE ACS USED
+      DEFINE ENDAV.<.ENAV1 <LIST>>>
+
+   DEFINE .ACV1 (ITEM)<
+      .ACV2 (ITEM)>                ;;PEEL OFF ANGLEBRACKETS IF ANY
+
+   DEFINE .ACV2 (NAM,SIZ)<
+      IFDEF NAM,<.IF NAM,SYMBOL,<PRINTX ACVAR NAM ALREADY DEFINED>>
+      NAM==.FPAC+..NAC   ;;DEFINE VARIABLE
+      $'NAM==NAM                   ;;FOR DDT
+      IFB <SIZ>,<..NAC=..NAC+1>
+      IFNB <SIZ>,<..NAC=..NAC+SIZ>>
+
+   DEFINE .ACV3 (N)<
+      IFG N-.NPAC,<PRINTX ?TOO MANY ACS USED>
+      IFLE N-4,<
+        JSP .A16,.SAV'N> ;;SAVE ACTUAL NUMBER USED
+      IFG N-4,<
+        JSP .A16,.SAV8>> ;;SAVE ALL
+
+   DEFINE .ENAV1 (ARGS)<
+      IRP ARGS,<
+        .ENAV2 (ARGS)>>
+
+     DEFINE .ENAV2 (ARG)<
+      .ENAV3 (ARG)>
+
+     DEFINE .ENAV3 (NAM,SIZ)<
+      PURGE NAM,NAM
+     >
+
+      IFN REL,<
+   ;SUPPORT ROUTINES FOR AC VARIABLE FACILITY
+
+   .SAV1::    PUSH P,.FPAC
+      PUSHJ P,0(.A16)              ;CONTINUE PROGRAM
+       SKIPA
+      AOS -1(P)
+      POP P,.FPAC
+      POPJ P,
+
+   .SAV2::    PUSH P,.FPAC
+      PUSH P,.FPAC+1
+      PUSHJ P,0(.A16)
+       SKIPA
+      AOS -2(P)
+      POP P,.FPAC+1
+      POP P,.FPAC
+      POPJ P,
+
+
+
+                                   B-142
+                                   MONSYM
+
+
+
+
+   .SAV3::
+   .SAV4::    PUSH P,.FPAC
+      PUSH P,.FPAC+1
+      PUSH P,.FPAC+2
+      PUSH P,.FPAC+3
+      PUSHJ P,0(.A16)
+       SKIPA
+      AOS -4(P)
+      POP P,.FPAC+3
+      POP P,.FPAC+2
+      POP P,.FPAC+1
+      POP P,.FPAC
+      POPJ P,
+
+   .SAV8::    ADD P,[10,,10]
+      JUMPGE P,[HALT .]
+      DMOVEM .FPAC,-7(P)
+      DMOVEM .FPAC+2,-5(P)
+      DMOVEM .FPAC+4,-3(P)
+      DMOVEM .FPAC+6,-1(P)
+      PUSHJ P,0(.A16)
+       SKIPA
+      AOS -10(P)
+      DMOVE .FPAC+6,-1(P)
+      DMOVE .FPAC+4,-3(P)
+      DMOVE .FPAC+2,-5(P)
+      DMOVE .FPAC,-7(P)
+      SUB P,[10,,10]
+      POPJ P,
+      >
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-143
+                                   MONSYM
+
+
+
+
+   ;AC SAVE FACILITY - COMPILES OPEN PUSH'S
+   ;  SAVEAC <LIST-OF-ACS>
+   ;DUMMY ROUTINE PUT ON STACK TO CAUSE AUTOMATIC RESTORE. SUPPORTS
+   ; +1 OR +2 RETURNS.
+
+   DEFINE SAVEAC (ACS)<
+      .NAC==0
+      IRP ACS,<
+        PUSH P,ACS                 ;;SAVE AN AC
+        .NAC=.NAC+1>               ;;COUNT THEM
+      .N1==.NAC
+      SETMI .A16,[CAIA   ;;STACK DUMMY RETURN
+              AOS -.N1(P)          ;;HANDLE SKIP RETURN
+        IRP ACS,<
+              .N1=.N1-1
+              MOVE ACS,-.N1(P)>  ;;RESTORE AN AC
+              SUB P,[.NAC,,.NAC]  ;;CLEAR STACK
+              POPJ P,]   ;;FINAL RETURN
+      PUSH P,.A16>
+
+      IFN REL,<
+   ;STANDARD RETURNS
+
+   RSKP::     AOS 0(P)
+   R::        RET
+      >                                      ;END OF IFN REL,
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-144
+                                   MONSYM
+
+
+
+
+      SUBTTL BLSUBR - BLISS-STYLE SUBROUTINE MECHANISM
+
+   ;MACROS FOR STACK-STYLE (BLISS) SUBROUTINE ENTRY
+   ;BLSUBR DEFINE A SUBROUTINE ENTRY POINT.  IT TAKES THE LIST OF
+   ;SYMBOLS WHICH WILL BE BOUND TO VALUES ON THE STACK AT ENTRY TO
+   ;THE ROUTINE.  A STACK FRAME POINTER IS SETUP IN .FP AND MUST
+   ;BE UNDISTURBED THROUGH THE ROUTINE.  OTHER MECHANISMS WHICH
+   ;USE THE STACK (E.G. SAVEAC) CAN BE USED.
+   ;AN OPTIONAL LIST OF VARIABLES IN THE SAME FORMAT AS FOR TRVAR CAN
+   ;BE GIVEN TO ALLOCATE LOCAL DYNAMIC STORAGE.
+
+   ;SUBROUTINES DEFINED HEREBY ARE CALLED WITH BLCALL.
+
+      IFE REL,<
+      EXTERN .ENTER>
+
+   DEFINE BLSUB. (ARGS,VARS)<      ;;ARGUMENTS, LOCAL VARIABLES
+      ..TRR==10                    ;;REMEMBER CURRENT RADIX
+      RADIX 8                      ;;SO BACKSLASH ARGS WILL WORK HEREIN
+      ..NA==2                      ;;INIT ARG COUNT
+      IRP ARGS,<
+        ..NA=..NA+1>               ;;COUNT ARGS
+      IRP ARGS,<
+        .BLSU1(ARGS,\..NA)         ;;DEFINE AN ARG
+        ..NA=..NA-1>
+      ..NV==1                      ;;SETUP TO COUNT VARIABLE STORAGE
+      IRP VARS,<
+        .TRV1 (VARS)>              ;;COUNT WORDS AND DEFINE SYMBOLS
+     DEFINE ENDBS. <.ENBS1 <ARGS>
+              .ENSV1 <VARS>> ;;SAVE SYMBOLS
+      JSP .A16,.ENTER
+      ..NV-1,,..NV-1
+      RADIX ..TRR>                 ;;SETUP FRAME PTR
+
+   DEFINE .BLSU1 (ARG,LOC)<
+      DEFINE ARG<-^O'LOC(.FP)>
+      $'ARG==<Z ARG>>
+
+   DEFINE .ENBS1 (ARGS)<
+      IRP ARGS,<
+      DEFINE ARGS<....U>>>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-145
+                                   MONSYM
+
+
+
+
+   ;CALL STACK-STYLE (BLISS) SUBROUTINE
+   ;THIS MACRO TAKES THE NAME OF THE SUBROUTINE AND A LIST OF ARGUMENTS.
+   ;EACH ARGUMENT IN THE ARG LIST IS ONE OF THE FOLLOWING:
+   ;  1. A NORMAL EFFECTIVE ADDRESS SPECIFICATION, E.G. FOO, @FIE(X)
+   ;  2. AN IMMEDIATE ADDRESS WRITTEN AS <.,ADR> WHERE ADR IS AN EFFECTIVE
+   ;  ADDRESS SPECIFICATION, E.G. FOO, @FIE(X).  NOTE THAT THIS
+   ;  ADDRESS WILL BE COMPUTED BY AN XMOVEI AT THE TIME OF THE CALL
+   ;  SO SECTION INFORMATION WILL BE BOUND AT THAT TIME.  NOTE ALSO
+   ;  THAT THIS FORM SHOULD *NOT* BE USED FOR A LITERAL CONSTANT
+   ;  WHERE YOU WOULD NOT WANT THE CURRENT SECTION PUT IN THE LEFT
+   ;  HALF.  USE [CONST] INSTEAD.  YES, THE DOT HERE IS LIKE NO-DOT IN BLISS
+   ;  AND VICE-VERSA.
+   ;  3. A STRUCTURE REFERENCE SPECIFICATION, E.G. AAA, <BB,(X)>.  IF
+   ;  THE LATTER FORM IS USED, THE BRACKETS ARE REQUIRED.
+
+   DEFINE BLCAL. (NAME,ARGS)<
+      ..NA==0                      ;;INIT ARG COUNT
+      IRP ARGS,<
+        .BLCL2 ARGS>               ;;COMPILE PUSH
+      PUSH P,[..NA+1,,..NA+1]      ;;COUNT OF ARGS AND SELF
+      PUSHJ P,NAME                 ;;JUMP TO SUBR
+      >
+
+   ;SEPARATE PAIRED ARGS
+
+     DEFINE .BLCL2 (ARGS)<
+      .BLCL1 ARGS>
+
+     DEFINE .BLCL1 (ARG1,ARG2)<
+        IFIDN <ARG1><.>,<
+              XMOVEI .A16,ARG2     ;;IMMEDIATE ARG
+              PUSH P,.A16>
+        IFDIF <ARG1><.>,<
+        .IFATM <ARG1>,.BLF1        ;;SEE IF ARG IS ATOMIC
+        IFN .BLF1,<
+          .BLF1==0                 ;;SET TO 1 IFF STRUCTURE REF
+          .IF %'ARG1,MACRO,<       ;;CHECK RELATED STRUCTURE SYMBOL
+              .BLF1==1>  ;;IS A STRUCTURE
+          IFNB <ARG2>,<
+              .BLF1==1>  ;;SECOND ARG IMPLIES STRUCTURE TOO
+          IFN .BLF1,<              ;;'OR' OF ABOVE TWO CHECKS
+              LOAD .A16,ARG1,ARG2
+              PUSH P,.A16>>
+        IFE .BLF1,<                ;IF WASN'T A STRUCTURE REF,
+              PUSH P,ARG1>>        ;;PUSH ONE ARG
+        ..NA=..NA+1>
+
+   ;MACRO TO SEE IF STRING IS AN ATOM, I.E. CONTAINS ONLY LEGAL SYMBOL
+   ;CONSTITUENTS A-Z, 0-9, %, $, .
+   ;IT IS PAINFULLY SLOW, BUT MACRO PROVIDES NO OTHER WAY
+   ;FLAG WILL BE SET TO 1 IF STRING IS ATOM, 0 OTHERWISE
+
+   DEFINE .IFATM (S,FLG)<
+      IRPC S,<
+      FLG==0
+      IFGE "S"-"A",<IFLE "S"-"Z",<FLG=1>> ;;SET FLG IF LETTER OK
+      IFGE "S"-"0",<IFLE "S"-"9",<FLG=1>>
+      IFE "S"-"%",<FLG=1>
+      IFE "S"-"$",<FLG=1>
+      IFE "S"-".",<FLG=1>
+      IFE FLG,<STOPI>>>
+
+
+
+                                   B-146
+                                   MONSYM
+
+
+
+      IFN REL,<
+   ;SUPPORT CODE FOR BLSUBR
+
+   .ENTER::PUSH P,.FP
+      MOVE .FP,P
+      ADD P,0(.A16)                ;ALLOCATE LOCAL STORAGE
+      JUMPGE P,ENTOV               ;JUMP IF OVERFLOW
+   ENTOV1:    PUSHJ P,1(.A16)
+       JRST [ MOVE P,.FP ;RESET STACK PTR
+              JRST ENTX1]
+      MOVE P,.FP
+      AOS -1(P)                    ;PROPAGATE SKIP
+   ENTX1:     POP P,.FP
+      POP P,.A16
+      SUB P,0(P)                   ;REMOVE ARGS
+      JRST 0(.A16)                 ;RETURN
+
+   ENTOV:     MOVE P,.FP           ;STACK OVERFLOW, UNDO ADD
+      PUSH P,.A16                  ;SAVE LOCAL RETURN IN 1(.FP)
+      HRRZ .A16,0(.A16)  ;GET COUNT
+      ADJSP P,-1(.A16)   ;ALLOCATE SPACE, GET TRAP HERE OR ON PUSH
+      MOVE .A16,1(.FP)   ;RESTORE LOCAL RETURN
+      JRST ENTOV1                  ;CHARGE AHEAD
+      >                                      ;END IFN REL
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-147
+                                   MONSYM
+
+
+
+
+      SUBTTL ERROR-MESSAGE SUPPORT FOR MACROS
+
+
+
+
+      ;Macro to print current location, macro name, and text
+      DEFINE MPRNTX (MNAME,TEXT)
+        <DEFINE ..MP. (LOCN,MTEXT,PTEXT)
+          <PRINTX Location 'LOCN', Macro 'MTEXT': PTEXT
+          >
+        ..MP.(\.,MNAME,<TEXT>)
+        PURGE ..MP.
+        >
+
+      ;Macro to print current location and text
+      DEFINE EPRNTX (TEXT)
+        <DEFINE ..EP. (LOCN,PTEXT)
+          <PRINTX Location 'LOCN': PTEXT
+          >
+        ..EP.(\.,<TEXT>)
+        PURGE ..EP.
+        >
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-148
+                                   MONSYM
+
+
+
+
+      SUBTTL MACROS TO SUPPORT EXTENDED ADDRESSING
+
+
+   ;  Local format indirect word
+   ;  =================================================================
+   ;  !1!0!    Reserved   ! I !   X   !            ADDR               !
+   ;  =================================================================
+   ;  !0!1!2               12! 13!14   17!18                         35!
+
+
+
+      ;Macro to generate local-format (instruction-format) indirect words
+      ;Args:  
+      ;       ADDR       18-bit in-section address (indexing or indirection
+      ;                  may be specified)
+
+      ;Generates Q errors on the following:
+      ;                  Bits 0-12 non-zero in ADDR
+
+      DEFINE LFIWM (ADDR)
+      <..ERR.=0                    ;;Reset error flag
+      IFN <<ADDR>&<^O<777740,,0>>>,
+        <MPRNTX(LFIWM,Bits 0 - 12 non-zero in address field: ADDR)
+        ..ERR.=1
+        >
+      IFN ..ERR.,<-1,-1,-1>        ;;Generate Q error
+      IFE ..ERR.,<1B0!<<^O<400037,,-1>>&<ADDR>>>       ;;Generate LFIW
+      PURGE ..ERR.
+      >
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-149
+                                   MONSYM
+
+
+
+
+   ;  Global format indirect word
+   ;  =================================================================
+   ;  !0! I !   X   !       SEC       !            ADDR               !
+   ;  =================================================================
+   ;  !0! 1 !2     5!6         17!                           35!
+
+
+      ;Macro to generate global-format (extended-format) indirect words
+      ;Args:
+      ;       SEC        12-bit section number
+      ;       ADDR       18-bit in-section address (indexing or indirection
+      ;                  may be specified)
+
+      ;Generates Q errors on the following:
+      ;                  Bits 0-12 non-zero in ADDR
+      ;                  SEC greater than 12 bits
+
+      DEFINE GFIWM (SEC,ADDR)
+      <..ERR.=0                    ;;Reset error flag
+      IFN <<SEC>&<^O<-1,,770000>>>,
+        <MPRNTX(GFIWM,Section greater than 12 bits: SEC)
+        ..ERR.=1
+        >
+      IFN <<ADDR>&<^O<777740,,0>>>,
+        <MPRNTX(GFIWM,Bits 0 - 12 non-zero in address field: ADDR)
+        ..ERR.=1
+        >
+      IFN ..ERR.,<-1,-1,-1>        ;;Generate Q error
+                                   ;;Generate GFIW
+      IFE ..ERR.,<
+        <<<ADDR>_<^O14>>&<^O<370000,,0>>!<<ADDR>&<0,,-1>>!<<SEC>_<^O22>>>>
+      PURGE ..ERR.
+      >
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-150
+                                   MONSYM
+
+
+
+
+   ;  The following macros generate all flavors of 1 and 2-word
+   ;  global and local byte pointers.  They are similar to the
+   ;  POINT pseudo-op, with the following exceptions:
+
+   ;  1.      The basic argument triad of (bytesize,address,byte position)
+   ;          is maintained.  However, some of the macros will prefix
+   ;          and-or postfix the triad with additional argument(s).
+   ;  2.      Numeric arguments are always interpreted in the current radix.
+   ;          Assuming the current radix is octal, note the following
+   ;          equivalences:
+   ;                     a.  POINT 10,200,36
+   ;                     b.  L1BPT(12,200,44)
+   ;                     c.  L1BPT(^D10,200,^D36)
+   ;  3.      Strict field-limits are enforced.  Any expression that
+   ;          will not fit into its appropriate field will generate
+   ;          an error message and cause a Q error.  Thus:
+   ;          L1BPT (10,200,-1) will cause an error.  (The correct effect
+   ;          is generated with:  L1BPT (10,200).)
+
+   ;  Also, note that in those macros that generate global byte-pointers,
+   ;  section values and address values must always be specified as distinct
+   ;  arguments.  If address symbol FOO resolves to 377,,123456 , then it
+   ;  would be specified in the macros as follows:
+   ;          G2BPT(FOO_-^D18,7,FOO&777777,36)
+   ;  Or (better):
+   ;          FOOSEC=FOO_-^D18
+   ;          FOOADR=FOO&777777
+   ;          G2BPT(FOOSEC,7,FOOADR,36)
+
+   ;  If runtime-generated values are needed, then any or all argument
+   ;  fields may be assembled as zero and filled in at runtime using an
+   ;  appropriate DPB instruction.  (G1BPT will not allow a zero bytesize
+   ;  and will only allow a zero byte position if it is legal for that
+   ;  particular bytesize.)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-151
+                                   MONSYM
+
+
+
+
+   ;  1-word local byte pointer
+   ;  =================================================================
+   ;  !   P   !   S   ! 0 ! I !   X   !            ADDR               !
+   ;  =================================================================
+   ;  !0     5!6    11! 12! 13!14   17!18                            35!
+
+
+
+      ;Macro to generate local, 1-word byte pointers
+      ;Args:
+      ;       BSIZ       Byte size
+      ;       ADDR       18-bit address (indexing or indirection
+      ;                  may be specified)
+      ;       BPOS       Optional byte position
+
+      ;Generates Q errors on the following:
+      ;                  Bits 0-12 non-zero in ADDR
+      ;                  BSIZ or BPOS greater than 6 bits
+
+      DEFINE L1BPT (BSIZ,ADDR,BPOS)
+      <.BSIZ.=BSIZ                 ;;Convert args to numeric
+      .BPOS.=BPOS
+      ..ERR.=0                     ;;Reset error flag
+      IFN <<ADDR>&<^O<777740,,0>>>,
+        <MPRNTX(L1BPT,Bits 0 - 12 non-zero in address field: ADDR)
+        ..ERR.=1
+        >
+      IFN <.BSIZ.&<^O<-1,,777700>>>,
+        <MPRNTX(L1BPT,Bytesize greater than 6 bits: BSIZ)
+        ..ERR.=1
+        >
+      IFN <.BPOS.&<^O<-1,,777700>>>,
+        <MPRNTX(L1BPT,Byte offset greater than 6 bits: BPOS)
+        ..ERR.=1
+        >
+      ;;Cause Q error
+      IFN <..ERR.>,<-1,-1,-1>
+      ;;Generate byte pointer
+      IFE <..ERR.>,
+        <IFIDN <BPOS><>,<POINT .BSIZ.,ADDR>
+        IFDIF <BPOS><>,<POINT .BSIZ.,ADDR,.BPOS.>
+        >
+      PURGE ..ERR.,.BSIZ.,.BPOS.
+      >
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-152
+                                   MONSYM
+
+
+
+
+   ;  1-word global byte pointer
+   ;  =================================================================
+   ;  !     P,S     !       SEC       !            ADDR               !
+   ;  =================================================================
+   ;  !0           5!6         17!                           35!
+
+
+
+      ;Macro to generate global, 1-word byte pointers
+      ;Args:
+      ;       
+      ;       SEC        12-bit section address
+      ;       BSIZ       Byte size
+      ;       ADDR       18-bit address (NO!! indexing or indirection
+      ;                  may be specified)
+      ;       BPOS       Optional byte position
+
+      ;Generates Q errors on following:
+      ;                  Illegal byte size or byte position
+      ;                  Indirection or indexing specified with ADDR
+      ;                  ADDR greater than 18 bits
+      ;                  SEC greater than 12 bits
+
+      ;Legal sizes and positions are as follows:
+
+      ;Size              Positions (Octal)
+      ;6                 44,36,30,22,14,6,0
+      ;7                 44,35,26,17,10,1
+      ;8                 44,34,24,14,4
+      ;9                 44,33,22,11,0
+      ;18                44,22,0
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-153
+                                   MONSYM
+
+
+
+      DEFINE G1BPT (SEC,BSIZ,ADDR,BPOS<^O44>)
+      <..ERR.=0                              ;;Reset error flag
+      ..ENC.=0                               ;;Define it as an arbitrary value
+      IFE BSIZ-7,                            ;;IF BYTESIZE=7
+        <..ENC.=^O57                         ;;Get correct encode value
+        IFN BPOS-^O44,<IFN BPOS-^O35,<IFN BPOS-^O26,<IFN BPOS-^O17,<IFN BPOS-^O10,
+                         <IFN BPOS-1<..ERR.=..ERR.!1>>>>>>
+        >
+      IFN BSIZ-7,                            ;;ELSE IF BYTESIZE=6
+        <IFE BSIZ-6,
+          <..ENC.=^O45                       ;;Get correct encode value
+          IFN BPOS-^O44,<IFN BPOS-^O36,<IFN BPOS-^O30,<IFN BPOS-^O22,<IFN BPOS-^O14,
+                         <IFN BPOS-6,<IFN BPOS,<..ERR.=.ERR.!1>>>>>>>
+          >
+        IFN BSIZ-6,                          ;;ELSE IF BYTESIZE=8
+          <IFE BSIZ-^O10,
+            <..ENC.=^O50           ;;Get correct encode value
+            IFN BPOS-^O44,<IFN BPOS-^O34,<IFN BPOS-^O24,<IFN BPOS-^O14,<IFN BPOS-4,
+                         <..ERR.=.ERR.!1>>>>>
+            >
+          IFN BSIZ-^O10,           ;;ELSE IF BYTESIZE=9
+            <IFE BSIZ-^O11,
+              <..ENC.=^O62                   ;;Get correct encode value
+              IFN BPOS-^O44,<IFN BPOS-^O33,<IFN BPOS-^O22,<IFN BPOS-^O11,<IFN BPOS,
+                         <..ERR.=..ERR.!1>>>>>
+              >
+            IFN BSIZ-^O11,                   ;;ELSE IF BYTESIZE=18
+              <IFE BSIZ-^O22,
+                <..ENC.=^O54                 ;;Get correct encode value
+                IFN BSIZ-^O44,<IFN BSIZ-^O22<IFN BSIZ,<..ERR.=..ERR.!1>>>
+                >
+              IFN BSIZ-^O22,<..ERR.=..ERR.!2>          ;;ELSE: Illegal byte size
+              >
+            >
+          >
+        >
+      IFN <<ADDR>&<-1,,0>>,<..ERR.=..ERR.!4> ;;Address greater than 18 bits
+                                                  ;; or indexing or indirection specified
+      IFN <<SEC>&<^O<-1,,770000>>>,<..ERR.=..ERR.!<^O20>> ;;Section greater than 12 bits 
+      IFN ..ERR.,
+        <IFN ..ERR.&1,<MPRNTX (G1BPT,Illegal byte offset: BPOS)>
+        IFN ..ERR.&2,<MPRNTX (G1BPT,Illegal byte size: BSIZ)>
+        IFN ..ERR.&4,
+          <MPRNTX (G1BPT,<Address indexed, indirect, or greater than 18 bits: ADDR>)>
+        IFN ..ERR.&<^O20>,<MPRNTX (G1BPT,Section greater than 12 bits: SEC)>
+        -1,-1,-1                   ;;Cause a "Q" error
+        >
+      ;;Generate the byte pointer
+      IFE ..ERR.,
+        <<<..ENC.+<<BSIZ>-<<BPOS>/<BSIZ>>>>_<^O36>>!<<ADDR>&<0,,-1>>!<<SEC>_^O<22>>> 
+      PURGE ..ERR.,..ENC.
+      >
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-154
+                                   MONSYM
+
+
+
+
+   ;  2-word local byte pointer
+
+   ;  !0     5!6    11! 12! 13      17!18                            35!
+   ;  =================================================================
+   ;  !   P   !   S   ! 1 ! Reserved  !       Available to User       !
+   ;  =================================================================
+   ;  !1!0!    Reserved   ! I !   X   !            ADDR               !
+   ;  =================================================================
+   ;  !0!1!2               12! 13!14   17!18                         35!
+
+
+
+      ;Macro to generate local, 2-word byte pointers
+      ;Args:
+      ;       
+      ;       BSIZ       Byte size
+      ;       ADDR       18-bit address (Indexing or indirection
+      ;                  may be specified)
+      ;       BPOS       Optional byte position
+      ;       OPT        Optional user field available in word 1, right half
+
+      ;Generates Q errors on the following:
+      ;                  Bits 0-12 non-zero in ADDR
+      ;                  Bits 0-17 non-zero in OPT
+      ;                  BSIZ or BPOS greater than 6 bits
+
+      DEFINE L2BPT(BSIZ,ADDR,BPOS,OPT<0>)
+      <..ERR.=0                    ;;Reset error flag
+        .BSIZ.=BSIZ                ;;Convert args to numeric
+        .BPOS.=BPOS
+      IFN <<ADDR>&<^O<777740,,0>>>,
+        <MPRNTX(L2BPT,Bits 0 - 12 non-zero in address field: ADDR)
+        ..ERR.=1
+        >
+      IFN <<OPT>&<-1,,0>>,
+        <MPRNTX(L2BPT,Bits 0-17 non-zero in optional field: OPT)
+        ..ERR.=1
+        >
+      IFN <.BSIZ.&<^O<-1,,777700>>>,
+        <MPRNTX(L2BPT,Bytesize greater than 6 bits: BSIZ)
+        ..ERR.=1
+        >
+      IFN <.BPOS.&<^O<-1,,777700>>>,
+        <MPRNTX(L2BPT,Byte offset greater than 6 bits: BPOS)
+        ..ERR.=1
+        >
+      IFN ..ERR.,<-1,-1,-1>                  ;;Generate Q error
+      ;;Generate the byte pointer
+      IFE ..ERR.,
+        <IFDIF <BPOS><>,<<<POINT .BSIZ.,OPT,.BPOS.>!1B12>&<^O<777740,,-1>>>
+        IFIDN <BPOS><>,<<<POINT .BSIZ.,OPT>!1B12>&<^O<777740,,-1>>>
+          <1B0!<<^O<400037,,-1>>&<ADDR>>>    ;;Generate LFIW
+        >
+      PURGE ..ERR.,.BSIZ.,.BPOS.
+      >
+
+
+
+
+
+
+
+
+
+                                   B-155
+                                   MONSYM
+
+
+
+
+   ;  2-word global byte pointer
+
+   ;  !0     5!6    11! 12! 13      17!18                            35!
+   ;  =================================================================
+   ;  !   P   !   S   ! 1 ! Reserved  !       Available to User       !
+   ;  =================================================================
+   ;  !0! I !   X   !       SEC       !            ADDR               !
+   ;  =================================================================
+   ;  !0! 1 !2     5!6         17!                           35!
+
+
+      ;Macro to generate global, 2-word byte pointers
+      ;Args:
+      ;       SEC        12-bit section address
+      ;       BSIZ       Byte size
+      ;       ADDR       18-bit address (Indexing or indirection
+      ;                  may be specified)
+      ;       BPOS       Optional byte position
+      ;       OPT        Optional user field available in word 1, right half
+
+      ;Generates Q errors on the following:
+      ;                  SEC greater than 12 bits
+      ;                  Bits 0-12 non-zero in ADDR
+      ;                  Bits 0-17 non-zero in OPT
+      ;                  BSIZ or BPOS greater than 6 bits
+
+      DEFINE G2BPT(SEC,BSIZ,ADDR,BPOS,OPT<0>)
+      <..ERR.=0                    ;;Reset error flag
+        .BSIZ.=BSIZ                ;;Convert args to numeric
+        .BPOS.=BPOS
+      IFN <<SEC>&<^O<-1,,770000>>>,
+        <MPRNTX(G2BPT,Section greater than 12 bits: SEC)
+        ..ERR.=1
+        >
+      IFN <<ADDR>&<^O<777740,,0>>>,
+        <MPRNTX(G2BPT,Bits 0 - 12 non-zero in address field: ADDR)
+        ..ERR.=1
+        >
+      IFN <<OPT>&<-1,,0>>,
+        <MPRNTX(G2BPT,Bits 0-17 non-zero in optional field: OPT)
+        ..ERR.=1
+        >
+      IFN <.BSIZ.&<^O<-1,,777700>>>,
+        <MPRNTX(G2BPT,Bytesize greater than 6 bits: BSIZ)
+        ..ERR.=1
+        >
+      IFN <.BPOS.&<^O<-1,,777700>>>,
+        <MPRNTX(G2BPT,Byte offset greater than 6 bits: BPOS)
+        ..ERR.=1
+        >
+      IFN ..ERR.,<-1,-1,-1>                  ;;Generate Q error
+      ;;Generate the byte pointer
+      IFE ..ERR.,
+        <IFDIF <BPOS><>,<<<POINT .BSIZ.,OPT,.BPOS.>!1B12>&<^O<777740,,-1>>>
+        IFIDN <BPOS><>,<<<POINT .BSIZ.,OPT>!1B12>&<^O<777740,,-1>>>
+          ;;Generate GFIW
+          <<<ADDR>_<^O14>>&<^O<370000,,0>>!<<ADDR>&<0,,-1>>!<<SEC>_<^O22>>>
+        >
+      PURGE ..ERR.,.BSIZ.,.BPOS.
+      >
+
+
+
+
+                                   B-156
+                                   MONSYM
+
+
+
+
+   LIT                                       ;MAKE SURE LITERALS COME BEFORE END MARK
+      IFN REL,<
+   .RLEND==:.-1                              ;MARK END OF CODE IN MACREL
+      >
+     IF2,<PURGE REL>               ;FLUSH REL FROM UNIV FILE
+
+      .XCMSY
+
+      END                ;End of MACSYM
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                   B-157
+
+
+
+
+
+
+
+
+
+
+
+
+                                 APPENDIX D
+
+                                  *ACTSYM*
+
+
+
+
+
+                                  Abstract
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                    D-1
+                                  *ACTSYM*
+
+
+
+   ;<5.UTILITIES>ACTSYM.MAC.2, 28-Oct-81 14:37:54, EDIT BY GRANT
+   ;Change major version to 5
+
+
+   UNIVERSAL ACTSYM - DECsystem-10/20 symbol file for accounting V2(35)
+   SUBTTL B.A. HUIZENGA/BAH/TAH/DPM   22-Jul-81
+
+
+   ;VERSION INFORMATION
+      ACCVER==5                    ;MAJOR VERSION
+      ACCEDT==35                   ;EDIT LEVEL
+      ACCMIN==0                    ;MINOR VERSION
+      ACCWHO==0                    ;LAST MODIFIER
+
+
+   ;COPYRIGHT (C) 1979,1980,1981 BY
+   ;DIGITAL EQUIPMENT CORPORATION, MAYNARD, MASS.
+   ;
+   ;
+   ;THIS SOFTWARE IS FURNISHED UNDER A LICENSE AND MAY BE USED AND COPIED
+   ;ONLY  IN  ACCORDANCE  WITH  THE  TERMS  OF  SUCH LICENSE AND WITH THE
+   ;INCLUSION OF THE ABOVE COPYRIGHT NOTICE.  THIS SOFTWARE OR ANY  OTHER
+   ;COPIES THEREOF MAY NOT BE PROVIDED OR OTHERWISE MADE AVAILABLE TO ANY
+   ;OTHER PERSON.  NO TITLE TO AND OWNERSHIP OF THE  SOFTWARE  IS  HEREBY
+   ;TRANSFERRED.
+   ;
+   ;THE INFORMATION IN THIS SOFTWARE IS SUBJECT TO CHANGE WITHOUT  NOTICE
+   ;AND  SHOULD  NOT  BE  CONSTRUED  AS A COMMITMENT BY DIGITAL EQUIPMENT
+   ;CORPORATION.
+   ;
+   ;DIGITAL ASSUMES NO RESPONSIBILITY FOR THE USE OR RELIABILITY  OF  ITS
+   ;SOFTWARE ON EQUIPMENT WHICH IS NOT SUPPLIED BY DIGITAL.
+
+
+   IFNDEF     FTUUOS,<FTUUOS==0>   ;TOPS-10
+   IFNDEF     FTJSYS,<FTJSYS==-1>  ;TOPS-20
+
+   DEFINE     TOPS10,<IFN FTUUOS,>
+   DEFINE     TOPS20,<IFN FTJSYS,>
+
+   IF1,<
+      TOPS10  <PRINTX [Assembling ACTSYM-10]>
+      TOPS20  <PRINTX [Assembling ACTSYM-20]>
+   >
+
+
+
+
+
+
+
+
+                                    D-2
+                                  *ACTSYM*
+
+
+
+   SUBTTL     PARAMETERS FOR USAGE ITEM DESCRIPTORS
+
+   ;FIELDS IN DATA ITEM DESCRIPTOR
+
+   US%FLG==:77B5                             ;FLAGS
+       US%IMM==:1B0                ; 1 - IMMEDIATE DATA ITEM
+                                   ; 0 - ADDRESS OF DATA ITEM
+   US%TYP==:77B11                            ;TYPE CODE
+       .USASC==:0                            ;ASCII
+       .USSIX==:1                            ;SIXBIT
+       .USOCT==:2                            ;OCTAL
+       .USDEC==:3                            ;DECIMAL
+       .USDAT==:4                            ;DATE-TIME
+       .USTAB==:5                            ;TABLE (SPECIAL FORM)
+       .USVER==:6                            ;VERSION NUMBER
+       .USSPC==:7                            ;SPACE FILL
+       .USPDT==:10                           ;OLD STYLE TOPS-10 DATE/TIME
+
+   US%LEN==:777B20                           ;LENGTH
+   US%COD==:77777B35               ;ITEM CODE
+
+   ;RECORD TYPE CODES
+
+      RADIX 10                     ;**** NOTE RADIX 10 ****
+
+   .UTRST==:1                      ;SYSTEM RESTART ENTRY
+   .UTSEN==:2                      ;SESSION ENTRY
+   .UTCKP==:3                      ;CHECKPOINT ENTRY (SYSTEM RESTART)
+   .UTUSB==:4                      ;FIRST ENTRY OF USAGE FILE (SAME AS .UTRST)
+   .UTTAD==:5                      ;DATE-TIME CHANGE
+   .UTBAT==:6                      ;BATCH PROCESSOR
+   .UTINP==:7                      ;INPUT SPOOLER ENTRY
+   .UTOUT==:8                      ;OUTPUT SPOOLER ENTRY
+   .UTFLU==:9                      ;FILE USAGE DIRECTORY ENTRY
+   .UTDSU==:10                               ;DISK SPINDLE USAGE ENTRY
+   .UTMNT==:11                               ;STRUCTURE MOUNT ENTRY
+   .UTMMT==:12                               ;TAPE MOUNT ENTRY
+   .UTDMT==:13                               ;DECtape MOUNT ENTRY
+   .UTFCM==:14                               ;FILE COMMAND ENTRY
+   .UTRET==:15                               ; File retrieved
+   .UTARC==:16                               ; File archived
+   .UTMIG==:17                               ; File migrated
+   .UTCOL==:18                               ; File collected
+
+   .UTUSR==:5000                             ;USER-DEFINED ENTRY TYPES ARE 5000-9999
+
+      RADIX 8                      ;**** END OF RADIX 10 ****
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                    D-3
+                                  *ACTSYM*
+
+
+
+   COMMENT
+
+
+   The format of the data to be passed  to  the  accounting  system  will
+   consist of a list of items describing the entries in a single record.
+
+   The record descriptor list will have a header  containing  the  record
+   type code and the record version information.
+
+   Format of a record descriptor:
+
+      !=======================================================!
+      !  DEC ver.   !  CUST ver.  !        Entry Type         !
+      !-------------------------------------------------------!
+      ! Flags  !  Type  !   Length    !       Item Code       !
+      !-------------------------------------------------------!
+      !           Data or Address (-1 for default)            !
+      !-------------------------------------------------------!
+      \                           .                           \
+      \                           .                           \
+      \                           .                           \
+      !-------------------------------------------------------!
+      !                 0 (Marks end of list)                 !
+      !=======================================================!
+
+   The generation of these  tables  will  be  controlled  by  the  UITEM.
+   macro.   All known data items will have a name generated by the use of
+   this macro.  If any application dependent items are needed the  UITEM.
+   macro  may be used to generate the new item.  The USENT.  macro may be
+   used to generate the first word of the entry descriptor table.
+
+   All USAGE entry headers and the system-defined USAGE entry  types  use
+   the specific item types and these items are ordered by the system.
+
+   Installation-defined USAGE entries (with entry types  above  .UTUSR  -
+   5000  to  9999)  use the arbitrary data items (USUAS., USUSX., USUDC.,
+   USUOC., USUVR., USUDT., and USUSP.) in the order in which they are  to
+   be  written  into  the USAGE entry record.  Each arbitrary data record
+   must be preceded by a USUAR.  item.
+
+   Example of installation-defined USAGE entry:
+
+   ;The following code writes a USAGE entry for a fictitious "file access count"
+   ; in a user program.  This program must be running as an enabled OPERATOR or
+   ; WHEEL.
+
+   ;Here to write USAGE entry for file access count
+
+      MOVEI T1,.USENT              ;USAGE function to write entry
+      MOVEI T2,FILRDB              ;Address of Record Descriptor Block
+      USAGE                        ;Write the entry
+       ERJMP USGERR                ;Failed to write entry-- do something else
+      JRST USGOK                   ;Entry written-- go on
+
+   ;Record descriptor block for file access count accounting
+
+   FILRDB:
+      USENT. (.UTUSR+12,1,1)       ;Entry type 5012= file access count.
+      USPVR. (<BYTE(3)VWHO(9)VMAJOR(6)VMINOR(18)VEDIT>,US%IMM) ;Version
+                                   ;  of this program (for header record).
+
+      USUAR.                       ;Start of first arbitrary record.
+      USUAS. ([ASCII \This appears in every entry\],,27) ;Text.
+
+
+                                    D-4
+                                  *ACTSYM*
+
+
+
+      USUSP. (,,5)                 ;Space fill, 5 characters.
+      USUDC. (FILCNT,,6) ;Count of file accesses, 000000-999999.
+
+      USUAR.                       ;Start of second arbitrary record.
+      USUSX. (<SIXBIT \FILE: \>,US%IMM,6) ;SIXBIT text for filename.
+      USUAS. (FILNAM,,200)         ;File name, 200 characters.
+
+      EXP 0                        ;End of entry.
+
+   ;Storage
+
+   FILCNT:    BLOCK 1                        ;File access count
+   FILNAM:    BLOCK ^D<200/5>                ;File name text
+
+   &  ;;; End of comment
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                    D-5
+                                  *ACTSYM*
+
+
+
+   SUBTTL UITEM. / USENT. / USAGE. DEFINITIONS
+
+      SALL
+
+   DEFINE UITEM. (NAME,TYPE,LEN) <
+       DEFINE US'NAME'. (DATA<-1>,IMMED<0>,ULEN<LEN>) <
+      USAGE. (.US'NAME,ULEN,TYPE,IMMED,<DATA>)
+       >
+   >
+
+   DEFINE USENT. (ETYPE,DVER,CVER) <
+      BYTE (9) ^D<DVER>,^D<CVER> (18) ^D<ETYPE>
+   >
+
+   DEFINE USAGE. (CODE,LENGTH,TYPE,FLAGS,DATUM) <
+      FLAGS+<TYPE>B11+<^D<LENGTH>>B20+CODE
+       IFB  <DATUM>,<-1>
+       IFNB <DATUM>,<DATUM>
+   >
+
+   DEFINE USDSK. (TABLE) <
+      USAGE. (.USDST,0,.USTAB,US%IMM,<TABLE>)
+   >
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                    D-6
+                                  *ACTSYM*
+
+
+
+   SUBTTL USAGE. ITEM-CODE DEFINITIONS
+
+   DEFINE USLIST <
+
+   DEFUS (JNO,0,.USDEC,4)                    ;JOB NUMBER
+   DEFUS (TAD,1,.USDAT,14)                   ;CURRENT DATE/TIME
+   DEFUS (TRM,2,.USASC,1)                    ;TERMINAL DESIGNATOR
+   DEFUS (LNO,3,.USOCT,4)                    ;LINE NUMBER
+   DEFUS (PNM,4,.USSIX,6)                    ;PROGRAM NAME (CALLER)
+   DEFUS (PVR,5,.USVER,15)                   ;PROGRAM VERSION
+   DEFUS (AMV,6,.USVER,15)                   ;ACCOUNTING MODULE VERSION
+   DEFUS (NOD,7,.USSIX,6)                    ;CALLER'S LOCATION
+   DEFUS (PPN,10,.USOCT,12)        ;PROJECT / PROGRAMMER NUMBER (TOPS10 ONLY)
+   DEFUS (NM1,11,.USSIX,6)                   ;NAME OF USER (TOPS10)
+   DEFUS (SNM,12,.USASC,39)        ;SYSTEM NAME
+   DEFUS (MVR,13,.USVER,15)        ;MONITOR VERSION NUMBER
+   DEFUS (MBD,14,.USDAT,14)        ;MONITOR BUILD DATE
+   DEFUS (MUP,15,.USDEC,18)        ;MONITOR UPTIME (IN SECONDS)
+   DEFUS (ACT,16,.USASC,39)        ;ACCOUNT STRING
+   DEFUS (LCK,17,.USDAT,14)        ;TIME OF LAST CHECKPOINT
+   DEFUS (RTM,20,.USDEC,9)                   ;RUNTIME IN MS
+   DEFUS (CTI,21,.USDEC,11)        ;CORE-TIME INTEGRAL (TOPS10 ONLY)
+   DEFUS (SST,22,.USDAT,14)        ;SESSION START TIME
+   DEFUS (JTY,23,.USDEC,1)                   ;JOB TYPE (BATCH / TIMESHARING)
+   DEFUS (BJN,24,.USSIX,6)                   ;BATCH JOB NAME
+   DEFUS (BSN,25,.USDEC,6)                   ;BATCH SEQUENCE NUMBER
+   DEFUS (COM,26,.USASC,39)        ;USER COMMENT
+   DEFUS (DKR,27,.USDEC,8)                   ;DISK READS
+   DEFUS (DKW,30,.USDEC,8)                   ;DISK WRITES
+   DEFUS (VTI,31,.USDEC,11)        ;VIRTUAL CORE-TIME INTEGRAL
+   DEFUS (EBX,32,.USDEC,9)                   ;EBOX MEGACOUNTS (CYCLES * 10^6)
+   DEFUS (MBX,33,.USDEC,9)                   ;MBOX MEGACOUNTS (CYCLES * 10^6)
+   DEFUS (MCL,34,.USDEC,6)                   ;MONITOR CALLS
+   DEFUS (MCM,35,.USDEC,6)                   ;MONITOR COMMANDS
+   DEFUS (SCL,36,.USDEC,3)                   ;SCHEDULING CLASS
+   DEFUS (TYI,37,.USDEC,6)                   ;TTY INPUT CHARACTERS
+   DEFUS (TYO,40,.USDEC,6)                   ;TTY OUTPUT CHARACTERS
+   DEFUS (TYW,41,.USDEC,6)                   ;TTY WAKEUPS
+   DEFUS (CPN,42,.USDEC,1)                   ;NUMBER OF CPUS
+   DEFUS (CP0,43,.USDEC,4)                   ;SERIAL NUMBER OF CPU0
+   DEFUS (CP1,44,.USDEC,4)                   ;SERIAL NUMBER OF CPU1
+   DEFUS (CP2,45,.USDEC,4)                   ;SERIAL NUMBER OF CPU2
+   DEFUS (CP3,46,.USDEC,4)                   ;SERIAL NUMBER OF CPU3
+   DEFUS (CP4,47,.USDEC,4)                   ;SERIAL NUMBER OF CPU4
+   DEFUS (CP5,50,.USDEC,4)                   ;SERIAL NUMBER OF CPU5
+   DEFUS (RQQ,51,.USDEC,11)        ;RUN QUEUE QUOTIENT (TOPS10 ONLY)
+   DEFUS (NM2,52,.USASC,39)        ;NAME OF USER (TOPS20)
+   DEFUS (CCT,53,.USDEC,7)                   ;CONSOLE CONNECT TIME (SECONDS)
+   DEFUS (DTL,54,.USDAT,14)        ;DATE/TIME BEFORE CHANGE (STAD)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                    D-7
+                                  *ACTSYM*
+
+
+
+
+   ;DISK UTILIZATION RECORD ENTRIES
+
+   DEFUS (NRF,55,.USDEC,3)                   ;NUMBER OF RECORDS FOLLOWING
+   DEFUS (TAL,56,.USDEC,10)        ;TOTAL ALLOCATED STORAGE
+   DEFUS (TUS,57,.USDEC,10)        ;TOTAL STORAGE USED
+   DEFUS (TNF,60,.USDEC,5)                   ;TOTAL NUMBER OF FILES
+   DEFUS (STR,61,.USASC,6)                   ;STRUCTURE NAME
+   DEFUS (STP,62,.USDEC,1)                   ;STRUCTURE TYPE CODE
+   DEFUS (KTP,63,.USDEC,3)                   ;CONTROLLER TYPE
+   DEFUS (DTP,64,.USDEC,3)                   ;DEVICE TYPE
+   DEFUS (LIQ,65,.USDEC,6)                   ;LOGGED IN QUOTA
+   DEFUS (LOQ,66,.USDEC,6)                   ;LOGGED OUT QUOTA
+   DEFUS (LLI,67,.USDAT,14)        ;LAST LOGGED IN DATE/TIME
+   DEFUS (LAT,70,.USDAT,14)        ;LAST DISK ACCOUNTING DATE/TIME
+   DEFUS (EXP,71,.USASC,1)                   ;EXPIRED DIRECTORY (Y/N)
+   DEFUS (DIR,72,.USASC,39)        ;DIRECTORY NAME
+   DEFUS (ALC,73,.USDEC,10)        ;ALLOCATED STORAGE
+   DEFUS (USG,74,.USDEC,10)        ;STORAGE USED
+   DEFUS (FIL,75,.USDEC,5)                   ;NUMBER OF FILES
+   DEFUS (FON,76,.USASC,1)                   ;FILES ONLY INDICATOR (Y/N)
+
+   ;SPOOLER INFORMATION RECORD ENTRIES
+
+   DEFUS (SRT,77,.USDEC,9)                   ;SPOOLER RUNTIME
+   DEFUS (SCI,100,.USDEC,11)       ;CORE-TIME INTEGRAL
+   DEFUS (SDR,101,.USDEC,8)        ;SPOOLER DISK READS
+   DEFUS (SDW,102,.USDEC,8)        ;SPOOLER DISK WRITES
+   DEFUS (JNM,103,.USSIX,6)        ;JOB NAME
+   DEFUS (QNM,104,.USSIX,3)        ;QUEUE NAME
+   DEFUS (SDV,105,.USSIX,6)        ;PROCESSING DEVICE
+   DEFUS (SSN,106,.USDEC,6)        ;SEQUENCE NUMBER
+   DEFUS (SUN,107,.USDEC,6)        ;SPOOLER UNITS PROCESSED
+   DEFUS (CRT,110,.USDAT,14)       ;CREATION DATE/TIME OF REQUEST
+   DEFUS (DSP,111,.USSIX,6)        ;DISPOSITION
+   DEFUS (TXT,112,.USASC,39)       ;OPR OR SYSTEM TEXT
+   DEFUS (PRI,113,.USDEC,2)        ;PRIORITY
+   DEFUS (SNF,114,.USDEC,5)        ;NUMBER OF FILES PROCESSED
+   DEFUS (SCD,115,.USDAT,14)       ;SCHEDULED DATE/TIME
+   DEFUS (FRM,116,.USSIX,6)        ;FORMS TYPE
+
+   ;DATE/TIME CHANGE RECORD ENTIRES
+
+   DEFUS (OFD,117,.USDEC,7)        ;OFFSET IN DAYS
+   DEFUS (OFS,120,.USDEC,7)        ;OFFSET IN SECONDS
+   DEFUS (ODT,121,.USDAT,14)       ;OLD DATE/TIME
+
+   ;ARBITRARY RECORD ITEM TYPES
+
+   DEFUS (UAR,122,.USSPC,0)        ;USER-DEFINED ARBITRARY RECORD DELIMITER
+   DEFUS (UAS,123,.USASC,0)        ;USER-DEFINED ASCII STRING
+   DEFUS (USX,124,.USSIX,0)        ;USER-DEFINED SIXBIT STRING
+   DEFUS (UOC,125,.USOCT,0)        ;USER-DEFINED OCTAL NUMBER
+   DEFUS (UDC,126,.USDEC,0)        ;USER-DEFINED DECIMAL NUMBER
+   DEFUS (UDT,127,.USDAT,14)       ;USER-DEFINED DATE AND TIME
+   DEFUS (UVR,130,.USVER,15)       ;USER-DEFINED VERSION (STANDARD FORMAT)
+   DEFUS (USP,131,.USSPC,0)        ;USER-DEFINED SPACE FILL
+
+   ;STRUCTURE MOUNT RECORD ENTRIES
+
+   DEFUS (SSI,132,.USSIX,6)        ;SIXBIT STRUCTURE ID
+   DEFUS (TNP,133,.USDEC,2)        ;TOTAL NUMBER OF PACKS
+   DEFUS (SRV,134,.USDAT,14)       ;SERVICED DATE/TIME OF REQUEST
+
+
+                                    D-8
+                                  *ACTSYM*
+
+
+
+   DEFUS (MCT,135,.USDEC,3)        ;MOUNT COUNT BEFORE MOUNT
+   DEFUS (DCT,136,.USDEC,3)        ;MOUNT COUNT AFTER DISMOUNT
+   DEFUS (ATP,137,.USDEC,1)        ;ACCESS TYPE
+
+   ;TAPE MOUNT RECORD ENTRIES
+
+   DEFUS (VID,140,.USSIX,6)        ;MAGTAPE VOLUME LABEL IN VOL1 LABEL
+   DEFUS (VSN,141,.USSIX,6)        ;VISUAL SERIAL NUMBER
+   DEFUS (MRF,142,.USDEC,8)        ;THOUSANDS OF FRAMES READ
+   DEFUS (MWF,143,.USDEC,8)        ;THOUSANDS OF FRAMES WRITTEN
+   DEFUS (MLT,144,.USDEC,2)        ;LABEL TYPE
+   DEFUS (MLS,145,.USDEC,1)        ;VOLUME LABEL STATE
+   DEFUS (MRD,146,.USDEC,8)        ;NUMBER OF PHYSICAL RECORDS READ
+   DEFUS (MWR,147,.USDEC,8)        ;NUMBER OF PHYSICAL RECORDS WRITTEN
+   DEFUS (FSI,150,.USSIX,6)        ;FILE SET IDENTIFIER
+   DEFUS (SRE,151,.USDEC,10)       ;NUMBER OF SOFT READ ERRORS
+   DEFUS (SWE,152,.USDEC,10)       ;NUMBER OF SOFT WRITE ERRORS
+   DEFUS (HRE,153,.USDEC,10)       ;NUMBER OF HARD READ ERRORS
+   DEFUS (HWE,154,.USDEC,10)       ;NUMBER OF HARD WRITE ERRORS
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                    D-9
+                                  *ACTSYM*
+
+
+
+
+   ; Retrieve/archive/migration/collection entries
+
+   DEFUS (TP1,155,.USSIX,6)        ; Tape ID 1
+   DEFUS (TS1,156,.USDEC,4)        ; Tape saveset #
+   DEFUS (TF1,157,.USDEC,6)        ; Tape file #
+   DEFUS (TP2,160,.USSIX,6)        ; Tape 2 ID
+   DEFUS (TS2,161,.USDEC,4)        ; Tape saveset #
+   DEFUS (TF2,162,.USDEC,6)        ; Tape file #
+   DEFUS (RSN,163,.USOCT,1)        ; Reason offline code
+   DEFUS (EUT,164,.USDEC,7)        ; ELAPSED USE TIME (STRUCTURE AND TAPE)
+
+   ;BATCH PROCESSOR RECORD ENTRIES
+
+   DEFUS (BAC,165,.USASC,39)       ;BATCH ACCOUNT STRING
+   DEFUS (BRN,166,.USDEC,9)        ;BATCH RUNTIME
+   DEFUS (BCT,167,.USDEC,11)       ;BATCH CORE-TIME INTEGRAL
+   DEFUS (BDR,170,.USDEC,8)        ;BATCH DISK READS
+   DEFUS (BDW,171,.USDEC,8)        ;BATCH DISK WRITES
+   DEFUS (BJB,172,.USSIX,6)        ;JOB NAME
+   DEFUS (BSQ,173,.USDEC,6)        ;SEQUENCE NUMBER
+   DEFUS (BDT,174,.USDAT,14)       ;CREATION DATE/TIME OF REQUEST
+   DEFUS (BET,175,.USDAT,14)       ;DATE/TIME JOB COULD BE SCHEDULED
+   DEFUS (BST,176,.USDAT,14)       ;DATE/TIME JOB STARTED RUNNING
+   DEFUS (BDS,177,.USSIX,6)        ;DISPOSTITION
+   DEFUS (BTX,200,.USASC,39)       ;TEXT
+   DEFUS (BPR,201,.USDEC,2)        ;PRIORITY OF REQUEST
+   DEFUS (URE,202,.USDEC,6)        ;USER'S RUNTIME ESTIMATE
+   DEFUS (UAC,203,.USDEC,6)        ;USER'S ACTUAL RUNTIME
+   DEFUS (UCE,204,.USDEC,4)        ;USER'S CORE ESTIMATE
+   DEFUS (UCH,205,.USDEC,4)        ;USER'S CORE HIGHWATER MARK
+   DEFUS (RIN,206,.USDEC,6)        ;REQUEST ID NUMBER
+
+   ;INPUT SPOOLER RECORD ENTRIES
+
+   DEFUS (IAC,207,.USASC,39)       ;INPUT SPOOLER ACCOUNT STRING
+   DEFUS (IRN,210,.USDEC,9)        ;INPUT SPOOLER RUNTIME
+   DEFUS (ICT,211,.USDEC,11)       ;INPUT SPOOLER CORE-TIME INTERAL
+   DEFUS (IDR,212,.USDEC,8)        ;INPUT SPOOLER DISK READS
+   DEFUS (IDW,213,.USDEC,8)        ;INPUT SPOOLER DISK WRITES
+   DEFUS (IJN,214,.USSIX,6)        ;INPUT SPOOLER JOB NAME
+   DEFUS (IQN,215,.USSIX,3)        ;INPUT SPOOLER QUEUE NAME
+   DEFUS (IPD,216,.USSIX,6)        ;INPUT SPOOLER PROCESSING DEVICE
+   DEFUS (ISN,217,.USDEC,6)        ;INPUT SPOOLER SEQUENCE NUMBER
+   DEFUS (ICR,220,.USDEC,6)        ;INPUT SPOOLER NUMBER OF CARDS READ
+   DEFUS (ICD,221,.USDAT,14)       ;CREATION DATE/TIME OF REQUEST
+   DEFUS (IDS,222,.USSIX,6)        ;DISPOSITION
+   DEFUS (ITX,223,.USASC,39)       ;TEXT
+   DEFUS (IPR,224,.USDEC,2)        ;PRIORITY OF REQUEST
+   DEFUS (IRI,225,.USDEC,6)        ;REQUEST ID NUMBER
+   DEFUS (ICN,226,.USDEC,7)        ;CONNECT TIME
+
+   DEFUS (OAC,227,.USASC,39)       ;OUTPUT SPOOLER ACCOUNT STRING
+   DEFUS (ORI,230,.USDEC,6)        ;OUTPUT SPOOLER REQUEST ID NUMBER
+   DEFUS (OCN,231,.USDEC,7)        ;OUTPUT SPOOLER CONNECT TIME
+   DEFUS (DPN,232,.USASC,39)       ;DISK USAGE DIRECTORY PPN
+
+   ;DISK USAGE ACCOUNT STRING RECORD - (DUA)
+
+   DEFUS (DAC,233,.USASC,39)       ;DUA - ACCOUNT STRING
+   DEFUS (DPP,232,.USASC,39)       ;DUA - PPN/DIRECTORY
+   DEFUS (DFN,233,.USDEC,5)        ;DUA - NUMBER OF FILES
+   DEFUS (DFS,234,.USSIX,6)        ;DUA - FILE STRUCTURE NAME
+
+
+                                    D-10
+                                  *ACTSYM*
+
+
+
+   DEFUS (DFT,235,.USDEC,1)        ;DUA - FILE STRUCTURE TYPE
+   DEFUS (DKT,236,.USDEC,3)        ;DUA - CONTROLLER TYPE
+   DEFUS (DDT,237,.USDEC,3)        ;DUA - DEVICE TYPE
+
+   ;DISK SPINDLE USAGE RECORD
+
+   DEFUS (SFS,240,.USSIX,6)        ;FILE STRUCTURE NAME
+   DEFUS (SFT,241,.USDEC,1)        ;TYPE OF FILE STRUCTURE
+   DEFUS (SCT,242,.USDEC,3)        ;CONTROLLER TYPE
+   DEFUS (SDT,243,.USDEC,3)        ;DEVICE TYPE
+   DEFUS (SPI,244,.USASC,12)       ;DISK PACK IDENTIFIER
+   DEFUS (SDU,245,.USSIX,4)        ;DISK UNIT NAME
+   DEFUS (SNP,246,.USDEC,2)        ;TOTAL NUMBER OF PACKS IN STRUCTURE
+   DEFUS (SMN,247,.USDEC,2)        ;M OF N PACK COUNT
+   DEFUS (DTF,250,.USDAT,14)       ;DATE/TIME OF FIRST MOUNT
+   DEFUS (DCC,251,.USDEC,7)        ;CONNECT TIME
+
+   ;USER FILE STRUCTURE MOUNT RECORD (CONT.)
+
+   DEFUS (FMA,252,.USASC,39)       ;ACCOUNT STRING
+   DEFUS (FST,254,.USDEC,1)        ;TYPE OF FILE STRUCTURE
+   DEFUS (FCT,255,.USDEC,3)        ;CONTROLLER TYPE
+   DEFUS (FDT,256,.USDEC,3)        ;DEVICE TYPE
+   DEFUS (FDS,257,.USSIX,6)        ;DISPOSITION
+   DEFUS (FOT,260,.USASC,39)       ;TEXT
+   DEFUS (FCD,261,.USDAT,14)       ;CREATION DATE/TIME OF REQUEST
+   DEFUS (FSD,262,.USDAT,14)       ;SCHEDULED DATE/TIME OF REQUEST
+   DEFUS (FCO,263,.USDEC,7)        ;CONNECT TIME
+
+   ;USER MAGTAPE MOUNT RECORD
+
+   DEFUS (MAC,264,.USASC,39)       ;ACCOUNT STRING
+   DEFUS (MDS,265,.USSIX,6)        ;DISPOSITION
+   DEFUS (MTX,266,.USASC,39)       ;TEXT
+   DEFUS (MCD,267,.USDAT,14)       ;CREATION DATE/TIME OF REQUEST
+   DEFUS (MSD,270,.USDAT,14)       ;SCHEDULED DATE/TIME OF REQUEST
+   DEFUS (MVD,271,.USDAT,14)       ;SERVICED DATE/TIME OF REQUEST
+   DEFUS (MCO,272,.USDEC,3)        ;TYPE OF CONTROLLER
+   DEFUS (MCN,273,.USDEC,7)        ;CONNECT TIME
+
+   ;USER DECTAPE MOUNT RECORD
+
+   DEFUS (DAN,274,.USASC,39)       ;ACCOUNT STRING
+   DEFUS (DVI,275,.USSIX,6)        ;DECTAPE VOLUME IDENTIFIER
+   DEFUS (DRI,276,.USSIX,6)        ;DECTAPE REEL IDENTIFIER
+   DEFUS (DTR,277,.USDEC,8)        ;DECTAPE READS
+   DEFUS (DTW,300,.USDEC,8)        ;DECTAPE WRITES
+   DEFUS (DDS,301,.USSIX,6)        ;DISPOSTITION
+   DEFUS (DTX,302,.USASC,39)       ;TEXT
+   DEFUS (DCE,303,.USDAT,14)       ;CREATION DATE/TIME OF REQUEST
+   DEFUS (DSQ,304,.USDAT,14)       ;SCHEDULED DATE/TIME OF REQUEST
+   DEFUS (DSS,305,.USDAT,14)       ;SERVICED DATE/TIME OF REQUEST
+   DEFUS (DCN,306,.USDEC,7)        ;CONNECT TIME
+
+   ;USER DECTAPE FILE COMMAND RECORD
+
+   DEFUS (FAS,307,.USASC,39)       ;ACCOUNT STRING
+   DEFUS (FMR,310,.USDEC,9)        ;MOUNT RUNTIME TO PROCESS USER REQUEST
+   DEFUS (FCI,311,.USDEC,11)       ;MOUNT CORE-TIME INTEGRAL
+   DEFUS (FDR,312,.USDEC,8)        ;MOUNT DISK READS
+   DEFUS (FDW,313,.USDEC,8)        ;MOUNT DISK WRITES
+   DEFUS (FCM,314,.USASC,1)        ;TYPE OF FILE COMMAND
+   DEFUS (FNF,315,.USDEC,2)        ;NUMBER OF FILES TRANSFERRED
+
+
+
+                                    D-11
+                                  *ACTSYM*
+
+
+
+   DEFUS (FDP,316,.USSIX,6)        ;DISPOSITION
+   DEFUS (FTX,317,.USASC,39)       ;TEXT
+   DEFUS (FCQ,320,.USDAT,14)       ;CREATION DATE/TIME OF REQUEST
+   DEFUS (FSH,321,.USDAT,14)       ;SCHEDULED DATE/TIME OF REQUEST
+   DEFUS (FVD,322,.USDAT,14)       ;SERVICED DATE/TIME OF REQUEST
+   DEFUS (FCE,323,.USDEC,7)        ;CONNECT TIME
+
+
+   ;LATE COMERS
+
+   DEFUS (NM3,324,.USSIX,6)        ;TOPS-10 - 2ND HALF OF USER NAME (#11 IS 1ST HALF)
+   DEFUS (B27,325,.USSPC,27)       ;SPACE FILL 27 CHARACTERS USED IN TOPS10 TO
+                                   ; USE INSTEAD OF PPN/DIRECTORY DEFUSES. THE
+                                   ; DEFUS PPN IS USED IN CONJUNCTION WITH THIS ONE.
+   DEFUS (SID,326,.USSIX,6)        ;TOPS-10 - DISK PACK ID (USED INSTEAD OF #244)
+   DEFUS (B06,327,.USSPC,6)        ;SPACE FILL 6 CHARACTERS (USED WITH #326 ABOVE)
+   DEFUS (UPF,330,.USSIX,1)        ;TOPS-10 DISK USAGE - UFD WAS PROTECTED
+   DEFUS (FPF,331,.USSIX,1)        ;TOPS-10 DISK USAGE - SOME FILES WERE PROTECTED
+   DEFUS (TMA,332,.USSIX,1)        ;TOPS-10 DISK USAGE - USER HAS TOO MANY AUNIQUE
+                                   ;ACCOUNT STRINGS IN DIRECTORY.  LIMIT IS DEFINED
+                                   ;IN IPCF MESSAGE FOR DISK USAGE FROM BACKUP
+   DEFUS (LLG,333,.USPDT,14)       ;TOPS-10 OLD FORMAT DATE/TIME OF LAST LOGIN
+   DEFUS (DVN,334,.USSIX,6)        ;TOPS-10 DEVICE NAME (MAG/DECTAPE MOUNTS)
+
+
+   >;;; END OF USLIST
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                    D-12
+                                  *ACTSYM*
+
+
+
+   SUBTTL     Macros to define all USAGE. item codes
+
+
+   TOPS10     <
+
+   DEFINE UITEM. (NAME,TYPE,LEN) <
+      DEFINE US'NAME'. (DATA<-1>,IMMED<0>) <
+              USAGE. (.US'NAME,TYPE,IMMED,<DATA>)
+      >
+   >
+
+   DEFINE USAGE. (CODE,TYPE,FLAGS,DATUM) <
+      IFN TYPE-.USASC,<LENGTH==1>
+      IFE TYPE-.USASC,<LENGTH==10
+      IFL FLAGS,<PRINTX ?ASCII DATA CANNOT BE IMMEDIATE>>
+      IFB <DATUM>,<
+      QA.IMM+<LENGTH>B17+CODE
+      EXP     -1
+      >
+      IFNB <DATUM>,<
+              IFL FLAGS,<
+              QA.IMM+<LENGTH>B17+CODE
+              DATUM>
+              IFGE FLAGS,<IFIDN <DATUM><-1>,<
+              IFE LENGTH-10,<PRINTX ?CANNOT BE DEFAULTED>
+              QA.IMM+<LENGTH>B17+CODE
+              DATUM>
+                            IFDIF <DATUM><-1>,<
+              <LENGTH>B17+CODE
+              <DATUM>&<37,,777777>>
+      >
+   >
+   >
+
+   DEFINE USENT. (ETYPE,DVER,CVER,LRESP,RESP) <
+      FLAGS==0
+      IFNB <LRESP>,<IFG LRESP,<FLAGS==QF.RSP>>
+      FLAGS+.QUMAE
+      0
+      LRESP,,RESP
+      QA.IMM+<1>B17+.QBAFN
+      UGENT$
+      QA.IMM+<1>B17+.QBAET
+      ETYPE
+   >
+
+   > ;END OF TOPS-10 CONDITIONAL
+
+
+   DEFINE DEFUS (NAM,VAL,TYP,LEN) <
+       IF1,<IFDEF .US'NAM,<
+      PRINTX .US'NAM ALREADY DEFINED
+       >>
+      .US'NAM==:VAL
+      UITEM. (NAM,TYP,LEN)
+   >
+
+
+
+
+
+
+
+
+
+                                    D-13
+                                  *ACTSYM*
+
+
+
+   ;EXPAND ALL DEFINITIONS
+
+   USLIST
+
+   ;SPECIAL ITEM TYPE CODE DEFINITIONS
+
+   .USDSX==:7776                   ;STRUCTURE/DIRECTORY INFO WORD (SPECIAL)
+   .USDST==:7777                   ;DISK STATISTICS TABLE POINTER
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                    D-14
+                                  *ACTSYM*
+
+
+
+   SUBTTL     TOPS-10 IPCF message definitions and formats
+
+
+   TOPS10     < ;START OF A LONG CONDITIONAL
+
+      FTCASECONVERT==:0  ;LOWER/UPPER CONVERSION SELECTION FEATURE TEST
+                                   ; 0 = DON'T CONVERT
+                                   ;-1 =CONVERT LOWER CASE LETTERS TO UPPER CASE
+
+      PRJWPB==400                  ;SET LOGICAL BLOCK SIZE IN PROJCT.SYS TO 2 DISK
+
+      PRJWPB==<PRJWPB+177>&777600 ;ROUND UP TO NEXT FULL DISK BLOCK
+
+   ;IPCF TYPES OF MESSAGES SENT TO THE ACCOUNTING DAEMON, ACTDAE.
+   ;  THESE ARE THE ACCOUNTING SUBFUNCTION VALUES TO STORE IN .QBAFN
+   ;  OF THE QUEUE. UUO.  SEE UUOSYM.MAC.
+
+   UGVAL$==:1                      ;VALIDATION MESSAGES
+   UGLGN$==:2                      ;LOGIN MESSAGES (USER IS LOGGING IN)
+   UGSES$==:3                      ;SESSION MESSAGES (USER TYPED A SESSION COMMAND)
+   UGATT$==:4                      ;ATTACH MESSAGES
+   UGSDT$==:5                      ;SET DATE/TIME EVENT FROM DAEMON
+   UGVAC$==:6                      ;RESPONSE TO ANY MESSAGE IF REQUESTED (??$ACK IS NON-ZERO)
+   UGENT$==:7                      ;MAKE AN ENTRY
+   UGEBC$==:10                               ;END A BILLING CLOSURE
+   UGUFC$==:11                               ;USAGE FILE CLOSURE
+   UGFDM$==:12                               ;USER FILE STRUCTURE MOUNT MESSAGE
+   UGFDD$==:13                               ;USER FILE STRUCTURE DISMOUNT MESSAGE
+   UGMGM$==:14                               ;USER MAGTAPE MOUNT MESSAGE
+   UGMGD$==:15                               ;USER MAGTAPE DISMOUNT MESSAGE
+   UGDTM$==:16                               ;USER DECTAPE MOUNT MESSAGE
+   UGDTD$==:17                               ;USER DECTAPE DISMOUNT MESSAGE
+   UGSPM$==:20                               ;DISK PACK SPINDLE SPIN-UP MESSAGE
+   UGSPD$==:21                               ;DISK PACK SPINDLE SPIN-DOWN MESSAGE
+   UGACK$==:22                               ;GENERAL ACK CODE
+   UGDUE$==:23                               ;DISK USAGE FROM BACKUP
+   UGACC$==:24                               ;ACCESS CONTROL
+   UGOUP$==:25                               ;OBTAIN USER PROFILE
+                                   ;26 = UNUSED
+   UGLGO$==:27                               ;MONITOR LOGOUT MESSAGE (.IPCSL)
+
+   ;SUCCESSFUL/UNSUCCESSFUL IPCF MESSAGE CODES
+
+   UGTRU$==:1                      ;SUCCESSFUL MESSAGE
+   UGFAL$==:2                      ;FAILURE MESSAGE
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                    D-15
+                                  *ACTSYM*
+
+
+
+   ;FORMAT OF LOGIN MESSAGE (UGLGN$)
+
+   UL$TYP==:0                      ;TYPE OF MESSAGE
+   UL$ACK==:UL$TYP+1               ;UNIQUE MESSAGE IDENTIFIER
+   UL$LIN==:UL$ACK+1               ;LINE NUMBER
+   UL$PRG==:UL$LIN+1               ;PROGRAM NAME (ALWAYS LOGIN)
+   UL$VER==:UL$PRG+1               ;VERSION OF LOGIN
+   UL$NOD==:UL$VER+1               ;NODE NAME
+   UL$ACT==:UL$NOD+1               ;USER'S ACCOUNT STRING
+   UL$ACE==:UL$ACT+7               ;END OF ACCOUNT STRING
+   UL$BEG==:UL$ACE+1               ;SESSION START DATE/TIME
+   UL$JTY==:UL$BEG+1               ;JOB TYPE
+      ULJTI$==:1                   ;TIMESHARING
+      ULJBA$==:2                   ;BATCH
+   UL$BNM==:UL$JTY+1               ;BATCH JOB NAME
+   UL$BSQ==:UL$BNM+1               ;BATCH SEQUENCE NUMBER
+   UL$RMK==:UL$BSQ+1               ;SESSION REMARK
+   UL$RME==:UL$RMK+7               ;END OF SESSION REMARK
+   UL$CLS==:UL$RME+1               ;SCHEDULING CLASS
+   UL$PPN==:UL$CLS+1               ;PROJECT-PROGRAMMER NUMBER OF USER
+   UL$NM1==:UL$PPN+1               ;FIRST SIX LETTERS OF USER'S NAME
+   UL$NM2==:UL$NM1+1               ;LAST SIX LETTERS OF USER'S NAME
+   UL$BRI==:UL$NM2+1               ;BATCH REQUEST ID
+   UL$TDE==:UL$BRI+1               ;TERMINAL DESIGNATOR
+
+   ;FORMAT OF SESSION MESSAGE (UGSES$)
+
+   US$TYP==:0                      ;TYPE OF MESSAGE
+   US$ACK==:US$TYP+1               ;UNIQUE MESSAGE IDENTIFIER
+   US$PRG==:US$ACK+1               ;PROGRAM NAME (ALWAYS LOGIN)
+   US$VER==:US$PRG+1               ;VERSION OF LOGIN
+   US$ACT==:US$VER+1               ;USER'S NEW ACCOUNT STRING
+   US$ACE==:US$ACT+7               ;END OF ACCOUNT STRING
+   US$BEG==:US$ACE+1               ;SESSION START DATE/TIME
+   US$RMK==:US$BEG+1               ;NEW SESSION REMARK
+   US$RME==:US$RMK+7               ;END OF SESSION REMARK
+
+
+   ;FORMAT OF ATTACH MESSAGES (UGATT$)
+
+   UA$TYP==:0                      ;TYPE OF MESSAGE
+   UA$ACK==:UA$TYP+1               ;UNIQUE MESSAGE IDENTIFIER
+   UA$LIN==:UA$ACK+1               ;LINE NUMBER
+   UA$PRG==:UA$LIN+1               ;PROGRAM NAME (ALWAYS LOGIN)
+   UA$VER==:UA$PRG+1               ;VERSION LOGIN
+   UA$NOD==:UA$VER+1               ;NODE NAME
+   UA$TDE==:UA$NOD+1               ;TERMINAL DESIGNATOR
+   UA$TJN==:UA$TDE+1               ;TARGET JOB NUMBER
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                    D-16
+                                  *ACTSYM*
+
+
+
+   ;FORMAT OF THE REQUEST FOR VALIDATION MESSAGE (UGVAL$)
+   ;  THIS MESSAGE CAN BE EITHER IPCF OR QUEUE. UUO FORMAT.  THE SAMPLE
+   ;  PROGRAM "VALID" SHOWS AN EXAMPLE FOR USING QUEUE. FOR VALIDATION.
+
+   UV$TYP==:0                      ;TYPE OF MESSAGE
+   UV$ACK==:1                      ;GIVEN TO US TO RETURN TO THE REQUESTOR OF VALIDATION
+   UV$PPN==:2                      ;PPN TO VALIDATE
+   UV$ACT==:3                      ;BEGINNING OF ACCOUNT STRING TO VALIDATE (MAX. OF 8 WORDS)
+   UV$ACE==:UV$ACT+7               ;LAST WORD OF THE ACCOUNT STRING
+
+   ;FORMAT OF THE ANSWER TO A MESSAGE (UGVAC$)
+
+   UC$TYP==:0                      ;TYPE OF MESSAGE
+   UC$RES==:1                      ;RESPONSE -- EITHER UGTRU$ OR UGFAL$
+   UC$ACK==:2                      ;CODE TO RETURN TO THE REQUESTOR OF VALIDATION
+   UC$ERR==:3                      ;BEGINNING OF ASCIZ ERROR MESSAGE
+   UC$ACT==:UC$ERR                           ;ACCOUNT STRING RETURNED IF VALIDATION SUCCESS
+   UC$ACE==:UC$ACT+7               ;LAST WORD OF THE ACCOUNT STRING
+
+   ;FORMAT OF THE SET DATE/TIME EVENT MESSAGE FROM DAEMON (UGSDT$)
+
+   UD$TYP==:0                      ;TYPE OF MESSAGE
+   UD$OFF==:1                      ;TIME OFFSET OF COMMAND
+   UD$ODT==:2                      ;OLD DATE/TIME
+   UD$PRG==:3                      ;NAME OF PROGRAM SENDING MESSAGE (DAEMON)
+   UD$VER==:4                      ;VERSION OF PROGRAM SENDING MESSAGE (DAEMON VERSION #)
+
+   ;FORMAT OF "MAKE AN ENTRY" MESSAGE (UGENT$).
+
+   ;  THIS MESSAGE IS ONLY GENERATED VIA THE QUEUE. UUO.  SEE SAMPLE PROGRAM
+   ;  "USRENT" FOR AN EXAMPLE OF IT'S USE.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                    D-17
+                                  *ACTSYM*
+
+
+
+   ;FORMAT OF THE FIRST THREE WORDS OF ALL MOUNT AND DISMOUNT MESSAGES TO
+   ;  CONFORM TO GALAXY-TYPE HEADER.
+
+   UX$TYP==0                       ;TYPE OF MESSAGE
+   UX$FLG==1                       ;FLAGS WORD
+   UX$COD==2                       ;ACK CODE
+
+   ;FORMAT OF A USER FILE STRUCTURE MOUNT MESSAGE - UGFDM$
+
+   UF$DEV==:UX$COD+1               ;DEVICE NAME IN SIXBIT
+   UF$JOB==:UF$DEV+1               ;JOB NUMBER OF USER
+   UF$TRD==:UF$JOB+1               ;TERMINAL DESIGNATOR
+   UF$TNO==:UF$TRD+1               ;LINE NUMBER
+   UF$PNM==:UF$TNO+1               ;NAME OF PROGRAM (USUALLY PULSAR)
+   UF$PVR==:UF$PNM+1               ;VERSION OF PROGRAM (USUALLY PULSAR)
+   UF$NOD==:UF$PVR+1               ;NODE NAME OF USER'S LOCATION
+   UF$ACT==:UF$NOD+1               ;USER'S ACCOUNT STRING
+   UF$ACE==:UF$ACT+7               ;END OF ACCOUNT STRING
+   UF$PPN==:UF$ACE+1               ;PROJECT-PROGRAMMER NUMBER OF USER
+   UF$NM1==:UF$PPN+1               ;FIRST SIX LETTER OF USER'S NAME
+   UF$NM2==:UF$NM1+1               ;LAST SIX LETTERS OF USER'S NAME
+   UF$STY==:UF$NM2+1               ;TYPE OF FILE STRUCTURE
+   UF$PNO==:UF$STY+1               ;NUMBER OF PACKS IN FILE STRUCTURE
+   UF$CTY==:UF$PNO+1               ;CONTROLLER TYPE
+   UF$DTY==:UF$CTY+1               ;DEVICE TYPE
+   UF$DSP==:UF$DTY+1               ;DISPOSITION
+   UF$TXT==:UF$DSP+1               ;TEXT TO EXPLAIN DISPOSITION
+   UF$CDT==:UF$TXT+10              ;CREATION DATE/TIME OF MOUNT REQUEST
+   UF$SDT==:UF$CDT+1               ;SCHEDULED DATE/TIME OF MOUNT REQUEST
+   UF$VDT==:UF$SDT+1               ;SERVICED DATE/TIME OF MOUNT REQUEST
+   UF$CBR==:UF$VDT+1               ;MOUNT COUNT BEFORE REQUEST
+   UF$ACC==:UF$CBR+1               ;ACCESS TYPE
+
+   ;FORMAT OF USER FILE STRUCTURE DISMOUNT MESSAGE (UGFDD$).  THE FOLLOWING
+   ;  IS APPENDED TO THE MOUNT MESSAGE.
+
+   UF$SCT==:UF$ACC+1               ;MOUNT COUNT AFTER DISMOUNT
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                    D-18
+                                  *ACTSYM*
+
+
+
+   ;FORMAT OF USER MAGTAPE MOUNT MESSAGE - UGMGM$
+
+   UM$DEV==:UX$COD+1               ;DEVICE NAME IN SIXBIT
+   UM$JOB==:UM$DEV+1               ;JOB NUMBER OF USER
+   UM$TRD==:UM$JOB+1               ;TERMINAL DESIGNATOR
+   UM$TNO==:UM$TRD+1               ;LINE NUMBER
+   UM$PNM==:UM$TNO+1               ;NAME OF PROGRAM (USUALLY PULSAR)
+   UM$PVR==:UM$PNM+1               ;VERSION OF PROGRAM (USUALLY PULSAR)
+   UM$NOD==:UM$PVR+1               ;NODE NAME OF USER'S LOCATION
+   UM$ACT==:UM$NOD+1               ;ACCOUNT STRING
+   UM$ACE==:UM$ACT+7               ;END OF ACCOUNT STRING
+   UM$PPN==:UM$ACE+1               ;PROJECT-PROGRAMMER NUMBER OF USER
+   UM$NM1==:UM$PPN+1               ;FIRST SIX LETTERS OF USER'S NAME
+   UM$NM2==:UM$NM1+1               ;LAST SIX LETTERS OF USER'S NAME
+   UM$CTY==:UM$NM2+1               ;CONTROLLER TYPE
+   UM$DSP==:UM$CTY+1               ;DISPOSITION
+   UM$TXT==:UM$DSP+1               ;TEXT TO EXPLAIN DISPOSITION
+   UM$CDT==:UM$TXT+10              ;CREATION DATE/TIME OF MOUNT REQUEST
+   UM$SDT==:UM$CDT+1               ;SCHEDULED DATE/TIME OF MOUNT REQUEST
+   UM$VDT==:UM$SDT+1               ;SERVICED DATE/TIME OF MOUNT REQUEST
+   UM$VID==:UM$VDT+1               ;VOLUME ID RECORDED IN VOL1 LABEL
+   UM$RID==:UM$VID+1               ;REEL ID VISUAL LABEL OF TAPE
+   UM$LTY==:UM$RID+1               ;LABEL TYPE
+   UM$LST==:UM$LTY+1               ;VOLUME LABEL STATE
+   UM$FSI==:UM$LST+1               ;FILE SET IDENTIFIER
+
+   ;FORMAT OF A USER MAGTAPE DISMOUNT MESSAGE (UGMGD$).  THE FOLLOWING IS
+   ;  APPENDED TO THE MOUNT MESSAGE.
+
+   UM$MRD==:UM$FSI+1               ;MAGTAPE READS - THOUSANDS OF CHARACTERS
+   UM$MWR==:UM$MRD+1               ;MAGTAPE WRITES - THOUSANDS OF CHARACTERS
+   UM$RRD==:UM$MWR+1               ;PHYSICAL RECORDS READ
+   UM$RWR==:UM$RRD+1               ;PHYSICAL RECORDS WRITTEN
+   UM$SRE==:UM$RWR+1               ;SOFT READ ERRORS
+   UM$SWE==:UM$SRE+1               ;SOFT WRITE ERRORS
+   UM$HRE==:UM$SWE+1               ;HARD READ ERRORS
+   UM$HWE==:UM$HRE+1               ;HARD WRITE ERRORS
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                    D-19
+                                  *ACTSYM*
+
+
+
+   ;FORMAT OF A USER DECTAPE MOUNT MESSAGE - UGDTM$
+
+   UD$DEV==:UX$COD+1               ;DEVICE NAME IN SIXBIT
+   UD$JOB==:UD$DEV+1               ;JOB NUMBER OF USER
+   UD$TRD==:UD$JOB+1               ;TERMINAL DESIGNATOR
+   UD$TNO==:UD$TRD+1               ;LINE NUMBER
+   UD$PNM==:UD$TNO+1               ;NAME OF PROGRAM (USUALLY PULSAR)
+   UD$PVR==:UD$PNM+1               ;VERSION OF PROGRAM (USUALLY PULSAR)
+   UD$NOD==:UD$PVR+1               ;NODE NAME OF USER'S LOCATION
+   UD$ACT==:UD$NOD+1               ;ACCOUNT STRING
+   UD$ACE==:UD$ACT+7               ;END OF ACCOUNT STRING
+   UD$PPN==:UD$ACE+1               ;PROJECT-PROGRAMMER NUMBER OF USER
+   UD$NM1==:UD$PPN+1               ;FIRST SIX LETTERS OF USER'S NAME
+   UD$NM2==:UD$NM1+1               ;LAST SIX LETTERS OF USER'S NAME
+   UD$DSP==:UD$NM2+1               ;DISPOSITION
+   UD$TXT==:UD$DSP+1               ;TEXT TO EXPLAIN DISPOSITION
+   UD$CDT==:UD$TXT+10              ;CREATION DATE/TIME OF MOUNT REQUEST
+   UD$SDT==:UD$CDT+1               ;SCHEDULED DATE/TIME OF MOUNT REQUEST
+   UD$VDT==:UD$SDT+1               ;SERVICED DATE/TIME OF MOUNT REQUEST
+   UD$VID==:UD$VDT+1               ;VOLUME ID RECORDED ON DECTAPE
+   UD$RID==:UD$VID+1               ;REEL ID VISUAL LABEL OF DECTAPE
+
+   ;FORMAT OF A USER DECTAPE DISMOUNT MESSAGE (UGDTD$).  THE FOLLOWING IS APPENDED
+   ;  TO THE MOUNT MESSAGE.
+
+   UD$DRD==:UD$RID+1               ;DECTAPE READS - BLOCKS
+   UD$DWR==:UD$DRD+1               ;DECTAPE WRITES - BLOCKS
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                    D-20
+                                  *ACTSYM*
+
+
+
+   ;FORMAT OF A DISK SPINDLE SPIN-UP MESSAGE - UGSPM$
+
+   US$DEV==:UX$COD+1               ;DISK UNIT NAME IN SIXBIT
+   US$JOB==:US$DEV+1               ;JOB NUMBER OF PULSAR
+   US$TRD==:US$JOB+1               ;TERMINAL DESIGNATOR
+   US$TNO==:US$TRD+1               ;LINE NUMBER
+   US$PNM==:US$TNO+1               ;NAME OF PROGRAM (USUALLY PULSAR)
+   US$PVR==:US$PNM+1               ;VERSION OF PROGRAM (USUALLY PULSAR)
+   US$NOD==:US$PVR+1               ;NODE NAME OF PULSAR'S LOCATION
+   US$FSN==:US$NOD+1               ;FILE STRUCTURE NAME
+   US$STY==:US$FSN+1               ;FILE STRUCTURE TYPE
+   US$CTY==:US$STY+1               ;CONTROLLER TYPE
+   US$DTY==:US$CTY+1               ;DEVICE TYPE
+   US$DPI==:US$DTY+1               ;DISK PACK IDENTIFIER
+   US$PNO==:US$DPI+1               ;NUMBER OF PACKS IN FILE STRUCTURE
+   US$MTH==:US$PNO+1               ;M OF N COUNT
+   US$DTM==:US$MTH+1               ;DATE/TIME PACK WAS SPUN UP
+
+   ;FORMAT OF A DISK SPINDLE SPIN-DOWN MESSAGE (UGSPD$) IS THE SAME AS A MOUNT MESSAGE.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                    D-21
+                                  *ACTSYM*
+
+
+
+   ;FORMAT OF A DISK USAGE ENTRY FROM BACKUP - UGDUE$
+
+   UB$ACN==:UX$COD+1               ;NUMBER OF ACCOUNT STRINGS
+   UB$JOB==:UB$ACN+1               ;JOB NUMBER OF BACKUP
+   UB$TRD==:UB$JOB+1               ;TERMINAL DESIGNATOR
+   UB$TNO==:UB$TRD+1               ;TERMINAL NUMBER
+   UB$NOD==:UB$TNO+1               ;NODE NAME
+   UB$PNM==:UB$NOD+1               ;PROGRAM NAME (BACKUP)
+   UB$PVR==:UB$PNM+1               ;PROGRAM VERSION NUMBER
+   UB$TAU==:UB$PVR+1               ;TOTAL ALLOCATED DISK USAGE
+   UB$TWU==:UB$TAU+1               ;TOTAL WRITTEN DISK USAGE
+   UB$TNF==:UB$TWU+1               ;TOTAL NUMBER OF FILES
+   UB$FSN==:UB$TNF+1               ;FILE STRUCTURE NAME
+   UB$PPN==:UB$FSN+1               ;PPN
+   UB$FST==:UB$PPN+1               ;FILE STRUCTURE TYPE
+   UB$CNT==:UB$FST+1               ;CONTROLLER TYPE
+   UB$DVT==:UB$CNT+1               ;DEVICE TYPE
+   UB$QIN==:UB$DVT+1               ;LOGGED IN QUOTA
+   UB$QOU==:UB$QIN+1               ;LOGGED OUT QUOTA
+   UB$LLG==:UB$QOU+1               ;LAST LOGIN DATA/TIME (OLD FORMAT)
+   UB$LAT==:UB$LLG+1               ;LAST ACCOUNTING DATE/TIME
+   UB$EXP==:UB$LAT+1               ;EXPIRED DIRECTORY FLAG
+   UB$UPF==:UB$EXP+1               ;UFD WAS PROTECTED FLAG
+   UB$FPF==:UB$UPF+1               ;SOME FILES WERE PROTECTED FLAG
+   UB$ABO==:UB$FPF+1               ;ACCOUNT STRING BUFFER OVERFLOWED
+
+   ;THE FOLLOWING 4 ITEMS ARE REPEATED FOR EACH ACCOUNT STRING IN THE UFD
+
+   UB$ACT==:UB$ABO+1               ;ACCOUNT STRING
+   UB$BAL==:UB$ACT+10              ;BLOCKS ALLOCATED TO THIS ACCOUNT STRING
+   UB$BWR==:UB$BAL+1               ;BLOCKS WRITTEN
+   UB$NFL==:UB$BWR+1               ;FILE WITH THIS ACCOUNT STRING
+
+   UB$END==:UB$NFL+1               ;LENGTH OF THE IPCF MESSAGE (NOT REALLY)
+
+   ;COMPUTE THE MAXIMUM NUMBER OF ACCOUNTS STRINGS THAT CAN BE PASSED IN THIS
+   ;  IPCF FORMAT. ONLY 1 IPCF MESSAGE CAN BE USED SO THIS IS IT.
+
+   UB$MAC==:<1000-UB$ACT>/<UB$END-UB$ACT>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                    D-22
+                                  *ACTSYM*
+
+
+
+   ;FORMAT OF A REQUEST FOR ACCESS CONTROL VALIDATION.
+
+   ;  THIS MESSAGE IS ONLY AVAILABLE VIA THE QUEUE. UUO.  THE SYMBOLS DEFINED
+   ;  BELOW ARE USED AS THE DATA ITEM DESCRIPTORS FOR THE SUB-FUNCTION BLOCK.
+   ;  SEE THE SAMPLE PROGRAM "ACCCHK" FOR AN EXAMPLE OF IT'S USE.
+
+   .UGTYP==:0                      ;TYPE OF ACCESS CHECK
+      UG.VER==:0                   ;VERIFY PPN, PASSWORD, AND ACCOUNT STRING
+      UG.SPV==:1                   ;SPRINT VERIFY PPN, PASSWORD, AND ACCT STRING
+                                   ;MORE FUNCTIONS LATER
+   .UGACT==:1                      ;ACCOUNT STRING BLOCK
+   .UGPPN==:2                      ;PPN BLOCK
+   .UGPSW==:3                      ;PASSWORD BLOCK
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                    D-23
+                                  *ACTSYM*
+
+
+
+   SUBTTL     TOPS-10 ACCT.SYS entry definitions
+
+
+   ;*** Note *** Still under TOPS-10 conditional
+
+
+   .ACWRD==0  ;FIRST WORD OF THE FILE ACCT.SYS
+      AC.VRS==777777B17  ;FORMAT VERSION NUMBER OF THE FILE
+              .ACCVN==4  ;CURRENT VERSION NUMBER
+      AC.LEN==777777B35  ;LENGTH OF EACH ENTRY
+              .ACLEN==16 ;VERSION 4 IS 14(10) WORDS LONG
+
+   ;ACCT.SYS ENTRY FORMAT
+
+   .ACPPN==0  ;PROJECT PROGRAMMER NUMBER
+   .ACPSW==1  ;PASSWORD IN SIXBIT
+   .ACPRV==2  ;PRIVILEGED BITS
+      AC.IPC==1B0        ;JOB CAN DO IPCF PRIVILEGED FUNCTIONS
+      AC.DSP==3B2        ;HIGHEST DISK PRIORITY
+      AC.MET==1B3        ;JOB CAN DO METER UUO
+      AC.POK==1B4        ;JOB CAN POKE THE MONITOR
+      AC.CPU==1B5        ;JOB CAN CHANGE ITS CPU SPECIFICATION
+      AC.HPQ==74B9       ;HIGHEST HPQ THAT JOB CAN SET
+      AC.SPL==1B10       ;JOB CAN SET NO SPOOL
+      AC.RTT==1B13       ;JOB CAN DO REAL TIME TRAPPING (RTTRP.) UUO
+      AC.LOK==1B14       ;JOB CAN DO LOCK UUO
+      AC.TRP==1B15       ;JOB CAN DO TRPSET UUO
+      AC.SPC==1B16       ;JOB CAN PEEK/SPY AT ALL OF CORE
+      AC.SPM==1B17       ;JOB CAN PEEK/SPY AT THE MONITOR
+      AC.CUS==777777B35 ;RESERVED FOR CUSTOMER
+   .ACNM1==3  ;USER'S NAME IN SIXBIT - FIRST WORD
+   .ACNM2==4  ;USER'S NAME IN SIXBIT - SECOND WORD
+   .ACLIT==5  ;TIMES ALLOWED TO LOGIN
+      AC.WDH==77777777B23          ;WEEKDAY HOURS, 0000-2359
+      AC.WEH==7777B35              ;WEEKEND HOURS, 2-HOUR SHIFTS 0000-2200
+   .ACCIP==6  ;CORE AND IPCF PARAMETERS
+      AC.NPP==777B8      ;MAXIMUM NUMBER OF PHYSICAL PAGES
+      AC.NVP==777B17     ;MAXIMUM NUMBER OF VIRTUAL PAGES
+      AC.SND==777B26     ;MAXIMUM NUMBER OF SENDS
+      AC.RCV==777B35     ;MAXIMUM NUMBER OF RECEIVES
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                    D-24
+                                  *ACTSYM*
+
+
+
+   .ACPRO==7  ;PROFILE BITS
+      AC.WDT==1B0        ;WATCH DAYTIME
+      AC.WRT==1B1        ;WATCH RUNTIME
+      AC.WWA==1B2        ;WATCH WAIT
+      AC.RED==1B3        ;WATCH READ
+      AC.WRI==1B4        ;WATCH WRITE
+      AC.CDR==1B5        ;SPOOL CDR
+      AC.CDP==1B6        ;SPOOL CDP
+      AC.PTP==1B7        ;SPOOL PTP
+      AC.PLT==1B8        ;SPOOL PLT
+      AC.LPT==1B9        ;SPOOL LPT
+      AC.WVR==1B10       ;WATCH VERSION
+      AC.WMT==1B11       ;WATCH MTA
+      AC.WFL==1B12       ;WATCH FILE
+      AC.OPR==7B23       ;OPERATOR PRIVILEGE FIELD (SEE UUOSYM FOR SYMBOLS)
+              ;.OBNOP==0 ;NO OPERATOR PRIVILEGES
+              ;.OBSDP==1 ;SYSTEM OPERATOR PRIVILEGES
+              ;.OBLOP==2 ;LOCAL OPERATOR PRIVILEGES
+              ;.OBROP==3 ;REMOTE OPERATOR PRIVILEGES
+      AC.RMK==1B24       ;REMARK IS REQUIRED
+      AC.ACT==1B25       ;ACCOUNT IS REQUIRED
+      AC.LOC==1B26       ;USER MAY LOGIN AT LOCAL TERMINAL
+      AC.ROP==1B27       ;USER MAY LOGIN AT REMOTE OPR OR CTY
+      AC.DST==1B28       ;USER MAY LOGIN AT DATA SET TERMINAL
+      AC.RMT==1B29       ;USER MAY LOGIN AT REMOTE TERMINAL
+      AC.SBJ==1B30       ;USER MAY LOGIN SUBJOB OF A BATCH JOB
+      AC.BAT==1B31       ;USER MAY LOGIN UNDER BATCH
+      AC.NRT==1B32       ;NAME REQUIRED UNDER TIMESHARING
+      AC.NRB==1B33       ;NAME REQUIRED UNDER BATCH
+      AC.PRT==1B34       ;PASSWORD REQUIRED FOR TIMESHARING
+      AC.PRB==1B35       ;PASSWORD REQUIRED FOR BATCH
+   .ACCUS==10 ;CUSTOMER USER PROFILE BITS
+   .ACPGM==11 ;SIXBIT NAME OF PROGRAM TO RUN
+   .ACDEV==12 ;SIXBIT DEVICE FROM WHERE TO RUN PROGRAM
+   .ACDIR==13 ;DIRECTORY FORM WHERE TO RUN PROGRAM
+   .ACCNO==14 ;CHARGE NUMBER
+   .ACESE==15 ;EXPIRATION DATE,,SCHEDULER AND END/DEQ PARAMETERS
+      AC.EXP==777777B17  ;EXPIRATION DATE
+      AC.SCD==777B26               ;SCHEDULER TYPE
+      AC.EDQ==777B35               ;ENQ/DEQ/QUOTA
+
+   > ;END OF TOPS-10 CONDITIONAL FROM WAY BACK
+                                   
+      END                          ;END OF ACTSYM.MAC
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                    D-25
+|  
+|  
+|  
+|  
+|  
+|  
+|  
+|  
+|  
+|  
+|  
+|  
+|                                APPENDIX B
+|  
+|                    TOPS-20 ERROR CODES AND MNEMONICS
+|  
+|  
+|  
+|  Code     Mnemonic    Code    Mnemonic    Code    Mnemonic   Code     Mnemonic    Code    Mnemonic    Code    Mnemonic
+|  
+|  600010   LGINX1      600011  LGINX2      600012  LGINX3
+|  600013   LGINX4      600014  LGINX5      600020  CRJBX1
+|  600021   CRJBX2      600022  CRJBX3      600023  CRJBX4
+|  600024   CRJBX5      600025  CRJBX6      600026  CRJBX7
+|  600035   LOUTX1      600036  LOUTX2      600045  CACTX1
+|  600046   CACTX2      600050  EFCTX1      600051  EFCTX2
+|  600052   EFCTX3      600055  GJFX1       600056  GJFX2
+|  600057   GJFX3       600060  GJFX4       600061  GJFX5
+|  600062   GJFX6       600063  GJFX7       600064  GJFX8
+|  600065   GJFX9       600066  GJFX10      600067  GJFX11
+|  600070   GJFX12      600071  GJFX13      600072  GJFX14
+|  600073   GJFX15      600074  GJFX16      600075  GJFX17
+|  600076   GJFX18      600077  GJFX19      600100  GJFX20
+|  600101   GJFX21      600102  GJFX22      600103  GJFX23
+|  600104   GJFX24      600107  GJFX27      600110  GJFX28
+|  600111   GJFX29      600112  GJFX30      600113  GJFX31
+|  600114   GJFX32      600115  GJFX33      600116  GJFX34
+|  600117   GJFX35      600120  OPNX1       600121  OPNX2
+|  600122   OPNX3       600123  OPNX4       600124  OPNX5
+|  600125   OPNX6       600126  OPNX7       600127  OPNX8
+|  600130   OPNX9       600131  OPNX10      600133  OPNX12
+|  600134   OPNX13      600135  OPNX14      600136  OPNX15
+|  600137   OPNX16      600140  OPNX17      600141  OPNX18
+|  600142   OPNX19      600143  OPNX20      600144  OPNX21
+|  600145   OPNX22      600150  DESX1       600151  DESX2
+|  600152   DESX3       600153  DESX4       600154  DESX5
+|  600155   DESX6       600156  DESX7       600157  DESX8
+|  600160   CLSX1       600161  CLSX2       600165  RJFNX1
+|  600166   RJFNX2      600167  RJFNX3      600170  DELFX1
+|  600175   SFPTX1      600176  SFPTX2      600177  SFPTX3
+|  600200   CNDIX1      600202  CNDIX3      600204  CNDIX5
+|  600210   SFBSX1      600211  SFBSX2      600215  IOX1
+|  600216   IOX2        600217  IOX3        600220  IOX4
+|  600221   IOX5        600222  IOX6        600240  PMAPX1
+|  600241   PMAPX2      600245  SPACX1      600250  FRKHX1
+|  600251   FRKHX2      600252  FRKHX3      600253  FRKHX4
+|  600254   FRKHX5      600255  FRKHX6      600260  SPLFX1
+|  600261   SPLFX2      600262  SPLFX3      600263  SPLBTS
+|  600264   SPLBFC      600267  GTABX1      600270  GTABX2
+|  600271   GTABX3      600273  RUNTX1      600275  STADX1
+|  600276   STADX2      600300  ASNDX1      600301  ASNDX2
+|  600302   ASNDX3      600320  ATACX1      600321  ATACX2
+|  600322   ATACX3      600323  ATACX4      600324  ATACX5
+|  600332   STDVX1      600335  DEVX1       600336  DEVX2
+|  600337   DEVX3       600345  MNTX1       600346  MNTX2
+|  600347   MNTX3       600350  TERMX1      600351  TLNKX1
+|  600352   ATIX1       600353  ATIX2       600356  TLNKX2
+
+

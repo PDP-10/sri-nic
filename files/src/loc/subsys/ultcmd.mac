@@ -1,0 +1,498 @@
+;<GEOFF3>ULTCMD.FAI.10, 27-Aug-80 21:01:41, Edit by Geoff
+; Added comments on calling sequence
+;<SOURCES>ULTCMD.FAI 12-Oct-78 11:07:00, Edit by McLure
+;^ Now breaks, sigh kludgey
+;<SOURCES>ULTCMD.FAI 14-Sep-78 12:46:00, Edit by McLure
+;Formats output of commands to a "?" at a parse
+	title	ultcmd
+	subttl	"Ultimate" command scanner
+	search	monsym
+	search	nyusym			; [nyu] search local symbols
+	entry	getcmd, subcmd
+	intern	lstchr, crflg, dmflg
+
+comment	
+	Autofill command scanner - based more or less on the RISOS command
+scanner -- give the user as much of the command as is unambiguous and ignore
+any further portions of this part.  Here's how it works:
+
+	The calling seq is:
+
+	CALL	GETCMD		;for main command
+	CALL	SUBCMD		;for subcommands
+
+your stack should be .gt. '17 in length, since it uses '17 locs on it.
+
+	TABLE entries are of the form:
+		.
+		.
+		.
+
+TABLE:	[Asciz/ (noise) ],,-nentries	;noise string, - of # of entries
+	[Asciz/commandname/],,addr	;name of command, addr where to go
+		.
+		.
+		.
+	0					;clean way to end table
+To call the appropriate subroutine after this returns, use the
+following sequence:
+		.
+		.
+		.
+	Hrrz	1,(1)
+	Call	(1)
+		.
+		.
+		.
+
+command names (in pointer table) MUST be in lowercase!
+	
+
+
+; Ac's
+f=0					; Flags
+u=5					; Byte count to last user character
+v=6					; Ditto to last prefill character
+w=7					; Byte pointer to next possible char
+x=10					; Aobjn pointer to commands still in it
+y=11					; Random ac
+z=12					; Useless ac
+t=16					; Pointer to table (ac1 in call)
+p=17					; Guess
+
+; Editting character definitions (for what it's worth)
+c.char==177				; Rubout - character delete
+c.word=="W"-100				; ^W delete this parse
+c.line=="U"-100				; ^U abort the whole thing
+c.what=="R"-100				; Again please
+c.clrs=="L"-100				; Clear the screen and retype
+c.help=="?"				; Loser here
+
+opdef	call	[pushj	p, 0]
+opdef	ret	[popj	p, 0]
+
+
+
+; Subcmd is used to parse a subcommand, Getcmd to parse a top level command
+; Both accept in 1 the address of a table, whose first entry is a prompt text
+; In the left half and minus the number of table entries in the right half
+; The rest of the table consists of asciz strings in the left half and
+; Random in the right half - for use by user
+
+subcmd:	aosa	clevel			; One level deeper
+getcmd:	setzm	clevel			; At the top
+
+; Save the world(s)
+	adjsp	p, 17			; Make room on stack
+	movem	16, (p)
+	movei	16, -16(p)
+	blt	16, -1(p)		; Save all ac's
+
+gtcmd0:	move	t, 1			; Address of table
+	skipn	clevel			; Is this a subcommand?
+	 movem	1, tpaddr		; No, save as top for ^U
+
+	movei	1, .priin		; Turn off echo
+	rfmod
+	tlz	2, (tt%osp)		; Turn back on output just in case
+	push	p, 2			; Save for when we are done
+	trz	2, tt%eco
+	sfmod
+
+	rfcoc				; Set up for any display stuff
+	push	p, 2			; But save it
+	push	p, 3			; For later
+	move	2, [byte (2) 2,2,2,1,2,2,2,2,2,3,2,2,1,2,2,1,2,2]
+	move	3, [byte (2) 2,2,2,2,2,2,2,2,2,2,2,2,2,2]
+	sfcoc
+
+	movei	1, .priout		; What sort of thingy are we on?
+	gttyp
+	setzm	dmflg
+	cain	2, .ttd15		; Datamedia?
+	 setom	dmflg			; Yes
+
+
+
+; Here with tty modes set up ok, to start beginning parse of command
+
+prompt:	hlro	1, (t)			; Get prompt text
+	trne	1, -1			; Anything there?
+	 psout				; Yes
+
+; Enter here to start over without the prompt (^W)
+prmpt1:	movei	x, 1(t)			; Beginning of commands
+	hrl	x, (t)			; Make aobjn pointer to them
+
+	setzm	uschar			; Reset bit mask
+	setzb	v, u			; Set up initial counts
+
+
+; Here to get the actual characters and do the parse
+gtcmd1:	setzm	crflg			; No CR yet
+gtcmd2:	pbin				; Get a character
+	cail	1, "A"			; Uppercase letter?
+	 caile	1, "Z"
+	 caia				; Nope
+	 addi	1, "a"-"A"		; Lowercase (!!) it
+
+	cain	1, 15			; Cr?
+	 jrst	gotcr			; Yes, set cr flag and flush LF
+	caie	1, 12			; LF
+	 cain	1, 40			; Space?
+	 jrst	this1			; See if he has enuf yet
+	caie	1, 33			; Altmode
+	 cain	1, ","			; Or comma
+	 jrst	this1			; These will do too
+	cain	1, "^"			; Up-arrow?
+	 jrst	this1			; This will do
+	cain	1, c.char		; Char delete?
+	 jrst	backup
+	cain	1, c.help		; Wants help?
+	 jrst	idiot			; Yes
+	cain	1, c.line		; Abort the whole gig?
+	 jrst	oops			; Yes
+	cain	1, c.word		; Delete this command
+	 jrst	bakall			; Yes, start over this one
+	cain	1, c.what		; Messed up?
+	 jrst	retype
+	cain	1, c.clrs
+	 jrst	clrscn
+	caig	1, " "			; Dont allow controls past here
+	 jrst	scream
+
+; Falls thru
+
+
+; Looks like he is typing part of a command, first see if it is in fact
+; Something we have autofilled, then try for more of some command
+fndcmd:	camn	u, v			; Any prefilled chars?
+	 jrst	fndnpf			; No, not one then
+	move	2, u			; Get pointer to last user char
+	idivi	2, 5			; Make into byte pointer
+	hrl	2, bps(3)
+	addi	2, csbuf		; Into command buffer
+	ildb	3, 2			; Get first prefill character after this
+	came	3, 1			; Match?
+	 jrst	fndnpf			; No, try new letter
+	movei	1, 1			; Set up bit mask
+	lsh	1, (u)			; Offset
+	iorm	1, uschar		; Say this char user given
+	aoja	u, gtcmd1		; And increment the byte count
+
+; Now it looks like he is starting a new portion of the command, lets
+; See if we can find it
+fndnpf:	move	2, v			; Set up a byte type pointer
+	idivi	2, 5
+	hrl	2, bps(3)
+	move	w, 2			; Save pointer offset
+	move	y, x			; Get aobjn pointer
+	setz	4,			; No finds yet
+
+; Try to find this character in the possibles
+fndlup:	hlrz	z, (y)			; Get byte pointer start
+	add	z, w			; To desired byte
+	ildb	3, z			; Get the byte
+	camn	3, 1			; Same byte?
+	 jrst	fndlp2			; Yes, count it
+	jumpn	4, fndlp1		; Already had some?
+fndlp0:	aobjn	y, fndlup		; No, keep trying
+	jumpe	4, scream		; Looks like nothing found, complain
+fndlp1:	movss	x, 4			; Get new aobjn pointer
+	pbout				; Echo the good character first
+	movei	2, csbuf
+	add	2, w
+	idpb	1, 2			; Save it as well
+	movei	1, 1			; Mark char as user
+	lsh	1, (v)
+	iorm	1, uschar
+	aos	u, v			; Increment count too
+
+
+
+; Now see what we are in a position to give the user as prefill
+getfil:	call	prefil			; Figure out what to prefill
+getfl3:	jumpe	2, gtcmd1		; No prefill - sigh
+	addm	2, v			; Increment prefill byte count
+	hlrz	3, (x)			; Get a command string
+	add	3, w
+	addi	w, csbuf
+getfl4:	ildb	1, 3
+	idpb	1, w			; Buffer it
+	pbout				; Give him the prefil
+	sojg	2, getfl4		; Give it all
+	jrst	gtcmd1			; And go get more command
+
+
+; Here to figure out what to give the user as prefill
+prefil:	ibp	w			; Increment the random byte pointer
+	hlrz	y, (4)
+	add	y, w
+	setz	2,			; Start with no guys
+prefl0:	ildb	1, y
+	skipe	1
+	 aoja	2, prefl0
+	aobjn	4, prefl1
+	ret				; Unique command, give all as prefill
+prefl1:	hlrz	y, -1(4)
+	add	y, w
+	hlrz	z, (4)
+	add	z, w
+	push	p, 2			; Save last count
+	setz	2,			; Count on ac2
+prefl2:	ildb	1, y
+	ildb	3, z
+	camn	1, 3			; Same string up to here?
+	 aoja	2, prefl2		; Yes
+	camge	2, (p)
+	 exch	2, (p)
+	pop	p, 2			; Get back smaller guy
+
+	aobjn	4, prefl1		; Do for all commands
+	ret				; All done, return
+
+
+
+; Increment the aobjn pointer in 4 for later commands
+fndlp2:	skipe	4			; This the first match?
+	 soja	4, fndlp0		; Just count number of guys
+	hrlo	4, y			; Yes, start up aobjn pointer
+	jrst	fndlp0			; And go count number of them
+
+; Got a CR, say we saw it so next LF flagged right
+gotcr:	setom	crflg
+	jrst	gtcmd2			; And go read next character
+
+
+; Do the usual annoying thing if the user types something bad (yech!)
+scream:	movei	1, 7
+	pbout				; Beep beep beep
+	jrst	gtcmd1			; Try again
+
+; See if the user has specified a unique command
+this1:	move	2, v
+	idivi	2, 5
+	hrl	2, bps(3)
+	move	w, 2
+	hlrz	2, (x)			; The first of the possibles
+	add	2, w			; Offset into byte pointer
+	ildb	3, 2			; Get the next character of the command
+	jumpn	3, scream		; Not a null, so not unique yet
+	movem	1, lstchr		; Save terminator
+
+; Here to return the offset to the user
+
+retcmd:	hrrzm	x, -20(p)		; Return it
+	movei	1, .priin
+	pop	p, 3
+	pop	p, 2
+	sfcoc				; Reset ccoc words
+	pop	p, 2
+	sfmod				; Restore tty modes
+	movsi	16, -16(p)
+	blt	16, 16
+	adjsp	p, -17			; Restore ac's and stack
+	ret				; All done here
+
+
+
+; Delete whole thing
+oops:	skipe	dmflg			; Want display winnage
+	 skipa	1, [point 7, [byte (7) "M"-100,"Z"-100,"W"-100,0]]
+	hrroi	1, [asciz /XXX
+/]
+	psout				; Show him we forgot it
+	move	t, tpaddr		; Start over at the beginning
+	jrst	prompt			; Go try to get one
+
+bakall:	skipn	dmflg			; Display?
+	 jrst	bakal2			; No
+	movei	1, "H"-100		; BS
+	skiple	v
+	pbout
+	sojg	v, .-1			; Back up over it all
+	movei	1, "W"-100		; EOL
+	pbout
+	jrst	prmpt1			; Start it all over this guy
+
+bakal2:	hrroi	1, [asciz /=/]
+	psout
+	jrst	prmpt1			; Just start over here
+
+
+; Delete a character, ie backup over the last character that tthe user
+; Typed -- we must then recompute the prefill characters, because
+; The character deleted may be a previously prefiled char that he
+; Chose to type in
+backup:	move	1, uschar		; Get the bit mask of user chars
+	jffo	1, .+2			; Get the last one he did
+	 jrst	scream			; Nothing there, complain
+	movei	1, 43			; Offset it
+	subm	1, 2			; Make it bit number
+	movei	1, 1			; Clear that bit
+	lsh	1, (2)
+	andcab	1, uschar		; Do it
+	jffo	1, .+2
+	 jrst	bakup1			; Undo the whole thing then
+	movei	1, 43
+	subm	1, 2
+	movei	u, 1(2)			; Set up current byte count
+
+	idivi	2, 5
+	hrl	2, bps(3)
+	movem	2, w			; Set up byte pointer to this guy
+
+	movei	x, 1(t)			; Address of first in table
+	hrl	x, (t)			; Make aobjn in x
+	setz	4,			; No match found yet here
+
+
+
+baklup:	movei	y, csbuf
+	hlrz	z, (x)
+	call	strcmp			; See if this string matches
+	 jrst	baklp2			; This much good, count it
+	skipn	4			; No match, got anything yet?
+baklp1:	 aobjn	x, baklup		; No, keep looking for some
+	movss	x, 4			; Got it, make it aobjn
+	call	prefil			; Figger out what to fill it with
+	add	2, u			; Number of filled chars
+gotbak:	exch	2, v			; Set up as end of string
+	sub	2, v			; Get difference from last time
+	skipn	dmflg			; Getting sisplay winnage?
+	 jrst	shobak			; No, show chars backed over
+
+dmbak:	movei	1, "H"-100		; BS
+	skiple	2
+
+	pbout
+	sojg	2, .-1			; Back over the stuff
+	movei	1, "W"-100
+	pbout
+	jrst	gtcmd1			; Go get more commands
+
+; Typeout what he undid
+shobak:	jumple	2, gtcmd1		; Nothing being shown?
+	movei	1, "["			; Make it look like [foo]
+	pbout
+	push	p, 2			; Save count of chars to do
+	add	2, v			; Make byte pointer
+	idivi	2, 5			; To previous end
+	hrl	2, bps(3)
+	addi	2, csbuf		; Into command buffer
+	pop	p, 3			; Get back count
+
+shoblp:	skipg	2			; Normalise byte pointer
+	 sub	2, [43b5+1]
+	ldb	1, 2
+	pbout
+	add	2, [7b5]		; Decrement byte pointer
+	sojg	3, shoblp		; Show all chars
+	movei	1, "]"
+	pbout
+	jrst	gtcmd1			; Go get more of comand
+
+
+
+bakup1:	movei	x, 1(t)
+	hrl	x, (t)			; Set up aobjn again
+	setzb	u, uschar		; Nothing given by user yet
+	setz	2,			; Pretend no fill either
+	jrst	gotbak			; Go undo what we did
+
+baklp2:	skipe	4			; This the first match?
+	 sosa	4			; Just count number of guys
+	hrlo	4, x			; Yes, start up aobjn pointer
+	jrst	baklp1			; Return
+
+strcmp:	jumple	u, cpopj		; Dont care about count
+	hrli	z, (<point 7,0>)
+	hll	y, z			; Make byte pointers
+	move	3, u			; Get count
+
+strclp:	ildb	1, z
+	ildb	2, y			; Get chars
+	came	1, 2
+	 aosa	(p)			; Skip return -- no match
+	 sojg	3, strclp		; Decrement count
+cpopj:	ret				; Success, single return
+
+
+
+
+
+; User wants some help - give him the options
+
+ctrlch:	hrroi	1,[asciz /<Something odd>/]
+	jumpe	2,[aobjn y,idiolp
+		jrst	retype]
+	cain	2, 14
+	 hrroi	1, [asciz/<FF>/]
+	cain	2,12
+	 hrroi	1,[asciz /<LF>/]
+	cain	2,33
+	 hrroi	1,[asciz /<ESC>/]
+	cain	2," "
+	 hrroi	1,[asciz /<SPACE>/]
+	jrst	idiol1
+
+idiot:	hrroi	1, [asciz /?  One of the following:
+/]
+	psout				; Give the guy the choices
+	move	y, x			; Get aobjn pointer to left guys
+
+idiolp:	hlro	1, (y)			; Get the guy
+	ldb	2,[point 7,(1),6]
+	caig	2," "
+	 jrst	ctrlch			; Strangeness found
+idiol1:	psout
+	movei	1, 101
+	rfpos
+	tlz	2,-1
+	hrroi	1, [asciz /	/]
+	cail	2,100
+	hrroi	1, [asciz /
+/]
+	psout
+	aobjn	y, idiolp		; Give all choices
+
+; Falls thru
+retype:	hrroi	1, [asciz /
+/]
+retyp1:	psout				; Fresh line
+	hlro	1, (t)
+	trne	1, -1
+	 psout				; Type prompt text if any
+	move	z, v
+	jumpe	z, gtcmd1		; Some people are just losers!
+	move	2, [point 7, csbuf]	; Get pointer
+retyp2:	ildb	1, 2
+	pbout
+	sojg	z, retyp2
+	jrst	gtcmd1			; Go get more of command
+
+clrscn:	skipn	dmflg
+	 jrst	retype			; Just retype if not on DM
+	hrroi	1, [byte (7) "^"-100, "]"-100, 0]
+	jrst	retyp1			; Else clear screen first
+
+
+; Literals, constants, etc.
+lit
+var
+bps:	440700				; Byte pointer offsets
+	350700
+	260700
+	170700
+	100700	
+lstchr:	0				; Confirming character
+clevel:	0				; Command/subcommand level
+dmflg:	0				; Flag for display winnage
+crflg:	0				; Was character before LF a CR or not?
+tpaddr:	0				; Top level command dispatch
+uschar:	0				; Bit mask for user typed chars
+bufsiz==30				; Lots of room
+csbuf:	block	bufsiz			; Command buffer
+
+
+	end				; Fin

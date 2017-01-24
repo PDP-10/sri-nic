@@ -1,0 +1,314 @@
+/* Machine dependent code for systems running under MS-DOS.
+** Assumes ANSI.SYS has been installed as an installable device
+** driver.  For any version or compiler peculiarities, use 
+** preprocessor conditionals, but PLEASE -- do not nest
+** conditionals!
+*/
+
+#include "ccmd.h"		/* get ccmd symbols */
+#include "cmfncs.h"		/* and internal symbols */
+
+
+
+/* cmrpjmp
+**
+** Purpose:
+**   Automatic reparse handler, installed via the cmsetrp macro from
+**   ccmd.h.  If this handler is installed in a CSB for which a reparse
+**   is needed, it will perform a longjmp to restart execution at the
+**   point following the installing cmsetrp invocation.  This point
+**   should be following the call to cmini that set up parsing for
+**   the current command line, and before the comnd call for the first
+**   field in the command.
+**
+** Input arguments: None
+** Output arguments: None
+** Returns: Nothing
+**/
+
+
+jmp_buf cmrpjb;			/* global jump buffer for autoreparse */
+
+cmrpjmp()
+{
+#ifdef LATTICE
+  longjmp(&cmrpjb,1);		/* do the jump */
+#else
+  longjmp(cmrpjb,1);
+#endif
+  return(CMxNOAR);		/* if it returns, it failed */
+}
+
+
+
+/* cmerjmp
+**
+** Purpose:
+**   Automatic parse error handler, much like the automatic reparse
+**   handler described above.  This macro should be invoked just prior
+**   to issuing a prompt.  When a parsing error subsequently occurs
+**   (that is, the parse function is about to return anything but
+**   CMxOK), cmperr will be called to print the error, and then
+**   execution will jump back to the site of this macro.  When the
+**   automatic error handler is installed, the user program can
+**   ignore the codes returned by parse, since they will always be
+**   CMxOK.
+**
+**   Note: Reparse situations will be handled by the error handler if
+**   no reparse handler has been installed.
+**
+** Input arguments: None.
+** Output arguments: None.
+** Returns: Nothing.
+**/
+
+jmp_buf cmerjb;				/* global jump buffer */
+
+cmerjmp(ret)
+int ret;				/* code that triggered the handler */
+{
+  cmperr(ret);				/* issue error message */
+#ifdef LATTICE
+  longjmp(&cmerjb,1);			/* take the jump */
+#else
+  longjmp(cmerjb,1);
+#endif
+  return(CMxNOAE);			/* failed */
+}
+
+
+
+
+/*
+** Machine-dependent IO routines... In each case, if the file descriptor
+** argument is the special value CONSOLE, the IO is done to the console
+** using Lattice C's direct console I/O routines.  If the file descriptor
+** is not CONSOLE but nevertheless refers to the console, the direct
+** console I/O operations will also be used.  Any other file descriptor
+** is assumed NOT to refer to a terminal, so no echoing will be performed.
+** In this case, the user program may want to set CM_TTY and/or CM_CRT 
+** in order to cause normal terminal handling.  If CRT is set in this
+** case, a dumb crt will be assumed, which does automatic wraparound
+** at the right border and which has no screen functions other than
+** character output, carriage return, linefeed, backspace, and
+** destructive space.
+**/
+
+static int console;			/* TRUE if source is console */
+
+/* cmgetc - get a character from the input source.  Return std return code */
+
+int
+cmgetc(c,fd)
+char *c;			/* pointer where input char is placed */
+int fd;				/* input filedesc */
+{
+  int cc;			/* int returned by system routines */
+
+  if (fd == NULDEV)
+    return(CMxEOF);		/* nothing ever comes from nowhere */
+
+    				/* check for input from console */
+  if ((fd == CONSOLE) || ((fd == cmcsb._cmioj) && console)) {
+    cc = getch();		/* get the char */
+    *c = cc;
+    return(CMxOK);
+  }
+  else {
+    cc = read(fd,c,1); /* get char */
+    if (cc == 0)
+      return(CMxEOF);		/* pass along end-of-file condition */
+    else if (cc == -1)
+      return(CMxIO);		/* and IO error */
+    else
+      return(CMxOK);		/* and return success */
+  }
+}
+
+/* cmputc - Output a single character to the terminal */
+
+cmputc(c,fd)
+char c;				/* character to output */
+int fd;				/* input filedesc */
+{
+  if ((fd == CONSOLE) || ((fd == cmcsb._cmioj) && console))
+    putch(c);	 		/* output to console */
+  else if ((fd != cmcsb._cmioj) || (cmcsb._cmflg & CM_TTY))
+    write(fd,&c,1);		/* output to terminal filedesc */
+}
+
+/* cmputs - Output null-terminated string to the terminal */
+
+cmputs(s,fd)
+char *s;			/* string to output */
+int fd;				/* input filedesc */
+{
+  if ((fd == CONSOLE) || ((fd == cmcsb._cmioj) && console))
+    cputs(s);			/* console output */
+  else if ((fd != cmcsb._cmioj) || (cmcsb._cmflg & CM_TTY))
+    write(fd,s,strlen(s)); 	/* arbitrary file */
+}
+
+/* cmcr - Move to the beginning of the current line */
+
+cmcr(fd)
+int fd;				/* input filedesc */
+{
+  cmputc(RETURN,fd);			/* output a carriage return */
+}
+
+/* cmnl - Output a newline sequence to the command stream */
+
+cmnl(fd)
+int fd;				/* input filedesc */
+{
+#ifndef LATTICE
+  cmcr(fd);
+#endif
+  cmputc(NEWLINE,fd);		/* just a newline character */
+}
+
+/* cmwrap - Make sure the cursor wraps when it is required */
+
+cmwrap(fd)
+{
+				/* This happens for console automatically */
+				/* and we assume the same for other devices */
+}
+
+/* cmcls - Clear the screen.  Only invoked if source is a CRT.  Return
+** TRUE iff we think the operation succeeded.
+**/
+
+cmcls()
+{
+  if (console)
+    cputs("\033[2J");		/* home and clear screen: ESC [ 2 J */
+  else
+    cmputc(FORMFEED);		/* for other terminal try a formfeed */
+  return(TRUE);			/* assume it worked */
+}
+
+/* cmceol - Clear to end of line.  Only invoked on a CRT.  Return
+** TRUE iff we think we succeeded.
+**/
+
+cmceol()
+{
+  if (console) {
+    cputs("\033[K");		/* erase to end-of-line: ESC [ k */
+    return(TRUE);
+  }
+  else
+    return(FALSE);		/* say we can't do it on other terminals */
+}
+
+
+/* cmupl - Moves up one line in the display without changing column
+** position.  Should not wrap to bottom of screen or cause destructive
+** downward scrolling.  Only invoked on a CRT.  Returns TRUE iff we
+** think the operation succeeded.
+**/
+
+cmupl()
+{
+  if (console) {
+    cputs("\033[A");		/* up one line: ESC [ A */
+    return(TRUE);
+  }
+  else
+    return(FALSE);		/* assume other terminals are incapable */
+}
+
+/* cmcpos - Returns current column position on display.  If the
+** command source is not the console, the column position currently
+** stored in the CSB is returned.
+**/
+
+int
+cmcpos()
+{
+  int nscan;			/* # of items successfully scanned in */
+				/* cursor position report */
+  int row,col;			/* reported cursor position */
+
+  if (console) {
+    cputs("\033[6n");		/* device status report: ESC [ 6 n */
+    nscan = cscanf("\033[%d;%dR",&row,&col); /* scan response */
+#ifndef RAINBOW
+    getch();			/* pick up the carriage return */
+#endif
+    if (nscan != 2)
+      return(cmcsb._cmcol);	/* undecipherable response */
+    else
+      return(col-1);		/* give back response adjusted for 0-origin */
+  }
+  else
+    return(cmcsb._cmcol);	/* unknown for other than console */
+}
+
+/* cmflush - Flush all pending input on the input source */
+
+cmflush(fd)
+{
+  char junk;
+
+  if ((fd == CONSOLE) || ((fd == cmcsb._cmioj) && console))
+    while (kbhit())		/* flush console input */
+      getch();
+  else if ((fd != cmcsb._cmioj) || (cmcsb._cmflg & CM_TTY))
+    while (read(fd,&junk,1) == 1); /* flush other terminal */
+}
+
+/* cmtset - Initialize the source terminal.  Check if the source is
+** the console, and if so set the console flag as well as the CM_TTY
+** and CM_CRT flags in the CSB.  Otherwise, clear all three flags.
+** In all cases, the column limit in the CSB is set to 79.
+**/
+
+#include	"dos.h"			/* for interrupt calls */
+#define	CARRY	0x01			/* carry in processor flag register */
+#define ISCOT	0x02			/* device status flags */
+#define	ISCIN	0x01			
+#define	ISDEV	0x80			
+
+cmtset()
+{
+  int fd = cmcsb._cmioj;		/* get desired input source */
+  union REGS inregs,outregs;		/* registers for DOS call */
+  int flags;				/* processor flags after DOS call */
+
+  if (fd == NULDEV)
+    console = FALSE;			/* and it's not the console */
+  else if (fd == CONSOLE)
+    console = TRUE;			/* and set the console flag */
+  else {
+    inregs.h.ah = 0x44;			/* IOCTL call */
+    inregs.h.al = 0x00;			/* get device info */
+    inregs.x.bx = fd;			/* file handle */
+    flags = intdos(&inregs,&outregs);	/* do the call */
+#ifdef LATTICE
+    if (((flags & CARRY) != 0) || (outregs.x.ax == 0xff)) /* error? */
+#else
+    if ((outregs.x.cflag != 0) || (outregs.x.ax == 0xff)) /* error? */
+#endif      
+      console = FALSE;			/* then assume nothing */
+    else if ((outregs.x.dx & ISDEV) == 0) /* disk file? */
+      console = FALSE;			/* then it's not the console */
+    else if (outregs.x.dx & (ISCOT | ISCIN)) /* console input or output? */
+      console = TRUE;			/* then set flag */
+    else
+      console = FALSE;			/* otherwise clear it */
+  }
+  if (console)
+    cmcsb._cmflg |= (CM_TTY | CM_CRT); /* console is a CRT */
+  else
+    cmcsb._cmflg &= ~(CM_TTY | CM_CRT); /* anything else is not a tty */
+  cmcsb._cmcmx = 79;			/* everything has 80 columns */
+}
+
+/* cmtend - Restore prior terminal state. Nothing needed for PC */
+
+cmtend()
+{
+}

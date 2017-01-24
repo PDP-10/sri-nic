@@ -1,0 +1,227 @@
+;-*-Midas-*-
+
+	Title @BINPRT - Print the assembly info for an SBLK .EXE file
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	The assembly information is included as one of the misc.
+;;	info blocks, type 1.  Sub-block type 1 is for MIDAS info,
+;;	type 2 is for make-link, and others are undefined.
+;;
+;;	the data in the subblock is:
+;;
+;;	+0	count of # words in header including this one (5)
+;;	+1	sixbit machine with was assembled on
+;;	+2	sixbit name of program that made this file
+;;	+3	internal-format date&time of creation
+;;	+4	offset into this subblock of start of username string (5)
+;;	+5	offset to start of source filename string, or object
+;;		filename if type 2
+;;	+6	... start of string data ... 
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+.DECSAV
+
+T=10
+TT=11
+T3=12
+P=17
+
+PDLen==100
+JCLen==40
+
+PureMark==1776			;This is always the LH of 1st word of
+				;SSAVE shared/pure .EXE's
+
+.INSRT LIB:SYMBOLS
+.INSRT LIB:MACROS
+
+PDList:	-PDLen,,.
+	Block PDLen
+
+Once:	0			;Only do it once.
+
+JCLbuf:	Block JCLen
+
+JFN:	0			;JFN on file
+FilSiz:	0			;Size in pages
+
+Bootp:	0			;This is a bootstrap file.
+
+GJblok:	GJ%OLD\GJ%IFG\GJ%CFM+.GJDEF
+	.PRIIN,,.PRIOU
+	-1,,[Asciz "SYS"]	;dev
+	0			;dir
+	0			;name
+	-1,,[Asciz "EXE"]	;extension
+	0			;protection
+	0			;account
+	0			;alternate jfn
+
+CRLF:	Asciz "
+"
+
+.INSRT LIB:PRARG
+
+Begin:	RESET
+	Move P,PDList
+	Movei 1,.RSINI
+	RSCAN
+	  .Lose
+ParJCL:	PBIN
+	Cain 1,^J
+	  Jrst Input		;No JCL specified, read filename from TTY.
+	Caie 1,40		;Space ends programname that begins JCL.
+	  Jrst ParJCL
+	Setom Once		;Mark that we only run once
+	Jrst DoIt		;and do it.
+
+Input:	Type "File: "
+DoIt:	Movei 1,GJblok
+	Setz 2,
+	GTJFN
+	  Jrst [Cain 1,GJFX33	;Filename was not specified?
+		  Jrst Die	;  Nope, so they don't want to play anymore.
+		Call Error
+		Jrst Next]
+	Movem 1,JFN
+
+Filoop:	Type "File: "
+	Movei 1,.PRIOU
+	Hrrz 2,JFN
+	Move 3,[111110,,JS%PAF]
+	JFNS
+	  .Lose
+	AType CRLF
+	Hrrz 1,JFN
+	Move 2,[Field(36.,OF%BSZ)+OF%RD]
+	OPENF
+	  Jrst [Call Error
+		Jrst Next]
+	SIZEF
+	  .Lose
+	Movem 3,FilSiz		;Size in pages.
+	Hrlz 1,JFN		;JFN,,0
+	Move 2,[.FHSLF,,EOMpag]
+	Txo 3,PM%CNT\PM%RD
+	PMAP			;Map in the file.
+	  .Lose
+	Hlrz T,EOM		;Get LH of 1st word.
+	Cain T,PureMark		;Pure?
+	  Jrst [TypeCR "This is a SSAVE file, so there's no assembly information."
+		Jrst NxtFil]
+	Movei TT,EOM
+	Move T3,FilSiz
+	IMuli T3,1000
+	Addi T3,EOM
+Trace:	Hlre T,(TT)		;Size of next block.
+	Jumpge T,GotEnd		;Aha, end!
+	Sub TT,T
+	Camg TT,T3
+	  Aoja TT,Trace
+UnkTyp:	TypeCR "This doesn't appear to be a save file."
+	Jrst NxtFil
+
+GotEnd:	Caie T,(JRST)
+	  Caig T,777		;Max entry-vector size.
+	    Skipa
+	   Jrst UnkTyp
+	Skipn 2(TT)		;2 words after ends starts assembly data.
+	  Jrst NoData
+	Addi TT,2		;OK, so start from here.
+GetFun:	Skipl (TT)
+	  Jrst NoData
+	Hrrz T,(TT)		;See what kind of block it is.
+	Caie T,3		;debugging info?
+	  Jrst NxtFun		;  Nope.
+	Setzm Bootp
+	Hrrz T,1(TT)		;See what type of sub-block?
+	Cain T,1		;Midas style?
+	  Jrst SayHoo		;  Yep.
+	Caie T,2		;A bootstrap?
+	  Jrst NxtFun		;  Nope, so don't know what to do with it.
+	Setom Bootp
+SayHoo:	Addi TT,2		;Start of actual data.
+	Type "Made by "
+	Hrro 1,TT		;Start of block.
+	Add 1,4(TT)		;Offset to start of username
+	PSOUT
+	Type " with "
+	Move 3,2(TT)		;sixbit program-name
+	Call SixOut
+	Type " on "
+	Move 3,1(TT)		;Get machine type.
+	Came 3,[Sixbit "TWENEX"]
+	  Jrst [Call SixOut
+		Type " timestamp?"
+		Jrst SayHo0]
+	Movei 1,.PRIOU
+	Move 2,3(TT)
+	Setz 3,
+	ODTIM
+	  Ernop
+SayHo0:	Hrroi 1,[Asciz "
+from source file "]
+	Skipe Bootp
+	  Hrroi 1,[Asciz "
+This is a bootstrap for "]
+	PSOUT
+	Hrro 1,TT
+	Add 1,5(TT)
+	PSOUT
+	Move 1,(TT)		;# words.
+	Caig 1,6		;More than the six header words?
+	  Jrst DoCRLF
+	Type "Comment: "	;yes, so next is comment.
+	Hrro 1,TT
+	Add 1,6(TT)
+	PSOUT
+DoCRLF:	AType CRLF
+	Jrst NxtFil
+
+NxtFun:	Hlre T,(TT)
+	Sub TT,T
+	Jrst GetFun
+
+NoData:	TypeCR "No assembly information included."
+
+NxtFil:	Seto 1,
+	Move 2,[.FHSLF,,EOMpag]
+	Move 3,FilSiz
+	Txo 3,PM%CNT
+	PMAP
+	Hrrz 1,JFN
+	Txo 1,CO%NRJ
+	CLOSF
+	  Nop
+	Move 1,JFN
+	GNJFN
+	  Skipa
+	    Jrst [AType CRLF
+		  Jrst Filoop]
+Next:	Skipn Once
+	  Jrst Input
+Die:	.Logout
+	Jrst Die
+
+SixOut:	Setz 4,
+	Rotc 3,6
+	Movei 1,40(4)
+	PBOUT
+	Jumpn 3,SixOut
+	Return
+
+Error:	Call Terpri
+	CType "?
+	Call Barf
+	AType CRLF
+	Return
+
+Variables
+Constants
+
+EOMpag==<./777>+1
+EOM=EOMpag*1000
+
+	End Begin

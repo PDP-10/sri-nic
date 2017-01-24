@@ -1,0 +1,292 @@
+	universal domsym	Domain block sizes and offsets
+	search	  monsym,macsym
+
+  dclb==00000
+  dchb==00003
+  dtlb==00000
+  dthb==00017
+sbrany==00000
+sbrinz==00001
+sbrcor==00002
+sbruna==00003
+pagema==00035
+filebk==00050
+zcdata==02656
+ dntbl==00377
+ pltbl==00401
+ rrtbl==00200
+ rdtbl==05000
+ satbl==00022
+poltbl==00002
+ maxdc==00400
+ maxlc==00077
+labelh==01761
+ maxsb==00012
+	page
+;	PASCAL structure definitions
+
+
+define record(rn)<
+	define	%%%rna <rn>	;;remember record name
+	loc 0>
+
+define rend<
+	%%%rna =.
+	reloc>
+
+define rc(rcname,rctype<1>,rcrep<1>)<
+rcname:	block rctype*rcrep>
+
+define ptr(x)<1>		;;all pointers are one word
+
+;
+;	encoded values
+;
+
+	record	dclass
+	rc	dclb	;low bound
+	rc	din	;Internet class
+	rc	dcs	;CSNET class
+	rc	dchb	;high bound
+	rc	dcx4,4	;fill to 3 bits
+	rend
+
+	record	rstct
+	rc	rsany	;unrestricted (any one)
+	rc	rsinz	;in-zone hosts only
+	rc	rscors	;co-resident resolver only
+	rc	rsunav	;unavailable to anyone
+	rc	rsxxx4,^d11	; fill to 4 bits
+	rc	rsxx17,	;the last is 17 octal
+	rend
+
+	record	dtypes
+	rc	dtlb	;low bound
+	rc	da	;Address
+	rc	dns	;Name server
+	rc	dmd	;Mail destination
+	rc	dmf	;Mail forwarder
+	rc	dcname	;Canonical name pointer
+	rc	dsoa	;Start Of Authority
+	rc	dmb	;Mailbox
+	rc	dmg	;Mail group
+	rc	dmr	;Mail rename
+	rc	dnull	;Null RR
+	rc	dwks	;Well known service
+	rc	dptr	;Domain name pointer
+	rc	dhinfo	;host information
+	rc	dminfo	;Mailbox information
+	rc	dthb	;High bound
+	rend
+
+	daxfer=^d252	;Zone transfer request
+	dmailb=^d253	;Mailbox related info request
+	dmaila=^d254	;Mail agent request
+	dstar=^d255	;Everything
+
+	record	labels
+	rc	lstext,<<maxlc+1>/4>
+	rend
+
+	record	ulabel
+	rc	nodept		;pointer to first node with this label
+	rc	next		;pointer to next ulabel
+	rc	ultext,labels	;label string
+	rend
+
+	record	labuse
+	rc	labptr		;pointer to unique label
+	rc	casemo,2	;case modifier bits
+	rend
+
+	record 	dname
+	rc	dlabel,labuse
+	rc	more		;following labels in name
+	rc	dnamec		;next name this size
+	rend
+
+	record	rdchun		;rdchunk
+	rc	rdmore		;pointer next chunk this RR
+	rc	rdchai		;pointer next chunk this level
+	rc	ckind		;zero for litstring, 1 for dname
+	rc	litdat,0	;pointer to litstring
+	rc	rrname		;dname pointer
+	rend
+
+	record	node
+	rc	nodela,labuse	
+	rc	nodelc		;next node with same label
+	rc	upptr		;father pointer
+	rc	sidept		;side pointer
+	rc	downpt		;down node pointer
+	rc	downtb		;down table pointer
+	rc	rrptr,0		;rr pointer
+	rc	zonept		;zone entry pointer
+	rend
+
+	record	rr
+	rc	rrnext		;pointer to next rr this node
+	rc	rrnode		;pointer to node owning this RR
+	rc	rrttl		;time to live
+	rc	rrtc		;type and class
+	rc	rdata		;pointer to rdchunk
+	rc	rrchai		;pointer to next instance of this kind of RR
+	rend
+
+	dtl=^d36-^l<dthb>	;length in bits of a dtypes
+	dcl=^d36-^l<dchb+4>	;length in bits of a dclass
+	rsl=^d36-^l<rsxx17>	;length in bits of a restriction
+	defstr(rrtyp,rrtc,dtl-1,dtl)	;macro defs for subfields
+	defstr(rrcla,rrtc,dtl+dcl-1,dcl)
+	defstr(rrres,rrtc,dtl+dcl+rsl-1,rsl)
+
+	record	lock
+	rc	lockwd		;aoje lock
+	rc	share		;shared count
+	rc	exclus		;exclusive count
+	rend
+
+	record	zoneen
+	rc	zchain		;pointer to next zone at this name
+	rc	znode		;pointer to zone node
+	rc	zclass		;zone class
+	rc	loaded		;is zone loaded
+	rc	zsoa		;pointer to node with SOA
+	rc	zsoarr		;pointer to SOA RR
+	rc	ziscac		;zone is cache
+	rc	zonelo,lock	;zone lock
+	rc	zconfi,zcdata	;zone configuration data
+	rc	dtable,dntbl	;dname table
+	rc	ltable,pltbl	;primary label table
+	rc	rrtabl,rrtbl	;RR table
+	rc	rdtabl,rdtbl	;rdchunk table
+	rc	sadata,satbl	;storage allocation statistics
+	rc	zpools,poltbl	;pool tables
+	rc	zpages,pagema	;page map
+	rend
+
+	record	serch		;search block
+	rc	slock		;lock variable, -1 if unlocked
+	rc	sbnext		;pointer to next search block
+	rc	sbrskd		;resident schedular test word
+	rc	sbzf,0,0	;first location to zero
+	rc	erttl		;recursion counter to kill infinite loops
+	rc	tquery		;absolute time query was started
+	rc	fcode,4		;JSYS function, acs 2-4
+	rc	psave		;JSYS stack pointer save area
+	rc	sbiptr		;working input pointer
+	rc	sbhsts		;saved host status or port number
+	rc	sname,maxdc/4	;domain name for search (plus a little extra)
+	rc	sbps,1,maxdc/2;byte ptrs to length octets of labels in sname
+	rc	sbmax		;pointer to last used in sbps
+	rc	stype		;search QTYPE
+	rc	sclass		;search QCLASS
+	rc	sopera		;search operation (eg. std, inv, cm, cu)
+	rc	srestr		;search restriction
+	rc	lock1		;pointer to first held lock
+	rc	lock2		;pointer to second held lock
+	rc	locked		;counter of times waited for lock
+	rc	azone		;pointer to authoritative zone
+	rc	alabel		;pointer into SBPS for SOA label
+	rc	lmatch		;pointer to last match during auth zone search
+	rc	derc		;error code
+	rc	outcnt		;count of RDATA characters
+	rc	outins		;XCTed to output an octet
+	rc	outbp		;updated output byte pointer
+	rc	cnptr		;ANCOPY temp for CNAME RR pointer
+	rc	anret		;number of RRs used as answers
+
+	rc	adeln,ptr(node)	;pointer to node from azone with NS delegation
+				;RRs attached
+	rc	adell,ptr(sbps)	;value of LABEL when adeln set
+	rc	cdeln,ptr(node)	;pointer to node from cache with NS delegation
+				;RRs attached
+	rc	cdell,ptr(sbps)	;value of LABEL when cdeln set
+
+	rc	dnbp		;dump routine byte pointer for data
+	rc	dncp		;dump routine byte pointer for case mods
+	rc	dnlc		;dump routine counter
+
+;	resolver interface
+
+	rc	rcomnd		;resolver command and status
+	rc	rflags		;value of FLAGS register when resolver called
+	rc	rsolvn		;node where resolver placed answers
+	rend
+
+	record	master
+	rc	dirty		;file is dirty if not zero
+	rc	update		;last update time
+	rc	jsysin		;has file been initialized by JSYS code ?
+	rc	prijfn		;JFN for primary database
+	rc	secjfn		;JFN for secondary database
+	rc	mbase,ptr(master)	;correct origin for master block
+	rc	versun			;database version #
+	rc	flpgct			;file page count
+	rc	sbloop			;pointer to search block circular list
+	rc	skdtst,maxsb		;(resident) schedular test cells
+	rc	allocl,lock		;memory allocation lock
+	rc	usedpa,pagema		;used page bit map
+	rc	szone,zoneen		;zone entry for search tree
+	rc	cachep,ptr(zoneen)	;pointer to cache zone
+	rc	msgfil,filebk*3		;log files
+	rc	iaorg,^D8*<maxdc/4>	;domain name for invers
+					;address tree for each class
+	
+	rc	stark,2			;byte pointer to "*" octet, word with "*"
+	rc	sbarra,maxsb,serch	;search block array
+	rc	tzero			;absolute time of database creation
+	rend
+if2 <	purge record,%%%rna,rend,rc,ptr> ; clean up (ptr is a stkvar)
+	page
+define	dcheck <
+ifn   dclb-00000,<printx   dclb consistency failure, should be 00000>
+ifn    din-00001,<printx    din consistency failure, should be 00001>
+ifn    dcs-00002,<printx    dcs consistency failure, should be 00002>
+ifn   dchb-00003,<printx   dchb consistency failure, should be 00003>
+ifn  np.cs-00002,<printx  np.cs consistency failure, should be 00002>
+ifn   dtlb-00000,<printx   dtlb consistency failure, should be 00000>
+ifn     da-00001,<printx     da consistency failure, should be 00001>
+ifn    dns-00002,<printx    dns consistency failure, should be 00002>
+ifn    dmd-00003,<printx    dmd consistency failure, should be 00003>
+ifn    dmf-00004,<printx    dmf consistency failure, should be 00004>
+ifn dcname-00005,<printx dcname consistency failure, should be 00005>
+ifn   dsoa-00006,<printx   dsoa consistency failure, should be 00006>
+ifn    dmb-00007,<printx    dmb consistency failure, should be 00007>
+ifn    dmg-00010,<printx    dmg consistency failure, should be 00010>
+ifn    dmr-00011,<printx    dmr consistency failure, should be 00011>
+ifn  dnull-00012,<printx  dnull consistency failure, should be 00012>
+ifn   dwks-00013,<printx   dwks consistency failure, should be 00013>
+ifn   dptr-00014,<printx   dptr consistency failure, should be 00014>
+ifn dhinfo-00015,<printx dhinfo consistency failure, should be 00015>
+ifn dminfo-00016,<printx dminfo consistency failure, should be 00016>
+ifn   dthb-00017,<printx   dthb consistency failure, should be 00017>
+ifn daxfer-00374,<printx daxfer consistency failure, should be 00374>
+ifn dmailb-00375,<printx dmailb consistency failure, should be 00375>
+ifn dmaila-00376,<printx dmaila consistency failure, should be 00376>
+ifn  dstar-00377,<printx  dstar consistency failure, should be 00377>
+ifn pagema-00035,<printx pagema consistency failure, should be 00035>
+ifn filebk-00050,<printx filebk consistency failure, should be 00050>
+ifn zcdata-02656,<printx zcdata consistency failure, should be 02656>
+ifn  dntbl-00377,<printx  dntbl consistency failure, should be 00377>
+ifn  pltbl-00401,<printx  pltbl consistency failure, should be 00401>
+ifn  rrtbl-00200,<printx  rrtbl consistency failure, should be 00200>
+ifn  rdtbl-05000,<printx  rdtbl consistency failure, should be 05000>
+ifn  satbl-00022,<printx  satbl consistency failure, should be 00022>
+ifn poltbl-00002,<printx poltbl consistency failure, should be 00002>
+ifn  maxdc-00400,<printx  maxdc consistency failure, should be 00400>
+ifn  maxlc-00077,<printx  maxlc consistency failure, should be 00077>
+ifn labelh-01761,<printx labelh consistency failure, should be 01761>
+ifn  maxsb-00012,<printx  maxsb consistency failure, should be 00012>
+ifn labels-00020,<printx labels consistency failure, should be 00020>
+ifn ulabel-00022,<printx ulabel consistency failure, should be 00022>
+ifn labuse-00003,<printx labuse consistency failure, should be 00003>
+ifn  dname-00005,<printx  dname consistency failure, should be 00005>
+ifn   node-00011,<printx   node consistency failure, should be 00011>
+ifn     rr-00006,<printx     rr consistency failure, should be 00006>
+ifn   lock-00003,<printx   lock consistency failure, should be 00003>
+ifn zoneen-11151,<printx zoneen consistency failure, should be 11151>
+ifn  serch-00347,<printx  serch consistency failure, should be 00347>
+ifn master-17036,<printx master consistency failure, should be 17036>
+	>
+	end

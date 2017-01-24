@@ -1,0 +1,14 @@
+!
+!	Control file to build DDT11 on both TOPS-10 and TOPS-20
+!
+!COMP MYSNOM
+comp DDTSYM
+comp DDTGP
+comp DDTFIL
+comp DDTSIM
+comp DDT11
+R LINK
+*DDT11/SAVE
+*DDTFIL,DDTGP,DDTSIM,DDT11
+*/GO
+

@@ -1,0 +1,566 @@
+;<BBN-4-MONITOR>CNTPHY.MAC.17, 10-Apr-82 13:55:10, Edit by TAPPAN
+; Add NFEVEC -- Hardware dependent dispatch vector
+; Change name to NFEPHY (General network front end)
+;<TAPPAN.4>CNTPHY.MAC.2, 28-Feb-82 19:21:39, Edit by TAPPAN
+; rescind the previous edit, since we can't call 
+; NETHSH at interrupt level (should fix that)
+;<BBN-4-MONITOR>CNTPHY.MAC.16, 23-Feb-82 20:15:17, Edit by TAPPAN
+; Call INTUP and INTDWN when interface goes up or down
+;<BBN-4-MONITOR>CNTPHY.MAC.14,  8-Feb-82 12:08:35, Edit by TAPPAN
+; Change inefficent code at CNOSRT
+;<BBN-4-MONITOR>CNTPHY.MAC.13,  9-Dec-81 13:07:08, Edit by TAPPAN
+; Increase maximum packet size we can send to 1024.
+;<BBN-4-MONITOR>CNTPHY.MAC.11, 28-Aug-81 16:05:38, Edit by TAPPAN
+;103: Keep PI's off while hacking output Q's to preserve integrity
+;<BBN-4-MONITOR>CNTPHY.MAC.3, 20-Jul-81 18:40:29, Edit by TAPPAN
+; use LGTAD (resident) instead of GTAD% (swappable) to find time
+;<MULTINET-MONITOR>CNTPHY.MAC.50,  8-Jun-81 19:59:40, Edit by TAPPAN
+; Allow 8 or 16 byte transfers across the DTE under MODE16 conditional
+	SEARCH PROLOG,PROKL,MONSYM,MACSYM,INPAR,MNTPAR,IMPPAR
+
+	TTITLE NFEPHY,,<Driver for Network front-end DTE on Multinet>
+
+;;; Dan Tappan
+	ASCIZ	/
+	NFEPHY
+	COPYRIGHT (C) 1981,1982 BOLT BERANEK and NEWMAN INC.
+	/
+
+;;;
+;;; This impliments a device driver suitable for sending Internet packets
+;;; out over a DTE to a front-end 11 (hooked up to Cheapnet or otherwise)
+;;; that is compatable with Multinet conventions
+;;;
+
+;;;
+;;; 10<->11 protocal used
+;;;
+;;; When one of the machines restarts, it clears the up bit in it's
+;;; status word, and rings the other's doorbell, when the other recieves
+;;; this, it reinitializes whatever is necessary, and sets it's
+;;; ACK bit, and rings back. When the first recieves this it sets it's up bit
+;;; clears the other's ACK bit, and allows I/O
+;;;
+;;; If one machine has a packet to send to the other, then it sets the REQOT
+;;; bit in it's status word, and the size of the packet in bytes in the
+;;; low eight bits, and rings the other's doorbell, this does what is 
+;;; necessary to receive, interrupting both on completion
+;;;
+
+;;; Definitions
+MODE16==1			; Non-zero if 16 bit transfers across the DTE
+
+DEFSTR PKSIZ,,35,12		; Size of packet to transfer
+DEFSTR REQOT,,20,1		; Output request bit
+DEFSTR UPBIT,,21,1		; Machine is up
+DEFSTR AKBIT,,22,1		; Restart acknowledge
+
+MAXPKL==^D1024			; Maximum packet length (bytes) we allow
+BYTSIZ==^D8			; Size of transfers across the DTE
+WRDDIV==4			; Divisor, #bytes -> #words(PDP10)
+
+IFN MODE16,<
+MAXPKL==MAXPKL/2
+BYTSIZ==BYTSIZ*2
+WRDDIV==2
+>				; If word mode
+
+
+SIZMSK==7777			; 12 bits of packet size
+
+;;; Address's of DTE block
+
+;;; DTEINT and DTEEPW are globals
+;;; DTEINT==:KIEPT+142		; Interrupt location
+;;; DTEEPW==:KIEPT+144		; Examin protection word
+;;; DTEERW==:KIEPT+145		; Examine relocation word
+;;; DTEDPW==:KIEPT+146		; Deposit protection word
+;;; DTEDRW==:KIEPT+147		; Deposit relocatiopn word
+;;; DTEEBP==:KIEPT+140		; To 11 byte pointer
+;;; DTETBP==:KIEPT+141		; To 10 byte pointer
+
+;;; CONO STUFF
+;;; (Some of these bit definitions are in PROKL)
+;;;
+LDTEPI==DTEPI0+DTEPIE+IMPCHN	; Enable all interrupt
+CLTO10==40			; Clear input done bits
+CLTO11==100			; clear output done bits
+RSTDTE==DTETDB+CLTO10+CLTO11	; Reset relevant bits
+
+;;;
+;;; Header -- First word is link/size,
+;;; the second word describes the type of packet.
+;;; if > 2^24 then packet is an internet packet, header word is the 
+;;; internet address of the interface it was received on (11 -> 10)
+;;; or the Internet address of the immediate destination (10->11)
+;;;
+;;; if the first byte if 0 then the next byte encodes the packet type
+;;; further as:
+;;;	0 -- NOP
+;;;	1 -- Raw network packet, third byte is the interface number.
+;;;	2 -- Interface reset. Byte 3  is the interface number,
+;;;	byte 4 is the network type code. If this command is sent
+;;;	from the 11 to the 10 then the packet data is the local address
+;;;	of the interface (size depends on the network type).
+;;;	If sent from the 10 to the 11 the first 32 bits of data are
+;;;	the internet address to be used on that front-end.
+;;;	3 -- Address error (Interface unreachable). Probably only
+;;;	11 -> 10. If the 3rd byte is 255 then the first 32 bits of data 
+;;;	are the Internet address that can't be reached, otherwise
+;;;	it is the interface number that is not-usable
+;;;
+;;; Command codes
+C%NOP==0
+C%RPKT==1
+C%IRST==2
+C%AERR==3
+
+.NFEDH==1				; Destination host word
+.NFEHL==2				; length of header
+
+DEFSTR	PKTNET,.NFEDH,7,8		; Non-zero if internet address
+DEFSTR	PKTCMD,.NFEDH,15,8		; Command byte in word
+DEFSTR	PKTINN,.NFEDH,23,8		; Interface number
+DEFSTR	PKTITY,.NFEDH,31,8		; Network type
+;;;
+
+
+;;; Driver routines
+	RESCD
+;;; Protocal vector
+NFEVEC::
+	NCTVEC(NFEVEC,RSKP,NTPKIL)	; Protocal specific kill function
+	NCTVEC(NFEVEC,R,NTPERR)		; Protocal specific error handler
+	NCTVEC(NFEVEC,NFEEIN,NTIDUN)	; Done with input
+	NCTVEC(NFEVEC,INTODN,NTODUN)	; Done with input
+	NCTVEC(NFEVEC,INTFBF,NTRBUF)	; Flush a buffer
+	NCTVEC(NFEVEC,RSKP,NTOTOK)	; Output allowed check
+	NCTVEC(NFEVEC,NFEHDR,NTLLDR)	; Local leader routine
+	NCTVEC(NFEVEC,ININFE,NTPINI)	; protocal initialization
+
+;;; Functions from the above
+
+;;; 
+;;; Protocal specific initialization
+;;;
+ININFE:	MOVEI T1,.NFEHL			; Size of "local leader
+	MOVEM T1,NTHDRL(P1)		; set it
+	RET				; and return
+
+;;;
+;;; NFEHDR -- Network front-end header.
+;;; Called
+;;;	 T1 -- Local destination address
+;;;	 T2 -- buffer
+;;;
+NFEHDR:
+IFN MAXLDR-.NFEHL,<
+	MOVEI T3,.NFEHL		; Size of our header
+	CALL FIXLDR		; Fix the leader size
+>
+	LSH T1,4		; left justify
+	MOVEM T1,.NFEDH(T2)	; Save the local destination
+	RET
+
+;;; 
+;;; NFEEIN -- End of input handler
+;;; Called P1 -- pointer to physical NCT
+;;; NTIB(P1) completed buffer
+;;;
+NFEEIN:
+	MOVE T2,NTIB(P1)	; Get input buffer
+	JE PKTNET,(T2),NFEEI1	; If Internet packet
+	MOVNI T3,.NFEHL		; Size to correct by
+	CALL FIXLDR		; ...
+	MOVEM T2,NTIB(P1)	; Set new address
+	CALLRET INTEIN		; Give packet to the internet
+
+;;; Here if packet contains a function
+NFEEI1:	LOAD T1,PKTCMD,(T2)	; Get command
+	CAIL T1,MAXFCN		; Good?
+	 MNTBUG(HLT,NFEBFN,<Bad function code from network FE>,<<T2,CODE>,<P1,NCT>>)
+	CALL @FCNTAB(T1)	; Dispatch
+	MOVE T2,NTIB(P1)	; get buffer
+	CALL INTFBF		; release it
+	SETZM NTIB(P1)		; CLear
+	CALLRET NFISRT		; Start input again if possible
+
+;;; Function table
+FCNTAB:	IFIW!R			; NOP
+	IFIW!R			; Raw network packet
+	IFIW!NFEIUP		; Interface up
+	IFIW!NFENXI		; Interface non-existant
+MAXFCN==.-FCNTAB
+
+;;;
+;;; Handle an "Interface up" message
+;;; packet contains the type and address of the interface
+;;;
+;;; This should probably check the given address
+;;; against the NCT's, and complain if different.
+;;; Also if type is Ethernet, then should reply with
+;;; a "set interface address" with the correct
+;;; internet address.
+NFEIUP:	RET			; Nothing for now
+
+;;;
+;;; Handle a "Net unreachable" message
+;;; 
+NFENXI:	MOVE T3,.NFEHL(T2)	; get the address
+	LSH T2,-4		; right justify
+	NETNUM T2,T3		; and it's network number
+	XMOVEI T1,[	LOAD T1,NTNET,(P1)	; Get net
+			CAME T1,T2		; Same?
+			 RET			; no
+			SETZM NETON(P1)		; Mark the network down
+			CALL MNTWAK		; Wake up hardware fork
+			RET]			; and return
+	CALL VNCTFN		; Apply to the NCT's
+	RET
+	
+;;;
+;;; Hardware vector
+DTEVEC::
+	NCTVEC(DTEVEC,NFEKIL,NTHKIL)	; Hardware kill
+	NCTVEC(DTEVEC,NFEINI,NTHINI)	; Initialization
+	NCTVEC(DTEVEC,NFERSS,NTRSRT)	; Hardware restart
+	NCTVEC(DTEVEC,NFISRT,NTISRT)	; Input start
+	NCTVEC(DTEVEC,NFOSRT,NTOSRT)	; Output start
+	NCTVEC(DTEVEC,NFESCK,NTSCHK)	; Status check
+
+	SWAPCD
+;;; NFEINI - Initialize an interface
+NFEINI:	XMOVEI T1,NFEINT	; Get our interrupt locaion
+	MOVEM T1,NTIDSP(P1)	; Set dispatch address
+	MOVE T1,NTCONO(P1)	; Get an I/O instruction
+	LSH T1,-^D23		; Sift over to get
+	ANDI T1,170		; Ofset into DTE area
+	MOVEM T1,NTDTEN(P1)	; Save it here
+	MOVEI T2,NT10ST(P1)	; Point to 10's status word
+	MOVEM T2,DTEERW(T1)	; Set examine relocation	
+	MOVEI T2,NT11ST(P1)	; Point to 10's status word
+	MOVEM T2,DTEDRW(T1)	; Set deposit relocation
+	MOVEI T2,2		; Size of region
+	MOVEM T2,DTEDPW(T1)	; Set for deposit region
+	MOVEI T2,1
+	MOVEM T2,DTEEPW(T1)	; And examine
+	MOVE T2,NTIINT(P1)	; Get interrupt instruction
+	MOVEM T2,DTEINT(T1)	; Store in DTE block
+ 	MOVE T1,[XWD .RESP3,MAXPKL/WRDDIV+2]	; Priority,, Size of buffer
+	MOVX T2,.RESGP		; From general pool
+	CALL ASGRES		; Assign it
+	 JSP CX,NOBUFF		; No buffer
+	HRLI T1,(<POINT BYTSIZ,0>)	; Make into a byte pointer
+	MOVEM T1,NTINP(P1)	; Save 
+	MOVE T2,NTDTEN(P1)	; ge back DTE index
+	MOVEM T1,DTETBP(T2)	; Set in block
+	MOVE T1,[XWD .RESP3,MAXPKL/WRDDIV+2]	; Again for output side
+	MOVX T2,.RESGP
+	CALL ASGRES
+	 JSP CX,NOBUFF
+	HRLI T1,(<POINT BYTSIZ,0>)
+	MOVEM T1,NTOUP(P1)	; And save it for later also
+	MOVE T2,NTDTEN(P1)
+	MOVEM T1,DTEEBP(T2)	; ...
+	SETZM NTIB(P1)		; Clear buffers
+	SETZM NTOB(P1)		; ...
+	JRST NFERSS
+
+;;; Here if insufficent storage for I/O buffers
+NOBUFF:	MNTBUG(HLT,NFENBF,<No storage for Fibernet buffers>,<<CX,D>>)
+
+	RESCD
+;;; Here when restarting
+NFERSS:	SETZM NT10ST(P1)	; Clear status word
+	SETZM NT11ST(P1)	; And init the 11 side also
+
+NFERS1:	CALL CLROB		; Flush any output buffer
+	CALL CLRIB		; and input
+	SETZM NTORDY(P1)	; Output not allowed yet
+
+	MOVX T1,RSTDTE		; Get initializing bits
+	MNTXCT NTCONO		; And CONO them
+	MOVX T1,LDTEPI		; And PI bits also
+	MNTXCT NTCONO		; And CONO Them also
+	CALLRET RNGBEL		; And ring the 11's doorbel
+
+;;; 
+;;; NFISRT - Start input routine
+;;;
+NFISRT:	JE REQOT,<+NT11ST(P1)>,R	; Return if no input	
+	SKIPE NTIB(P1)		; anything going?
+	 RET			; yes, null also
+	SOSGE INTNFI		; Any input buffers?
+	 AOSA INTNFI		; no
+	  CAIA			; 
+	  JRST NFEINB		; error, defer processing
+	PIOFF                   ; Turn interrupts off
+	SKIPN T1,INTFRI		; Get next buffer
+	 MNTBUG(HLT,NFBDIB,<Internet input queue fouled>)
+	LOAD T2,NBQUE,(T1)	; get next buffer
+	SKIPE T2
+	 SETSEC T2,INTSEC	;Put inproper section if exists
+	MOVEM T2,INTFRI		; Put queue back
+	PION			; Allow inetrrupts again
+	SETZRO NBQUE,(T1)	; clear the queue word
+IFN MAXLDR-.NFEHL,<
+	MOVE T2,T1		; Point to the packet
+	CAML T2,[XWD INTSEC,1000] ; Valid buffer?
+	 CAMLE T2,[XWD INTSEC,-1] ; ?
+	  MNTBUG(HLT,INTGBB,<Got bad Internet buffer>)
+	MOVEI T3,.NFEHL		; Get header length
+	CALL FIXLDR		; Correct for it
+>
+	EXCH T2,NTIB(P1)	; Save final buffer
+	JUMPN T2,CLROB1		; If something else snuck in, free buffer
+	SETZRO REQOT,<+NT11ST(P1)>	; Clear request bit
+	MOVE T1,NTDTEN(P1)	; Get DTE block offset
+	MOVE T2,NTINP(P1)	; And input byte pointer
+	MOVEM T2,DTETBP(T1)	; Set in block
+	LOAD T1,PKSIZ,<+NT11ST(P1)>	; Get input size in bytes
+	CAILE T1,MAXPKL		; Valid size?
+	 JRST NFEDE2		; No, error
+	MOVNS T1		; Get negative
+	ANDI T1,SIZMSK		; Round to 12 bits
+	TXO T1,1B23		; Interrupt both on completion
+	MNTXCT NTDATO		; Do DATAO
+	RET			; Return
+
+NFEINB:	AOS INTFLG		; make gateway get more buffers
+	CALL MNTWAK		; Wake up hardware fork
+	RET
+
+NFEDE2: MNTBUG(CHK,NFEIBG,<Input packet too big>)
+	CALLRET NFERSS		; Re-sync us
+
+
+
+;;; 
+;;; NFOSRT - Start output routine
+;;;
+NFOSRT:	PIOFF                   ; No interrupts
+	SKIPN NTOB(P1)		; Anything going now?
+	 JRST NFOSR1
+	PION                    ; Allow interrupts again
+	SKIPN T1,NTTOUT(P1)	; get timeout
+	 RET			; None set
+	SUB T1,TODCLK		; subtract "now"
+	JUMPL T1,NFERSS		; hung
+	RET			; return
+
+NFOSR1:	
+	SKIPE T2,NTIOBO(P1)     ; Anything waiting?
+	 JRST NFOSR2            ; Yes
+	PION			; 103: nothing waiting
+	SETZM NTOB(P1)          ; Nothing waiting
+	RET
+
+NFOSR2:	LOAD T1,NBQUE,(T2)      ; Get next in list
+	JUMPN T1,NFOSR3		; Something there
+	SETZM NTIOBI(P1)	; clear input list also
+	CAIA
+NFOSR3:	SETSEC T1,INTSEC	; Put pointer in right section
+	MOVEM T1,NTIOBO(P1)	; Save pointer to next buffer
+	MOVEM T2,NTOB(P1)	; Save current output pointer
+	PION			; 103: Q's safe now, give back machine
+	SETZRO NBQUE,(T2)	; clear the link	
+	LOAD T1,NBBSZ,(T2)	; Get number of words in buffer
+	SOS T1			; Minus the link word
+	CAILE T1,MAXPKL/WRDDIV+1	; Valid size?
+	 MNTBUG(CHK,NFBGOT,<Output buffer too big>)
+	MOVE T3,T1		; Save count
+	ASH T1,WRDDIV/2		; Convert to number of bytes
+	STOR T1,PKSIZ,<+NT10ST(P1)>	; Set count
+	MOVE T1,T3		; get size again	
+	XMOVEI T2,.NFEDH(T2)	; point to the actual message
+	HRRZ T3,NTOUP(P1)	; Get dest ponter
+	CALL XBLTA              ; Transfer down to section 0
+	MOVE T2,NTOUP(P1)	; Get pointer
+	MOVE T1,NTDTEN(P1)	; Get DTE offset
+	MOVEM T2,DTEEBP(T1)     ; Set as byte pointer
+	MOVE T1,TODCLK		; get clock now
+	ADDI T1,^D1000		; Set one second timeout
+	MOVEM T1,NTTOUT(P1)	; In NCT
+	SETONE REQOT,<+NT10ST(P1)>	; Request output
+	CALLRET RNGBEL		; Ring the bell
+
+;;;
+;;; NFEINT - Interrupt handler routine, Called from NCT with all AC's saved
+;;;
+NFEINT:	MOVX T1,DTETDN!DTETER	; Input done?
+	MNTXCT NTCNSZ		; ?
+	 JRST NFEIDN		; yes
+	MOVX T1,DTEEDN		; To 11 done?
+	MNTXCT NTCNSZ		; ?
+	 JRST NFEODN		; Output done
+	MOVX T1,DTEEER		; To 11 error?
+	MNTXCT NTCNSZ		; ?
+	 JRST NFERTX		; Yes, resend packet
+	MOVX T1,DTETDB          ; Check doorbell
+	MNTXCT NTCNSZ		; ?
+	 JRST NFETDB            ; Yes, check it out
+	MNTBUG(HLT,NFEBDI,<Bad interrupt>)
+
+;;; Here on to 11 done
+NFEODN:
+	SKIPN NTOB(P1)		; really doing output?
+	 JRST NFEOD1		; no
+	MNTCALL NTODUN		; Do output done
+NFEOD1:	MOVX T1,CLTO11		; Clear to 11 done bits
+	MNTXCT NTCONO
+	JRST NFOSRT		; Keep output moving
+
+;;; Here on to 10 done
+NFEIDN:	SKIPN T3,NTIB(P1)	; Were we doing input?
+	 JRST [ MNTBUG(CHK,NFEBII,<Bad Input Interrupt>)
+		JRST NFEIDX]	; Exit routine
+	MOVX T1,DTETER          ; To 10 error?
+	MNTXCT NTCNSZ		; ?
+	 JRST NFEID1		; Yes, ignore it
+	MOVE T2,NTDTEN(P1)	; Get DTE offset
+	HRRZ T1,DTETBP(T2)	; Get final pointer
+	HRRZ T2,NTINP(P1)	; Get original
+	SUBI T1,-1(T2)		; Get packet size (in words)
+	PUSH P,T1		; Save size
+	PUSH P,T3		; And address
+	XMOVEI T3,1(T3)		; point one past the header
+	CALL XBLTA              ; Transfer packet up to section 6
+	POP P,T3		; Restore address
+	POP P,T1		; And size
+	MOVEM T1,(T3)		; Set buffer size
+	MNTCALL NTIDUN		; Input done processing
+NFEIDX:	MOVX T1,CLTO10		; Clear input bits
+	MNTXCT NTCONO		; With the appropriate CONO
+	CALLRET NFISRT		; In case there's another waiting
+
+;;; Here on input error
+NFEID1:	MNTXCT NTCONI		; get the error bits
+	MNTBUG(INF,NFEIER,<Network front end input error>,<<T1,BITS>,<P1,NCT>>)
+	CALL CLRIB		; Clear input buffer
+	JRST NFEIDX		; And exit
+
+;;;
+;;; NFETDB - 10 doorbell handler
+;;;
+
+NFETDB:	JN UPBIT,<+NT11ST(P1)>,NFEDB0	; Up bit set?
+	SETONE <AKBIT,UPBIT>,<+NT10ST(P1)>	; Set our ack bit
+
+	CALL NFERS1		; reset all
+
+	CALL LGTAD		; Get time of date
+	MOVEM T1,NTXUPT(P1)	; as when he came up
+	SETOM NTRDY(P1)		; Hardware is working
+	AOS NTSTCH(P1)		; Log a change of state
+	CALL MNTWAK		; Wake up hardware fork
+
+	JRST DBELLX		; Exit routine
+
+;;; Here on response to ACK
+NFEDB0:	JN UPBIT,<+NT10ST(P1)>,NFEDB1	; Has our upness been acked?
+	JE AKBIT,<+NT11ST(P1)>,NFEDBE	; He's not acking, error
+
+	SETZRO AKBIT,<+NT11ST(P1)>	; Zero ACK bit
+	SETONE UPBIT,<+NT10ST(P1)>	; Set our upbit
+	SETOM NTORDY(P1)		; And allow output
+	SETOM NTRDY(P1)		; Flag hardware working
+	CALL LGTAD		; Get time of date
+	MOVEM T1,NTXUPT(P1)	; as when he came up
+
+	AOS NTSTCH(P1)		; indicate change in state
+	CALL MNTWAK		; signal hardware fork
+
+	SKIPA				; Skip error
+NFEDBE:	MNTBUG(CHK,NFENAK,<Input before Ack>)
+
+	CALL RNGBEL			; Bong on him again
+	JRST DBELLX			; And exit
+
+NFEDB1:	SETOM NTORDY(P1)	; Output is allowed at this point
+	CALL NFOSRT		; Do output if possible
+
+	JE REQOT,<+NT11ST(P1)>,DBELLX	; Does he want to start output?
+
+	SKIPN NTIB(P1)		; Was input happening?
+	IFSKP.
+	 MNTBUG(CHK,NFEMIN,<Input request while input in progress>)
+	 CALL NFERSS		; Reset and resync
+	ELSE.
+	 CALL NFISRT		; start it coming
+	ENDIF.
+
+DBELLX:	MOVX T1,DTETDB		; Clear the doorbell
+	MNTXCT NTCONO		; With cono
+	RET
+
+
+
+;;;
+;;; CLROB - Free up output buffer
+;;;
+CLROB:	SKIPN T2,NTOB(P1)	; Get output buffer
+	 RET			; Return now if nothing there
+	SETZM NTOB(P1)		; Flush buffer
+	SETZM NTTOUT(P1)	; Clear the timeout
+CLROB1:	CALLRET INTFBF		; free the buffer
+
+
+;;; CLRIB - Free input buffer
+CLRIB:	SKIPN T2,NTIB(P1)	; Anything there?
+	 RET			; no
+	SETZM NTIB(P1)		; zero flag
+	JRST CLROB1		; free it
+
+;;;
+;;; NFERTX - Here on a to 11 error, clear error and try again
+;;;
+NFERTX:	MNTXCT NTCONI
+	MNTBUG(INF,NFEOER,<Network FE Output error>,<<T1,BITS>,<P1,NCT>>)
+	MOVE T1,NTDTEN(P1)	; Get offset
+	MOVE T2,NTOUP(P1)	; Get pointer
+	MOVEM T2,DTETBP(T1)	; reset pointer
+	SETONE REQOT,<+NT10ST(P1)>	; Reset request bit
+	MOVX T1,DTEEER!DTEEDN	; Clear to 11 error
+	MNTXCT NTCONO		; ....
+	CALLRET RNGBEL		; Ring bell again
+
+;;;
+;;; RNGBEL - Ring 11's doorbel
+;;;
+RNGBEL:	MOVX T1,DTEEDB		; Proper bit
+	MNTXCT NTCONO		; Zap it
+	RET			; and return
+
+;;;
+;;; NFESCK - Status check routine,
+;;; skips if interface is alright
+;;;
+;;; Called with P1 - Pointer to NCT
+NFESCK:	JE UPBIT,<+NT11ST(P1)>,R ; If 11 is not up
+	JE UPBIT,<+NT10ST(P1)>,R ; Or hasn't seen us come up
+	JN AKBIT,<+NT10ST(P1)>,R ; Or hasn't seen our ack yet
+	MOVX T1,DTEEER!DTETER	; Or if an error has occured
+	MNTXCT NTCNSZ
+	 RET			; Return bad
+	RETSKP			; else success
+
+;;;
+;;; NFEKIL - Turn off the hardware on a Fibernet DTE
+;;;
+NFEKIL:	SKIPE NETON(P1)		; Network supposed to be on?
+	 JRST NFEKL1		; Yes, don't disable interrupts
+				; (so 11 can tell us when it comes back)
+	MOVX T1,DTEPIE		; Get Bits to
+	MNTXCT NTCONO		; Turn PI's off
+NFEKL1:	SETZM NTORDY(P1)	; Turn off output
+	CALL INTDWN		; Interface is down
+	RET			; And return
+
+
+	TNXEND
+	END	; Of NFEPHY
+
+
+
+
+

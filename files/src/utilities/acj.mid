@@ -1,0 +1,1102 @@
+;<UTILITIES>ACJ.MID.133, 27-Apr-83 00:58:28, Edit by MRC
+
+TITLE ACJ
+SUBTTL Definitions
+
+; Stanford SCORE Access Control Job for TOPS-20 release 5
+; Mark Crispin, SU-SCORE
+
+; Access Control Job features:
+;  1. Disallow OPERATOR logins/attach if not on CTY or a PTY controlled by
+;     OPERATOR.
+;  2. Disallow login/attach if frozen or root-directory subdirectory.
+;  3. Record CRDIR% that sets capabilities, disallow CRDIR% of non files-only
+;     subdirectory.
+;  4. Log capabilities enabling
+;  5. Downtime queue management, catch HSYS% and update downtime queue as
+;     appropriate.
+;  6. If FTSETSPD, disallow setting speed on non-dialup terminals if not
+;     WHEEL or OPERATOR (for when the front end was flaking out). 
+;  7. Disallow creating more than MAXFRK forks.
+;  8. ACCESS and CONNECT to non-PS: structures works if PS: user group matches.
+;  9. If FTSUBDIR, ACCESS and CONNECT work to one's subdirectories (now done in
+;     the system).
+; 10. Disallow CRJOB% if not WHEEL or OPERATOR.
+; 11. Record logout information for FINGER.
+; 12. Record entry into MDDT on console.
+; 13. Disallow CTY: assign
+
+; Assembly parameters
+
+IFNDEF ACJVER,ACJVER==5		; version
+IFNDEF FTSETSPD,FTSETSPD==0	; non-zero if to disallow setting speeds
+IFNDEF FTSUBDIR,FTSUBDIR==0	; non-zero if to handle subdirectory connect
+IFNDEF MAXFRK,MAXFRK==10.	; maximum number of forks any one job may have
+IFNDEF PDLLEN,PDLLEN==20	; length of stack
+IFNDEF RCVLEN,RCVLEN==100	; length of RCVOK% argument block
+IFNDEF USRLEN,USRLEN==10	; length of user name string
+IFNDEF HSYLEN,HSYLEN==18.	; two date/time words plus 16 string words
+IFNDEF GTDLEN,GTDLEN==.CDDFE	; size of GTDIR% value block
+IFNDEF GRPLEN,GRPLEN==100.	; maximum number of groups we handle
+
+; AC's
+
+A=1 ? B=2 ? C=3 ? D=4		; JSYS arguments, temporaries
+E=5 ? F=6 ? G=7			; other temporaries
+P=17				; stack pointer (used in ERCAL)
+
+	IFNDEF STAT%,STAT%=JSYS 745
+	IFNDEF TCP%TV,TCP%TV==<100,,0>
+	IFNDEF TCP%NT,TCP%NT==<40,,0>
+
+.INSRT MRC:<FINGER>FNGDEF.MID
+
+; Macros
+
+DEFINE TMSG STRING
+ HRROI A,[ASCIZ\!STRING!\]
+ PSOUT%
+TERMIN
+
+DEFINE LOGMSG STRING
+ CALL TIMSMP
+ TMSG [ ACJ: STRING]
+TERMIN
+
+DEFINE INS ?VALUE,MASK
+ <.DPB VALUE,<.BP MASK>> TERMIN
+
+SUBTTL Data area
+
+.DECSAV				; absolute assembly, produce an .EXE file
+
+CORBEG==.
+PDL:	BLOCK PDLLEN		; stack
+RCVBLK:	BLOCK RCVLEN		; RCVOK% argument block
+USRNAM:	BLOCK USRLEN		; user name string
+IFN FTSUBDIR,[
+DIRNAM:	BLOCK <2*USRLEN>+1	; directory name string
+];IFN FTSUBDIR
+HSYTAB:	BLOCK HSYLEN		; HSYS% block
+HSYTB1:	BLOCK HSYLEN		; auxillary readin block
+DWNJFI:	BLOCK 1			; downtime queue input JFN
+DWNJFO:	BLOCK 1			; downtime queue output JFN
+HSYDNP:	BLOCK 1			; non-zero means HSYS% needs to be done
+FNGJFN:	BLOCK 1			; JFN of FINGER file
+GTJBLK:	BLOCK .JIMAX+1		; GETJI% readin area
+MYUSRN:	BLOCK 1			; save of my user number
+MYJOBN:	BLOCK 1			; save of my job number
+OPRNUM:	BLOCK 1			; user number of OPERATOR
+CTYNUM:	BLOCK 1			; TTY number of CTY
+CTYDEV:	BLOCK 1			; CTY's device designator
+NVTMIN:	BLOCK 1			; lowest NVT number
+NVTMAX:	BLOCK 1			; highest NVT number
+TVTMIN:	BLOCK 1			; lowest TVT number
+TVTMAX:	BLOCK 1			; highest TVT number
+PNVMIN:	BLOCK 1			; lowest PNV number
+PNVMAX:	BLOCK 1			; highest PNV number
+$NVTPU:	BLOCK 1			; NVTPUP table
+$PUPFP:	BLOCK 1			; PUPFPT table
+$PUPBU:	BLOCK 1			; PUPBUF table
+PUPBUF:	BLOCK 1			; address of Pup free storage
+
+; These blocks are +1 since they begin with a count word
+GTDBLK:	BLOCK GTDLEN+1		; GTDIR% value block
+USRGRP:	BLOCK GRPLEN+1		; user group list for user doing connect
+DIRGRP:	BLOCK GRPLEN+1		; directory group list for dir to connect to
+COREND==.-1
+PAT..:				; patch area
+	LOC <.\777>+1		; move to a page boundary
+
+; Name of the downtime queue
+
+DWNQUE:	ASCIZ/SYSTEM:DOWNTIME.QUEUE/
+
+SUBTTL Start of program
+
+; Entry vector
+
+EVEC:	JRST ACJ		; START
+	JRST ACJ		; REENTER
+	<INS ACJVER,VI%MAJ>\<INS .FVERS,VI%EDN> ; version
+EVECL==.-EVEC
+
+ACJ:	RESET%			; clean up I/O, etc.
+	MOVE [CORBEG,,CORBEG+1]	; init data area
+	SETZM CORBEG
+	BLT COREND
+	MOVE P,[PDL(-PDLLEN)]	; init stack
+	MOVEI A,.FHSLF		; get my capabilities
+	RPCAP%
+	TRNN B,SC%WHL\SC%OPR	; wizard?
+	 JRST [	LOGMSG [WHEEL or OPERATOR capability required
+]
+		HALTF%
+		JRST ACJ]
+	MOVE B,C		; enable all capabilities
+	EPCAP%
+	 ERCAL FATAL
+	MOVEI A,.SFMS0		; enable all system alerts
+	MOVEI B,1
+	SMON%
+	 ERCAL FATAL
+	GJINF%			; get my user and job number
+	MOVEM A,MYUSRN
+	MOVEM C,MYJOBN
+	SETZB A,C		; get OPERATOR's user number
+	HRROI B,[ASCIZ/OPERATOR/]
+	RCUSR%
+	 ERCAL FATAL
+	MOVEM C,OPRNUM		; save for later
+	HRROI A,[ASCIZ/CTY/]	; get CTY line number
+	STDEV%
+	 ERCAL FATAL
+	MOVEM B,CTYDEV		; save in device format for ASND% check
+	HRRZM B,CTYNUM		; save for OPERATOR login check
+	HRLOI 377777		; assume no ARPANET
+	MOVEM NVTMIN
+	MOVEM NVTMAX
+	MOVEM TVTMIN
+	MOVEM TVTMAX
+	MOVEM PNVMIN
+	MOVEM PNVMAX
+	MOVEI A,.GTNSZ		; get NCP data
+	GTNCP%
+	 ERJMP CHKTVT		; no ARPANET here
+	HRRZM C,NVTMIN		; set first NVT
+	HLRO B,C		; -number of NVTs
+	SUB C,B			; 1+first NVT number
+	HRRZM C,NVTMAX
+CHKTVT:	MOVSI A,(TCP%NT)	; get TVT function
+	STAT%
+	 ERJMP CHKPNV		; no TCP here
+	HRRZM B,TVTMIN		; set first TVT
+	HLRO C,B		; -number of TVTs
+	SUB B,C			; 1+last TVT number
+	HRRZM B,TVTMAX
+CHKPNV:	MOVE A,[SIXBIT/PUPPAR/]
+	SYSGT%			; get -nbr,,1st Pup NVT
+	JUMPE B,HOOKUP		; forget if no such table
+	HRRZM A,PNVMIN		; save TTY nbr of 1st Pup NVT
+	HLRE D,A
+	SUBI A,1(D)
+	HRRZM A,PNVMAX		; and TTY nbr of last Pup NVT
+	MOVEI A,(B)		; get GETAB table nbr
+	HRLI A,1		; next item in table
+	GETAB%
+	 ERJMP HOOKUP
+	MOVEM A,PUPBUF		; addr of Pup free storage (in monitor space)
+	MOVE A,[SIXBIT/NVTPUP/]
+	SYSGT%
+	 ERCAL FATAL
+	MOVEM B,$NVTPUP
+	MOVE A,[SIXBIT/PUPFPT/]
+	SYSGT%
+	 ERCAL FATAL
+	MOVEM B,$PUPFPT
+	MOVE A,[SIXBIT/PUPBUF/]
+	SYSGT%
+	 ERCAL FATAL
+	MOVEM B,$PUPBUF
+;	JRST HOOKUP
+
+; Now wire in the ACJ hooks we want
+
+HOOKUP:	MOVEI A,.SFSOK
+	MOVE B,[SF%EOK\SF%DOK\.GOASD]; catch ASND%
+	SMON%
+	 ERCAL FATAL
+	MOVE B,[SF%EOK\SF%DOK\.GOOAD]; catch assign due to OPENF%
+	SMON%
+	 ERCAL FATAL
+	MOVEI A,.SFSOK
+	MOVE B,[SF%EOK\SF%DOK\.GOCJB]; catch CRJOB%
+	SMON%
+	 ERCAL FATAL
+	MOVE B,[SF%EOK\SF%DOK\.GOLOG]; catch logins
+	SMON%
+	 ERCAL FATAL
+	MOVE B,[SF%EOK\SF%DOK\.GOCFK]; catch CFORK%
+	SMON%
+	 ERCAL FATAL
+IFN FTSETSPD,[
+	MOVE B,[SF%EOK\SF%DOK\.GOTBR]; catch setting terminal speed
+	SMON%
+	 ERCAL FATAL
+];IFN FTSETSPD
+	MOVE B,[SF%EOK\SF%DOK\.GOLGO]; catch logout
+	SMON%
+	 ERCAL FATAL
+	MOVE B,[SF%EOK\SF%DOK\.GOCRD]; catch CRDIR%
+	SMON%
+	 ERCAL FATAL
+	MOVE B,[SF%EOK\SF%DOK\.GOMDD]; catch MDDT%
+	SMON%
+	 ERCAL FATAL
+	MOVE B,[SF%EOK\.GOACC]	; access to directory w/o other rights
+	SMON%
+	 ERCAL FATAL
+	MOVE B,[SF%EOK\SF%DOK\.GOATJ]; catch ATACH%
+	SMON%
+	 ERCAL FATAL
+	MOVE B,[SF%EOK\SF%DOK\.GOHSY]; catch HSYS% for Stanford HSYS% queueing
+	SMON%
+	 ERJMP [LOGMSG [Unable to enable HSYS% hook
+]
+		MOVEI A,.SFSOK	; restore A clobbered by LOGMSG
+		JRST .+1]
+	MOVEI A,.FHSLF		; stick us onto queue 0
+	MOVEI B,1
+	SPRIW%
+	 ERCAL FATAL
+
+; Set cease from the downtime queue and update downtime queue
+
+	MOVSI A,(GJ%FOU\GJ%OLD\GJ%SHT); get a handle on the downtime queue
+	HRROI B,DWNQUE
+	GTJFN%
+	 ERJMP MAPFNG		; no queue, map FINGER file
+	HRRZM A,DWNJFO		; stask JFN away
+	MOVE B,[<INS 36.,OF%BSZ>\OF%WR\OF%RTD]
+	OPENF%
+	 ERCAL FATAL
+	MOVSI A,(GJ%OLD\GJ%SHT)	; get read JFN on downtime queue
+	HRROI B,DWNQUE
+	GTJFN%
+	 ERCAL FATAL
+	HRRZM A,DWNJFI		; stash the JFN away
+	MOVE B,[<INS 36.,OF%BSZ>\OF%RD]
+	OPENF%			; open the file
+	 ERCAL FATAL
+	SETOM HSYDNP		; flag an HSYS% needs to be done
+ACJ1:	MOVE A,DWNJFI		; get the JFN back
+	MOVE B,[444400,,HSYTAB]	; get a record
+	MOVNI C,HSYLEN
+	SIN%
+	 ERJMP ACJ2		; end of file, no HSYS% to do
+	GTAD%			; verify that the time is reasonable
+	CAML A,HSYTAB
+	 JRST ACJ1		; it isn't, try next time
+	MOVE A,DWNJFO		; write the record back
+	MOVE B,[444400,,HSYTAB]
+	MOVNI C,HSYLEN
+	SOUT%
+	 ERCAL FATAL
+	SKIPN HSYDNP		; does an HSYS% need to be done?
+	 JRST ACJ1		; no, next record
+	SETZM HSYDNP		; flag that we're doing it now
+	DMOVE A,HSYTAB		; get time down/time up
+	MOVEI C,HSYTAB+2	; pointer to string
+	HSYS%			; set the new cease
+	 ERCAL FATAL
+	LOGMSG [System shutdown set for ]
+	MOVEI A,.PRIOU		; output shutdown time
+	MOVE B,HSYTAB
+	SETZ C,
+	ODTIM%
+	 ERCAL FATAL
+	SKIPN B,HSYTAB+1	; until time known?
+	 JRST ACJ10		; no
+	TMSG [ until ]
+	MOVEI A,.PRIOU		; output until time
+	ODTIM%
+	 ERCAL FATAL
+ACJ10:	SKIPN HSYTAB+2		; is there a reason?
+	 JRST ACJ1		; no, don't try to output it
+	TMSG [ for ]
+	HRROI A,HSYTAB+2	; pointer to reason string
+	PSOUT%
+	TMSG [
+]
+	JRST ACJ1
+
+ACJ2:	SETZM HSYDNP		; clear the flag (probably unnecessary)
+	MOVE A,DWNJFI		; flush the files
+	HRLI A,(CO%NRJ)		; don't flush the JFN
+	CLOSF%
+	 ERCAL FATAL
+	HRLI A,(DF%EXP)		; delete and expunge the old file
+	DELF%
+	 ERJMP .+1		; don't terribly care
+	MOVE A,DWNJFO
+	CLOSF%
+	 ERCAL FATAL
+;	JRST MAPFNG		; now enter the main program loop
+
+; Map in the FINGER data base
+
+MAPFNG:	MOVSI A,(GJ%OLD\GJ%SHT)
+	HRROI B,[ASCIZ/FINGER:FINGER.BIN/]
+	GTJFN%
+	 ERJMP LOOP		; no FINGER file, don't care
+	MOVEM A,FNGJFN		; save JFN of FINGER file
+	MOVEI B,OF%RD\OF%WR\OF%THW
+	OPENF%
+	 ERCAL FATAL		; can't get the FINGER file
+	HRLZS A
+	HRRI A,BLDPAG
+	DMOVE B,[.FHSLF,,BLDPAG
+		 PM%CNT\PM%RD\PM%WR\PM%PLD\<HSTPAG-BLDPAG>]
+	PMAP%
+	 ERCAL FATAL
+	SETOM FNGLOK		; in case file locked by previous load
+	 ERJMP LOOP
+;	JRST LOOP
+
+SUBTTL Here's the main program loop
+
+LOOP:	MOVEI A,RCVBLK		; get a request
+	MOVEI B,RCVLEN
+	RCVOK%
+	 ERCAL FATAL
+	HRRZ B,RCVBLK+.RCFCJ	; get job number of requestor
+	SKIPE B			; SYSJOB?
+	 CAMN B,MYJOBN		; or me?
+	  JRST GRANT		; this shouldn't be necessary, but it's a bug
+	HLLZ B,MYUSRN		; get USRLH code
+	XOR B,RCVBLK+.RCUNO	; get user number
+	SKIPN B			; unlogged in user?
+	 SETZM RCVBLK+.RCUNO	; yes, make it easier for routines below
+	HLRZ B,RCVBLK+.RCFCJ	; check function code
+	CAIN B,.GOLOG		; login?
+	 JRST LOGCHK		; yes, check for valid login
+	CAIN B,.GOATJ		; attach?
+	 JRST ATTCHK		; yes, similar to login check
+	CAIN B,.GOLGO		; logout?
+	 JRST LGOLOG		; yes, record it
+	CAIN B,.GOACC		; connect or access?
+	 JRST ACCCHK		; yes, check non-PS: user groups
+	CAIN B,.GOHSY		; system shutdown request?
+	 JRST HSYQUE		; yes, mung the downtime queue
+IFN FTSETSPD,[
+	CAIN B,.GOTBR		; setting terminal speed?
+	 JRST SETSPD		; yes, log and maybe check it
+];IFN FTSETSPD
+	CAIN B,.GOCFK		; create fork?
+	 JRST CFKCHK		; yes, check for less than MAXFRK forks
+	CAIN B,.GOCAP		; enable capabilities?
+	 JRST CAPCHK		; see if god capabilities being set
+	CAIN B,.GOCRD		; create directory?
+	 JRST CRDCHK		; see if capabilities being set
+	CAIN B,.GOMDD		; enter MDDT%?
+	 JRST MDDCHK		; yes, log it
+	CAIE B,.GOASD		; device assign?
+	 CAIN B,.GOOAD		; assign due to OPENF%?
+	  JRST ASDCHK		; yes, check it
+	CAIN B,.GOCJB		; create job?
+	 JRST WOPR		; only let WHEEL or OPERATOR do it
+	MOVE B			; save function code over LOGMSG
+	LOGMSG [Unknown access function code ]
+	MOVEI A,.PRIOU		; output the function code
+	MOVE B,
+	MOVEI C,8.		; in octal
+	NOUT%
+	 ERCAL FATAL
+	JRST GRANT
+
+SUBTTL Downtime queue munger
+
+; First, get the HSYS% arguments
+
+HSYQUE:	LOGMSG [System shutdown set]
+	CALL LOGUSR
+	MOVSI B,-HSYLEN		; get this many table words
+HSYQU0:	MOVEI A,.DWNTI		; from the DWNTIM table
+	HRLI A,(B)
+	GETAB%
+	 ERCAL FATAL
+	MOVEM A,HSYTAB(B)	; to my HSYTAB table
+	AOBJN B,HSYQU0
+	GTAD%			; get the current date/time
+	MOVE A			; store it away someplace "safe"
+	SKIPN HSYTAB		; always paw over the queue on a cancel
+	 JRST HSYQU1
+	ADDI A,3*5*60.		; fuzz up a few minutes or so
+	CAML A,HSYTAB		; is it a very soon downtime?
+	 JRST GRANT		; yes, punt the queue
+HSYQU1:	MOVSI A,(GJ%FOU\GJ%OLD\GJ%SHT); get a handle on the downtime queue
+	HRROI B,DWNQUE
+	GTJFN%
+	 ERJMP NEWQUE
+	HRRZM A,DWNJFO		; stask JFN away
+	MOVE B,[<INS 36.,OF%BSZ>\OF%WR\OF%RTD]
+	OPENF%
+	 ERJMP [MOVE A,DWNJFO	; some cretin is trying to screw us
+		RLJFN%
+		 ERJMP GRANT
+		LOGMSG [Cannot open downtime queue
+]
+		JRST GRANT]
+	MOVSI A,(GJ%OLD\GJ%SHT)	; get read JFN on file
+	HRROI B,DWNQUE
+	GTJFN%
+	 ERCAL FATAL		; bullshit; we have the file open!
+	HRRZM A,DWNJFI
+	MOVE B,[<INS 36.,OF%BSZ>\OF%RD]
+	OPENF%
+	 ERCAL FATAL
+	SKIPN HSYTAB		; is this a new shutdown request?
+	 JRST HSYCAN		; no, a cancellation - process it
+	SETOM HSYDNP		; flag an HSYS% needs to be done
+;	JRST HSYFFR
+
+; Drops in from previous page
+
+HSYFFR:	MOVE A,DWNJFI		; search for the first record after this cease
+	MOVE B,[444400,,HSYTB1]
+	MOVNI C,HSYLEN
+	SIN%
+	 ERJMP [MOVE A,DWNJFO	; none, insert new record here
+		MOVE B,[444400,,HSYTAB]
+		MOVNI C,HSYLEN
+		SOUT%
+		 ERCAL FATAL	
+		JRST HSYXIT]	; and leave
+	CAML HSYTB1		; is this time valid?
+	 JRST HSYFFR		; bad time, flush this record
+	MOVE A,HSYTB1		; is this time before the new time?
+	CAMG A,HSYTAB
+	 JRST [	MOVE A,DWNJFO	; no, write record out
+		MOVE B,[444400,,HSYTB1]
+		MOVNI C,HSYLEN
+		SOUT%
+		 ERCAL FATAL	
+		SKIPN HSYDNP	; does an HSYS% need to be done?
+		 JRST HSYFFR	; no, flush
+		SETZM HSYDNP	; doesn't need to be done any more
+		DMOVE A,HSYTB1	; get time down/time up
+		MOVEI C,HSYTB1+2; pointer to string
+		HSYS%		; set the new cease
+		 ERCAL FATAL
+		JRST HSYFFR]	; and continue scan
+	MOVE A,DWNJFO		; yes, insert new record here
+	MOVE B,[444400,,HSYTAB]
+	MOVNI C,HSYLEN
+	SOUT%
+	 ERCAL FATAL	
+HSYCOP:	MOVE B,[444400,,HSYTB1]	; and continue copying the rest of the file
+	MOVNI C,HSYLEN
+	SOUT%
+	 ERCAL FATAL	
+	MOVE A,DWNJFI		; get yet another record
+	MOVE B,[444400,,HSYTB1]
+	MOVNI C,HSYLEN
+	SIN%
+	 ERJMP HSYXIT		; end of file, all done
+	MOVE A,DWNJFO		; still more, get output JFN and continue
+	JRST HSYCOP
+
+; Cancel the top request of the queue
+
+HSYCAN:	MOVE A,DWNJFI		; flush the first record
+	MOVE B,[444400,,HSYTAB]
+	MOVNI C,HSYLEN
+	SIN%
+	 ERJMP HSYXIT		; file probably empty somehow
+HSYCN0:	MOVE B,[444400,,HSYTAB]	; get new downtime request
+	MOVNI C,HSYLEN
+	SIN%
+	 ERJMP HSYXIT		; at end, punt
+	GTAD%			; verify that this new time is in the future
+	CAML A,HSYTAB
+	 JRST HSYCN0		; bad time, flush this record
+	DMOVE A,HSYTAB		; get time down/time up
+	MOVEI C,HSYTAB+2	; pointer to string
+	HSYS%			; set the new cease
+	 ERCAL FATAL
+HSYCN1:	MOVE A,DWNJFO		; write record out, repeat for each record
+	MOVE B,[444400,,HSYTAB]	; (probably should check for invalid date/time
+	MOVNI C,HSYLEN		;  here too, but since it's "impossible" I
+	SOUT%			;  didn't want to bother.  Up above is to
+	 ERCAL FATAL		;  prevent a cancel bringing down the system!)
+	MOVE A,DWNJFI		; get back input JFN
+	MOVE B,[444400,,HSYTAB]	; read next record
+	MOVNI C,HSYLEN
+	SIN%
+	 ERJMP HSYXIT		; at end, punt
+	JRST HSYCN1		; loop back for next record
+
+; Create a new downtime queue
+
+NEWQUE:	SKIPN HSYTAB		; is this a cease request?
+	 JRST GRANT		; a cancellation and no file, go away
+	MOVSI A,(GJ%FOU\GJ%NEW\GJ%SHT); no queue, make one
+	HRROI B,DWNQUE
+	GTJFN%
+	 ERCAL FATAL		; something is horribly wrong!!
+	HRRZM A,DWNJFO		; stask JFN away
+	MOVE B,[<INS 36.,OF%BSZ>\OF%WR\OF%RTD]
+	OPENF%
+	 ERJMP [MOVE A,DWNJFO	; uh oh.  Looks like we got reamed
+		RLJFN%
+		 ERJMP GRANT
+		LOGMSG [Cannot create downtime queue
+]
+		JRST GRANT]
+	MOVE B,[444400,,HSYTAB]	; write the request out
+	MOVNI C,HSYLEN
+	SOUT%
+	 ERCAL FATAL
+	CLOSF%			; close off the file
+	 ERCAL FATAL
+	JRST GRANT		; grant the request
+
+; Here when downtime queue munging done.  Flush the JFNs and exit
+
+HSYXIT:	MOVE A,DWNJFI		; flush the files
+	HRLI A,(CO%NRJ)		; don't flush the JFN
+	CLOSF%
+	 ERCAL FATAL
+	HRLI A,(DF%EXP)		; delete and expunge the old file
+	DELF%
+	 ERJMP .+1
+	MOVE A,DWNJFO
+	CLOSF%
+	 ERCAL FATAL
+	JRST GRANT		; grant the request
+
+SUBTTL Consider terminal speed set request
+
+IFN FTSETSPD,[
+SETSPD:	MOVE A,RCVBLK+.RCTER	; get controlling terminal
+	MOVE B,RCVBLK+.RCARA	; compare against terminal user is setting
+	MOVE D,RCVBLK+.RCARA	; get pointer to argument block
+	CAME A,.GELIN(D)	; is user setting own terminal?
+	 JRST SETSP1		; no, must access control
+	TRO A,.TTDES		; convert to a terminal designator
+	MOVEI B,.MORSP		; return terminal speed information
+	MTOPR%
+	 ERJMP GRANT		; dunno
+	TLNE B,(MO%RMT)		; is it a remote line?
+	 JRST GRANT		; yes, allow it silently
+SETSP1:	LOGMSG [Set speed of line ]
+	MOVEI A,.PRIOU
+	HRRZ B,.GELIN(D)	; get line number
+	MOVEI C,8.
+	NOUT%
+	 ERCAL FATAL
+	CAMN B,RCVBLK+.RCTER	; same line?
+	 JRST SETSP2		; yes, flush this part of msg
+	TMSG [ from line ]
+	MOVEI A,.PRIOU		; output user's line number
+	MOVE B,RCVBLK+.RCTER	; note C still set up from NOUT above
+	NOUT%
+	 ERCAL FATAL
+SETSP2:	TMSG [ to ]
+	MOVEI A,.PRIOU
+	HLRZ B,.GESPD(D)	; input speed
+	MOVEI C,10.
+	NOUT%
+	 ERCAL FATAL
+	MOVEI B,"/
+	BOUT%
+	 ERCAL FATAL
+	HRRZ B,.GESPD(D)	; output speed
+	NOUT%
+	 ERCAL FATAL
+	CALL LOGUSR		; output user name
+	JRST WOPR		; only let WOPR do this
+];IFN FTSETSPD
+
+SUBTTL Check for subdirectory or non-PS: user group match
+
+ACCCHK:
+IFN FTSUBDIR,[
+	HRROI A,USRNAM		; translate user name to string to USRNAM
+	SKIPN B,RCVBLK+.RCUNO
+	 JRST DENY		; unlogged in?
+	DIRST%
+	 ERCAL FATAL
+	HRROI A,DIRNAM		; translate directory name to string in DIRNAM
+	MOVE B,RCVBLK+.RCARA	; get pointer to arguments
+	SKIPN B,.GOAC1(B)
+	 JRST DENY		; unlogged in?
+	DIRST%
+	 ERJMP DENY		; deny if can't get at it
+	DMOVE A,[440700,,USRNAM
+		 440700,,DIRNAM]
+FNDOPN:	ILDB C,B		; try to find open broket
+	JUMPE C,DENY		; just paranoia, but...
+	CAIE C,"<
+	 JRST FNDOPN
+CHKMAT:	ILDB C,A		; get char from user name
+	ILDB D,B		; and from directory name
+	JUMPE D,DENY		; more paranoia...
+	CAIN C,(D)		; a match?
+	 JRST CHKMAT		; still possible...
+	JUMPN C,CHKGRP		; if user not a substring, then try groups
+	CAIN D,".		; look like subdirectory?
+	 JRST GRANT		; yes, let user win
+;  Note: this introduces a bug - FOO can connect to <FOO.BAR> on a foreign
+; structure.  I'll worry about it if I ever have a foreign structure.  A
+; much more obvious bug would be allowing close brocket as well as dot,
+; which would completely defeat foreign structures!!
+];IFN FTSUBDIR
+
+; Not a subdirectory.  Let's see if there is a user group match
+
+CHKGRP:	MOVE B,.GOAC1(B)	; get directory number wants to connect to
+	DMOVE A,[GRPLEN ? GTDLEN]; set up size of blocks
+	MOVEM A,USRGRP		; user group lists
+	MOVEM A,DIRGRP		; and directory group list
+	MOVEM B,GTDBLK		; GTDIR% BLOCK
+	MOVEI A,USRGRP		; return user groups for user
+	MOVEM A,GTDBLK+.CDUGP
+	SETZB A,GTDBLK+.CDDGP	; not directory groups, also clear RCDIR% flags
+	SKIPN B,RCVBLK+.RCUNO	; get her user number
+	 JRST DENY		; unlogged in?
+	RCDIR%			; convert to directory number
+	 ERCAL FATAL
+	MOVE A,C		; get directory number from C
+	MOVEI B,GTDBLK		; GTDIR% argument block
+	SETZ C,			; no password
+	GTDIR%			; get this user's almost everything
+	 ERCAL FATAL
+	MOVEI A,DIRGRP		; now get directory groups for directory user
+	MOVEM A,GTDBLK+.CDDGP	;  wants to connect to
+	SETZM GTDBLK+.CDUGP	; not user groups
+	MOVE A,RCVBLK+.RCARA	; get directory number she wants to connect to
+	MOVE A,.GOAC1(A)
+	MOVEI B,GTDBLK
+	SETZ C,
+	GTDIR%			; get the information
+	 ERJMP DENY		; if I can't get at, tough
+	MOVEI A,DP%CN_6		; is connecting to directory w/o psw allowed?
+	TDNN A,GTDBLK+.CDDPT
+	 JRST DENY		; too bad
+	SOSLE A,USRGRP		; get user group list count
+	 SOSG B,DIRGRP		; ditto for directory group
+	  JRST DENY		; user or directory not in any groups
+	HRLOI A,-1(A)		; form AOBJN pointers to lists
+	EQVI A,USRGRP+1
+	HRLOI B,-1(B)
+	EQVI B,DIRGRP+1
+USGLUP:	MOVE (A)		; get a group this user is in
+	MOVE C,B		; see if there is a directory group match
+DRGLUP:	CAMN (C)		; match?
+	 JRST GRANT		; user wins
+	AOBJN C,DRGLUP		; try next directory
+	AOBJN A,USGLUP		; no groups match, try next user group
+	JRST DENY		; no match at all
+
+SUBTTL Extra login/attach validation
+
+;  Attach check just sets up the user and terminal numbers of the desired
+; job for the login check routine to use (note that the job number is not
+; set up!).
+
+ATTCHK:	SKIPN RCVBLK+.RCUNO	; is user logged in?
+	 JRST ATTCH0		; no, don't do WOPR check
+	MOVEI A,SC%WHL\SC%OPR	; WOPR can do any kind of attach
+	TDNE A,RCVBLK+.RCCAP	; WOPR?
+	 JRST GRANT
+ATTCH0:	MOVE A,RCVBLK+.RCARA	; get pointer to arguments
+	SKIPE B,.GOTJB(A)	; get user#
+	 HLL B,MYUSRN		; make sure a valid user number
+	MOVEM B,.GELUN(A)	; set up into .GELUN for login check
+	MOVE B,.GOTTY(A)	; get TTY # in B
+	MOVEM B,RCVBLK+.RCTER	; set up as the TTY to check
+;	JRST LOGCHK		; fall into login check routine
+
+LOGCHK:	SETZ A,			; no input flags
+	MOVE B,RCVBLK+.RCARA	; get pointer to arguments
+	MOVE B,.GELUN(B)	; get user number user wants to log in under
+	RCDIR%			; get dir info, dir # in C
+	 ERJMP GRANT		; let LOGIN% barf on the user
+	TRNE A,CD%NVD\CD%RTD	; frozen?
+	 JRST DENY		; loser
+	MOVE A,RCVBLK+.RCTER	; get terminal number
+	MOVE B,RCVBLK+.RCARA	; and user number user wants
+	MOVE B,.GELUN(B)
+	CAMN A,CTYNUM		; logging in on the CTY?
+	 JRST [	CAMN B,OPRNUM	; operator may log in on the CTY
+		 JRST GRANT
+		MOVE A,C	; get directory number from RCDIR%
+		MOVEI B,GTDBLK	; else user must have WHEEL or OPERATOR
+		SETZ C,		; no passwords, please
+		GTDIR%
+		 ERCAL FATAL
+		MOVE GTDBLK+.CDPRV; fool WOPR
+		MOVEM RCVBLK+.RCCAP
+		JRST WOPR]
+	CAME B,OPRNUM		; trying to become OPERATOR?
+	 JRST GRANT
+	HRRZ A,RCVBLK+.RCFCJ	; potential OPERATOR's job number
+	HRROI B,A		; put answer in A
+	MOVEI C,.JICPJ		; get job number of PTY mother
+	GETJI%
+	 ERJMP GRANT
+	JUMPL A,DENY		; not on a PTY, lose
+	HRROI B,A		; on a PTY, get user number of PTY owner
+	MOVEI C,.JIUNO
+	GETJI%
+	 ERJMP GRANT
+	CAME A,OPRNUM		; does this PTY belong to OPERATOR?
+	 JRST DENY
+	JRST GRANT		; looks okay, allow it
+
+SUBTTL Logout logging
+
+LGOLOG:	MOVE FNGSIG		; get the header word
+	 ERJMP LGOCLB		; FINGER file zonked, ignore
+	CAME ['FINGER]		; is it SIXBIT/FINGER/?
+	 JRST LGOCLB		; file clobbered
+	AOSN FNGLOK		; yes, try to lock it
+	 JRST LGOLG0		; got the lock
+	GTAD%			; file locked, check time now
+	SUBI A,10.*3		; minus 10 seconds in the past
+	CAMGE A,FNGTIM		; was file locked more than 10 seconds ago?
+	 JRST [	LOGMSG [FINGER file locked, logout ignored
+]
+		JRST GRANT]	; unable to lock file
+	LOGMSG [FINGER file locked spuriously, ignoring lock
+]
+LGOLG0:	MOVE A,RCVBLK+.RCARA	; get pointer to arguments
+	SKIPGE A,.GERLG(A)	; job number being logged out or -1
+	 HRRZ A,RCVBLK+.RCFCJ	; our own job getting zapped
+	MOVE B,[-<.JIMAX+1>,,GTJBLK]; get the job's everything
+ 	MOVEI C,0
+	GETJI%
+	 ERJMP LGOUNL		; job vanished or something
+	AOSN GTJBLK+.JIBAT	; is job controlled by batch?
+	 JRST LGOUNL		; yes, don't record it
+	DMOVE E,GTJBLK+.JITNO	; TTY number in E, user number in F
+	SKIPN B,F		; get user number in B
+	 JRST LGOUNL		; if unlogged in job, forget it
+	HRROI A,USRNAM		; make username string
+	DIRST%
+	 ERJMP LGOUNL		; ???
+	MOVE A,FNGINF		; pointer to user lookup area
+	 ERJMP LGOCUL
+	HRROI B,USRNAM		; user name of this person
+	TBLUK%			; find user
+	 ERJMP LGOUNL		; user not in database
+	TLNN B,(TL%EXM)		; exact match?
+	 JRST LGOUNL		; forget it
+	HRRZ G,(A)		; address of user info
+	GTAD%			; time now
+	MOVEM A,DIED(G)		; save time if possible
+	 ERJMP LGOCUL		; file messed up or something
+	MOVEM A,FNGTIM		; set the last writer time as well
+	MOVE A,MYUSRN		; as well as last writer user
+	MOVEM A,FNGAUT
+	SKIPGE B,E		; terminal number
+	 JRST LGOLG1		; detached, don't check for NVT
+	CAML B,NVTMIN		; is it an NVT?
+	 CAML B,NVTMAX
+	  JRST LGOLG2
+	MOVEI A,.GTNNI		; get NVT line status
+	MOVEI C,E		; destination
+	HRROI D,.NCFHS		; get foreign host
+	GTNCP%
+	 ERJMP LGOLG1		; maybe logged out
+LGOLGH:	MOVE B,E
+	JRST LGOLG1
+
+LGOLG2:	CAML B,TVTMIN		; is it a TVT?
+	 CAML B,TVTMAX
+	  JRST LGOLG3
+	MOVE E,B		; save TTY # in case error
+	MOVSI A,(TCP%TV)	; argument is TVT
+	HRR A,B			; TVT number
+	HRROI B,7		; want host number (should be a symbolic name)
+	HRROI C,E		; location of last logout
+	STAT%
+	 ERJMP LGOLGH
+	JRST LGOLGH
+
+LGOLG3:	CAML B,PNVMIN		; is it a Pup NVT?
+	 CAMLE B,PNVMAX
+	  JRST LGOLG1		; out of range to be a PNV
+	MOVE E,B
+	SUB B,PNVMIN
+	MOVS A,B
+	HRR A,$NVTPUP		; get its TTYPUP word
+	GETAB%
+	 ERJMP LGOLGH
+	JUMPE A,LGOLGH		; must have just disconnected
+	MOVSS A
+	HRR A,$PUPFPT
+	GETAB%			; get foreign port addr (in monitor space)
+	 ERJMP LGOLGH
+	JUMPE A,LGOLGH
+	SUB A,PUPBUF		; get offset from start of Pup free storage
+	MOVSI A,1(A)		; really want 2nd word
+	HRR A,$PUPBUF
+	GETAB%			; get foreign host name
+	 ERJMP LGOLGH
+	MOVE B,A
+	TLO B,400000		; flag so FINGER knows its an Ethernet host
+LGOLG1:	MOVEM B,R.I.P.(G)	; location of last logout
+	 ERJMP LGOCUL
+LGOUNL:	SETOM FNGLOK		; now unlock the database
+	HRLZ A,FNGJFN		; JFN of FINGER file
+	HRRI A,BLDPAG
+	MOVE B,[UF%NOW\<HSTPAG-BLDPAG>]; update it all
+	UFPGS%
+	 ERJMP GRANT
+	JRST GRANT
+
+LGOCUL:	SETOM FNGLOK		; unlock clobbered file
+LGOCLB:	LOGMSG [FINGER file apparently clobbered, ignoring logout
+]
+	JRST GRANT
+
+SUBTTL CRDIR%, MDDT%, EPCAP%
+
+; CRDIR% check - see if capabilities being set
+
+CRDCHK:	MOVE A,RCVBLK+.RCARA	; get pointer to arguments
+	MOVE B,1(A)		; get bits in AC2 for CRDIR%
+	TLNN B,(CD%PRV)		; setting privileges?
+	 JRST CRDCH2		; don't bother logging
+	MOVE D,2(A)		; get directory number
+	LOGMSG [Create directory ]
+	SKIPN B,D
+	 JRST [	TMSG [(new)]
+		JRST CRDCH1]
+	MOVEI A,.PRIOU		; try to output directory
+	DIRST%
+	 JRST [	TMSG [(unknown?)]
+		JRST CRDCH1]
+CRDCH1:	TMSG [ with privileges]
+	CALL LOGUSR
+	MOVE A,RCVBLK+.RCARA	; get pointer to arguments
+CRDCH2:	MOVE B,3(A)		; get mode bits
+	TLNE B,(CD%DIR)		; FILES-ONLY?
+	 JRST GRANT		; yes, allow
+	SKIPN 2(A)		; not files only, new directory?
+	 JRST WOPR		; yes, require WOPR
+	MOVE B,1(A)		; get bits in AC2 for CRDIR%
+	TLNN B,(CD%MOD)		; old directory, setting mode?
+	 JRST GRANT		; no, allow
+	JRST WOPR		; yes, allow only if WOPR
+
+; MDDT% check - log it on the console
+
+MDDCHK:	LOGMSG [Entry into monitor DDT]
+	CALL LOGUSR
+	JRST WOPR		; redundant but oh well
+
+; EPCAP% check - see if god privileges and if so log
+
+CAPCHK:	MOVE A,RCVBLK+.RCARA	; get pointer to arguments
+	MOVE A,.GENCP(A)	; get new capabilities user wants
+	ANDCM A,RCVBLK+.RCCAP	; not interested in ones she already has
+	SKIPE B,RCVBLK+.RCUNO	; not interested in unlogged in jobs (FTPSER!)
+	 TRNN A,SC%WHL\SC%OPR	; becoming a WHEEL or OPERATOR?
+	  JRST GRANT		; no, not interested in other bits
+	CAMN B,OPRNUM		; not interested in OPERATOR jobs either
+	 JRST GRANT
+	LOGMSG [Enable capabilities]
+	CALL LOGUSR
+	JRST GRANT
+
+SUBTTL ASND%, CFORK% & grant/deny exits
+
+; ASND% check - disallow access to CTY unless WOPR
+
+ASDCHK:	MOVE A,RCVBLK+.RCARA	; get pointer to arguments
+	MOVE A,.GEADD(A)	; get device designator she wants
+	CAMN A,CTYDEV		; CTY:?
+	 JRST WOPR		; yes, disallow unless WOPR
+	JRST GRANT		; otherwise allow
+
+; CFORK% check - limit # of user forks to something reasonable
+
+CFKCHK:	MOVE A,RCVBLK+.RCARA	; get pointer to arguments
+	MOVE A,.GEFCT(A)	; get number of forks she is using
+	CAIG A,MAXFRK		; too many?
+	 JRST GRANT		; no - allow
+;	JRST WOPR		; yes - allow only if WHEEL or OPERATOR
+
+; Entry to allow if WHEEL or OPERATOR
+
+WOPR:	MOVEI A,SC%WHL\SC%OPR	; let WHEEL or OPERATOR win
+	TDNE A,RCVBLK+.RCCAP
+GRANT:	 TDZA B,B		; grant the request
+DENY:	  MOVEI B,400000	; deny the request
+	MOVE A,RCVBLK+.RCRQN	; grant the request
+	SETZ C,			; no string for now
+	GIVOK%
+	 ERCAL FATAL
+	JRST LOOP
+
+SUBTTL Fatal errors come here
+
+FATAL:	LOGMSG []
+	MOVEI A,.PRIOU		; display last error
+	HRLOI B,.FHSLF
+	SETZ C,
+	ERSTR%
+	 ERJMP .+2
+	 ERJMP .+1
+	TMSG [, JSYS at PC=]
+	POP P,F
+	MOVEI F,-2(F)		; point PC at actual location of the JSYS
+
+;  Clever symbol table lookup routine.  For details, read "Introduction to
+; DECsystem-20 Assembly Language Programming", by Ralph Gorin, published by
+; Digital Press.
+
+	SETZB C,E		; no current program name or best symbol
+	MOVE D,116		; .JBSYM
+	HLRO A,D
+	SUB D,A			; -count,,ending address +1
+SYMLUP:	LDB A,[400400,,-2(D)]	; symbol type
+	JUMPE A,NXTSYM		; program names are uninteresting
+	CAILE A,2		; 0=prog name, 1=global, 2=local
+	 JRST NXTSYM		; none of the kind we want
+	MOVE A,-1(D)		; value of the symbol
+	CAMN A,F		; exact match?
+	 JRST [	MOVE E,D	; yes, select it
+		JRST FNDSYM]
+	CAML A,F		; smaller than value sought?
+	 JRST NXTSYM		; too large
+	SKIPE B,E		; get best one so far if there is one
+	 CAML A,-1(B)		; compare to previous best
+	  MOVE E,D		; current symbol is best match so far
+NXTSYM:	ADD D,[2000000-2]	; add 2 in the left, sub 2 in the right
+	JUMPL D,SYMLUP		; loop unless control count is exhausted
+	SKIPN D,E		; did we find anything helpful?
+	 JRST FATAL1
+;	JRST FNDSYM
+
+; Found an entry that looks close.  See if it really is and if so use it
+
+FNDSYM:	MOVE A,F		; desired value
+	SUB A,-1(D)		; less symbol's value = offset
+	CAIL A,200		; is offset small enough?
+	 JRST FATAL1		; no, not a good enough match
+	MOVE D,E		; get the symbol's address
+	MOVE A,-2(D)		; symbol name
+	TLZ A,740000		; clear flags
+	CALL SQZTYO		; print symbol name
+	MOVE B,F		; get desired value
+	SUB B,-1(D)		; less this symbol's value
+	JUMPE B,FATAL2		; if no offset, don't print "+0"
+	MOVEI A,"+		; add + to the output line
+	PBOUT%
+	CAIA
+FATAL1:	 MOVE B,F		; here if PC must be in octal
+	MOVEI A,.PRIOU		; and copy numeric offset to output
+	MOVEI C,8.
+	NOUT%
+	 ERJMP .+1
+FATAL2:	SKIPE MYJOBN		; attempt to recover if job 0
+	 HALTF%
+	RESET%			; deACJify
+	MOVEI A,.SNPSY		; see if there is another ACJ around
+	DMOVE B,[.RSQZ 0,ACJFN
+		 .RSQZ 0,STG]
+	SNOOP%
+	 JRST [	LOGMSG [Can't get address of ACJFN
+]
+		HALTF%
+		JRST ACJ]
+	MOVEI A,(B)		; address of ACJFN in A
+	HRLI A,1		; transfer one word
+	MOVEI B,D		; into D
+	PEEK%
+	 JRST [	LOGMSG [Can't PEEK% in ACJFN
+]
+		HALTF%
+		JRST ACJ]
+	JUMPE D,[TMSG [ - Restarting ACJ
+]
+		 JRST ACJ]
+	LOGMSG [Another ACJ is running as system fork ]
+	MOVEI A,.PRIOU
+	MOVEI B,(D)
+	MOVEI C,8.
+	NOUT%
+	 ERJMP .+1
+	TMSG [
+]
+	HALTF%
+	JRST ACJ
+
+SUBTTL Subroutines
+
+; Convert a 32-bit quantity in A from squoze to ASCII
+
+SQZTYO:	IDIVI A,50		; divide by 50
+	PUSH P,B		; save remainder, a character
+	SKIPE A			; if A is now zero, unwind the stack
+	 CALL SQZTYO		; call self again, reduce A
+	POP P,A			; get character
+	ADJBP A,[350700,,[ASCII/ 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ.$%/]]
+	LDB A,A			; convert squoze code to ASCII
+	PBOUT%
+	RET
+
+; Output user name of requester
+
+LOGUSR:	TMSG [ by job ]
+	MOVEI A,.PRIOU
+	HRRZ B,RCVBLK+.RCFCJ	; job number
+	MOVEI C,10.		; output in decimal
+	NOUT%
+	 ERCAL FATAL
+	TMSG [, user ]
+	MOVEI A,.PRIOU
+	SKIPN B,RCVBLK+.RCUNO	; from user number in block
+	 JRST [	TMSG [not logged in user]
+		JRST LOGUS1]
+	DIRST%
+	 ERJMP [TMSG [???]
+		JRST LOGUS1]
+LOGUS1:	TMSG [, program ]
+	HRRZ A,RCVBLK+.RCFCJ	; get program name for this job
+	MOVE B,[-1,,GTJBLK+.JIPNM]
+	MOVEI C,.JIPNM
+	GETJI%
+	 SETZM GTJBLK+.JIPNM
+	MOVE B,GTJBLK+.JIPNM	; get job name in B for output
+SIXOUT:	SETZ A,			; canonical SIXBIT output routine
+	LSHC A,6
+	ADDI A,"A-'A
+	PBOUT%			; wasteful of jsi, but...
+	JUMPN B,SIXOUT
+	TMSG [, TTY]
+	MOVEI A,.PRIOU
+	MOVE B,RCVBLK+.RCTER	; get terminal number
+	MOVEI C,8.		; output in octal
+	NOUT%
+	 ERCAL FATAL
+	CAML B,NVTMIN		; is it an NVT?
+	 CAML B,NVTMAX
+	  JRST LOGUS3
+	MOVEI A,.GTNNI		; get NVT line status
+	MOVEI C,E		; destination
+	HRROI D,.NCFHS		; get foreign host
+	GTNCP%
+	 ERJMP LOGUS3
+	TMSG [, ]
+	MOVEI A,.PRIOU		; output host name
+	MOVE B,E		; host number from E
+	MOVEI C,^D8		; in case have to go by numbers
+	CVHST%
+	 NOUT%
+	  ERJMP .+1
+LOGUS3:	TMSG [
+]
+	RET
+
+TIMSMP:	MOVEI A,.PRIOU
+	RFPOS%			; get cursor position
+	 ERJMP TIMSM1
+	TRNN B,-1
+	 JRST TIMSM1
+	TMSG [
+]
+TIMSM1:	MOVEI A,.PRIOU
+	SETO B,
+	SETZ C,
+	ODTIM%
+	 ERJMP .+1
+	RET
+
+...LIT:	CONSTANTS
+
+END EVECL,,EVEC

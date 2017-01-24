@@ -1,0 +1,1015 @@
+;[SRI-NIC]SRC:<LOC.SYSTEM>LISTEN.MID.183, 15-Oct-89 21:56:03, Edit by MKL
+; don't put a timer around KFORK%, possibly causes PSISTK and
+; SPTFL1 BUGHLTs.  Why does KFORK hang (does it?).
+;[SRI-NIC]SRC:<LOC.SYSTEM>LISTEN.MID.177, 14-Sep-89 12:35:12, Edit by ZZZ
+; **** trying to chase down the elusive branch-to-stack problem ****
+; Changed the ResetT code hoping to avoid timing errors.
+; Added err jump to DEBRK call in TimHit
+;[SRI-NIC]SRC:<LOC.SYSTEM>LISTEN.MID.176, 18-Aug-89 09:18:04, Edit by ZZZ
+; Removed the leading "*" from argument to WHOIS fork before RSCAN.  This
+; had been a kludge to avoid entering interactive mode before WHOIS code
+; was modified to support server-fork continuation...
+;[SRI-NIC]SRC:<LOC.SYSTEM>LISTEN.MID.150, 22-Jul-89 01:48:53, Edit by MKL
+; add /WHOIS flag.  a WHOIS fork is started and fed arg in RSCAN
+; buffer. when fork halts next arg is stuffed in RSCAN and fork is
+; continued.  more efficient than restarting WHOIS from scratch.
+;[SRI-NIC]SRC:<LOC.SYSTEM>LISTEN.MID.149, 13-Jul-89 13:55:43, Edit by MKL
+; finally found a bug.  forkph wasn't cleared if kfork aborted.  fixed.
+;[SRI-NIC]SRC:<LOC.SYSTEM>LISTEN.MID.139,  6-Jul-89 18:53:40, Edit by MKL
+; add DEBUG code so we can find bugs (set DEBUGP)
+;[SRI-NIC]SRC:<LOC.SYSTEM>LISTEN.MID.138, 24-Feb-89 11:56:52, Edit by MKL
+;fix possible interrupt/stack problems
+
+;-*-Midas-*-
+
+	Title @LISTEN - Listen on TCP port
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	@LISTEN <filespec> /switch /switch ...
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+.DECSAV
+
+T=10
+TT=11
+L=12
+R=13
+F=14
+P=17
+
+.forkr==30.			;a fork can be reused this many minutes
+.dbugs==40.			;this much debugging memory
+
+PDLen==40
+InBufl==100
+AtBufl==40
+
+TimerC==1			;JSYS time-out.
+TickCh==3			;Periodic wake-up.
+
+MaxFrk==20.			;Maximum # of inferiors we can handle.
+MaxErr==20.			;This many of the same error in a row is fatal
+
+NapTim==5			;Time to settle after getting an error (secs)
+Cycle==5*60.			;Check inferior status every this often
+JTime==30.			;Seconds for a JSYS to finish
+
+.INSRT MID:SYMBOLS
+.INSRT MID:MACROS
+.INSRT MID:MACSYM
+.INSRT MID:PRARG
+
+Define Timer time,loc
+	Movx T,time*3			;Turn into GTAD (1/3 second) units.
+	Movei TT,loc
+	Call SetT
+Termin
+
+Define UnTimer
+	Call ResetT
+Termin
+
+Define SaveAC
+	Pushn P,[1,2,3,4,5,T,TT,F]	;Save all ACs we might use
+Termin
+
+Define RestAC
+	Popn P,[F,TT,T,5,4,3,2,1]	;Restore possibly bashed ACs
+Termin
+
+PDL:	-PDLen,,.
+	Block PDLen
+				
+DEBUGP:	0			;for debugging output 
+Refuse:	0			;for shutting the server down gracefully
+DbgTxt:	Block .dbugs
+
+InBuf:	Block InBufl
+AtmBuf:	Block AtBufl
+
+EXEfil:	Block <40.*4>/5		;Filename of .EXE file to load into inferior
+TCPfil:	Block <40.*4>/5		;Filename of TCP: connection for listening.
+Name:	Block 40./5
+
+FrkUse:	MaxFrk			;# of forks to allow at once
+Port:	0			;Port# to listen on
+EntOff:	0			;Entry-vector offset
+IdlMax:	0			;Maximum idle-time for a fork, in ticks
+WhoisP:	0			;-1 if WHOIS-RSCAN-RESTARTABLE
+RsBuff:	Block 40
+PIOflg:	0			;If non-0, so primary-IO-style startup
+PIOffd:	0			;Set if primary I/o redirected in inferior
+IAmode:	0			;Set if interactive mode is requested
+TPmode:	0			;High-Throughput mode
+InfJFN:	0			;Temp storage for JFN for GET-ting save file
+eRLJFN:	0			;Silent counter of # of RLJFN% failures
+PH:	0			;Temporary holder for new Process Handle
+JFN:	0			;Same for JFN on net connection
+ForkEr:	0			;Fork-status check error flag
+LstErr:	0			;Saved last system error code (or -1).
+ErrCnt:	0			;Consecutive-same-error counter
+
+TimSet:	0			;Set when TIMER% on CLOSF% is in action.
+TimRet:	0			;Where a TIMER% is supposed to go next.
+TimTim:	0			;Exact time at which TIMER% is set.
+PerTim:	0			;Exact time that periodic TIMER% is set for.
+
+nForks:	0			;# of active forks
+ForkP:	Block MaxFrk		;-1 if in use, 0 if not
+ForkPH:	Block MaxFrk		;PH's of forks, or 0 if slot empty
+FrkJFN:	Block MaxFrk		;JFNs they are using.
+FrkTim:	Block MaxFrk		;Time when connection last checked for activity
+FrkSnt:	Block MaxFrk		;Bytes transmitted over connection
+FrkLuz:	Block MaxFrk		;Lossage counter (# of failures)
+FrkRst:	Block MaxFrk		;last time fork was reset
+ForkAC:	Block 20
+
+GJblok:	GJ%OLD+.GJDEF
+	.NULIO,,.NULIO
+	-1,,[Asciz "SYSTEM"]
+	0			;directory
+	0			;name
+	-1,,[Asciz "EXE"]
+	block 10
+
+CmdBlk:	CM%XIF+Repars
+	.PRIIN,,.PRIOU
+	-1,,[Asciz ""]
+	440700,,InBuf
+	440700,,InBuf
+	5*InBufl-1
+	0
+	440700,,AtmBuf
+	AtBufl*5-1
+	GJblok
+
+IniFDB:	Field(.CMINI,CM%FNC) ? 0 ? 0 ? 0
+PrgFDB:	Field(.CMFLD,CM%FNC) ? 0 ? 0 ? 0
+DecFDB:	Field(.CMNUM,CM%FNC) ? 10. ? 0 ? 0
+
+CmdFDB:	Field(.CMIFI,CM%FNC)+Cm0FDB ? 0 ? 0 ? 0
+Cm0FDB:	Field(.CMSWI,CM%FNC)+Cm1FDB ? Sw1Tab ? 0 ? 0
+Cm1FDB:	Field(.CMSWI,CM%FNC)+ConFDB ? Sw2Tab ? 0 ? 0
+ConFDB:	Field(.CMCFM,CM%FNC) ? 0 ? 0 ? 0
+
+Sw1Tab:	nSw1,,nSw1
+	[Asciz "ENTRY-VECTOR:"],,EntOff
+	[Asciz "FORKS:"],,FrkUse
+	[Asciz "IDLE-MAX:"],,IdlMax
+	[Asciz "PORT:"],,Port
+nSw1==.-Sw1Tab-1
+
+Sw2Tab:	nSw2,,nSw2
+	[Asciz "DEBUG"],,debugp
+	[Asciz "HIGH-THROUGHPUT"],,TPmode
+	[Asciz "INTERACTIVE"],,IAmode
+	[Asciz "PRIMARY-IO"],,PIOflg
+	[Asciz "WHOIS"],,WhoisP
+nSw2==.-Sw2Tab-1
+
+PSIPC1:	0
+PSIPC2:	0
+PSIPC3:	0
+
+LevTab:	PSIPC1 ? PSIPC2 ? PSIPC3
+
+ChnTab:	Channel TimerC,1,TimHit	;Some JSYS timed out.
+	Channel TickCh,3,Tick	;a TIMER% hits this is check kids periodically
+	Channel .ICIFT,2,KidDie	;when a child halts we check them all, too.
+	EndChannel
+
+CRLF:	Asciz "
+"
+
+;debugging stuff
+define debuga *foo
+	Push P,1
+	Move 1,[DbgTxt+1,,DbgTxt]
+	Blt 1,DbgTxt+.dbugs-1
+	Hrroi 1,[Asciz /foo/]
+	Movem 1,DbgTxt+.dbugs-1
+	Skipe DebugP
+	  PSOUT
+	Pop P,1
+termin
+
+define debugo foo
+	Push P,2
+	Move 2,[DbgTxt+1,,DbgTxt]
+	Blt 2,DbgTxt+.dbugs-1
+	Move 2,foo
+	Movem 2,DbgTxt+.dbugs-1
+	Skipe DebugP
+	  Call dbg.o
+	Pop P,2
+termin
+
+dbg.o:	push p,1
+	push p,3
+	movei 1,.priou
+	movei 3,8.
+	nout%
+	 jfcl
+	pop p,3
+	pop p,1
+	ret
+
+Begin:	RESET%
+	Move P,PDL
+	Call Parse		;Parse the JCL
+	  Jrst Die		;  Oops.
+	Call Init		;Do some initialization & czeching
+	  Jrst [Type "?Initialization failure - "
+		Call ErrCR	;Barf out why then CRLF
+		Jrst Die]	;then punt
+	Call ReName		;Rename us to the server-program.
+	Call Hello		;Say hi to the world, so they know we're alive.
+	Call $CONT		;go into background mode via PRARG%
+ 
+	debuga "initialized
+"
+Loop:	Call FSlot		;Find a free slot, skip return with index in F
+	  Jrst Lounge		;  No slots, wait till one becomes available.
+	Call GetCon		;Get a new connection, sets JFN
+	Call ForkIt		;Get a fork.
+;	Call LoadIt		;Get and load up the .EXE
+	Call RunIt		;Now start it a-running.
+	Aos 1,nForks		;Bump the fork count
+	Caig 1,1		;If this is the first fork
+	  Call SetPer		;  then start up the periodic watchdog timer.
+	Jrst Loop		;go for more.
+
+FSlot:	debuga "get slot: "
+	Skipe Refuse		;skip if not refusing connections
+	  Jrst [debuga "refusing...
+"
+		Return]
+	Movs F,FrkUse		;Find a free table slot.  count,,flag array
+	Movns F
+FSlot0:	Skipn ForkP(F)		;This slot in use?
+	  Jrst [Tlz F,-1	;  No.  Trash LH, leave only index in RH.
+		debugo f
+		debuga "
+"
+		Jrst Popj1]	;  Skip return says we won
+	Aobjn F,FSlot0		;Yes, loop over all slots.
+	debuga "none
+"
+	Return			;No free slots, return +1.
+
+;;
+;;	Get here when there are no free fork slots, e.g. they're all in use
+;;	by forks.  WAIT% for one to die and interrupt us with an IFT
+;;	interrupt.  If we free up a slot which at a clock-tick interrupt,
+;;	we check to see if the PC is Lounge, to know if we're waiting for
+;;	a slot to become free, and if so return to user-mode at PC+1
+;;
+
+NTemp:	Field(8,NO%COL)+NO%LFL+8.
+
+Lounge:	Skipn DebugP
+	  Jrst LWait
+	Hrroi 1,[Asciz "[lounge - P: "]
+	PSOUT
+	Movei 1,.priou		;1/ primary output
+	Hlre 2,P		;2/ stack pointer
+	Movei 3,8.
+	NOUT			;show stack pointer
+	  Nop
+	Movei 1,44.		;comma
+	PBOUT
+	PBOUT
+	Movei 1,.priou
+	Hrre 2,P 
+	Movei 3,8.
+	NOUT
+	  Nop
+	Hrroi 1,[Asciz " / "]
+	PSOUT
+	Movei 1,.priou
+	Hlre 2,-1(P)
+	Move 3,NTemp
+	NOUT
+	  Nop
+	Movei 1,44.		;comma
+	PBOUT
+	PBOUT
+	Movei 1,.priou
+        Hrre 2,-1(P)
+	Movei 3,8.
+	NOUT
+	  Nop
+	Hlre 2,(P)
+	Move 3,NTemp
+	NOUT
+	  Nop
+	Movei 1,44.		;comma
+	PBOUT
+	PBOUT
+	Movei 1,.priou
+	Hrre 2,(P)
+	Movei 3,8.
+	NOUT
+	  Nop
+	Movei 1,.priou
+	Hlre 2,1(P)
+	Move 3,NTemp
+	NOUT
+	  Nop
+	Movei 1,44.		;comma
+	PBOUT
+	PBOUT
+	Movei 1,.priou
+	Hrre 2,1(P)
+	Movei 3,8.
+	NOUT
+	  Nop
+	Hrroi 1,[Asciz "]
+"]
+	PSOUT
+
+LWAIT:	WAIT%			;Wait for an interrupt.
+	debuga "unlounge
+"
+	Jrst Loop		;Go find the free slot.
+
+;;
+;;	Get a connection.  Returns +2 on success with the JFN in AC1,
+;;	+1 return on error.  Note that the actual listening action is
+;;	done by the OPENF%, which is where you'll expect this code to
+;;	be sitting if it's listening.
+;;
+
+GetCon:	debuga "getcon
+"
+	Movx 1,GJ%SHT\GJ%OLD
+	Hrroi 2,TCPfil
+	GTJFN%
+	  Jrst [
+;		Caie 1,GJFX3	;No JFN available?
+;		  Cain 1,TCPX20	;  Max # of TCP connections exceeded?
+;		    Jrst xxx	;    Yeah, we're kinda screwed.
+		Hrroi T,[Asciz "Can't get JFN on new connection"]
+		Call JError	;Output badge + text + system error + CRLF
+		Call Snooze
+		Jrst GetCon]
+	Movem 1,JFN		;Save JFN.
+	Move 2,[Field(8,OF%BSZ)+OF%RD+OF%WR]
+	Skipe IAmode		;Interactive mode?
+	  Tlo 2,(Field(.TCMWH,OF%MOD))  ;SORRY, ONLY HIGH-THROUGHPUT SUPPORTED
+	Skipe TPmode		;High-Throughput mode?
+	  Tlo 2,(Field(.TCMWH,OF%MOD))
+	OPENF%			;This is the actual listen.
+	  Skipa			;  Failed!
+	    Return		;    Won, JFN is in AC1
+;	Cain 1,TCPX20		;Max # of TCP connections exceeded?
+;	  Jrst xxx		;  Yeah, fraid so.
+	Caie 1,TCPX31		;Connection error or rejected?
+	  Jrst [
+;		Hrroi T,[Asciz "Open failed for new connection"]
+;		Call JError	;No, something else, so report it.
+		Cain 1,NTWZX1	;NET WIZ caps needed?
+		  Jrst Die	;  Yes, fatal error.
+		Jrst .+1]	;Something else, so try again.
+	Move 1,JFN		;Release the not-open JFN
+	RLJFN%
+	  Jrst [Hrroi T,[Asciz "Couldn't release JFN after failed OPENF%"]
+		Call JError
+		Jrst .+1]
+	Jrst GetCon
+
+;;
+;;	create an inferior fork, load it with whatever .EXE we're
+;;	supposedta
+;;
+
+BadFrk:	Call Snooze
+ForkIt: Skipe WhoisP		;if restartable
+	 Jrst [Skipn 1,ForkPH(F) ;have a fork?
+	        Jrst .+1	;no get a new one
+	       Movem 1,PH	;save fork handle
+	       Return]		;already have a fork, restart it
+	Movx 1,CR%CAP		;Create us an inferior, give it the same
+	CFORK%			;caps as us.  
+	  Jrst [Hrroi T,[Asciz "Couldn't create inferior"]
+		Call JError
+		Jrst BadFrk]
+	Movem 1,PH		;Save the PH here
+	GTAD			;now
+	Movem 1,FrkRst(F)	;log that we just reset this fork
+;	Return
+
+;;
+;;	Load up the .EXE file to run
+;;
+
+LoadIt:	Movx 1,GJ%SHT\GJ%OLD
+	Hrroi 2,EXEfil		;Now we need a JFN on the .EXE file for
+	GTJFN%			;whatever program we're supposed to load.
+	  Jrst [Hrroi T,[Asciz "%Couldn't get JFN on inferior save file"]
+		Call JError
+		Call Snooze
+		Jrst LoadIt]
+	Movem 1,InfJFN
+;; debugging - output the filespec right now to a buffer, so we can type
+;; it out later.
+	Setzm InBuf
+	Move 2,1		;JFN in AC1
+	Hrroi 1,InBuf		;This buffer is available now that parsing
+	Move 3,[111110,,JS%PAF]	;Everything
+	JFNS%
+	  Ernop
+	Move 1,InfJFN
+;; end of debugging code
+	Hrl 1,PH		;PH,,JFN
+	GET%			;Load the program into the process
+	 Erjmp [Hrroi T,[Asciz "%Couldn't GET inferior save file"]
+		Call JError
+ 		Cain 1,IOX5	;i/o error?
+		  Call [Hrroi T,[Asciz "%Device or data error."]
+			Call IdentT
+			TypeCR ""
+			Ret]
+;; debugging stuff
+		Type "JFN was on file: "
+		Atype InBuf
+		Atype CRLF
+;; end debugging stuff
+		Move 1,InfJFN
+		RLJFN%
+		  Nop
+		Call Snooze
+		Jrst NCFork]
+	Return
+
+NCFork:	Move 1,PH
+	KFORK%
+	 Erjmp .+1
+	Jrst BadFrk
+
+;;
+;;	Start the process running.
+;;
+
+RunIt:  Skipn WhoisP		;Whois-restartable-rscan?
+	 Jrst Runit1		;no, something else
+;get arg from TCP conn.
+	Move 1,[440700,,RsBuff]
+	Hrroi 2,[asciz /WHOIS /]
+	Setz 3,
+	SOUT%
+	Move 2,1
+	Move 1,JFN
+	Movei 3,<40*5>-1
+	Movei 4,.CHLFD
+	SIN%
+	 Erjmp [Ret]
+	movni 3,1
+	adjbp 3,2
+	movei 2,.chlfd
+	dpb 2,3
+	Setz 2,
+	idpb 2,3
+;put arg in rscan
+
+	Hrroi 1,RsBuff
+	RSCAN%
+	 Erjmp [TypeCR "Rscan stuff failed"
+		Ret]
+
+	Move 1,PH
+	Hrro 2,JFN
+	SPJFN%
+	  Ernop
+	Setom PIOffd
+
+;start fork if first time thru
+        Skipn ForkPH(F)
+	 Jrst Runit0
+;else (continue fork)
+	Move 1,PH
+	Txo 1,SF%CON		;continue it
+	SFORK%
+	 Erjmp [TypeCR "Fork continue failed."
+	        Ret]
+	Jrst StFrk1
+Runit1:	Skipn PIOflg		;Want primary-io style?
+	  Jrst RunIt0		;  No.
+	Move 1,PH
+	Hrr 2,JFN
+	Hrls 2
+	SPJFN%
+	  Ernop
+	Setom PIOffd
+RunIt0:	Move 1,JFN		;Else want JFN in AC1
+	Movem 1,ForkAC+1	;Set inferior's AC1 to the JFN of connection
+	Move 1,PH
+	Movei 2,ForkAC
+	SFACS%			;Set the inferior AC block.
+	  Ernop
+StFork:	Move 1,PH
+	Move 2,EntOff
+	SFRKV%			;Start the inferior
+	  Ernop
+StFrk1: Skipn WhoisP
+	 Jrst StFrk2
+	Movei 1,.RSCNT
+	RSCAN%
+	 Erjmp .+1
+	Jumpe 1,StFrk2
+	Movei 1,1000.
+	DISMS%
+	Jrst StFrk1
+StFrk2:	Setzm FrkSnt(F)		;No data transmitted yet.
+	Setzm FrkLuz(F)		;No lossage yet either.
+	TIME%
+	Movem 1,FrkTim(F)	;Time fork was created.
+	Move 1,PH		;Move the temp PH to its permanent..
+	Movem 1,ForkPH(F)	;..location
+	Setom ForkP(F)		;say in use
+	Move 1,JFN
+	Movem 1,FrkJFN(F)
+	debuga "*fork "
+	debugo f
+	debuga " started
+"
+	Return
+
+KidDie:	debuga "kiddie interrupt
+"
+	SaveAC
+	Call Check		;Check ALL kids.
+	Movei 1,PSIPC2
+	Jrst Tick0
+
+Tick:	debuga "tick
+"
+	SaveAC
+	Call Check		;Check the status of our inferiors.
+	Skipe nForks		;Any forks still alive 'n kickin?
+	  Call SetPer		;  Yes, set reset the timer to check them again
+	Movei 1,PSIPC3
+Tick0:	Hrrz 2,(1)		;See where we interrupted from
+	Cain 2,LWAIT+1		;Were we waiting for a slot to free?
+	  Jrst [Movei 2,Loop	;  Yes, so break out of WAIT%
+		Hrrm 2,(1)	;  Set return-from-interrupt PC
+		Movx 2,Bit(5)	;  User-mode bit
+		Iorm 2,(1)	;  Set in PC so we break from monitor context
+		Jrst .+1]
+	RestAC
+	DEBRK%			;and return from interrupt
+
+SetPer:	debuga "set tick
+"
+	GTAD%			;Get date&time into AC1
+	Move 2,1		;TIMER% wants time to hit in AC2
+	Add 2,[Cycle*3]		;Add in how much in the future to go off
+	Movem 2,PerTim		;Save the actual time.
+	Move 1,[.FHSLF,,.TIMDT]	;Generate an interrupt at this time.
+	Movei 3,TickCh		;Tug on this channel.
+	TIMER%			;Set it.
+	  Ernop
+	Return
+
+RemPer:	debuga "remove tick
+"
+	Move 1,[.FHSLF,,.TIMDD]
+	Move 2,PerTim			;Remove the timer set at this time.
+	TIMER%
+	  Ernop
+	Setzm PerTim
+	Return
+
+Snooze: debuga "snoozing
+"
+	Movx 1,<NapTim*1000.>	;Take this much time to
+	DISMS%			;settle down after an error.
+	Return			;then climb back on and try again.
+
+Check:	Movs F,FrkUse
+	Movns F
+Check0:	Skipn ForkP(F)		;This slot in use?
+	  Jrst NxtFrk		;  Nope, go to the next
+	Move 1,ForkPH(F)	;get handle
+	Setzm ForkEr		;assume no errors to start with
+
+	hrrz 3,f
+	debugo 3
+	debuga ")"
+
+;	FFORK%			;Freeze so we can read it's status
+;	  Erjmp Kaboom		;  we kill for errors
+	RFSTS%			;Get the status of the process
+	  Erjmp Kaboom		;  we kill for errors
+	Ldb 3,[.BP RF%STS,1]	;Get the status code
+	Caie 3,.RFHLT		;Halted?
+	 Cain 3,.RFFPT		; or terminated?
+	  Jrst NukeIt		;  Yep.
+	Move 1,FrkJFN(F)
+	GDSTS%			;Check the connection status
+	  Erjmp Kaboom		;  we kill for errors
+	debuga " connection status: "
+	Hlre L,2
+	Hrre R,2
+	debugo L
+	debuga ",,"
+	debugo R
+	Caie L,.TCSYN
+	  Jrst NukeIt		;punt if send side disappeared
+	Skipn IdlMax		;This fork have a time-out?
+	  Jrst Rezume		;  Nah, so let it go.
+
+	Move 1,FrkJFN(F)
+	Movei 2,13		;Read TCB
+	Movei 3,14		;TSLFT
+	TCOPR%
+	 Erjmp Kaboom
+	Move 2,3
+	
+	debuga " - Byte count delta: "
+	Move L,2
+	Sub L,FrkSnt(F)
+	debugo L
+	Camg 2,FrkSnt(F)		;Same as last time?
+	  Jrst [TIME%
+		Sub 1,FrkTim(F)		;Time since last check
+		debuga " idle "
+		debugo 1
+		Camge 1,IdlMax
+		  Jrst Rezume
+		debuga " timed-out"
+		Jrst Kaboom]
+
+	Movem 2,FrkSnt(F)		;Update new transmitted-data count
+	TIME%
+	Movem 1,FrkTim(F)		;and time of last activity
+Rezume:
+;	Move 1,ForkPH(F)
+;	RFORK%				;Resume the fork
+;	  Ernop				;  Ernop = Erjmp .+1
+	debuga " ok
+"
+	Jrst NxtFrk
+
+Kaboom:	Setom ForkEr		;this fork DIES!
+NukeIt:	debuga " done - "
+	Call AbortF		;Abort all activity associated with Fork (F)
+
+Nuke1:	Sosg nForks		;And decrement the active-fork count
+	  Jrst RemPer		;No more forks, remove periodic timer & return
+NxtFrk:	Aobjn F,Check0		;If there are more, check them.
+	Return
+
+;;
+;; Abort the fork in F
+;;
+AbortF:	Skipn PIOflg		;was primary-I/O redirected?
+	  Jrst Abort0		;  no.  skip the resetting then.
+	Timer JTime,Abort0	;Set a TIMER%.
+	Move 1,ForkPH(F)
+	Move 2,[.NULIO,,.NULIO]
+	SPJFN%
+	  Ernop
+	UnTimer
+Abort0:	Setzm ForkP(F)		;say slot not in use
+	Skipn ForkEr		;are we killing a lame fork?
+	 Skipn Whoisp		;no, are we reusing forks?
+	  Jrst Abort1		;  lame-fork or resetting - so kill it
+	GTAD			;now
+	Sub 1,FrkRst(F)		;delta from last reset
+	Cail 1,<.forkr*200.>	;past the max number of minutes?
+	  Jrst Abort1		;yes, kill it
+	debuga "reuse it.
+"
+	Jrst Abort2
+
+Abort1:
+;	Timer JTime,Abort2
+	debuga "nuke it.
+"
+	Move 1,ForkPH(F)
+	Setzm ForkPH(F)			;if KFORK% aborts, hope it goes away
+	KFORK%				;Kill the fork.
+	  Ernop
+;	UnTimer
+
+Abort2:	Timer JTime,Abort3
+	Move 1,FrkJFN(F)		;Push the last data through
+	Movei 2,.TCPSH
+	TCOPR%
+	  Ernop
+	UnTimer
+
+Abort3:	Skipn 1,FrkJFN(F)		;and try again.
+	  Jrst Abort4
+	Timer 15.,CAgain		;If hanging on CLOSF%, abort out
+	CLOSF%				;Try to close the connection.
+	  Ernop
+	UnTimer
+
+Abort4:	Setzm FrkJFN(F)
+	Return
+
+CAgain:	Timer 60.,ClzLuz
+	Move 1,FrkJFN(F)
+	Txo 1,CZ%ABT			;Abort this time 
+	CLOSF%				;Try again.
+	  Ernop
+	UnTimer
+	Jrst Abort4
+
+ClzLuz:	Aos FrkLuz(F)			;Bump lossage counter
+	Jrst Abort4			;then carry on...
+
+ErrCR:	Call Err
+	AType CRLF
+	Return
+
+Err:	Setom LstErr		;Use the last system error.
+Err0:	Movei 1,.PRIOU		;output goes here
+	Move 2,LstErr		;Last system error code
+	Hrli 2,.FHSLF		;PH in left half
+	Setz 3,			;no limit on available space for output
+	ERSTR%			;output the error string
+	  Jrst [Type "Undefined error number: "
+		Movei 1,.PRIOU
+		Hrrz 2,LstErr
+		Movei 3,8.
+		NOUT%
+		 Jfcl
+		Return]
+	  Jrst [TypeCR "String size out of bounds or invalid"
+		Return]
+	Return
+
+JError:	Movei 1,.FHSLF
+	GETER%			;Get the last error
+	ifjer.			;no errors
+	  Movei 2,LSTRX1	;"process has not encountered any errors"
+	else.			;real error
+	  Hrrzs 2		;isolate the error code
+	  Came 2,LstErr		;same as last time?
+	  ifskp.		;yes!
+	    Skipe 3,ErrCnt	;have we reached "no more" threshold?
+	    ifskp.		;yes - too many
+	      Hrroi 1,[Asciz "Too many sequential errors - quitting."]
+	      ESOUT
+	      HALTF		;die, but stick around
+	      0			;don't allow continuation
+	    else.		;no - not too many (yet)
+	      Sos ErrCnt	;counting down...
+	    endif.		;(Skipe 3,ErrCnt)
+	  else.			;no! different error this time
+	    Movem 2,LstErr	;remember what it was
+	    Movei 1,MaxErr	;max # of consecutive errors
+	    Movem 1,ErrCnt	;reset our tolerance counter
+	  endif.		;(Came 2,LstErr)
+	endif.			;(GETER)
+	Call IdentT		;Get to a new line, ident, then out T/ BP
+	Type " -- "
+	Call Err0
+	AType CRLF
+	Move 1,LstErr		;Return the error code in AC1
+	Return
+
+IdentT:	Movei 1,.PRIOU
+	DOBE%			;Wait until output buffer empty
+	Type "[LISTEN/"
+	AType Name
+	Type "] "
+	Move 1,T
+	PSOUT%
+	Return
+
+Parse:	Call .Parse		;Do the work
+	  Return		;  Failure return, pass it up
+	Skipe IAmode		;Do a consistency check
+	  Skipn TPmode
+	    Skipa
+	   Jrst [TypeCR "?Both /INTERACTIVE and /THROUGHPUT selected"
+		 Return]	;+1 is lose return
+	Skipn EXEfil
+	  Jrst [TypeCR "?No .EXE filespec specified"
+		Return]
+	Skipn Port
+	  Jrst [TypeCR "?No port# specified"
+		Return]
+	Move T,FrkUse
+	Cail T,1
+	  Caile T,MaxFrk
+	    Jrst [Type "?Number of forks must be from 1 - "
+		  Movei 1,.PRIOU
+		  Movei 2,MaxFrk
+		  Movei 3,10.
+		  NOUT%
+		    Nop
+		  TypeCR ""
+		  Return]
+	Hrroi 1,TCPfil
+	Hrroi 2,[Asciz "TCP:"]
+	Setz 3,
+	SOUT%
+	Move 2,Port
+	Movei 3,10.
+	NOUT%
+	  Nop
+	Hrroi 2,[Asciz "#;PERSIST:60;TIMEOUT:60"]
+	Setz 3,
+	SOUT%
+Popj1:	Aos (P)
+CPopj:	Return
+
+.Parse:	Movei 1,.RSINI
+	RSCAN%			;Make JCL available for reading.
+	  Return
+	Setzm EXEfil		;Clear the filename buffer
+	Movei 1,CmdBlk
+	Movei 2,IniFDB
+	COMND%
+	  Erjmp ParErr
+
+Repars:	Movei 1,CmdBlk
+	Movei 2,PrgFDB
+	COMND%			;Skip the programname.
+	  Erjmp ParErr
+
+Parse0:	Movei 1,CmdBlk
+	Movei 2,CmdFDB
+	COMND%
+	  Erjmp ParErr
+	Txne 1,CM%NOP
+	  Jrst ParErr
+	LDB T,[.BP CM%FNC,(3)]	;Get the function code
+	Cain T,.CMCFM		;Confirm?  EOL?
+	  Jrst Popj1		;  Yep, so done.
+	Caie T,.CMIFI		;Input file?
+	  Jrst SwiPar		;  No, must be a switch
+	Skipe EXEfil		;Already one specified?
+	  Jrst [TypeCR "?More than one filename specified"
+		Return]
+	Hrroi 1,EXEfil		;AC2 has JFN from COMND parse
+	Move 3,[111100,,JS%PAF]	;Dev, Dir, Name, Ext.
+	JFNS%			;Save it in File
+	Hrroi 1,Name
+	Movsi 3,(Field(.JSAOF,JS%NAM))
+	JFNS%			;Put just the filename in Name
+	Movei 1,(2)
+	RLJFN%			;Don't need this anymore.
+	  Nop
+	Jrst Parse0
+
+SwiPar:	Hrrz T,(2)		;Address of where to store value
+	Tlz 3,-1		;Only want RH (address of FDB used)
+	Caie 3,Cm0FDB		;Switch table for switches with values?
+	  Jrst [Setom (T)	;  No, switch table for turn-on flags.
+		Jrst Parse0]	;  So turn it on and continue
+	Movei 1,CmdBlk		;Parse for the value now.
+	Movei 2,DecFDB
+	COMND%
+	  Erjmp ParErr
+	Txne 1,CM%NOP
+	  Jrst [TypeCR "?Decimal number parse failed, that switch needs a value"
+		Return]
+	Movem 2,(T)		;Store the value
+	Jrst Parse0		;and go for more.
+
+ParErr:	Type "?Error during parse - "
+	CallRet ErrCR
+
+Init:	Movei 1,.FHSLF		;Initialize the interrupt system.
+	Move 2,[LevTab,,ChnTab]
+	SIR%
+	  Erjmp CPopj
+	EIR%
+	  Erjmp CPopj
+	Movx 2,ChnMsk
+	AIC%
+	  Erjmp CPopj
+	Move 1,IdlMax		;Get maximum idle time (given in minutes)
+	IMuli 1,<1000.*60.>	;Turn into ticks (1000. ticks/sec)
+	Movem 1,IdlMax		;Put it back, stupid!
+	Setzm eRLJFN		;Reset silent error counter.
+	Jrst Popj1
+
+ReName:	Setz 1,
+	Move 2,[440600,,1]	;Accumlate sixbit in AC1
+	Move 3,[440700,,Name]	;Translate it from the name here
+	Movei 4,6		;Maximum # of characters to translate
+ReNam0:	Ildb T,3
+	Jumpe T,ReNam1		;No more source
+	Subi T,40		;7bit -> 6bit
+	Idpb T,2
+	Sojg 4,ReNam0
+	Setz 4,
+	Idpb 4,3		;Tie off original name at six characters
+ReNam1:	Move 2,1
+	SETSN%			;Set the PNM and SNM
+	  Nop
+	Return
+
+Hello:	Hrroi T,[Asciz "Listening on port "]
+	Call IdentT
+	Movei 1,.PRIOU
+	Move 2,Port
+	Movei 3,10.
+	NOUT
+	  Nop
+	AType CRLF
+	Return
+
+Clean:	Movs T,FrkUse
+	Movns F
+Clean0:	Skipn 1,ForkPH(T)
+	  Jrst Clean1
+	KFORK%
+	  Nop
+Clean1:	Aobjn T,Clean0
+	Return
+
+Die:	Call Clean		;Clean up
+	Hrroi 1,[Asciz ""]
+	RSCAN%			;Flush any unread rscan data
+	  Nop
+	HALTF%
+	Jrst .-1
+
+;;
+;;	TIMER% stuff
+;;
+
+SetT:	Pushn P,[1,2,3]
+	debuga "Time Set "
+	Movem TT,TimRet			;Where to go to after a TIMER% hits.
+	Setzm TimSet			;Mark that the TIMER% isn't set yet.
+	GTAD%				;Get Now.
+	Move 2,T			;Time allowed
+	Add 2,1				;Add in current time.
+	Movem 2,TimTim			;Save the date&time here.
+	debugo TimTim
+	debuga "
+"
+	Move 1,[.FHSLF,,.TIMDT]		;Kick at a certain time
+	Movei 3,TimerC			;Kick on this channel.
+	TIMER%				;Set the TIMER%.
+	  Erjmp SetT0			;  Failed to?
+	Setom TimSet			;Flag that TIMER% is set.
+SetT0:	Popn P,[3,2,1]
+	Ret
+
+ResetT:	debuga "Time Zap "
+	debugo TimTim
+	debuga "
+"
+	Move 1,[.FHSLF,,.TIMDD]	;1/ remove interrupts for
+	Move 2,TimTim		;2/    exactly this time
+	Skipn TimSet		;is a timer still set?
+	  Ret			;no - all for naught
+	TIMER%			;yes - reset it now
+	  Erjmp [Hrroi T,[Asciz "%Couldn't reset timer."]
+		 Call JError
+		 Jrst .+1]
+	Ret
+
+TimHit:	debuga "Time Hit
+"
+	Push P,1
+	Setzm TimSet			;TIMER% is no longer set.
+	Movx 1,Bit(5)			;User-mode bit.
+	Iorm 1,PSIPC1			;Set it.
+	Move 1,TimRet			;Where to go to from here.
+	Hrrm 1,PSIPC1			;Set the PC
+	Pop P,1
+	DEBRK%				;and return there from this routine.
+	  Erjmp HitErr
+HitErr:	Hrroi T,[Asciz "%DEBRK ERROR!!"]
+	Call JError
+	Jrst Die		;Error is fatal
+
+
+YorN:	Type "(Y/N) "
+	PBIN%			;Get a char
+	Cain 1,^M		;If a CR
+	  PBIN%			;  there's always an LF to follow
+	Cail 1,"a		;Do cheap
+	  Trz 1,40		;  UPPERCASING
+	Cain 1,"Y		;yes?
+	  Jrst [TypeCR "es."
+		Jrst Popj1]	;+2 yes return
+	Cain 1,"D		;da?
+	  Jrst [TypeCR "a."
+		Jrst Popj1]	;+2 da return
+	Cain 1,"N		;nyet?
+	  Jrst [TypeCR "yet."
+		Return]		;+1 nyet return
+	TypeCR " - no."		;Don't waste help on Spazmoids
+	Return
+
+
+VARS:	Variables		;dump anything allocated with .scalar,
+				;.vector, or ' here, dynamic area
+
+CONST:	Constants		;dump constants out here, static area
+
+	End Begin

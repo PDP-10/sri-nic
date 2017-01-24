@@ -1,0 +1,1134 @@
+begin "DIABLO"
+
+comment a driver for listing PUB output files on the DIABLO
+	printer--using standard listing defaults, adjusting
+	offset, and moving up and down half-lines for
+	sub/superscripts:  NWS
+
+	Extended to cover GEN COM (model 300Q): NWS
+
+	Extended to print different offsets on facing pages: NWS 5/21/76
+
+	EXTENDED FOR XEROX 3100 AND DIABLO 1620 TERMINALS.  
+	GJA, JULY 21 1976.
+
+        EXTENDED FOR BOLDFACE AND ESCAPE SEQUENCES ON DIABLO 1620.
+        JMS, OCTOBER 1977.
+
+	EXTENDED FOR AGILE A-1 TERMINAL.  GJA 13 JAN 78.
+
+	Extended to absolute horizontal tab multiple spaces
+	and absolute vertical tab multiple linefeeds
+	for the DIABLO 1620.  WEINSTOCK 10 Feb 78.
+
+	Increased pause before terminal reset after continuous
+	listing for Agile at 1200 baud.  Stopped printing
+	End of SAIL execution.   David Roode 12 Apr 82.
+
+;
+
+COMMENT Special characters in the text file:
+	^A	toggle hardware underscore (Agile only)
+    ^C ... ^D	boldface
+	^F	underscore next character
+	^H	backspace
+	^P	pause
+	^R	half space up
+	^S	half space down
+    ^V ... ^W	underscore
+	^X	bare underscore
+    ^Y ... ^Z	sneak text
+	esc	sneak esc plus next character
+
+NOTE: ^C, ^D, ^F, ^R, and ^S are assumed to be snuck in by PUB, with the
+result that PUB's estimate of the line width for justification is off.
+We compensate by reducing the justification width for every one of these
+we encounter.
+
+;
+
+require "<><>" delimiters;
+
+
+define lf = <'12>,
+       cr = <'15>,
+       ff = <'14>,
+       crlf = <"
+">,
+       ctlA = <'1>,
+       ctlB = <'2>,
+       ctlC = <'3>,
+       ctlD = <'4>,
+       ctlE = <'5>,
+       ctlF = <'6>,
+       ctlG = <'7>,
+       ctlH = <'10>,
+       ctlK = <'13>,
+       ctlP = <'20>,
+       ctlR = <'22>,
+       ctlS = <'23>,
+       ctlT = <'24>,
+       ctlU = <'25>,
+       ctlV = <'26>,
+       ctlW = <'27>,
+       ctlX = <'30>,
+       ctlY = <'31>,
+       ctlZ = <'32>,
+       ctlUP = <'36>,
+       ctl\ = <'34>,
+       esc  = <'33>,
+       space = <'40>,
+       tab = <'11>,
+       spaces = <"                                                                         ">,
+
+       ! = <comment>,
+       maxpage = <1000>;
+
+INTERNAL LABEL DOIT;		! Breakpoint here to alter options;
+
+INTERNAL INTEGER JWAIT;		! Wait (in msec) after turning off justification;
+integer width,newwidth;		! Width for justification; 
+integer justifying;		! Was justification last turned ON or OFF?;
+integer didjust;		! Was justification EVER on?;
+INTERNAL INTEGER CRPAD;		! NUMBER OF EXTRA PADDING NULLS AFTER EACH CR;
+integer array printingpages [1:maxpage];
+string defaultstring;
+string temp, page, printpages, confirmation;
+string username;
+integer logdir,condir,ttyno;
+integer infile, ppbrchar, ibrchar, brchar, eof;
+integer mac2;
+integer ender,starter,fftbl,checknotbl,pagetbl,delfftbl;
+integer page1;
+integer i;
+integer gencom, olddtc, newdtc, XEROX, DIABLO, AGILE;	
+		! TERMINAL TYPE (EXACTLY ONE OF THE ABOVE six IS TRUE);
+integer LPI, cpi, linesonpage;
+INTEGER HALFLINES;	! Use half line-feed instead of full (AGILE only);
+INTEGER TWOFF;		! TWO FORMFEEDS PER PAGE;
+integer lesshalf;
+integer nmaxpage;
+integer ofset0,			! Column number where CR returns to;
+	ofset1,ofset2,		! Spaces beyond CR for even and odd pages;
+	ofseti;			! Spaces beyond CR for this page;
+integer curpage;
+integer curchar;
+integer pagecount;
+integer nextpage;
+integer pause;
+integer additional!lf!spacing;
+integer defaultfile;
+integer boldfacing;                   	! inside ^C ... ^D scope ;
+INTEGER UNDERLINING;			! Inside ^V ... ^W scope;
+INTEGER ABSXTABS,ABSYTABS;		! Using absolute tabbing mechanism;
+integer lastx;			! Last absolute X position;
+INTEGER NEXTX;			! Target for absolute tab;
+integer total!lines;		! Last absolute Y position;
+integer NEXTY;			! Target for absolute tab;
+INTEGER NOTBINARY;		! True only if AGILE at 1200 baud;
+simple string procedure UPPER(string s);
+    begin
+    comment forces s to upper case;
+    string t; 
+    integer c;
+    t_null;
+    while s do
+	begin
+	c_lop(s);
+	t_t&(if "a" leq c leq "z" then c-'40 else c);
+	end;
+    return(t);
+    end;
+
+
+PROCEDURE SPACING (INTEGER CPI, LPI);
+
+COMMENT DEVICE-DEPENDENT SETUP TO CONTROL HORIZONTAL AND VERTICAL SPACING;
+BEGIN "SPACING"
+
+HALFLINES _ FALSE;
+IF XEROX OR DIABLO THEN BEGIN
+    COMMENT HORIZONTAL SPACING;
+	PBOUT(ESC); PBOUT('37); 
+	PBOUT ( 1 + (IF XEROX THEN 60 ELSE 120) DIV CPI );
+    COMMENT VERTICAL SPACING;
+	PBOUT(ESC); PBOUT('36); PBOUT ( 1 + 48 DIV LPI );
+	END
+    ELSE IF AGILE THEN BEGIN
+	INTEGER TEMP;
+	! Start out at 12 pitch;
+	IF CPI=10 THEN OUTSTR(ESC&"F");	! Toggle to 10 pitch;
+	IF LPI=6 THEN OUTSTR(ESC&"J")
+	    ELSE IF LPI=8 THEN OUTSTR(ESC&"K")
+	    ELSE IF LPI=12 THEN BEGIN
+		OUTSTR(ESC&"J");
+		HALFLINES _ TRUE;
+		END;
+	END
+    ELSE IF GENCOM THEN BEGIN
+	IF CPI=10 THEN OUTSTR(ESC&"E")
+		ELSE OUTSTR(ESC&"F");
+	IF CPI=12 AND LPI=6 THEN OUTSTR(ESC&"J");
+	END;
+COMMENT LINES PER PAGE;
+TWOFF _ FALSE;
+IF XEROX THEN BEGIN
+	I _ LINESONPAGE;
+	IF I > 126 THEN BEGIN
+		I _ I / 2;
+		TWOFF _ TRUE;
+		END;
+	PBOUT(ESC);
+	PBOUT(FF);
+	PBOUT(I);
+	END;
+END "SPACING";
+
+
+
+simple procedure FIX!TABS;
+begin
+integer i;
+COMMENT CLEAR ALL TABS;
+if gencom OR AGILE then OUTSTR(ESC&"3") 
+ ELSE IF XEROX OR DIABLO THEN OUTSTR(ESC&"2")
+ else begin
+    for i _ 1 step 1 until 20 do   ! clear each tab individually;
+        begin
+	    pbout(tab);
+	    pbout(ESC);
+	    pbout("2");
+        end;
+    end;
+outstr(crlf);
+ofset0 _ ofset1 min ofset2;
+OFSET1 _ OFSET1 - OFSET0;
+OFSET2 _ OFSET2 - OFSET0;
+ofseti_ofset1;
+psout(spaces[1 to ofset0]);
+if GENCOM OR AGILE then
+    OUTSTR(esc&"6")	! set new margin ;
+    ELSE OUTSTR(ESC&"1");	! PUT A TAB STOP AT THE LEFT MARGIN;
+outstr(crlf);
+end;
+
+
+SIMPLE PROCEDURE WAITMS(INTEGER MS);
+	START!CODE 
+	HRRZI 1,MS; 
+	DISMS 
+	END;	
+	
+simple integer procedure GETNEXTPAGE;
+comment checks printingpages table to find next page which
+	is to be printed and returns the number;
+
+	begin 
+	integer i;
+	if curpage > nmaxpage then return (0);
+	curpage _ curpage+1;
+	for i _ curpage step 1 until nmaxpage do 
+	  if printingpages[i] then begin
+				   curpage_i;
+				   return (curpage); end;
+	return (0);
+	end;
+
+simple integer procedure GOTONEXT (integer page);
+
+comment inputs file breaking on FF until desired page is reached;
+comment also makes sure '14 is not part of PUB command string;
+
+	begin
+	while true do 
+	  begin "getinput"
+	  string s;
+	  integer c;
+	  s_input(infile,delfftbl);
+	  if eof then return (false);
+	  if (ibrchar = '177) then 
+		begin
+		c_charin(infile);
+		if c='20 then c_charin(infile);
+		end;
+	  if ibrchar = ff then pagecount_pagecount+1;
+	  if pagecount = page then return (true);
+	  end "getinput";
+	end;
+
+simple procedure SETUPPRINTINGPAGES;
+
+comment scans desired page list and marks desired pages true in array;
+
+	begin
+	integer i, jbrchar;
+	integer bpage, epage;
+	string s;
+	if not length(printpages) then return;
+	s_printpages;
+	nmaxpage _ 1;
+      while true do begin
+	bpage _ cvd(scan(s, pagetbl, ppbrchar));
+	if ppbrchar = 0 then
+		begin
+		if bpage neq 0 then 
+			begin
+			printingpages[bpage] _ true;
+			nmaxpage _ bpage;
+			end;
+		return;
+		end;
+	if ppbrchar = "," then begin printingpages[bpage] _ true; 
+					nmaxpage _ bpage; continue; end;
+	if ppbrchar = "-" then 
+		begin
+		epage_cvd(scan(s, pagetbl, jbrchar));
+		for i _ bpage step 1 until epage do
+				printingpages[i] _ true;
+		nmaxpage _ epage;
+		if jbrchar = 0 then return;
+		end;
+	end;	
+	end;
+
+simple procedure DO!LINEFEED;
+
+comment simulates line-feed for DIABLO that does different size
+	line feeds;
+
+     	begin
+	NEXTY _ NEXTY + 1;
+	if ABSYTABS then return;
+	IF HALFLINES THEN OUTSTR(ESC&"9")
+		ELSE IF NOTBINARY AND NEXTX NEQ 0
+			THEN OUTSTR(ESC&"9"&ESC&"9")
+		ELSE pbout(lf);
+	total!lines_total!lines+1;
+	if additional!lf!spacing then
+	    begin
+		pbout(ctlf);
+		if additional!lf!spacing < 0 then
+		   for i _ additional!lf!spacing step 1 until -1 do
+			pbout(ctlk) 
+		else
+		   for i _ 1 step 1 until additional!lf!spacing do
+			pbout(lf);
+		pbout(ctlf);
+	    end;
+	end;
+
+simple procedure UPORDOWN(INTEGER UP);
+
+comment moves printer up or down halfline;
+
+	begin
+	integer i;
+	if gencom then BEGIN
+		pbout(esc);
+		PBOUT (IF UP THEN 
+				(IF LESSHALF THEN "S" ELSE "0")
+			ELSE	(IF LESSHALF THEN "B" ELSE "9") );
+		END
+	   ELSE IF XEROX OR DIABLO THEN BEGIN
+		PBOUT(ESC); PBOUT("3");
+		FOR I _ 1 STEP 1 UNTIL LESSHALF DO BEGIN
+			IF UP THEN PBOUT(ESC);
+			PBOUT(LF);
+			END;
+		PBOUT(ESC); PBOUT("4");
+		END
+	    ELSE IF AGILE THEN
+		OUTSTR(IF UP THEN ESC&"S" ELSE ESC&"B")
+	   ELSE BEGIN
+		pbout(ctlF);
+		for i_ 1 step 1 until lesshalf do 
+			pbout(IF UP THEN ctlk ELSE lf);
+		pbout(ctlF);
+		END;
+	end;
+
+
+
+simple procedure CARRIAGERETURN;
+
+comment outputs offset number of spaces after each cr;
+
+	begin
+	NEXTX _ 0;
+	IF LASTX NEQ 0 THEN 
+	    BEGIN
+	    IF JUSTIFYING AND NewWidth NEQ WIDTH THEN
+		BEGIN
+		WIDTH _ NewWidth;
+		PBOUT(ESC);
+		PBOUT(".");
+		PBOUT((WIDTH-1) LSH -7);
+		PBOUT((WIDTH-1) LAND '177);
+		END;
+	    PBOUT(CR);
+	    FOR I _ 1 STEP 1 UNTIL CRPAD DO PBOUT(0);
+	    if NOT (gencom or agile or ofset0=0) then PBOUT(TAB);
+	    if ofseti neq 0 then psout(spaces[1 to ofseti]);
+	    END;
+	LASTX _ 0;
+	end;
+
+
+COMMENT ABSOLUTE TABBING;
+
+
+PROCEDURE HORTAB;
+	BEGIN "Horizontal Adjustment"
+
+	COMMENT Go to absolute tab location given by NEXTX;
+
+	INTEGER I,NCHARS;
+	NCHARS _ NEXTX - LASTX;
+	IF NCHARS=0 THEN		! Do nothing--we're already there ;
+	ELSE IF NEXTX=0 THEN carriagereturn
+	ELSE IF 1 LEQ NCHARS LEQ 3 THEN
+		FOR I _ 1 STEP 1 UNTIL NCHARS
+			DO PBOUT(SPACE)
+	ELSE BEGIN
+	    i _ nextx + ofset0 + ofseti;
+	    IF DIABLO THEN BEGIN
+		pbout(esc);
+		pbout(TAB);
+		pbout(I+1);
+		END
+	    ELSE IF AGILE THEN BEGIN
+		IF NOTBINARY AND I='12 THEN BEGIN
+		    OUTSTR(ESC&"H"&0&'11&" ");
+		    END
+		ELSE BEGIN
+		    PBOUT(ESC);
+		    PBOUT("H");
+		    PBOUT(I LSH -7);
+		    PBOUT(I LAND '177);
+		    END;
+		END;
+	    END;
+	LASTX _ NEXTX;
+	END "Horizontal Adjustment";
+
+
+
+PROCEDURE VERTAB;
+	BEGIN "Vertical adjustment"
+	COMMENT Go to absolute position of NEXTY;
+	INTEGER I,NLINES, DELTA, ADJUST;
+	ADJUST _ FALSE;
+	NLINES _ NEXTY - TOTAL!LINES;
+	IF NLINES LEQ 0 THEN RETURN
+	ELSE IF NLINES LEQ 4 THEN BEGIN
+	    DELTA _ (IF HALFLINES THEN 2 ELSE 1);
+	    WHILE NLINES GEQ DELTA DO
+		BEGIN
+		PBOUT(LF);
+		IF NOTBINARY THEN ADJUST_TRUE;	! LF's get coverted to CR-LF's;
+		NLINES _ NLINES-DELTA;
+		END;
+	    IF NLINES>0 THEN OUTSTR(ESC&"9");
+	    END
+	ELSE IF DIABLO THEN BEGIN
+		pbout(esc);
+		pbout(ctlK);
+		pbout(NEXTY+1);
+		END
+	ELSE IF AGILE THEN BEGIN
+	    IF JUSTIFYING THEN
+		BEGIN
+		PBOUT(LF);	! This makes sure each end-of-line is CR-LF;
+		IF NOTBINARY THEN ADJUST_TRUE;
+		END;
+	    I _ (IF HALFLINES THEN NEXTY DIV 2 ELSE NEXTY);
+	    IF NOTBINARY AND I='12 THEN BEGIN
+		OUTSTR(ESC&"V"&0&'11&'12);
+		IF NOTBINARY THEN ADJUST _ TRUE;
+		END
+	    ELSE BEGIN
+		OUTSTR(ESC&"V");
+		PBOUT(I LSH -7);
+		PBOUT(I LAND '177);
+		END;
+	    IF HALFLINES AND (NEXTY LAND 1) THEN OUTSTR(ESC&"9");
+	    END;
+	IF ADJUST THEN
+	    BEGIN
+	    LASTX _ 0;
+	    HORTAB;
+	    END;
+	TOTAL!LINES _ NEXTY;
+	END "Vertical adjustment";
+
+
+simple integer procedure FORMFEED (INTEGER PAUSE);
+
+comment counts current page, checks if it is to be printed, if not gets
+	page number of next page to be printed and moves to that page;
+
+	begin
+	integer i,success;
+	pagecount _ pagecount+1;	  
+	if length(printpages) then  
+	  begin
+	  nextpage _ getnextpage;
+	  if nextpage = 0 then success _ false
+	    else if nextpage neq pagecount then success _ gotonext(nextpage) 
+	    else success _ true;
+	  end
+	else success _ true;
+	IF TOTAL!LINES=0 AND lastx=0 THEN RETURN(success);
+	if pause then BEGIN
+	    IF ABSYTABS THEN PBOUT(FF);
+	    IF ABSXTABS THEN HORTAB;
+	    CLRBUF;
+	    PBIN
+	    END
+	  Else 
+	    IF XEROX OR DIABLO OR AGILE THEN BEGIN
+		PBOUT(FF);
+		IF TWOFF AND TOTAL!LINES<LINESONPAGE/2 THEN PBOUT(FF);
+		FOR I _ 1 STEP 1 UNTIL 10 DO PBOUT(0);
+			! Printer sometimes goofs without this padding;
+		END
+	    ELSE for i_1 step 1 until linesonpage-total!lines do 
+							do!linefeed;
+	total!lines _ NEXTY _ 0;
+	return (success); 
+	end;
+
+simple procedure BADDEFAULTFILE;
+    begin
+    if defaultfile=-1 then return;
+    defaultfile_-1;
+    outstr("
+Something is wrong with default file.  You will be asked directly for
+the rest of the options and a new default file will be made.
+");
+    end;
+
+simple procedure GETTEMP;
+    begin
+    input(defaultfile,starter);
+    temp_input(defaultfile,ender);
+    end;
+
+
+PROCEDURE BOLD (INTEGER CHAR); BEGIN "BOLD"
+    IF CHAR NEQ " " THEN BEGIN
+	! Graphics on ;
+	IF XEROX OR DIABLO THEN OUTSTR(ESC&"3")     
+	    ELSE IF AGILE THEN OUTSTR(ESC&"4")
+	    ELSE PBOUT(CTLF);
+	pbout(" ");		    ! Offset slightly ;
+	pbout(char); 	    ! Print the offset character ;
+	pbout(ctlH);                ! Back to standard position ;
+	! Graphics off ;
+	IF XEROX OR DIABLO THEN OUTSTR(ESC&"4")
+	    ELSE IF AGILE THEN OUTSTR(ESC&"R")
+	    ELSE PBOUT(CTLF);
+	END;
+    pbout(char); 	    ! Print the character ;
+    NEXTX _ lastx _ lastx+1;
+    END "BOLD";
+
+
+PROCEDURE ULINE(INTEGER CHAR); BEGIN "ULINE"
+    PBOUT(CHAR);		! The character;
+    IF CHAR NEQ " " THEN BEGIN
+	PBOUT(CTLH);		! Backspace;
+	PBOUT("_");		! Underline it;
+	END;
+    NEXTX _ LASTX _ LASTX+1;
+    END "ULINE";
+
+COMMENT MAIN PROGRAM--INITIALIZATION AND FILE NAME;
+
+setbreak(pagetbl_getbreak,",-", '40, "is");
+setbreak (fftbl_getbreak, FF, null, "ins");
+setbreak(starter_getbreak,"[",null,"ins");
+setbreak(ender_getbreak,"]",null,"ins");
+setbreak(delfftbl_getbreak,FF&'177&'20,null,"ins");
+setbreak(checknotbl_getbreak,"0123456789", null, "x");
+
+COMMENT REFUSE LINKS;
+START!CODE
+	HRLOI 1,'20000;
+	TLINK;
+	  JFCL
+	END;
+
+gencom_olddtc_newdtc_LPI_cpi_linesonpage_XEROX_DIABLO_AGILE_0;
+
+outstr("PUB-DIABLO LISTING PROGRAM.   Version of 12 April 1982.
+
+NAME OF FILE
+:  ");
+
+comment should use .doc default extension;
+infile _ openfile (null, "roc");
+
+setinput (infile, 200, ibrchar, eof);
+
+comment get selected pages to be listed;
+while true do
+    begin
+    outstr("
+PAGES TO BE LISTED--<CR> for all
+:  ");
+    printpages _ intty;
+    if printpages = "?" then
+	begin
+	outstr("
+Simply type a <CR> if you want the entire file listed.  If you only
+want some of the pages give them as in the following example:
+    :  2,4,6-8,10,12-99
+");
+	continue;
+	end;
+    if length(printpages) then setupprintingpages;
+    done;
+    end;
+
+
+comment check if there is a default file and if so check if wanted;
+defaultfile_-1;
+gjinf(logdir,condir,ttyno);
+username_dirst(logdir);
+defaultfile_openfile("<"&username&">diablo.defaults","re");
+if defaultfile neq -1 then
+    while true do
+        begin
+        outstr("
+USE DEFAULT FILE FOR OPTIONS  (TYPE Y or N or ?)
+:  ");
+        temp_upper(intty);
+        if temp = "?" then
+            begin
+            outstr("
+The options that you last selected have been saved in 
+<"&username&">DIABLO.DEFAULTS.  Type Y to use these options.
+Type N to be asked about all the options again.
+");
+	    continue;
+	    end;
+	if temp = "N" then 
+	    begin 
+	    defaultfile_-1; 
+	    done; 
+	    end;
+	if temp = "Y" then done;
+	end;
+
+defaultstring_null;
+
+comment check which kind of terminal is being used;
+
+while true do
+	begin
+	AGILE_DIABLO_XEROX_newdtc_gencom_olddtc_ABSXTABS _ ABSYTABS _ FALSE;
+	if defaultfile = -1 then
+	    begin
+	    outstr("
+Terminal Type is OLD-DTC, NEW-DTC, GENCOM, XEROX, DIABLO, or AGILE
+(TYPE OD or ND or G or X or D or A or ?)
+:  ");
+	    temp_upper(intty);
+	    end
+	  else	gettemp;
+	if temp = "?" then 
+	    begin
+	    outstr("
+	Since different makes and models of DIABLO terminals have 
+different characteristics, it is important for the program to be able
+to know which type it is working with.  A brand name should appear
+somewhere on the terminal you are using.
+
+	The only current difference between old model and new model DTC
+terminals is the variable line spacing on the new model which gives
+6 lines per inch if PICA (10 cpi) is set and 8 lines per inch if ELITE
+(12 cpi) is set.  The older models use 6 lines per inch for both kinds
+of type.
+");
+	    continue;
+	    end;
+	if equ(temp,"OD") then 
+	    begin
+	    olddtc_true;
+	    done;
+	    end;
+	if temp="G" then 
+	    begin
+	    gencom_true;
+	    done;
+	    end;
+	if equ(temp,"ND") then 
+	    begin
+	    newdtc_true;
+	    done;
+	    end;
+	if equ(temp,"X") then 
+	    begin
+	    XEROX_true;
+	    done;
+	    end;
+	if equ(temp,"D") then 
+	    begin
+	    DIABLO_true;
+	    done;
+	    end;
+	if equ(temp,"A") then 
+	    begin
+	    AGILE_true;
+	    done;
+	    end;
+	baddefaultfile;
+	end;
+
+
+defaultstring_defaultstring&"Terminal type is ["&temp&"].";
+
+
+COMMENT HORIZONTAL AND VERTICAL SPACING;
+
+comment make the pitch setting;
+while true do
+    begin
+    if defaultfile=-1 then
+	begin
+	IF OLDDTC OR NEWDTC THEN
+		OUTSTR("
+IS THE PITCH SWITCH SET TO 10 OR 12?  (TYPE 10 or 12 or ?)
+:  ")
+          ELSE	outstr("
+10 OR 12 CHARACTERS PER INCH (CPI)  (TYPE 10 or 12 or ?)
+:  ");
+        temp_intty;
+	end
+      else gettemp;
+    if temp = "?" then
+	begin
+	IF OLDDTC OR NEWDTC THEN
+		OUTSTR("
+	The PITCH switch is located under the cover of the terminal 
+and may be set to 10 or 12 cpi (characters per inch).  10 is for PICA
+type and 12 is for ELITE.  Your setting of this switch should correspond
+to the size of the print wheel currently used on the terminal.  The
+DIABLO program cannot tell what this switch is set to so you must tell it.
+")
+	  ELSE	outstr("
+	You may select a PITCH of either 10 (PICA) or 12 (ELITE) cpi, 
+but probably your choice should correspond to the size of the print
+wheel currently in use on the terminal.
+");
+	continue;
+	end;
+    if (equ(temp,"10")) or (equ(temp,"12")) then
+	begin
+	cpi_cvd(temp);
+	defaultstring_defaultstring&crlf&"Chars per inch is ["&temp&"].";
+	done;
+	end;
+    baddefaultfile;
+    end;
+
+comment check on number lines per inch and per page;
+if olddtc then LPI _ 6 
+ELSE WHILE TRUE DO
+    begin
+    if defaultfile=-1 then
+	begin
+        outstr("
+LINES PER INCH  (TYPE 6 or 8 ");
+	IF XEROX OR DIABLO OR AGILE THEN OUTSTR ("or 12 ");
+	OUTSTR ("or ?)
+:  ");
+        temp_intty;
+	end
+     else gettemp;
+    if temp = "?" then
+	begin
+	IF XEROX OR DIABLO OR AGILE THEN outstr("
+	You may select a line spacing of 6, 8, or 12 lines per inch.
+6 lines per inch is the normal setting for single spaced output.  
+12 lines per inch is half spacing, and should be used for files that
+were generated for half space output.  8 lines per inch is not recommended.
+")
+	ELSE outstr("
+	You may select a line spacing of 6 or 8 lines per inch.
+6 lines per inch is the normal setting for single spaced output.  
+8 lines per inch is not recommended.
+");
+	continue;
+	end;
+    IF EQU(TEMP,"6") OR EQU(TEMP,"8") 
+		OR ((XEROX OR DIABLO OR AGILE) AND EQU(TEMP,"12"))
+	   THEN 
+	BEGIN
+	LPI _ CVD(TEMP);
+	LINESONPAGE _ 11 * LPI;
+	IF NEWDTC AND CPI=12 AND LPI=6 THEN ADDITIONAL!LF!SPACING _ 2;
+	defaultstring_defaultstring&crlf&"Lines per inch is ["&TEMP&"].";
+	DONE;
+	END;
+    baddefaultfile;
+    end;
+
+comment check if the user wants continuous feed or pause and set PAUSE
+	true or false;
+while true do
+	begin
+	if defaultfile=-1 then
+	    begin
+	    outstr("
+CONTINUOUS FEED OR PAUSE AT EACH PAGE (TYPE C or P or ?)
+:  ");
+	    temp_intty;
+	    end
+	  else gettemp;
+	if temp = "?" then
+	    begin
+	    outstr("
+If you will be using individual sheets of bond paper, type P to pause
+for insertion of each sheet of paper.  If you are using the regular
+wide paper on the sprockets, type C for continuous feed.
+");
+	    continue;
+	    end;
+	if (temp = "C") or (temp = "c") then 
+	    begin
+	    pause_false;
+	    defaultstring_defaultstring&crlf&"[C]ontinuous feed.";
+	    done;
+	    end;
+	if (temp="P") or (temp="p") then 
+	    begin
+	    pause_true;
+	    defaultstring_defaultstring&crlf&"[P]ause at each page.";
+	    done;
+	    end;
+	baddefaultfile;
+	end;
+
+COMMENT OFFSET;
+
+while true do 
+  begin
+  string tempno;
+  if defaultfile=-1 then
+	begin
+        outstr("
+OFFSET FROM LEFT MARGIN  (TYPE NUMBER or NUMBER,NUMBER or <CR> or ?)
+:  ");
+        temp _ intty;
+	end
+     else gettemp;
+  if temp = "?" then 
+    begin
+    outstr("
+The DIABLO prints very close  to the left margin (about 5/8 inch) so 
+you probably want to offset it to the right.  
+
+Type a number for the number of spaces you want the offset to be.  
+(8 is probably reasonable for PUB-produced output with the default 
+width of 72.)  
+
+If you need a different offset on facing pages for binding then 
+give both separated by a comma, e.g., 18,8 where the first and every 
+other page thereafter will be offset by 18 and the alternate pages by 8.
+
+If you don't want any offset you may give 0 or just type a <CR>.
+");
+    continue;
+    end;
+  tempno _ scan(temp, pagetbl, brchar);  ! scan for a comma;
+  ofset1 _ cvd(scan(tempno, checknotbl, brchar));  ! check digits;
+  if brchar neq 0 then begin baddefaultfile; continue; end;
+  if length(temp) then    ! we have a second number;
+    begin
+    ofset2_cvd(scan(temp,checknotbl,brchar)); ! check for all digits;
+    if brchar neq 0 then begin baddefaultfile; continue; end;
+    end							     
+   else  ofset2_ofset1;   ! no second number given;
+  defaultstring_defaultstring&crlf&"Offset is ["&
+				cvs(ofset1)&","&cvs(ofset2)&"].";
+  done;
+  end;
+
+comment check if full or partial halflines wanted;
+
+COMMENT Check removed 1/13/78.  Set it to partial always;
+
+IF LPI=8 THEN LESSHALF_2 ELSE LESSHALF_3;
+
+COMMENT MAKE A NEW DEFAULT FILE;
+
+if defaultfile = -1 then
+    while true do
+	begin
+	string temp;
+	outstr("
+WOULD YOU LIKE THESE OPTIONS RECORDED FOR NEXT USE  (TYPE Y or N or ?)
+:  ");
+	temp_upper(intty);
+	if temp = "?" then
+	    begin
+	    outstr("
+A file will be created on your directory which will be read in the
+next time you use the DIABLO program so that you will not have to
+be asked all these questions again.
+");
+	    continue;
+	    end;
+	if temp = "Y" then
+	    begin
+	    defaultfile_openfile("<"&username&">DIABLO.DEFAULTS","w");
+	    out(defaultfile,defaultstring);
+	    outstr(JFNS(DEFAULTFILE,0)&"
+");
+	    done;
+	    end;
+	if temp = "N" then done;
+	end;
+comment finished with defaultfile (either old version or new);
+if defaultfile neq -1 then cfile(defaultfile);
+
+COMMENT DO IT!;
+
+
+page1_true;
+curpage _ 0;
+pagecount _ 0;
+NEXTX _ lastx _ 0;
+NEXTY _ 0;
+TOTAL!LINES _ 0;
+BOLDFACING _ UNDERLINING _ 0;
+JUSTIFYING _ didjust _ 0;
+
+ABSXTABS _ ABSYTABS _ DIABLO OR AGILE;
+
+NOTBINARY_FALSE;
+IF AGILE THEN
+    BEGIN				! Determine whether binary or no;
+    INTEGER SPEED;
+    START!CODE
+	HRRZI 1,'101;			! Primary output;
+	HRRZI 2,'27;			! .MORSP = Return terminal speed;
+	MTOPR;				! Get it;
+	HRRZM 3,SPEED;			! Answer in ac3;
+	END;
+    IF SPEED>300 THEN NOTBINARY_TRUE;	! High speed needs XON/XOFF ;
+    END;
+
+DOIT:
+
+mac2_rfmod('101);
+IF NOTBINARY THEN BEGIN "CODES"
+	LABEL UNBIN;
+	UNBIN:
+	SFCOC('101,'525252525252,'525252525252);
+	STPAR('101,(MAC2 LAND '740000777777) LOR '340000000002);
+	END "CODES"
+ELSE sfmod('101,(MAC2 land '777777772477) );
+
+if gencom OR AGILE then 
+    begin
+    pbout(ctlUP);  ! enable esc sequence;
+    pbout(esc);   ! reset the terminal;
+    pbout("<");
+    pbout(ctlUP);  ! re-enable esc sequence now that reset done;
+    end;
+
+SPACING(CPI,LPI);
+fix!tabs;
+WIDTH _ 72; NewWidth_72; 
+
+outstr(crlf);
+if gencom then outstr("PLACE PAPER AND TYPE THE  ""A""  KEY WHEN READY!
+")  else outstr("PLACE PAPER AND TYPE  <CR>  WHEN READY!
+");
+
+total!lines_99;
+formfeed(0);   ! start page 1, check if it is to be printed, confirm, etc;
+carriagereturn;
+HORTAB;
+VERTAB;
+IF AGILE THEN PSOUT(ESC&"."&0&71);	! Set initial width (default 72);
+CLRBUF;
+PBIN;		! Wait for character;
+
+while true do 
+	begin "Major loop"
+	curchar _ charin(infile);
+	if eof then done;
+	if not curchar then continue;
+	if curchar='177 then
+		USERERR(0,1,"PROPORTIONAL SPACING CODE REMOVED")
+		COMMENT RECOVER FROM ARCHIVE TAPES OF <PUB>DIABLO.SAI,
+			VERSION 7 OR EARLIER.  REMOVED 1/13/78;
+	else
+	case curchar of begin "case statement"
+	[ff]	begin
+		boldfacing _ UNDERLINING _ 0;
+		if not formfeed(PAUSE) then done;
+		if page1 then   
+		    begin
+		    page1_false;   ! flip-flop facing page;
+		    ofseti_ofset2;  ! set correct offset;
+		    end
+		  else
+		    begin
+		    page1_true;
+		    ofseti_ofset1;
+		    end;
+		carriagereturn;
+		end;
+	[cr]	if absxtabs and not justifying then nextx_0
+		    else carriagereturn;
+	[lf]	do!linefeed;
+	[ctlC]	BEGIN
+		    IF AGILE AND NOT BOLDFACING THEN PBOUT(CTLB);
+		    boldfacing _ 1;  
+		    if justifying then NewWidth _ NewWidth-1;
+		    END;
+	[ctlD]	BEGIN
+		    IF AGILE AND BOLDFACING THEN PBOUT(CTLB);
+		    boldfacing _ 0; 
+		    if justifying then NewWidth _ NewWidth-1;
+		    END;
+	[ctlH]	begin
+		NEXTX _ NEXTX-1;
+		IF justifying or NOT ABSXTABS THEN BEGIN
+			pbout(curchar);
+			lastx _ lastx-1;
+			END;
+		end; 
+	[ctlV]	BEGIN
+		    IF AGILE AND NOT UNDERLINING THEN PBOUT(CTLA);
+		    UNDERLINING _ -1;
+		    END;
+	[ctlW]	BEGIN
+		    IF AGILE AND UNDERLINING THEN PBOUT(CTLA);
+		    UNDERLINING _ 0;
+		    END;
+	[ctlY]	while curchar neq ctlZ do
+		    BEGIN
+		    pbout(curchar);
+		    curchar _ charin(infile);
+		    END;
+	[tab]	BEGIN
+		    NEXTX _ 8 + (nextx land '777770);
+		    if justifying or not ABSXTABS THEN
+		        begin
+			for lastx_lastx step 1 until nextx do pbout('40);
+			lastx_nextx;
+			end
+		    END;
+	[space]	begin
+		    NEXTX _ NEXTX + 1;
+		    if justifying or not ABSXTABS then
+		        begin
+			pbout(curchar);
+			lastx_nextx
+			end
+		    end;
+	[esc]	BEGIN
+		    curchar _ charin(infile);
+		    IF NOT AGILE
+		    	AND ( CURCHAR="." OR CURCHAR="&" OR CURCHAR="'" )
+			THEN USERERR(0,1,"Can only do justification on an Agile terminal");
+		    IF CURCHAR="." THEN
+			BEGIN		! Specify width for justification;
+			NewWidth _ ( CHARIN(INFILE) LSH 7 ) LOR CHARIN(INFILE)
+				+ 1;
+			END
+		    ELSE if curchar="&" then
+			BEGIN		! Justification on;
+			HORTAB;
+			VERTAB;
+			if not justifying then outstr(esc&"&");
+			justifying_didjust_TRUE;
+			END
+		    else if curchar="'" then
+			BEGIN		! Justification off;
+			if justifying then
+			    begin
+			    if absytabs then
+				BEGIN
+				if lastx neq 0 and not notbinary
+					then pbout(cr);
+				lastx _ 0;
+				pbout(lf);
+				total!lines _ total!lines + 
+					(if halflines then 2 else 1);
+				END;
+			    IF JWAIT NEQ 0 THEN WAITMS(JWAIT);
+			    outstr(esc&"'");
+			    end;
+			justifying_false;
+			END
+		    else outstr(esc&curchar);
+		    END;
+	ELSE	BEGIN	"Printable characters"
+		HORTAB;
+		VERTAB;
+		if curchar = ctlf then
+			begin
+			pbout(charin(infile));
+			pbout(ctlh);
+			pbout("_");
+			NEXTX _ lastx _ lastx+1;
+			if justifying then NewWidth _ NewWidth-1;
+			end
+		else if (curchar = ctlA) THEN
+		    begin
+		    if agile then pbout(curchar)
+		    else underlining _ not underlining
+		    end
+		else if (curchar = ctlP) THEN PBIN
+		else if (curchar = ctlR) THEN 
+		    begin
+		    upordown(TRUE);
+		    if justifying then NewWidth _ NewWidth-1;
+		    end
+		ELSE if (curchar = ctlS)  then 
+		    begin
+		    upordown(FALSE);
+		    if justifying then NewWidth _ NewWidth-1;
+		    end
+		else IF BOLDFACING AND NOT AGILE THEN BOLD(CURCHAR)
+		ELSE begin
+			if curchar = ctlX then 		! underbar;
+				CURCHAR _ "_";
+			pbout(curchar);
+			NEXTX _ lastx _ lastx+1;
+			IF UNDERLINING AND NOT AGILE 
+			    AND "_" NEQ CURCHAR NEQ " " THEN
+			    OUTSTR(CTLH&"_");
+			end 
+		END "Printable characters"
+	    end "case statement"
+	end "Major loop";
+
+FORMFEED(PAUSE);
+cfile (infile);	    
+		    
+if gencom then
+    begin
+    pbout(esc);  ! reset margins;
+    pbout("8");
+    pbout(ctl\); ! disable esc sequences;
+    end
+ELSE IF DIABLO OR XEROX THEN SPACING(10,6)
+ELSE IF AGILE THEN BEGIN
+	if not pause then WAITMS(if didjust or notbinary then 10000 else 5000);
+				! Wait for buffers to empty;
+	OUTSTR(ESC&"<");	! Reset sequence;
+	END;
+sfmod('101,mac2);
+STPAR('101,mac2);
+start!code;
+haltf;
+end;
+end "DIABLO"

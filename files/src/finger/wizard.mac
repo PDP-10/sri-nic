@@ -1,0 +1,319 @@
+;SRC:<FINGER>WIZARD.MAC.2, 28-APR-84 10:50:24, Edit by NILSEN
+; Install at SRI-NIC
+;ACCT:<SU-UTILITIES>WIZARD.MAC.12, 20-Mar-84 21:42:52, Edit by S.SARGON
+; Fix tiny bug in idle output routine
+;<S.SARGON>WIZARD.MAC.10, 20-Mar-84 20:23:32, Edit by S.SARGON
+; Add job idle time column
+;<SU-UTILITIES>WIZARD.MAC.8, 21-Oct-83 10:19:40, Edit by FMF
+; Symbols in .PSECT CODE
+;<SU-UTILITIES>WIZARD.MAC.7, 19-Oct-83 21:14:59, Edit by FMF
+; clean up output format a bit
+;SRA:<FMF.WORK>WIZARD.MAC.4, 19-Oct-83 18:29:13, Edit by FMF
+; make use new getloc, clean up code
+;<S.SARGON>WIZARD.MAC.4, 15-Oct-83 12:44:04, Edit by S.SARGON
+; Forgot to clear TTYLOC before calling GETLOC - fixed now
+;<S.SARGON>WIZARD.MAC.2, 15-Oct-83 12:27:18, Edit by S.SARGON
+; Make the output prettier, more like finger
+;<S.SARGON>WIZARD.MAC.1, 15-Oct-83 10:49:38, Edit by S.SARGON
+; Use GETLOC.REL to allow terminal location to be displayed
+;ACCT:<SU-UTILITIES>WIZARD.MAC.7,  9-Aug-83 14:54:23, Edit by R.RMK
+; Clean up display for use as a command.
+;ACCT:<UTILITIES.SUBSYS>WIZARD.MAC.6,  5-Nov-82 17:06:15, Edit by B.BOMBADIL
+;Ignore SYSJB1 if running as an OPERATOR job
+;ACCT:<UTILITIES.SUBSYS>WIZARD.MAC.5, 23-Jun-82 20:11:12, Edit by B.BOMBADIL
+;ACCT:<UTILITIES.SUBSYS>WIZARD.MAC.1, 15-Jun-82 14:48:41, Edit by B.BOMBADIL
+;Clean up code, make program runnable at sites other than Stanford LOTS
+
+TITLE WIZARDS -- A program to detect privileged users
+SUBTTL Kirk Lougheed / September 1979
+
+SEARCH MONSYM,MACSYM,FNGDEF
+.REQUIRE SYS:MACREL
+.REQUIRE GETLOC
+.TEXT "WIZARD/SAVE"
+.TEXT "/SET:PURE:20000"
+.TEXT "/SYMSEG:PSECT:CODE"
+ASUPPRESS
+SALL
+
+EXTERN GETLOC			;Routine to get terminal's location
+
+IFNDEF STANSW,<STANSW==0>	;(Default is no Stanford features)
+
+T1=1				;Accumulator definitions
+T2=2
+T3=3
+T4=4
+J=5				;Job index counter
+P=17				;Stack pointer
+
+STKLEN==100			;Stack length
+
+IFNDEF MONRD%,<
+
+OPDEF MONRD% [JSYS 717]		;The "safe" SNOOP% jsys
+
+ .RDTST==0			;Test existence of MONRD% jsys
+ .RDJSB==2			;Read from JSB
+ .RDPSB==3			;Read from PSB
+ .TSTNM==123456			;Value returned by .RDTST function
+
+>;IFNDEF MONRD%
+
+IFNDEF IDLE%,<
+
+OPDEF IDLE% [JSYS 701]		;Job idle time jsys
+ID%TTY==:1B17			;Return ms since last user typein
+
+>;IFNDEF IDLE%
+
+.PSECT PAGED,100000
+
+TTYLOC:	BLOCK 1000
+TTYPAG==TTYLOC_-<^D9>
+
+.ENDPS
+
+;STORAGE LOCATIONS
+
+.PSECT DATA,1000
+
+FLAG:	BLOCK 1			;-1 if any wizards have been found
+OPRNUM:	BLOCK 1			;Operator's usernumber
+GETBLK:	BLOCK .JIMAX		;GETJI% information returned here
+TMPBUF:	BLOCK 20		;Temporary buffer for DIRST%
+STACK:	BLOCK STKLEN		;The stack
+
+.ENDPS
+
+;MAIN LOOP
+
+.PSECT CODE,5000
+
+START:	RESET%			;Reset the world
+	MOVE P,[IOWD STKLEN, STACK] ;Initialize the stack
+	MOVE T1,['WIZARD']	;Get sixbit job name
+	SETNM%			;Tell the system who we are
+	SETZB T1,T3		;Not used
+	HRROI T2,[ASCIZ/OPERATOR/] ;Operator's username
+	RCUSR%			;Get the usernumber
+	MOVEM T3,OPRNUM		;And store it for later use
+	MOVEI T1,.RDTST		;Test function
+	SETZ T2,		;No symbol
+	MONRD%			;Test if we exist
+	 ERJMP NOIMP		;Error if jsys not implemented
+	CAIE T2,.TSTNM		;Check value returned
+	 JRST NOIMP		;Bad value, say not implemented
+	CALL CHECK		;Take a look at the world
+STOP:	HALTF%			;Stop the world
+	JRST START		;Continue at start address
+
+NOIMP:	TMSG <?SYSDPY's MONRD% jsys not in the monitor>
+	JRST STOP		;Complain and shut us down
+
+;CHECK - Check for privileged jobs
+
+CHECK:	SETZM FLAG		;No jobs printed yet
+	MOVE T1,['JOBTTY']	;Use a job indexed GETAB% table
+	SYSGT%			;Look it up
+        HLLZ J,T2		;Set up -LENGTH,,0 for aobjn counter
+	AOBJN J,.+1		;Always ignore job 0
+GETJOB:	HRRZ T1,J		;T1/ Job number
+	MOVE T2,[XWD -.JIMAX,GETBLK] ;T2/ Storage for job information
+	SETZ T3,		;T3/ Start at offset zero
+	GETJI%			;Get job information
+	 ERJMP NXTJOB		;No job, look at next
+	SKIPN GETBLK+.JICPJ	;Check controlling job
+	 JRST NXTJOB		;Ignore a SYSJOB controlled job
+	HRRZ T1,GETBLK+.JIUNO	;Get usernumber
+	JUMPE T1,NXTJOB		;Not logged in, look at next job
+	MOVEI T1,.RDJSB		;Read from the JSB
+	MOVE T2,['SYSFK ']	;The JSB table of forks
+	SETZ T3,		;Want the top fork
+	HRRZ T4,J		;The job number
+	MONRD%
+	 JUMPN T1,NXTJOB	;Failure, job probably logged out
+	HRRZ T4,T2		;Put fork number in correct position
+	MOVEI T1,.RDPSB		;Read from PSB
+	MOVE T2,['CAPMSK']	;The process capabilities mask
+	SETZ T3,		;No offset
+	MONRD%
+	 JUMPN T1,NXTJOB	;Failure, job probably logged out
+	TXNN T2,SC%WHL!SC%OPR!SC%CNF!SC%MNT ;Any interesting privileges?
+	 JRST NXTJOB		;No, go on to next job
+IFN STANSW,<
+	MOVE T1,GETBLK+.JIPNM	;Get program name
+	CAME T1,[SIXBIT/SYSJB1/] ;Alternate SYSJOB?
+	 CAMN T1,[SIXBIT/DLINE /] ;SU-LOTS queueing system?
+	 IFNSK.
+	   MOVE T1,GETBLK+.JIUNO ;Yes, get the user number
+	   CAMN T1,OPRNUM	;Operator?
+	   JRST NXTJOB		;Yes, ignore this job
+	 ENDIF.
+>;IFN STANSW
+	CALL DPYWHL		;Display the job
+NXTJOB:	AOBJN J,GETJOB		;Get next job or fall through
+	SKIPE FLAG		;Did we see anyone?
+	 RET			;Yes, return without further ado
+	TMSG <%No privileged users on the system.
+>
+	RET
+
+
+;DPYWHL - Tell us about privileged user
+;Takes T2/ Capabilities word
+;Returns +1 always
+
+DPYWHL:	SAVEAC <J>		;Just in case...
+	STKVAR <PRVSAV>
+	SKIPE FLAG		;Skip header if we've already found someone
+	IFSKP.
+	  TMSG <Job  Username     Caps      Jobnam  Idle  TTY  Location
+>
+	  SETOM FLAG		;We've found at least one privileged user
+	ENDIF.
+	MOVEM T2,PRVSAV		;Save privs for later
+	MOVEI T1,.PRIOU		;Prepare to output job number
+	HRRZ T2,J		;Load job index
+	MOVE T3,[NO%LFL!<3,,^D10>] ;Leading filler, decimal
+	NOUT%			;Output it
+	 ERCAL ERROR
+	TMSG <  >		;Output separators
+	MOVE T1,[ASCII \     \]	;Load a word of blanks
+	MOVEM T1,TMPBUF		;Kludge to make columns line up
+	MOVEM T1,TMPBUF+1	; <Ditto>
+	SETZM TMPBUF+2		;If user name is >10 char ignore excess
+	HRROI T1,TMPBUF		;Load temporary buffer
+	MOVE T2,GETBLK+.JIUNO	;Get user number
+	DIRST%			;Translate number to string
+	 ERCAL ERROR
+	MOVE T3,[POINT 7,TMPBUF+2] ;More kludge to line up columns
+	ILDB T2,T3		;Load a byte
+	MOVEI T3," "		;Now load a space
+	IDPB T3,T1		;And replace DIRST% null with it
+	SETZM TMPBUF+2		;Zero out excessive user name
+	HRROI T1,TMPBUF		;Reload name buffer
+	PSOUT%			;And output it
+	MOVEI T1," "		;Load a space
+	SKIPE T2		;T2 contains either " " or alphanum char
+	 MOVEI T1,"."		;If latter, pretty print (like FINGER)
+	PBOUT%			;Output char " " or "."
+	PBOUT%			; <Ditto>
+	MOVE T2,PRVSAV		;Get back privs
+	HRROI T1,[ASCIZ/ Maint     /]
+	TXNE T2,SC%CNF
+	 HRROI T1,[ASCIZ/ CIA       /]
+	TXNE T2,SC%OPR
+	 HRROI T1,[ASCIZ/ Operator  /]
+	TXNE T2,SC%WHL
+	 HRROI T1,[ASCIZ/ Wheel     /]
+	PSOUT%			;And output privs
+	MOVE T2,GETBLK+.JIPNM	;Job name
+	MOVEI T3,6
+	DO.
+	  SETZ T1,		;Sixbit output routine
+	  LSHC T1,6
+	  ADDI T1,40
+	  PBOUT%
+	  SOJG T3,TOP.
+	ENDDO.
+	TMSG <  >
+	HRRZ T1,J		;Get job number
+	MOVE T2,GETBLK+.JITNO	;Get tty number
+	CAME T2,[-1]		;Check if detached
+	 TXO T1,ID%TTY		;If not, use ID%TTY bit
+	IDLE%			;Get job idle time
+	IFJER.
+	  HRROI T1,[ASCIZ \    \]
+	  PSOUT%		;If error, just print spaces
+	ELSE.
+	  IDIVI T1,^D1000*^D60	;Convert to minutes
+	  IFE. T1
+	    HRROI T1,[ASCIZ \    \]
+	    PSOUT%		;If .EQ. 0 then just print spaces
+	  ELSE.
+	    IDIVI T1,^D60	;Get hours
+	    CAIG T1,^D9		;Check if greater than limit
+	    IFSKP.
+	      HRROI T1,[ASCIZ \*:**\]
+	      PSOUT%		;If so, just print asterisks
+	    ELSE.
+	      IFE. T1
+		TMSG <  >	;No, so just print spaces
+	      ELSE.
+	        ADDI T1,"0"	;Add offset for ASCII 0
+	        PBOUT%		;Output space or number
+		MOVEI T1,":"
+		PBOUT%		;And output colon
+	      ENDIF.
+	      IDIVI T2,^D10	;Get 10s digit for minutes idle
+	      IFE. T2		;Check if anything here
+		CAIE T1,":"	;Did we print out an hour?
+		IFSKP.		;Yes...
+		  MOVEI T1,"0"	;So we want a zero here
+		ELSE.
+		  MOVEI T1," "	;Else we just want another space
+		ENDIF.
+	      ELSE.
+	        ADDI T2,"0"	;Convert to correct ASCII character
+	        MOVE T1,T2	;Copy
+	      ENDIF.
+	      PBOUT%		;Output 10s field
+	      ADDI T3,"0"	;Convert 1s field
+	      MOVE T1,T3	;Copy
+	      PBOUT%		;And output it
+	    ENDIF.
+	  ENDIF.
+	ENDIF.
+	TMSG <  >
+	SKIPL T2,GETBLK+.JITNO	;Get tty number
+	IFSKP.
+	  TMSG <   >		;If detached leave spaces
+	ELSE.
+	  MOVEI T1,.PRIOU	;Else prepare to output tty number
+	  MOVE T3,[NO%LFL!<3,,^D8>] ;Leading filler, radix octal
+	  NOUT%			;Output controlling tty
+	   ERCAL ERROR
+	ENDIF.
+	TMSG <  >
+	SETZM TTYLOC		;Clear 1st word of TTYLOC
+	MOVE T1,[TTYLOC,,TTYLOC+1] ;Prepare for blt
+	BLT T1,TTYLOC+77	;Clear 1st 100 words of TTYLOC
+	MOVE T1,[POINT 7,TTYLOC] ;Prepare to call GETLOC
+	HRRZ T2,GETBLK+.JITNO	;Load tty number
+	TXO T2,GL%PRE!GL%TIP	;Prepend Ethernet, or Internet as aprop.
+	CALL GETLOC		;Call terminal location routine 
+	IFSKP.
+	  SETZ T2,		;Get a null
+	  IDPB T2,T1		;Drop it in on our string
+	  HRROI T1,TTYLOC	;Output location
+	ELSE.
+	  HRROI T1,[ASCIZ \Not Available\] ;Here if failed
+	  SKIPGE GETBLK+.JITNO
+	   HRROI T1,[ASCIZ \Detached\] ;Assume detached or unknown
+	ENDIF.
+	PSOUT%
+	TMSG <
+>				;Print a crlf
+	RET			;And go home
+
+ERROR:	HRROI T1,[ASCIZ \Error at PC \]
+	ESOUT%
+	MOVE T2,(P)		;Get program counter
+	SUBI T2,2		;Get location of failing call
+	HRRZS T2		;RH only
+	MOVEI T1,.PRIOU		;Set up for NOUT%
+	MOVE T3,[NO%MAG!^D8]	;Format for NOUT%
+	NOUT%			;Output failing jsys location
+	 ERJMP .+1		;No recursion please
+	HRROI T1,[ASCIZ \ -- \]
+	PSOUT%			;Pretty print
+	MOVEI T1,.PRIOU		;Set up for ERSTR%
+	HRLOI T2,.FHSLF		;Most recent error, this job
+	MOVEI T3,0		;No limit
+	ERSTR%			;Translate error to string
+	 JFCL			;No-op
+	 JFCL
+	JRST STOP
+
+END START

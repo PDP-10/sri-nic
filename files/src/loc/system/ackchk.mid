@@ -1,0 +1,1191 @@
+;-*-Midas-*-
+;[SRI-NIC]SRC:<LOC.SYSTEM>ACKCHK.MID.16, 22-May-90 13:22:03, Edit by ZZZ
+;	Added low-error threshold to comand line (below which no wailing
+;	will occur).  Tweaked wailing code a little to make sure the logfile
+;	gets updated for each lost packet even if the cty doesn't get output.
+;[SRI-NIC]SRC:<LOC.SYSTEM>ACKCHK.MID.14, 15-May-90 17:05:36, Edit by ZZZ
+;	Merged checking programs (audchk/hurschk) into one (ackchk) by
+;	adding a command-line parser that configures the different ones.
+;	(see usage string in UsgStr for command-line details...)
+;	Modified the wailing sequence to conform to the actual pattern
+;	of lossage (most of the time it gripes once or twice it's not
+;	really a problem, just a loaded net).
+;	And removed the redundant timestamping of the console messages.
+;[SRI-NIC]SRC:<LOC.SYSTEM>AUDCHK.MID.49,  6-Apr-90 14:41:38, Edit by ZZZ
+;	Change 20's address to ethernet address
+;[SRI-NIC]SRC:<LOC.SYSTEM>AUDCHK.MID.43,  1-Mar-89 00:30:17, Edit by VIVIAN
+;	Switch to port 4/Sun
+;[SRI-NIC]SRC:<LOC.SYSTEM>AUDCHK.MID.42, 24-Feb-89 00:11:13, Edit by VIVIAN
+;	Remove references to F4, switch to Sun on port 6
+
+	Title $ACKCHK - Check for life on remote audit-trail server
+
+.decsav
+
+ A=5
+ B=6
+ C=7
+ T=10
+TT=11
+T3=12
+ L=13				;lost packets
+ P=17
+
+ACK==:37			;ACK code
+AUDPRT==:49.			;Audit Trail port#
+CarMsk==:<-1,,600000>		;Mask of non-lower-16-bits
+IPCFch==:0			;Channel for IPCF to knock on
+PakLen==:100			;Packet Buffer length
+PDLen==:100			;PDL size
+TTLive==:60.			;Time To Live
+UDPPRN==:17.			;UDP Protocol Number
+
+WaitN==:5			;Try this many times before assuming dead.
+WaitFor==:60.			;If no answer in this many seconds, assume dead
+
+S==:1000.			;One ticks worth of seconds
+M==:60.*S			;One minute
+
+.IPKVR==:1			;Version, data offset, type of service
+.IPKSG==:2			;Segment ID, frag stuff.
+.IPKPR==:3			;Time to live, protocol#, header checksum
+.IPKSH==:4			;Source host internet address
+.IPKDH==:5			;Destination host " "
+    IPhlen==:5			;IP header length.
+.UDPPO==:6			;UDP port#'s
+.UDPLN==:7			;UDP length, checksum
+    UDPhlen==:2			;Length of UDP header
+.UDPDT==:10			;UDP data bytes
+
+L16==:<777774,,0>		;Mask for left 16-bit byte in word
+R16==:<3,,777760>		;and for right 16-bit byte.
+B32==:L16\R16			;Full 32-bit word
+
+IPK$VR==:<.BP <740000,,0>,.IPKVR>	;IP Version#
+IPK$DO==:<.BP <036000,,0>,.IPKVR>	;Data Offset
+IPK$SR==:<.BP <001774,,0>,.IPKVR>	;Type of Service
+  IPK$ST==:<.BP <001600,,0>,.IPKVR>	;  (Precedence)
+  IPK$SF==:<.BP <000160,,0>,.IPKVR>	;  (Flags)
+IPK$DL==:<.BP R16,.IPKVR>		;Datagram Length
+
+IPK$SI==:<.BP L16,.IPKSG>		;Segment ID
+IPK$R1==:<.BP <000002,,0>,.IPKSG>	;Reserved, should be 0
+IPK$NF==:<.BP <000001,,0>,.IPKSG>	;Do-not-fragment bit
+IPK$MF==:<.BP <0,,400000>,.IPKSG>	;More-fragments flag
+IPK$FO==:<.BP <0,,377760>,.IPKSG>	;Fragment-Offset
+
+IPK$TL==:<.BP <776000,,0>,.IPKPR>	;Time-to-live
+IPK$PV==:<.BP <001774,,0>,.IPKPR>	;Protocol version
+IPK$HC==:<.BP R16,.IPKPR>		;IP Header Checksum
+
+IPK$SH==:<.BP B32,.IPKSH>		;Source Host
+IPK$DH==:<.BP B32,.IPKDH>		;Destination Host
+
+UD$SRC==:<.BP L16,.UDPPO>
+UD$DST==:<.BP R16,.UDPPO>
+UD$LEN==:<.BP L16,.UDPLN>
+UD$CHK==:<.BP R16,.UDPLN>
+
+PopJ1:	Aos (P)
+CPopJ:	Return
+
+Retskp==<Jrst PopJ1>
+
+.LSTOFF
+.INSRT MID:SYMBOLS
+.INSRT MID:MACROS
+.INSRT MID:BBNTCP
+.INSRT MID:SOUT
+.INSRT MID:PRARG
+.INSRT MID:COMND
+.LSTON
+
+Define FATAL &string
+	Jrst [Call ConLog
+	      Type string
+	      Jrst Die]
+Termin
+
+Define SHONUM bp,base
+	Movei 1,.PRIOU
+	Ldb 2,[bp PakBuf]
+	Movei 3,base
+	NOUT
+	  Nop
+Termin
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Impure storage
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+SaveP:	0			;for restoring stack ptr on command reparse
+PDL:	-PDLen,,.
+	Block PDLen
+
+LogJFN:	0			;JFN on LogFil
+
+UsHost:	Internet(192.,67.,67.,20.)	;Our host#
+HstBuf:	Block 20		;Where ShoHst puts the hostname
+
+IQH:	0			;Internet Queue Handle
+GQErr:	0			;Flag for GetQueue
+
+IntOK:	0			;Interrupts OK?
+Pollp:	0			;Are we being polled, or asking on our own?
+
+Wait1:	0			;Counter for #-of-tries to get ahold of GATHER
+Wait2:	0			;Counter for # seconds remaining in this try
+
+QDB:	.BYTE 8. ? 0 ? 0 ? 0 ? UDPPRN ? .BYTE	;UDP Protocol Number
+	0					;Wild foreign host
+	0					;Wild source host
+QDBPrt:	0					;local, foreign port (.BYTE 16)
+	.BYTE 8. ? 0 ? 0 ? 0 ? -1 ? .BYTE	;Protocol number mask
+	0					;Foreign host mask
+	0					;Source host mask
+	.BYTE 16. ? -1 ? 0 ? .BYTE		;Local port mask
+QDBlen==.-QDB
+
+PakBuf:	0					;Packet Buffer total length.
+;;
+;;	Start of IP header
+;;
+    .BYTE 4,4,8.,16.		;-----------------------+
+	4			;IP version #		|\
+	5			;Data Offset		| \ One
+	0			;Type of Service	| / Word
+	0			;Datagram Length	|/
+    .BYTE			;-----------------------+
+	0			;Segmentation and frag junk.
+    .BYTE 8.,8.,16.		;-----------------------+
+	60.			;Time-to-live		|\
+	UDPPRN			;Protocol number	| > One word
+	0			;IP header checksum	|/
+    .BYTE			;-----------------------+
+	0			;Source host
+	0			;Destination host
+;;
+;;	End of IP header, start of UDP header.
+;;
+	0			;Local port number, destination port#
+	0			;UDP header+data length, checksum
+;;
+;;	End of UDP header, start of UDP data.
+;;
+	Block 200
+
+PSIPC1:	0
+PSIPC2:	0
+PSIPC3:	0
+
+LEVTAB:	PSIPC1 ? PSIPC2 ? PSIPC3
+CHNTAB:	Channel IPCFch,2,Answer
+	EndChannel
+
+;;
+;;	Server IPCF stuff
+;;
+
+CrePak:	IP%CPD			;Create us a PID, please.
+MyPID:	0
+	0
+	ArgLen,,ArgBlk
+IPakLen==.-CrePak
+
+ArgBlk:	.IPCII
+	0
+	Block 2			;PID name (enough for 9 chars)
+ArgLen==.-ArgBlk
+
+MBlock:	.MUPIC			;Assign an interrupt channel to a PID
+MutPID:	0
+	IPCFch
+MBlokl==.-MBlock
+
+InfPak:	0			;<SYSTEM>INFO's reply.
+	0
+	0
+	InfLen,,InfArg
+
+InfLen==4
+InfArg:	Block InfLen
+
+DatPak:	0
+	0
+	0
+	1,,In
+
+In:	0
+
+RepPak:	0			;Our reply to the above message.
+	0
+HisPID:	0
+	1,,In			;1-word reply
+
+;;
+;;	User IPCF stuff
+;;
+
+Pack1:	IP%CPD
+MePID:	0
+	0		;To INFO
+	4,,SndArg
+
+Pack2:	0
+	0
+HimPID:	0
+	4,,SndArg
+
+SndArg:	.IPCIW
+	0
+	Block 2			;PID name (room for 9 chars)
+
+Pack3:	0
+	0			;From Us
+	0			;To Him
+	0			;No message
+
+Pack4:	0
+	0			;From Him
+	0			;To Us
+	1,,In			;1-word answer
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Pure stuff
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Messag:	Asciz "POLL"
+
+STypes:	[Asciz "Routine (0)"]
+	[Asciz "Priority (1)"]
+	[Asciz "Immediate (2)"]
+	[Asciz "Flash (3)"]
+	[Asciz "Flash Overrive (4)"]
+	[Asciz "CRITIC/ECP (5)"]
+	[Asciz "Internetwork Control (6)"]
+	[Asciz "Network Control (7)"]
+
+CRLF:	Asciz "
+"
+LogFil:	Block 40.
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Command-line parsing stuff
+;;
+  ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+FooFDB:	Field(.cmcfm,CM%FNC) + FldFDB ? 0 ? 0 ? 0
+FldFDB:	Field(.cmfld,CM%FNC) ? 0 ? 0 ? 0
+DecFDB:	Field(.cmnum,CM%FNC) ? 10. ? 0 ? 0
+DotFDB:	Field(.cmtok,CM%FNC) ? -1,,[Asciz "."] ? 0 ? 0
+OpnFDB:	Field(.cmtok,CM%FNC) + DecFDB ? -1,,[Asciz "["] ? 0 ? 0
+ClsFDB:	Field(.cmtok,CM%FNC) ? -1,,[Asciz "]"] ? 0 ? 0
+
+UsgStr:	Asciz /
+Usage: ACKCHK servername address port wait err1 errmax
+
+servername:  string used to identify which ack process this is (eg. HURS1)
+address:  numeric net address for remote side, with or without the brackets
+port:  decimal local port to use (must be unique) 153-160 are recommended
+wait:  number of minutes to wait for a reply before calling it lost (default 5)
+err1:  number of lost packets to skip before first complaining (default 1)
+errmax:  number of lost packets to skip before complaining loudly (default 3)
+/
+
+CBoxed:	0			;flag for whether address is in [] a box
+SName:	Block 40.		;server name (eg. "GATHER")
+SAddr:	Block 10.		;server address (eg. "[26.17.0.73]")
+HAddr1:	0			;first address field
+HAddr2:	0			;second address field
+HAddr3:	0			;third address field
+HAddr4:	0			;fourth address field
+AckHst:	0			;combined address fields
+UsPort:	0			;local server port#
+SWait:	5			;default duty cycle is once per 5 minutes
+Err1:	1			;default error low-threshold is 1
+ErrMax:	3			;default error high-threshold is 3
+Wailed:	0			;whether we wailed about this problem
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Version info and entry vectors
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+  V%WHO==2
+V%MAJOR==1
+V%MINOR==0
+ V%EDIT==.FVERS
+
+EntVec:	Jrst Begin
+	Jrst Begin
+	Version V%WHO,V%MAJOR,V%MINOR,V%EDIT
+EvecLn==.-EntVec
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Poking loop...
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Begin:	RESET%
+	Move P,PDL		;initialize stack pointer
+	Call DoJCL		;parse the command line
+	Call WaitUp		;Wait until machine is fully up
+	Call Initialize		;Initialize whatever
+;	Call Release		;release any old queues we might have
+	Call GetQueue		;get us the right queue
+	  Jrst AskNow		;  Already assigned, so switch modes.
+	Call InIPCF		;Initialize our IPCF stuff
+	.Continue		;continue into the background
+Loop:	Setzm IntOK		;No interrupts while doing this, please.
+	Call Poke		;Poke the remote machine
+	  Jrst Sleep		;  Failed, wait some and try again
+	Call Alivep		;Is it alive?
+	  Call Wail		;  No, so raise hell (skip returns)
+	    Call Alive		;    Yes...
+	Skipe Pollp		;Someone polling us?
+	  Call Reply		;  Yes, so reply now that we've polled the Sun
+Sleep:	Setom IntOK		;Allowed to interrupt out of here.
+	Movx 1,5*M
+	DISMS%
+	Jrst Loop
+
+Alive:	Skipge L
+	  Return
+	Hrroi T,[Asciz "Contact reestablished"]
+	Call LogIt
+	Skipe Wailed		;did we wail about the broken contact?
+	  Jrst [Call ConLog	;yeah, so report the reestablished contact.
+		CType ^G
+		Call OutSrv	;output server ID
+		TypeCR " is responding again."
+		Setzm Wailed	;clear this for next time
+		Jrst .+1]
+	Seto L,			;Reset lost count
+	Return
+
+Die:	Hrroi 1,[0]
+	RSCAN%			;make sure to clear out rescan buffer!
+	  Nop			;don't really care - we're dying anyhow
+	HALTF%
+	Jrst Die
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	JCL parsing code
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+DoJCL:	Movei 1,.rsini		;1/ initialize-rescan function code
+	RSCAN%			;make JCL available for standard input
+	  Jrst [Type "?Couldn't get JCL -- "
+		Call BarfCR	;output the error string
+		Jrst Die]	;and this is fatal...
+	Movei 1,CRepar		;1/ reparse address
+	Movem 1,CmdBlk+.cmflg	;save in command state block
+	Movem P,SaveP		;save stack pointer
+CRepar:	Move P,SaveP		;P/ restore stack pointer on reparse
+	Movei 1,CmdBlk		;1/ command state block address
+	Movei 2,FldFDB		;2/ .cmfld
+	COMND%			;get our program name
+	Txne 1,CM%NOP		;error?
+	  Jrst [Type "?Couldn't read program name -- "
+		Call BarfCR	;output the error string
+		Jrst Die]	;and croak
+	Movei 2,FooFDB		;2/ .cmcfm + .cmfld
+	COMND%			;get the server name
+	Txne 1,CM%NOP		;error?
+	  Jrst [Type "?Couldn't read server name -- "
+		Call BarfCR	;output the error string
+		Jrst Die]	;and croak
+	Ldb 4,[.BP CM%FNC,(3)]	;4/ function code used
+	Cain 4,.cmcfm		;confirmed?
+	  Jrst [Hrroi 1,UsgStr	;(yes) 1/ BP to usage string
+		PSOUT%		;output it to the luser
+		Jrst Die]	;and punt
+	Move 1,[440700,,SName]	;1/ BP to server-name buffer (destination)
+	Move 2,[440700,,AtmBuf]	;2/ BP to atom buffer (source)
+	Setz 3,			;3/ end on null byte
+	$SOUT			;copy the string
+	Call PAddr		;parse addr fields
+	  Jrst Die		;failure is fatal!
+	Call PNumba		;2/ get a decimal number
+	  Jrst Die		;failure is fatal!
+	Movem 2,UsPort		;save server's port number
+	Lsh 2,20.		;2/ shift it into place (.BYTE 16. ...)
+	Movem 2,QDBPrt		;save in our packet's localport field
+	Movei 1,ConFDB		;1/ .cmcfm address
+	Hrrm 1,DecFDB+.cmfnp	;cons onto FDB chain (to allow defaulting)
+	Movei 1,CmdBlk		;1/ command state block address
+	Movei 2,DecFDB		;2/ .cmnum(10.)
+	COMND%			;get the WAIT field
+	Txne 1,CM%NOP		;error?
+	  Jrst [Type "?Couldn't get cycle-wait field -- "
+		Call BarfCR	;output the error string
+		Jrst Die]	;and croak
+	Ldb 4,[.BP CM%FNC,(3)]	;4/ function block used
+	Cain 4,.cmcfm		;did we default?
+	  Retskp		;yep - all done with command line
+	Movem 2,SWait		;save scan-wait value
+	Movei 1,CmdBlk		;1/ command state block address
+	Movei 2,DecFDB		;2/ .cmnum(10.)
+	COMND%			;get the WAIT field
+	Txne 1,CM%NOP		;error?
+	  Jrst [Type "?Couldn't get error low-threshold field -- "
+		Call BarfCR	;output the error string
+		Jrst Die]	;and croak
+	Ldb 4,[.BP CM%FNC,(3)]	;4/ function block used
+	Cain 4,.cmcfm		;did we default?
+	  Retskp		;yep - all done with command line
+	Movem 2,Err1		;save error low-threshold value
+	Movei 1,CmdBlk		;1/ command state block address
+	Movei 2,DecFDB		;2/ .cmnum(10.)
+	COMND%			;get the WAIT field
+	Txne 1,CM%NOP		;error?
+	  Jrst [Type "?Couldn't get error high-threshold field -- "
+		Call BarfCR	;output the error string
+		Jrst Die]	;and croak
+	Ldb 4,[.BP CM%FNC,(3)]	;4/ function block used
+	Cain 4,.cmcfm		;did we default?
+	  Retskp		;yep - all done with command line
+	Movem 2,ErrMax		;save error high-threshold value
+	Confirm			;get confirmation
+	  Return		;fools!  failed...
+	Retskp			;success, all done!!
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Parse net address into HAddrN (N from 1-4).
+;;		Returns +1 on error, +2 otherwise
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+PAddr:	Setzm CBoxed		;make sure this starts out zero
+	Movei 1,CmdBlk		;1/ commanbd state block address
+	Movei 2,OpnFDB		;2/ .cmtok+.cmdec
+	COMND%			;get command field
+	Txne 1,CM%NOP		;error?
+	  Jrst [Type "?Couldn't grok remote address -- "
+		Call BarfCR	;output error string
+		Return]		;failed...
+	Ldb 4,[.BP CM%FNC,(3)]	;4/ function used for parse
+	Cain 4,.cmtok		;was it the open-box?
+	  Jrst [Setom CBoxed	;yeah, flag it for the rest of the parse
+		Call PNumba	;get the first numeric field then...
+		  Return	;failed...
+		Jrst .+1]	;worked -- go back into parse sequence
+	Movem 2,HAddr1		;save first HAddr field
+	Call PDot		;parse the delimiter '.'
+	  Return		;failed...
+	Call PNumba		;2/ parse the second numeric field
+	  Return		;failed...
+	Movem 2,HAddr2		;save second HAddr field
+	Call PDot		;parse the delimiter '.'
+	  Return		;failed...
+	Call PNumba		;2/ parse the third numeric field
+	  Return		;failed...
+	Movem 2,HAddr3		;save third HAddr field
+	Call PDot		;parse the delimiter '.'
+	  Return		;failed...
+	Call PNumba		;2/ parse the fourth numeric field
+	  Return		;failed...
+	Movem 2,HAddr4		;save fourth (last) HAddr field
+	Skipe CBoxed		;are we boxing this address string?
+	  Jrst [Movei 1,CmdBlk	;1/ command state block address
+		Movei 2,ClsFDB	;2/ .cmtok
+		COMND%		;get the close-box
+		Txne 1,CM%NOP	;error?
+		  Jrst [Type "?Host address improperly delimited."
+			Hrroi 1,CRLF
+			PSOUT%	;add the EOL to the error
+			Return]	;failed...
+		Jrst .+1]	;parsed correctly, so drop on through
+	Retskp			;all done with address field...
+
+PNumba:	Movei 1,CmdBlk		;1/ command state block address
+	Movei 2,DecFDB		;2/ .cmnum(10.)
+	COMND%			;get the number
+	Txne 1,CM%NOP		;error?
+	  Jrst [Type "?Invalid numeric field in host address."
+		Hrroi 1,CRLF	;EOL-terminate it
+		PSOUT%
+		Return]		;failed...
+	Retskp			;succeeded.
+
+PDot:	Movei 1,CmdBlk		;1/ command state block address
+	Movei 2,DotFDB		;2/ .cmtok(".")
+	COMND%			;get the token
+	Txne 1,CM%NOP		;error?
+	  Jrst [Type "?Found something other than the expected '.' in address."
+		Hrroi 1,CRLF	;EOL-terminate it
+		PSOUT%
+		Return]		;failed...
+	Retskp			;succeeded.
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Wait until machine is fully up.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+WaitUp:	GTAD%
+	Camn 1,[-1]		;Machine really up yet?
+	  Jrst [Movx 1,S
+		DISMS%		;No, so wait a second
+		Jrst WaitUp]	;and try again.
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Initialize - enable capabilities, set up interrupt system,
+;;	   generate host address word & string, and stuff IPCF packets
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Initialize:
+	Skipge SWait		;1/ mins to wait before giving up on a packet
+	  Jrst [TypeCR "?Requested a negative wait time - how can I do that?"
+		Jrst Die]	;can't handle it
+	Seto L,		;starting with no lost packets
+	Movei 1,.fhslf		;1/ my process handle
+	Setob 2,3		;2,3/ all capabilities that I have...
+	EPCAP%			;enable them
+	Movei 1,.fhslf		;1/ my process handle (just being careful)
+	Move 2,[LEVTAB,,CHNTAB]	;2/ LevelTable,,ChannelTable addresses
+	SIR%			;set interrupt vectors
+	EIR%			;enable interrupts for this process
+	Movx 2,ChnMsk		;2/ channel mask (all channels but IPCF)
+	AIC%			;activate these interrupt channels
+
+;; Now do the host address crunching
+
+	Move 1,HAddr1		;1/ first address field
+	Lsh 1,24.		;shift it into place
+	Move 2,HAddr2		;2/ second address field
+	Lsh 2,16.		;shift it into place
+	Ior 1,2			;1/ combined fields 1,2
+	Move 2,HAddr3		;2/ third address field
+	Lsh 2,8.		;shift it into place
+	Ior 1,2			;1/ combined fields 1-3
+	Move 2,HAddr4		;2/ fourth address field
+	Ior 1,2			;1/ combined fields 1-4
+	Movem 1,AckHst		;save as the remote host address
+	Move 1,[440700,,SAddr]	;1/ BP to server-address buffer
+	Movei 2,"[		;2/ open box
+	IDpb 2,1		;deposit it at front of string
+	Move 2,HAddr1		;2/ first address field
+	Movei 3,10.		;3/ decimal output
+	NOUT%			;output the number
+	  Nop			;never fails?
+	Movei 4,".		;4/ dot
+	IDpb 4,1		;append it
+	Move 2,HAddr2		;2/ second address field
+	NOUT%			;output the number
+	  Nop			;never fails?
+	IDpb 4,1		;append the dot
+	Move 2,HAddr3		;2/ third address field
+	NOUT%			;output the number
+	  Nop			;never fails?
+	IDpb 4,1		;append the dot
+	Move 2,HAddr4		;2/ fourth address field
+	NOUT%			;output the number
+	  Nop			;never fails?
+	Movei 2,"]		;close box
+	IDpb 2,1		;append delimiter to string
+	Setz 2,			;2/ null byte
+	IDpb 2,1		;null-terminate the string
+
+;; Now stuff the server name into the IPCF packets (truncate to 9 chars)
+
+	Move 1,SName		;1/ first 5 chars of server name
+	Movem 1,ArgBlk+.ipci2	;save in ArgBlk
+	Movem 1,SndArg+.ipci2	;save in SndArg
+	Move 1,SName+1		;1/ second 5 chars of server name
+	Trz 1,377		;null the last char (rightmost 8 bits)
+	Movem 1,ArgBlk+.ipci2+1	;save in ArgBlk
+	Movem 1,SndArg+.ipci2+1	;save in SndArg
+
+;; Now cons up the logfile name (untruncated)
+
+	Hrroi 1,LogFil		;1/ BP to logfile string (destination)
+	Hrroi 2,[Asciz "SYSTEM:"]
+	Setz 3,			;3/ asciz style
+	$SOUT			;start the string
+	Hrroi 2,SName		;2/ BP to server name
+	$SOUT			;append to the string
+	Hrroi 2,[Asciz ".LOG"]
+	$SOUT			;finish the string
+	Setz 2,			;2/ 0
+	IDpb 2,1		;null-terminate the filename
+
+	Return			;all done - return to caller
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Release any queues we might already have
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Release:Seto 1,			;then release all IN queues we might have.
+	RELIQ%
+	  Nop
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Allocate an Internet Queue
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+GetQueue:
+	Setom GQErr		;No errors gotten so far.
+GetQ0:	Movei 1,QDB		;Address of Queue Desciptor Block
+	Setzb 2,3		;Reserved, must be 0
+	ASNIQ%			;Get a queue.
+	  Jrst QError		;  failed!
+	Movem 1,IQH		;Save the Internet Queue Handle
+	Retskp			;return +2
+
+QError:	Aose GQErr		;This the first error?
+	  Jrst QWait		;  Naw, probably same, so just wait.
+	Cain 1,ASNSX2		;Already assigned to someone else?
+	  Return		;  Yes, so take +1 return
+	Pushn P,[1,2]		;Yes, so show the error.
+	Call ConLog
+	Type "?ASNIQ failed -- "
+	Call Barf
+	AType CRLF
+	Popn P,[2,1]
+	Cain 1,NTWZX1		;Net Wizard needed?
+	  Jrst Die		;  Foo!  And we aren't!?
+QWait:	Movx 1,30.*S		;Wait 30 seconds
+	DISMS%
+	Jrst GetQ0		;and try again
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Initialize IPCF stuff for the SYSJOB fork
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+InIPCF:	Movei 1,IPakLen
+	Movei 2,CrePak
+	MSEND%
+	  Fatal "Can't send request to <SYSTEM>INFO"
+	Move 1,MyPID
+	Movem 1,MutPID
+	Movem 1,InfPak+.IPCFR	;<SYSTEM>INFO's reply
+	Movem 1,DatPak+.IPCFR	;Incoming data packet
+	Movei 1,IPakLen
+	Movei 2,InfPak
+	MRECV%
+	  Fatal "Can't get <SYSTEM>INFO's reply"
+	Ldb T,[.BP IP%CFE,InfPak+.IPCFL]
+	Jumpe T,IIPCF0
+	Cain T,.IPCDN
+	  Fatal "Someone already has the PID I want"
+	Fatal "Random error reply from <SYSTEM>INFO"
+
+IIPCF0:	Movei 1,MBlokl
+	Movei 2,MBlock
+	MUTIL%
+	  Fatal "Can't assign interrupt channel to my PID"
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Answer an IPCF request
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Answer:	Pushn P,[1,2,3]
+	Movei 1,1
+	Hrlm 1,DatPak+.IPCFP
+	Movei 1,IPakLen
+	Movei 2,DatPak
+	MRECV%			;Grab the request packet.
+	  Jrst Dismis
+	Move 1,DatPak+.IPCFS
+	Movem 1,RepPak+.IPCFR	;Set up for reply.
+	Setom Pollp		;Flag that they want to poll.
+	Skipe IntOK		;Were they sleeping?
+	  Jrst [Movx 1,Bit(5)	;Yes, so
+		Iorm 1,PSIPC2	;turn on user-mode bit
+		Movei 1,Loop	;and then return
+		Hrrm 1,PSIPC2	;to here (wake up from sleeping)
+		Jrst .+1]
+Dismis:	Popn P,[3,2,1]
+	DEBRK%
+
+Reply:	Movem L,In		;Return the lost-counter
+	Movei 1,IPakLen
+	Movei 2,RepPak
+	MSEND%
+	  Nop
+	Setzm Pollp		;and then reset poll flag
+	Return			;and done.
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	The other side of the IPCF stuff - If there is already a job
+;;	with the queue we want, then we must be an infiltrator, so
+;;	ask the real one for status (waking it up to poll right now)
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+AskNow:	Movei 1,IPakLen
+	Movei 2,Pack1
+	MSEND%
+	  Jrst [Type "?Failed to send request to INFO -- "
+		Call BarfCR
+		Jrst Die]
+	Move 1,MePID
+	Movem 1,Pack2+.IPCFR	;To me from INFO
+	Movem 1,Pack3+.IPCFS	;To ACKCHK
+	Movem 1,Pack4+.IPCFR	;From ACKCHK
+	Movei 1,IPakLen
+	Movei 2,Pack2
+	MRECV%
+	  Jrst [Type "?Failed to receive reply from INFO -- "
+		Call BarfCR
+		Jrst Die]
+	Ldb T,[.BP IP%CFE,Pack2+.IPCFL]
+	Skipe T
+	  Jrst [Type "?INFO thinks another "
+		AType SName
+		TypeCR " PID is running, but I can't find it!"
+		Jrst Die]
+	Move 1,SndArg+.IPCI1
+	Movem 1,HimPID
+	Movem 1,Pack3+.IPCFR
+
+Status:	Movei 1,IPakLen
+	Movei 2,Pack3
+	MSEND%
+	  Jrst [Type "?Couldn't send message to "
+		Call OutSrv	;output the server ID
+		Call BarfCR
+		Jrst Die]
+	Movei 1,IPakLen
+	Movei 2,Pack4
+	MRECV%
+	  Jrst [Type "?Couldn't receive answer from "
+		Call OutSrv	;output server ID
+		Type " -- "
+		Call BarfCR
+		Jrst Die]
+	Call OutSrv
+	Hrroi 1,[Asciz " is healthy"]
+	Skipl In
+	  Hrroi 1,[Asciz " isn't working"]
+	PSOUT%
+	Jrst Die
+
+OutSrv:	AType SName
+	Type " at "
+	AType SAddr
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Start off a logging entry on the console
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+ConLog:	Movei 1,.PRIOU
+	DOBE%
+;this is redundant!
+;	Seto 2,
+;	Setz 3,
+;	ODTIM%
+;;;;;;;;;;;;;;;;;;;
+	Type " [ACKCHK] "
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Make a log-file entry
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+LogIt:	Movx 1,GJ%SHT\GJ%OLD	;See if there's an existing log file.
+	Hrroi 2,LogFil
+	GTJFN%
+	  Jrst [Movx 1,GJ%SHT	;Nope, so try to create one.
+		Hrroi 2,LogFil
+		GTJFN%
+		  Return	;Failed, we lose.
+		Jrst .+1]	;Won, new file.
+	Movem 1,LogJFN		;Save JFN.
+	Move 2,[Field(7,OF%BSZ)+OF%APP]
+	OPENF%			;Open for append only.
+	  Jrst [Move 1,LogJFN	;oops!
+		RLJFN%
+		  Nop
+		Return]
+	Seto 2,			;-1 means NOW
+	Setz 3,			;0 means standard format
+	ODTIM%			;Timestamp the log file
+	Hrroi 2,[Asciz " [ACKCHK] "]
+	Setz 3,
+	SOUT%			;Plus this so we don't mistake the author
+	Move 2,T		;Pointer to message given to us.
+	SOUT%
+	Hrroi 2,CRLF		;No CRLF is expected on the message.
+	SOUT%
+	CLOSF%
+	  Nop
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Wail for help...
+;;
+;;	Returns +2 always.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Beeps:	Asciz ""
+
+Wail:	Aos L			;L/ lost another packet
+	Hrroi T,[Asciz "Contact broken"]
+	Call LogIt		;post it in the logfile
+	Skipge Err1		;did they ask for a negative Err1?
+	  Retskp		;yeah, that means never wail!
+	Camge L,Err1		;no, but do we have enough errors yet?
+	  Retskp		;no  - skip this error and return
+	Setom Wailed		;remember wailing for when it comes back up
+	Call ConLog		;grab console for output (wait for it)
+	Skipge ErrMax		;did they ask for a negative ErrMax?
+	  Jrst SoftEr		;yeah - so just give soft errors
+	Camle L,ErrMax		;have we maxed out on errors already?
+	  Jrst MoreEr		;yeah, so do additional wailing
+	Came L,ErrMax		;have we passed our soft error threshold?
+	  Jrst SoftEr		;nope - so just give 'em a soft error
+HardEr:	AType Beeps		;make noise
+	Hrroi 1,[Asciz "Ahem:
+###################################################################################
+####
+####    The "]
+	PSOUT%
+	AType SName		;output server name
+	Type " host at "
+	AType SAddr		;output server address
+	Type " is not acknowledging audit-trail packets!!"
+	Hrroi 1,[Asciz "
+####    Is it DOWN?  WEDGED?  Is its server running?  Check and see!!
+####
+###################################################################################
+"]
+	PSOUT%
+	AType Beeps		;make some more noise here
+	AType CRLF		;force it out
+	Retskp
+
+SoftEr:	AType Beeps		;make some noise
+	Type "The "
+	AType SName		;output the server's name
+	Type " host at "
+	AType SAddr		;output the server's address
+	Hrroi 1,[Asciz " missed another packet.  Check to see if it's wedged."]
+	Skipn L			;skip if this isn't the first lossage
+	  Hrroi 1,[Asciz " missed a packet.  Check to see if it's wedged."]
+	PSOUT%
+	AType CRLF		;EOL time
+	Retskp
+	
+MoreEr:	AType Beeps		;make some noise
+	Type "The "
+	AType SName		;output server name
+	Type " host at "
+	AType SAddr		;output server address
+	TypeCR " is *still* not acknowledging audit-trail packets!!"
+	Retskp
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Wait for a response from the remote side
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Alivep:	Move T,SWait		;Try this many times
+	Movem T,Wait1
+Alive0:	Movei T,WaitFor		;# of seconds to wait
+	Movem T,Wait2
+Alive1:	Movx 1,S		;Wait one second
+	DISMS%
+	Call GetUDP		;See if there's a packet for us.
+	  Jrst NotYet
+; (packet-contents check removed here - win just by hearing back...)
+	Retskp			;Win! return +2
+
+;;; (packet-contents check code)
+;	Ldb T,[340800,,PakBuf+.UPDDT]
+;	Lsh T,8.
+;	Ldb TT,[240800,,PakBuf+.UPDDT]
+;	Addi T,(TT)
+;	Cain T,ACK		;Check for right response (an ACK)
+;	  Jrst Popj1		;Win!
+;;; (end of contents check code)
+
+NotYet:	Sosle Wait2		;Waited as long as we're gonna?
+	  Jrst Alive1		;  Nope, so wait some more.
+	Sosle Wait1		;Try this more times?
+	  Jrst Alive0		;  Yes, keep at it, reset Wait2
+	Return			;Failure return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Send off the poke message
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Poke:	Move A,[440800,,PakBuf+.UDPDT]
+	Move B,[440700,,Message]
+	Setz C,
+Poke0:	Ildb T,B
+	IDPB T,A
+	Skipe T
+	  Aoja C,Poke0
+	Move T,C
+	Addi T,UDPhlen*4
+	DPB T,[UD$LEN PakBuf]
+	Addi T,IPhlen*4
+	DPB T,[IPK$DL PakBuf]
+	Jumpe C,Poke1
+	Subi C,1
+	Lsh C,-2		;/4
+	Addi C,1
+Poke1:	Addi C,IPhlen+UDPhlen+1
+	Hrrzm C,PakBuf
+	Movei T,TTLive
+	DPB T,[IPK$TL PakBuf]
+	Setz T,
+	DPB T,[IPK$SR PakBuf]
+	Movei T,UDPPRN
+	DPB T,[IPK$PV PakBuf]
+	Move T,UsPort
+	DPB T,[UD$SRC PakBuf]	;Source and
+	Movei T,AUDPRT
+	DPB T,[UD$DST PakBuf]	;Destination ports
+	Move T,UsHost
+	DPB T,[IPK$SH PakBuf]	;Source Host
+	Move T,AckHst
+	DPB T,[IPK$DH PakBuf]	;Destination Host
+	Call Checksum		;Compute the UDP checksum into AC T
+	DPB T,[UD$CHK PakBuf]	;Store it into UDP header.
+;;	Call Explode		;Show what we're about to send
+	Move 1,IQH		;Queue Handle
+	Movei 2,PakBuf		;Address of Packet Buffer
+	Setz 3,			;Reserved, must be 0.
+	SNDIN%			;Send off the datagram.
+	  Skipa			;error!!!
+	 Retskp			;no error - return
+	Caie 1,SQX2		;lost our queue?
+	 Cain 1,SNDIX4		;or bad header value?
+	  Jrst [Call ConLog	;yeah - get to the console log
+		Type "%Lost internet queue for "
+		Call OutSrv	;output server ID
+		TypeCR " -- regetting it..."
+		Call GetQueue	;reget the queue
+		  Jrst AskNow	;failed - see why
+		Return]		;worked - return
+	Call ConLog		;get to the console log
+	Type "?Failed to send "
+	Call OutSrv		;output server ID
+	Type " a poll message -- "
+	CallRet BarfCR
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Get a UDP datagram
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+WaiUDP:	Tdza 1,1		;No flags.
+GetUDP:	  Movx 1,RIQ%NW		;  Don't wait
+	Movei 2,PakLen+1
+	Hrrzm 2,PakBuf
+	Hrr 1,IQH		;flags,,IQH
+	Movei 2,PakBuf
+	Setz 3,
+	RCVIN%
+	  Return
+	Retskp
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Compute UDP checksum
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Checks:	Setz T,			;Accumulate checksum here.
+	Move A,[442000,,PakBuf+.IPKSH]
+REPEAT 4,[			;Get Source/Destination addresses
+	Ildb B,A		;in 4 16-bit chunks.
+	Add T,B
+];Repeat
+IRP FIELD,,[IPK$PV,UD$SRC,UD$DST,UD$LEN]
+	Ldb B,[FIELD PakBuf]	;Add in protocol#, source port,
+	Add T,B			;destination port, UDP length.
+TERMIN
+	Add T,B			;Add in UDP length again.
+	Subi B,UDPhlen*4	;Subtract # UDP header bytes giving # data.
+	Lsh B,-1		;# bytes / 2 = # 16-bit bytes.
+	Move A,[442000,,PakBuf+.UDPDT]
+	Jumple B,Check1		;No data bytes.
+	Move C,B
+Check0:	Ildb TT,A
+	Add T,TT
+	Sojg C,Check0
+Check1:	Trne B,1		;Even # of 16-bit bytes?
+	  Jrst [Ildb TT,A	;No, so get 16-bits with high 8 being
+		Trz TT,377	;significant, and clobber low 8
+		Add T,TT	;and sum it in.
+		Jrst .+1]
+Check2:	Tdne T,[CarMsk]		;Any carries beyond 16 bits?
+	  Jrst [Ldb A,[.BP CarMsk,T]
+		Tdz T,[CarMsk]	;Yes so add them in and loop
+		Add T,A		;until it all fits in 16 bits.
+		Jrst Check2]
+	Setca T,		;1's complement the sum
+	Andi T,177777		;and keep only the lower 16 bits.
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Explode a packet buffer
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Explod:	Type "--Start of IP header--
++0: Version = "
+	Shonum IPK$VR,8.
+	Type ", Data Offset = "
+	Shonum IPK$DO,8.
+	CRType "    Type of Service = ["
+	Ldb T,[IPK$ST PakBuf]
+	Hrro 1,STypes(T)
+	PSOUT
+	Ldb T,[IPK$SF PakBuf]
+	Hrroi 1,[Asciz " /Low delay"]
+	Txne T,4
+	  PSOUT
+	Hrroi 1,[Asciz " /High throughput"]
+	Txne T,2
+	  PSOUT
+	Hrroi 1,[Asciz " /High reliability"]
+	Txne T,1
+	  PSOUT
+	Type "]
+    Datagram length = "
+	Shonum IPK$DL,10.
+	Type ".
++1: Segment ID = "
+	Shonum IPK$SI,8.
+	Type ", Reserved bit = "
+	Shonum IPK$SI,8.
+	Type ", Reserved bit = "
+	Shonum IPK$R1,2
+	Type ", Do-not-fragment = "
+	Shonum IPK$NF,2
+	CRType "    More-fragments = "
+	Shonum IPK$MF,2
+	Type ", Fragment-Offset = "
+	Shonum IPK$FO,8.
+	CRType "+2: Time-to-live = "
+	Shonum IPK$TL,10.
+	Type "., Protocol # = "
+	Shonum IPK$PV,8.
+	Type ", IP header checksum = "
+	Shonum IPK$HC,8.
+	CRType "+3: Source host = "
+	Ldb T,[.BP B32,PakBuf+.IPKSH]
+	Call ShoHst
+	CRType "+4: Destination host = "
+	Ldb T,[.BP B32,PakBuf+.IPKDH]
+	Call ShoHst
+	CRType "--End of IP header, start of UDP header--
++0: Source port = "
+	Shonum UD$SRC,8.
+	Type ", Destination port = "
+	Shonum UD$DST,8.
+	CRType "+1: Length = ",
+	Shonum UD$LEN,10.
+	Move T,2		;Save length
+	Type "., Checksum = "
+	Shonum UD$CHK,8.
+	CRType "--End of UDP header, start of UDP data--"
+	Subi T,UDPhlen*4	;Subtract length of UDP header
+	Jumpe T,[TypeCR "No data!"
+		 Return]
+	Movei TT,1
+	Move A,[440800,,PakBuf+.UDPDT]
+	Movei B,4
+
+UDPDT0:	Aos B
+	Caig B,4
+	  Jrst UDPDT1
+	AType CRLF
+	CType "+
+	Movei 1,.PRIOU
+	Aos 2,TT
+	Movei 3,8.
+	NOUT
+	  Nop
+	CType ":
+	Movei B,1
+
+UDPDT1:	Movei 1,.PRIOU
+	Ildb 2,A
+	Move 3,[Field(4,NO%COL)+NO%LFL+8.]
+	NOUT
+	  Nop
+	Sojg T,UDPDT0
+	TypeCR " <EOD>"
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Misc. other subroutines
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+ShoHst:	Movei 1,.PRIOU
+	Ldb 2,[.BP <037700,,0>,T]
+	Movei 3,10.
+	NOUT
+	  Nop
+	Movei 2,".
+	BOUT
+	Ldb 2,[.BP <77,,600000>,T]
+	NOUT
+	  Nop
+	Movei 2,".
+	BOUT
+	Ldb 2,[.BP <0,,177400>,T]
+	NOUT
+	  Nop
+	Movei 2,".
+	BOUT
+	Ldb 2,[.BP <0,,377>,T]
+	NOUT
+	  Nop
+	Type " ("
+	Movei 1,.GTHNS
+	Hrroi 2,HstBuf
+	Move 3,T
+	GTHST
+	  Skipa 1,[-1,,[Asciz "???"]]
+	    Hrroi 1,HstBuf
+	PSOUT
+	CType ")
+	Return
+
+	End Begin

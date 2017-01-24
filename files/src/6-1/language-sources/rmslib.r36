@@ -1,0 +1,4147 @@
+
+%([**		LIBRARY FILE REQUIRED BY RMS 		**])%
+
+! THIS SOFTWARE IS FURNISHED UNDER A LICENSE AND MAY  BE  USED
+! OR COPIED ONLY IN ACCORDANCE WITH THE TERMS OF SUCH LICENSE.
+!
+! COPYRIGHT  (C)  DIGITAL  EQUIPMENT  CORPORATION 1979, 1985.
+! ALL RIGHTS RESERVED.
+
+!AUTHOR: S. BLOUNT
+
+LITERAL	RMSLIV = 1^24 + 0^18 + 300;	!Edit date: 19-Jan-82
+					!ALSO CAUSES RMSVRB TO BE NO-OP
+
+
+%([
+REVISION HISTORY:
+
+EDIT#	NAME	DATE		COMMENTS
+====	====	====		=========
+1	JK	27-JUL-76	ADD "CHECKEXACTCOUNT" MACRO TO CHECK FOR CORRECT ROUTINE ARG COUNT.
+2	SB	30-SEP-76	ADD DBUG TO CHECKEXACTCOUNT
+1	JK	20-AUG-76	ADD 'MAKERFA' MACRO.
+2	SB	23-AUG-76	CHANGE 'MOVEDOWN' BUG
+3	JK	23-AUG-76	ADD 'FLGRRVUPD' FOR DATA RECORD FLAGS.
+4	SB	24-AUG-76	ADD SIZEOFANYRECORD MACRO, CHANGE SIZEOFDATARECORD
+
+5	JK	30-AUG-76	FIX SIZEOF... MACROS.
+6	SB	30-AUG-76	CHANGE THISAREA FIELD PLACEMENT
+
+7	JK	30-AUG-76	ADD 'BHUNUSED' FOR UNUSED BKT HDR BITS.
+8	JK	1-SEP-76	ADD 'FIRSTID' AND 'NULLID'.
+9	JK	1-SEP-76	FIX 'MAKERFA'.
+10	AS	4-SEP-76	ADD W2B SHIFT.
+11	SB	22-SEP-76	ADD PATH DEFINITIONS
+12	SB	24-SEP-76	ADD SOME SIDR DEFINITIONS
+13	SB	30-SEP-76	MAKE MOVEDOWN USE PUSHJ, NOT CALL0
+14	SB	30-SEP-76	ADD MININDEXRECS
+15	SB	7-OCT-76	CHANGE SIZEOFDATARECORD TO NOT COMPUTE SIDR LENGTH
+16	SB	20-OCT-76	ADD RFABKTLSH
+17	SB	5-NOV-76	ADD LOWESTBKTNUM DEFINITIONS
+18	SB	7-NOV-76	MAKE BUCKETS INTO PAGES...
+19	SB	23-NOV-76	TAKE OUT ALL BUCKET DESC DEFINITIONS
+20	SB	6-DEC-76	ADD NO-COMPRESS BIT IN RECORD HEADER
+21	SB	16-DEC-76	CHANGE KDBDBSZ TO FSTBSZ
+22	SB	23-DEC-76	ADD DEFBUCKETSIZE
+23	SB	1-FEB-77	ADD NOHIKEYUPDFLAG
+24	SB	13-APR-77	FIX SIZEOFDATARECORD
+
+
+PRODUCT	MODULE	 SPR
+ EDIT	 EDIT	 QAR		DESCRIPTION
+======	======	=====		===========
+
+13	27	XXXXX		NO SYMPTOM, BUT MACRO CLEAR HAS LAST EXPRESSION
+				MISSING THE FETCH OPERATOR ('.').
+
+***** END OF REVISION HISTORY *****
+
+***** BEGIN VERSION 2 DEVELOPMENT *****
+
+
+PRODUCT	MODULE	 SPR
+ EDIT	 EDIT	 QAR		DESCRIPTION
+======	======	=====		===========
+
+300	300	XXXXX		MAKE DBUG=1 WORK.
+
+301	301	XXXXX		SUPPORT EXTENDED ADDRESSING.
+
+
+])%
+
+%([
+****************************************************************
+*								*
+*			START OF MACROS.BLI			*
+*								*
+*		THIS FILE CONTAINS ALL "NON-RMS" MACROS.	*
+
+AUTHOR: S. BLOUNT /EGM
+
+])%
+
+	%([ VALUES FOR SUBROUTINE RETURN CODES ])%
+
+	LITERAL	TRUE = -1,
+		FALSE = 0;
+
+
+
+	%([ VERY IMPORTANT STRUCTURE DECLARATIONS ])%
+
+	%( The following macros are used for BLISS-36 only )%
+
+	STRUCTURE FORMAT[WRD,PSTN,LNGTH] = [ 1 ] (FORMAT+WRD)<PSTN,LNGTH>;
+	STRUCTURE FORMATS[WRD,PSTN,LNGTH;N] = [ N ] (FORMATS+WRD)<PSTN,LNGTH>;
+
+	STRUCTURE FORMATA[WRD,PSTN,LNGTH] = (FORMATA+WRD)<PSTN,LNGTH>;
+
+	STRUCTURE POINTER[WRD,PSTN,LNGTH] = [ 1 ] (.POINTER+WRD)<PSTN,LNGTH>;
+
+
+	MACRO	BITN ( N ) = 1 ^ (35-N) %;	! SHOULD BE DEFINED HERE***
+
+
+
+
+%([
+***********************************************************************
+*			EXTERNALS AND FORMAT MAPPINGS		      *
+***********************************************************************
+])%
+
+	MACRO	EXTDECLARATIONS =
+	EXTERNAL
+	    ACC$1,
+	    ACC$2,
+	    ACC$3,
+	    FST,			! FILE STATUS TABLE POINTER
+	    RST,			! RECORD STATUS TABLE POINTER
+	    CBD,			! PTR TO CURRENT BKT DESC (IN RST)
+	    RAB,			! USER RECORD ACCESS BLOCK
+	    FAB,			! USER RECORD FILE BLOCK
+	    FPT,			! USER FILE PROLOGUE TABLE
+	    KDB,			! PTR TO KEY DESCRIPTOR BLOCK
+	    ADB,			! AREA DESCRIPTOR BLOCK
+	    FRECOR,			! PAGE # OF FIRST FREE PAGE
+	    PAGTAB,			! PAGE TABLE FOR FREE CORE
+	    BUGFLG,			! DEBUGGING VERBOSITY FLAGS
+	    USERJFN,		! TEMP STORAGE FOR JFN DURING OPEN/CREATE
+	    PB,			! USER PARAMETER BLOCK POINTER
+	    DVFLGS,			! FLAGS FROM DVCHR JSYS
+	    USRRET,			! ADDRESS IN RMSDSP TO RETURN TO
+	    UJSYS,			! LOCATION WHERE LAST JSYS IS STORED
+	    OAFLAGS,			! INDICS OABORT MUST BE CALLED BEFORE USEREXIT
+	    ERRADR,			! ADDRESS OF USER ERROR RETURN
+	    USRSTV,			! USER STATUS-VALUE FIELD
+	    USRSTS,			! STATUS
+	    RMSSTS,			! MISC. RMS-20 STATUS BITS
+	    RMSSEC,			! RMS'S SECTION NUMBER
+	    USRSEC,			! SECTION NUMBER OF USER'S CODE
+	    BLKSEC,			! SECTION NUMBER OF USER'S ARG BLOCK
+	    DEXTR1,			! A DUMMY EXTERNAL USED TO PASS AC VALUES
+	    BUFACC;			! COUNT OF BUFFER ACCESSES (CALLS TO 'GETBUF')
+
+MAP
+    PAGTAB:	FORMAT,
+    DVFLGS:	FORMAT;
+MAP
+    FST:	POINTER,
+    RST:	POINTER,
+    CBD:	POINTER,
+    RAB:	POINTER,
+    FAB:	POINTER,
+    ADB:	POINTER,
+    KDB:	POINTER,
+    FPT:	POINTER %;
+
+
+%([
+***********************************************************************
+*			NUMERIC VARIABLES			      *
+***********************************************************************
+])%
+
+	LITERAL	ALLONES = -1,			! OBVIOUS
+		ON = 1,				! USED FOR TESTING BITS
+		OFF = 0,			! SAME
+		ZERO = 0,			! CONSTANT ZERO
+		PLUSINFINITY = %O'377777777777';	! POSITIVE INFINITY
+
+
+%([
+***********************************************************************
+*			USEFUL MACROS				      *
+***********************************************************************
+])%
+
+	MACRO	COMMENT=%,
+		REPEAT = WHILE TRUE DO %,	! INFINITE LOOP
+		wrd = 0,36 %,			! CONTENTS OF ENTIRE WORD
+		RH = 0,18 %,			! RIGHT HALF OF WORD
+		LH = 18,18 %,			! LEFT HALF OF WORD
+		PAGE = 0,9,9 %,			! PAGE NUMBER (BITS 18-26)
+		PAGEMASK = %O'777000' %,		! MASK FOR PAGE NUMBER
+		OFSET = 0,0,9 %,			! OFFSET INTO PAGE
+		WHOLEWORD = 0,wrd %,		! USED FOR POINTERS
+		PTR7 = 36,7 %,			! LEFT HALF OF 7-BIT PINTER
+		PTR6 = 36,6 %,			! SAME FOR SIXBIT
+		PTR36 = 36,36 %,			! SAME FOR FULL-WORDS
+		LASTASCIIPTR = 1,7 %,		! LAST BYTE IN ASCII WORD
+		ADDR( Z ) = ( Z ) %,	! ADDRESS OF VARIABLE
+		SETFLAG (A,B) = A = .A OR B %,	! SET A BIT
+		CHKFLAG (A,B) = (.A AND B ) %,
+		CLRFLAG (A,B) = A = .A AND ( NOT  B ) %;
+
+
+		%([ SOME VALUES FOR BYTE POINTERS ])%
+
+	LITERAL	NULLBP	=	%O'440000';	! A LEFT-JUSTIFIED BYTE PTR
+
+	MACRO $STRADD(STRING$)=UPLIT (%ASCIZ %STRING(STRING$)) %;
+
+	MACRO	PAZ = PLIT %ASCIZ %;
+
+	! TEXT OUTPUTTING MACROS
+
+	%([ MACRO TO TYPE OUT A STRING USING A FORMAT STATEMENT])%
+	!
+	MACRO	TXTOUT(FMT)=
+	BEGIN
+		EXTERNAL %NAME(FMT),TX$OUT;
+		%IF %LENGTH NEQ 1	! Some other args?
+		%THEN
+		$CALLM (TX$OUT,%REMAINING, %NAME(FMT))
+		%ELSE
+		$CALLM (TX$OUT,%NAME(FMT))
+		%FI
+	END %;
+
+	%([ MACRO TO TYPE OUT A TEXT STRING ])%
+
+	MACRO	TYPE( TEXT ) =		! TYPE OUT A MESSAGE ON THE TTY
+	BEGIN
+		TXTOUT(MF$ASZ,UPLIT(%ASCIZ TEXT));
+	END %;
+
+		%([ MACRO TO OUTPUT DEBUGGING MESSAGES ])%
+	MACRO	BUGOUT = TYPE %;			! MACRO TO OUTPUT DEBUGGING STUFF
+
+		%([ MACRO WHICH IS USED IN DPSS ARGUEMENT MACROS ])%
+	MACRO	DEBUGERROR = TYPE %;
+
+	%([ MACROS FOR ERROR MESSAGES IN EXTREME SITUATIONS ])%
+	MACRO	MSG ( TEXT ) =				   
+			BEGIN				! THIS MACRO USED PRIMARILY IN UNIT-TESTS
+			TYPE ( %STRING('?',TEXT));
+			END %;
+
+	%([ MACRO TO PERFORM A BLOCK TRANSFER OF DATA ])%
+
+	MACRO	MOVEWORDS (  FROMLOC, TOLOC, SIZE ) =
+			BEGIN
+			REGISTER
+			    BLTAC,
+			    XXXXAC;
+			XXXXAC<LH> = FROMLOC;
+			XXXXAC<RH> = TOLOC;
+			BLTAC = .XXXXAC + SIZE-1;
+			BLT ( XXXXAC, 0, BLTAC );
+			END %;
+
+	%([ MACRO TO CLEAR A BLOCK OF MEMORY ])%
+
+	MACRO	CLEAR ( PTR, LEN ) =			! CLEAR A SERIES OF CORE LOCATIONS
+		BEGIN
+			REGISTER TEMP1,TEMP2;
+			TEMP1 = PTR;			! BLOCK ADDRESS
+			TEMP2 = .TEMP1 + LEN - 1;
+			(.TEMP1)<wrd>=0;
+			IF LEN GTR 1			!BLT NECES?
+			THEN BEGIN			!YES, MULTI-WD
+				HRL ( TEMP1, TEMP1 );
+				AOJ ( TEMP1 );
+				BLT ( TEMP1, 0, TEMP2 );
+			END;
+		END %;
+
+
+	MACRO	ISON = ISNT OFF %,			! MACRO TO CHECK IF A BIT IS ON
+		ISNT = NEQ %,				! EQUALITY MACROS
+		IS = EQL %;
+
+%([
+***********************************************************************
+*			MISCELLANEOUS VALUES THAT ALL MODULES USE	*
+***********************************************************************
+])%
+
+	%([ SIZE OF A SINGLE PHYSICAL PAGE ])%
+
+	LITERAL	PAGESIZE	=	512;
+
+
+%([
+***********************************************************************
+*			MACROS TO SIMPLIFY VARIOUS COMPUTATIONS      *
+***********************************************************************
+])%
+
+
+
+	%([ MACRO TO COMPUTE THE TOTAL SIZE IN WORDS OF A DATA RECORD ])%
+
+	MACRO	SIZEINWORDS ( RECORDSIZE,BYTESIZE )=
+		BEGIN
+		LOCAL 
+		    BYTES, WORDS;
+		BYTES = 36/BYTESIZE;	!# OF BYTES PER WORD
+		WORDS = RECORDSIZE / .BYTES;	! SIZE OF EACH RECORD IN WORDS
+		IF ( RECORDSIZE MOD .BYTES ) ISNT ZERO
+		THEN WORDS = .WORDS + 1;	! ACCOUNT FOR SLACK BYTES
+		.WORDS	! RETURN VALUE
+		END %;
+
+
+
+
+%([
+***********************************************************************
+*			 MACROS FOR SHIFTING QUANTITIES		      *
+***********************************************************************
+])%
+
+	LITERAL	LEFTLSH		=	18,		! SHIFT INTO LEFT-HALF OF WORD
+		DIVIDEBY2LSH	=	-1,		! DIVIDE VALUE BY 2
+		P2W		=	9,		! SHIFTING CONSTANT FOR PAGES/WORDS
+		W2P		=	-9,		! WORDS TO PAGES
+		S2P		=	-9;		! LH (SECTIONS) TO PAGES
+
+
+
+%([
+*********************************************************************
+*		MACROS USED FOR SUBROUTINE LINKAGE CONVENTIONS   	*
+**********************************************************************
+])%
+
+	%([ MACROS FOR EXITING FROM RMS BACK TO THE USER ])%
+	MACRO	USEREXIT = $EXIT ( USRRET ) %;		! MACRO TO RETURN TO USER AFTER PROCESSING A COMMAND
+	MACRO	USEXITERR = $EXIT ( USRERR ) %;		! MACRO TO RETURN TO USER AFTER ERR DETECTED
+
+	%([ MACROS FOR SUBROUTINE EXITS ])%
+	MACRO	GOODRETURN = RETURN TRUE %;		! SUCCESSFUL RETURN FROM A ROUTINE
+	MACRO	BADRETURN = RETURN FALSE %;			! UNSUCCESSFUL RETURN FROM A ROUTINE
+
+%([
+***********************************************************************
+*			ERROR PROCESSING MACROS			      *
+***********************************************************************
+])%
+
+	%([ MACRO TO SET UP ADDRESS OF USER BLOCK FOR STATUS ])%
+
+	MACRO	ERRORBLOCK ( A ) = PB = .A %;		! SET UP BLOCK FOR ERROR STATUS
+
+		%([ MACRO TO DEFINE A USER ERROR AND EXIT TO USER ])%
+
+	MACRO	PROCERR ( CODE, ACTION ) =		! MACRO TO DESC ERROR
+			BEGIN
+			USRSTS = CODE;
+			%if DBUG %then
+			BEGINDEBUG( DBERRORS )		! SPECIAL DEBUGGING TRACE
+!+
+! Allow user to return the error code in a variable called "ERRORCODE"
+!  if he doesn't want to return the immediate value. This allows compilation
+!  to succeed with DBUG=1.
+!-
+			 %IF %IDENTICAL ( CODE, .ERRORCODE ) %THEN
+			  PRINTVALUE (%STRING('?USER ERROR FOUND: '), ERRORCODE)
+			 %ELSE
+			  TXTOUT (MF$UEF, UPLIT( %ASCIZ 'CODE'))
+			 %FI
+			ENDDEBUG;
+			%fi
+			ACTION
+			END	%;
+
+	MACRO	USERERROR ( CODE ) = PROCERR (CODE,(USEXITERR)) %;
+
+	MACRO	ERROR = USERERROR %;		!SYNONYM
+
+	MACRO	RETURNSTATUS ( CODE ) = PROCERR (CODE,(BADRETURN)) %;
+
+	%([ MACRO TO DECLARE AN INTERNAL ERROR CONDITION ])%
+	MACRO	RMSBUG (ERCOD) =		! INTERNAL CONSISTENCY ERROR FOUND
+			BEGIN
+			$EXIT (CRASH, R$$NAME,  GCA ( ERCOD ) )
+			END %;
+
+%([
+***********************************************************************
+*			DEBUGGING MACROS			      *
+***********************************************************************
+])%
+
+
+
+		%([ MACRO TO CHECK THE VALUE OF A SUBROUTINE INPUT ARGUMENT ])%
+	MACRO	CHECKINPUT ( ARGNAM,OPTR,ARGVAL) =
+		%IF DBUG %THEN
+		BEGIN
+			IF NOT ( .ARGNAM OPTR ARGVAL )
+			THEN RMSBUG ( MSGINPUT )
+		END
+		%FI	%;
+
+	MACRO	DBUGOUT(CASE$)=
+		%IF DBUG %THEN
+			BEGINDEBUG ( CASE$ )
+			TYPE ( %STRING(%REMAINING));
+			ENDDEBUG;
+		%FI %;
+
+	MACRO	BEGINDEBUG ( FLAGNAME ) =
+			BEGIN
+		  	IF ( ( .BUGFLG AND FLAGNAME ) ISON )
+			THEN BEGIN %,
+		ENDDEBUG =  END END	 %;
+
+	%([ MACRO TO TRACE THE ENTRY TO AN RMS-20 VERB PROCESSOR ])%
+
+	MACRO	RMSENTRY (VERBNAME)=
+		BIND R$$NAME = UPLIT( %ASCIZ %STRING(VERBNAME));
+		BEGIN
+		BEGINDEBUG (DBENTRY)
+			TXTOUT (MF$ENT, R$$NAME);
+		ENDDEBUG;
+		END %;
+
+
+		%([ MACRO TO PERFORM AN ENTRY TRACE OF A SPECIFIC ROUTINE ])%
+
+	MACRO	TRACE (RNAME) =			! TRACE RMS EXECUTION
+		BIND R$$NAME = UPLIT( %ASCIZ RNAME);	! SAVE ROUTINE NAME
+		BEGIN
+		BEGINDEBUG (DBTRACE)
+			TXTOUT (MF$ENR, R$$NAME);
+		ENDDEBUG;
+		END %;
+
+	%([ MACRO TO PRINT THE CONTENTS OF A VARIABLE <ALWAYS> ])%
+
+	MACRO	PRINTVALUE ( TEXT, fld )=
+		%IF DBUG %THEN
+		BEGIN
+		EXTERNAL
+		    DEXTR1;
+		TXTOUT(MF$CON,UPLIT(%ASCIZ TEXT));	!Message continues..
+		DEXTR1 = .fld;
+		CALLDUMP ( PCI ( 1 ) , GCI ( DEXTR1 ) )	!Type value and CRLF
+		END
+		%FI %;
+
+
+	%([ MACRO TO PRINT VALUE OF A FIELD IF DEBUG IS ON AND DBLOCAL IS SET ])%
+
+	MACRO	LOOKAT ( TEXT , fld ) =
+		%if dbug %then
+		BEGINDEBUG ( DBLOCAL )
+		PRINTVALUE ( TEXT, fld );
+		ENDDEBUG
+		%fi
+		 %;
+
+
+
+		%([ MACRO TO TRACE EXECUTION OF A SINGLE ROUTINE ])%
+
+	MACRO	RTRACE ( TEXT ) =				! USE THIS FOR ROUTINE TRACING
+		DBUGOUT(DBRTRACE, TEXT); %;
+
+	%([ MACRO FOR UN-IMPLEMENTED FUNCTIONS ])%
+	MACRO	NOTDONE ( A ) =
+			BEGIN
+			TYPE ( %STRING(A,' IS NOT IMPLEMENTED YET'));
+			END %;
+
+	%([ MACRO TO DECLARE A FILE CONSISTENCY PROBLEM ])%
+
+	MACRO	FILEPROBLEM ( ERRCODE )=
+		BEGIN
+		USRSTS = ER$UDF;
+		USRSTV = ERRCODE
+		END %;
+
+
+
+	%([ MACROS FOR INCREMENTING AND DECREMENTING VARIABLES ])%
+
+	MACRO	DEC( WHAT, AMT ) = WHAT = .WHAT - AMT %,
+		INC( WHAT, AMT ) = WHAT = .WHAT + AMT %;
+
+MACRO	CURRENTJSYS	=	(.UJSYS<RH> AND %O'77') %;
+
+%([
+***********************************************************************
+*			DEBUGGING VERBOSITY FLAGS		      *
+***********************************************************************
+])%
+
+		%([ THESE FLAG BITS DEFINE THE LEVEL OF THE DEBUGGING
+		   VERBOSITY OUTPUT WHICH IS TYPED.  THEY EXIST IN
+		   THE "BUGFLG" WORD. ])%
+
+		%([ *****NOTE THAT THESE BIT DEFINITIONS MUST CORRESPOND
+		   TO THE SAME BITS DEFINED IN RMSSYM.MTB. IN FACT, THESE
+		   BITS SHOULD BE ELIMINATED ALTOGETHER. ])%
+
+
+	LITERAL	DBTRACE		=	BITn ( 35 ),		! MODULE TRACE
+		DBERRORS	=	BITN ( 34 ),		! USER ERRORS
+		DBRTRACE	=	BITN ( 33 ),		! ROUTINE TRACE
+		DBLOCAL		=	BITN ( 32 ),		! LOCAL VARIABLES
+		DBBLOCKS	=	BITN ( 31 ),		! DUMP OF VARIOUS BLOCKS
+		DBLOCK		=	BITN ( 30 ),		! PRINT TRACE OF RECORD LOCKS
+		DBIO		=	BITN ( 29 ),		! TRACE I/O ACTIVITY
+		DBENTRY		=	BITN ( 28 );		! TRACE ENTRY TO RMS-20
+
+
+
+
+%([
+***********************************************************************
+*			ASCII CHARACTER  CODES		      *
+***********************************************************************
+])%
+
+	LITERAL	CHARTAB	=	%O'11',			! HORIZONTAL TAB
+		CHARLF	=	%O'12',			! LINE FEED
+		CHARVT	=	%O'13',			! VERTICAL TAB
+		CHARFF	=	%O'14',			! FORM FEED
+		CHAR0	=	%O'60',			! "0"
+		CHARCR	=	%O'15',			! CARRIAGE RETURN
+		CHARCNTZ=	%O'32';			! CONTROL-Z
+
+
+
+
+%([
+***********************************************************************
+*			REGISTER DEFINITIONS			      *
+***********************************************************************
+])%
+
+
+
+
+
+
+
+%([
+***********************************************************************
+*		INTERNAL SUBROUTINE PARAMETER VALUES		    *
+***********************************************************************
+])%
+
+
+	%([ THESE VALUES ARE BIT DEFINITIONS WHICH ARE PASSED TO
+	   CERTAIN ROUTINES AS "ABORT FLAGS". EACH BIT REPRESENTS
+	   A PARTICULAR OPERATION WHICH HAS BEEN PERFORMED AND MUST
+	   BE UNDONE. CURRENTLY, OABORT AND CLEANUP ARE THE ONLY
+	   ROUTINES WHICH USE THESE BITS ])%
+
+	LITERAL	ABRUNLOCK = BITN (35),		! UNLOCK THE FILE
+		ABRCLOSE  = BITN (34),		! CLOSE THE FILE
+		ABRFPT    = BITN (33),		! RELEASE THE FILE PROLOGUE TABLE
+		ABRFST   = BITN (32),		! RELEASE THE FILE STATUS TABLE
+		ABRPLOGPAGE = BITN ( 31 ),	! RELEASE THE FREE PAGE
+		ABRADB = BITN ( 30 ),		! RELEASE THE ADB
+		ABRULINDEX = BITN ( 29 ),	! UNLOCK THE CURRENT INDEX
+		ABRBUCKET = BITN ( 28 );		! FLUSH THE CURRENT BUCKET
+
+
+
+
+
+%([
+***********************************************************************
+*			END OF MACROS.REQ			      *
+***********************************************************************
+])%
+
+
+
+%([
+********************************************************
+*							*
+*		START OF LIMITS.REQ			*
+*							*
+*		CONTENTS:				*
+*							*
+*	1. USER PARAMETER LIMIT DEFINITIONS		*
+*							*
+*********************************************************
+
+AUTHOR: S. BLOUNT
+
+])%
+%([
+****************************************************************
+*			KEY DESCRIPTION LIMITS			*
+*****************************************************************
+])%
+
+
+	%([ USER KEY-DEFINIITION LIMITS ])%
+
+	LITERAL	MAXKEYS		=	255,		! MAX # OF KEYS FOR THE FILE
+		MAXKEYSEGS	=	8,		! MAX # OF KEY SEGMENTS
+		MAXKEYSIZE	=	255,		! SIZE OF KEY IN BYTES
+		MAXKSZW		=	64;		! SIZE OF KEY (IN WORDS)
+							! WARNING: DUPL DEF IN RMSGLB
+
+%([
+****************************************************************
+*			AREA DEFINITION LIMITS			*
+*****************************************************************
+])%
+
+
+	LITERAL	MAXAREAS	=	32;		! MAX # OF AREAS FOR THE FILE
+
+
+
+%([
+****************************************************************
+*			BUCKET PARAMETER LIMITS			*
+*****************************************************************
+])%
+
+	LITERAL	MAXFILLPERCENT	=	50,	! MAX FILE PERCENTAGE
+		MAXBKZ		=	7;	! MAX BUCKET SIZE (3 BIT FLD IN BFD)
+
+	LITERAL	MAXLEVELS	=	15;	! MAX # OF INDEX LEVELS
+						!MORE THAN BIG ENOUGH, EVEN WITH
+						! HALF FULL BKTS AND 10 WD KEYS
+						! ROOM FOR OVER 10**20 RECS
+						!WARNING: DUPL DEF IN RMSGLB
+
+
+
+%([
+****************************************************************
+*			MISCELLANEOUS LIMITS				*
+*****************************************************************
+])%
+
+	LITERAL	MINUSERBUFF	=	%O'20',		! MINIMUM BUFFER ADDRESS
+		MINADDRESS	=	%O'20';		! GENERAL ADDRESS VALUE
+
+%([
+****************************************************************
+*			END OF LIMITS.REQ			*
+*****************************************************************
+])%
+
+%([***************************************************************
+*								*
+*			START OF SWITCH.REQ			*
+*								*
+*		THIS FILE CONTAINS ALL COMPILATION		*
+*		SWITCH VALUES WHICH MAY BE ALTERED		*
+*		BEFORE RMS-20 IS INITIALLY BUILT.		*
+*		THIS FILE IS USED BY ALL SOURCE MOD-		*
+*		ULES WITHIN RMS-20.				*
+*								*
+***************************************************************])%
+
+	%([ DATA DECLARATION MACROS TO SELECT GLOBAL VARIABLES ])%
+
+	COMPILETIME
+		INDX=1,
+		DBUG=1;
+
+%([***************************************************************
+*			END OF SWITCH.REQ			*
+***************************************************************])%
+
+%([
+********************************************************
+*							*
+*		START OF BUCKET.REQ			*
+*							*
+*		CONTENTS:				*
+*							*
+*	1. BUCKET FORMAT DEFINITIONS FOR INDEXED FILES  *
+*	2. RECORD FORMAT DEFINITIONS FOR INDEXED FILES  *
+*	3. MISCELLANEOUS MACROS FOR USE WITH RECORDS	*
+*							*
+*********************************************************
+
+AUTHOR: S. BLOUNT
+
+])%
+
+%([
+*****************************************************************
+*		STRUCTURE OF BUCKET FOR INDEXED FILES		*
+*****************************************************************
+])%
+
+%([
+	FORMAT OF BUCKET (INDEXED FILES ONLY)
+	=====================================
+
+	!=====================================!
+	!FLAGS!LEVEL! TYPE !    NEXT-BYTE     !
+	!-------------------------------------!
+	!<UNUSED> !  AREA  !     NEXTBKT      !
+	!-------------------------------------!
+	!      LASTID      !      NEXTID      !
+	!-------------------------------------!
+	!                                     !
+	!           RECORD STORAGE            !
+	!                AREA                 !
+	!                                     !
+	!-------------------------------------!
+	!             RRV STORAGE             !
+	!                AREA                 !
+	!-------------------------------------!
+	!                                     !
+	!             FREE SPACE              !
+	!                                     !
+	!=====================================!
+])%
+
+	%([ DEFINITIONS RELATING TO THE SIZE OF A BLOCK ])%
+
+	LITERAL	LENGTHOFBLOCK	=	PAGESIZE / 4,	! WORDS IN A BLOCK
+		B2W		=	P2W,		! BUCKETS TO WORDS SHIFT
+		W2B		=	W2P,		! WORDS TO BUCKETS
+		B2P		=	0,		! SHIFT FOR CONVERTING BLOCKS TO PAGES
+		P2B		=	0,		! SHIFT FOR CONVERTING PAGES TO BLOCKS
+		BKTFLDSIZE	=	18,		! # OF BITS TO HOLD A BKT #
+		BLOCKSPERPAGE	=	4;		! NO. BLOCKS IN A PAGE
+
+
+	%([ SYMBOLS RELATING TO THE SIZE OF A FILE BUCKET ])%
+
+	LITERAL	LOWESTBKTNUM	=	1,		! NO BUCKET CAN BE ON PAGE 0
+		DEFBUCKETSIZE	=	1;		! DEFAULT VALUE OF BKS FIELD
+
+
+	%([ STRUCTURE OF FIXED-LENGTH HEADER OF BUCKET ])%
+
+	LITERAL	BHHDRSIZE	=	3;		! SIZE OF HEADER
+
+
+	MACRO	BHFLAGS		=	0,27,9 %,	! BUCKET FLAGS
+		BHLEVEL		=	0,21,6 %,	! LEVEL OF THIS BUCKET
+		BHBTYPE		=	0,18,3 %,	! BUCKET TYPE
+		BHNEXTBYTE	=	0,RH %,		! NEXT AVAIL WORD
+		BHUNUSED	=	1,26,10 %,	! (UNUSED)
+		BHTHISAREA	=	1,18,8 %,	! THIS AREA
+		BHNEXTBKT	=	1,RH %,		! PTR TO NEXT BUCKET
+		BHLASTID	=	2,LH %,		! LAST ID TO USE
+		BHNEXTID	=	2,RH %;		! NEXT ID TO USE
+
+	%([ FLAGS DEFINED IN BUCKET HEADER ])%
+
+	LITERAL	BHFLGROOT	=	BITN ( 35 ),	! THIS IS THE ROOT
+		BHFLGEND	=	BITN ( 34 );	! LAST BUCKET IN CHAIN
+
+	%([ BUCKET TYPES ])%
+
+	LITERAL	BTYPEINDEX	=	0,		! INDEX BUCKET
+		BTYPEDATA	=	1;		! DATA BUCKET
+
+	%([ VALUES USED FOR LEVELS OF THE INDEX (IF THESE CHANGE,
+	   WE'VE GOT PROBLEMS ])%
+
+	LITERAL	SEQSETLEVEL	=	1,		! LEVEL OF SEQUENCE SET
+		DATALEVEL	=	0;		! LEVEL OF DATA
+
+	%([ VALUES WHICH DETERMINE IF A PARITCULAR INDEX OR DATA
+	   BUCKET IS WRITTEN TO DISK WHEN IT IS RELEASED TO THE
+	   BUCKET MANAGER. THESE VALUES ARE USED TO SPEED UP
+	   PERFORMANCE IN THOSE CASES WHERE A COMPLETE DISK WRITE
+	   MIGHT NOT BE ABSOLUTELY NECESSARY. ])%
+
+	LITERAL
+		NOHIKEYUPDFLAG = FALSE;		! DONT UPDATE THE INDEX
+							! BUCKET WHEN A DATA BUCKET
+							! IS BEING REMOVED FROM THE INDEX.
+							! THIS WILL NOT CAUSE ANY HARM,
+							! BECAUSE THE INDEX STRUCTURE
+							! IS STILL INTACT (SEE INSRTIREC)
+
+
+
+
+
+%([
+****************************************************************
+*			RECORD FILE ADDRESS (RFA) STRUCTURE	*
+*****************************************************************
+])%
+
+		%([ *******	NOTE	  ********* ])%
+
+	%([ IN THE FOLLOWING RFA STRUCTURE MACROS, THE RECORD ID
+	   IS IN THE LEFT HALF OF THE RFA WORD. HOWEVER, THE
+	   HIGHEST ID WHICH IS EVER ALLOCATED IS #37777; THUS
+	   BIT 0 IS NEVER USED. THIS BIT IS RESERVED IN SIDR
+	   RECORDS FOR FUTURE USE. THE ID MACRO
+	   BELOW COULD BE CHANGED TO CONSIST OF ONLY 17 BITS, BUT
+	   THAT WOULD SLOW DOWN THE ACCESS TO RFA VALUES THRUOUT
+	   THE SYSTEM.
+
+		FORMAT OF AN INDEXED FILE RFA
+		=============================
+
+		!=====================================!
+		!*!   RECORD ID    !  BUCKET NUMBER   !
+		!=====================================!
+
+])%
+
+	MACRO	RFABUCKET	=	0,RH %,		! BUCKET NUMBER
+		RFAID		=	0,LH %;		! BUCKET ID
+
+	%([ SHIFTING VALUES FOR FIELDS IN AN RFA ])%
+
+	LITERAL	ID2RFALSH	=	18,		! SHIFT ID TO RFA
+		RFA2IDLSH	=	-18;		! SHIFT RFA TO ID
+
+	%([ MASK VALUES ])%
+
+	LITERAL	BUCKETMASK	=	%O'777777';	! RIGHT HALF MASK
+
+	%([ MACRO TO BUILD AN RFA FROM BUCKET NO. AND ID ])%
+
+	MACRO	MAKERFA ( BKTNO,ID ) = ID ^ ID2RFALSH + BKTNO %;
+
+	%([ MACROS TO EXTRACT EACH FIELD FROM AN RFA ])%
+
+	MACRO	IDOFRFA ( RFAVALUE ) = ( RFAVALUE ^ RFA2IDLSH ) %,
+		BUCKETOFRFA (RFAVALUE)=( RFAVALUE AND BUCKETMASK ) %;
+
+
+
+%([
+****************************************************************
+*			RECORD FORMAT STRUCTURE			*
+*****************************************************************
+])%
+
+
+
+%([
+****************************************************************
+*			INDEX RECORD FORMAT			*
+*****************************************************************
+])%
+
+%([		FORMAT OF INDEX RECORD:
+		======================
+
+	!=====================================!
+	!      FLAGS       !  BUCKET POINTER  !
+	!-------------------------------------!
+	!                                     !
+	!             KEY STRING              !
+	!                                     !
+	!=====================================!
+
+])%
+	%([ SIZE OF INDEX RECORD HEADER ])%
+
+	LITERAL	IRHDRSIZE	=	1;			! 1 WORD FOR HEADER
+
+
+	%([ INDEX RECORD HEADER FORMAT ])%
+
+	MACRO	IRFLAGS		=	0,LH %,			! FLAGS
+		IRBUCKET	=	0,0,BKTFLDSIZE %;	! BUCKET NUMBER
+
+	%([ DEFAULT VALUE FOR FLAGS IN INDEX RECORD ])%
+	%([ ***SEE FLAG DEFINITIONS UNDER DATA RECORD*** ])%
+
+	LITERAL	DEFIRFLAGS	=	0;
+
+
+
+
+
+%([
+****************************************************************
+*			DATA RECORD STRUCTURE			*
+*****************************************************************
+])%
+
+%([
+	FORMAT OF GENERALIZED INDEXED DATA RECORD
+	=========================================
+
+
+	!=====================================!
+	!      FLAGS       !    RECORD ID     !
+	!-------------------------------------!
+	!           RECORD POINTER            !
+	!-------------------------------------!
+	!     <UNUSED>     !   RECORD SIZE    !
+	!-------------------------------------!
+	!                                     !
+	!             DATA RECORD             !
+	!                                     !
+	!=====================================!
+
+
+])%
+
+	%([ SIZE OF DATA RECORD HEADER ])%
+
+	%([ NOTE THAT THE RECORD HEADER ON A USER DATA RECORD CAN
+	   HAVE DIFFERENT LENGTHS, DEPENDING UPON WHETHER IT IS
+	   A FIXED-LENGTH RECORD FILE OR A VARIABLE-LENGTH
+	   RECORD FILE ])%
+
+	LITERAL	FIXHDRSIZE	=	2,		! FIXED-FORMAT RECORDS
+		VARHDRSIZE	=	3;		! VARIABLE-FORMAT RECORDS
+
+	%([ DATA RECORD FORMAT DEFINITIONS ])%
+
+	MACRO	DRFLAGS		=	0,LH %,		! FLAGS
+		DRRECORDID	=	0,RH %,		! ID OF THIS RECORD
+		DRRRVADDRESS	=	1,WRD %,	! POINTER TO RRV
+		%([ DEFINITION OF RRV-ADDRESS FIELDS ])%
+		DRRRVBUCKET	=	1,RH %,		! RRV BUCKET NUMBER
+		DRRESERVED	=	2,LH %,		! <UNUSED>
+		DRRECSIZE	=	2,RH %;		! RECORD SIZE
+
+	%([ OFFSETS INTO THE DATA RECORD WHERE THE RECORD SIZE IS STORED ])%
+
+	LITERAL	VARRSZOFFSET	=	2;		! VARIABLE RECORDS
+
+
+	%([ FLAG BITS DEFINED IN USER DATA/INDEX RECORD ])%
+
+	LITERAL	DEFDRFLAGS	=	0;		! DEFAULT FLAGS
+
+	LITERAL	FLGDELETE	=	BITN ( 35 ),	! THIS RECORD IS DELETED
+		FLGRRV		=	BITN ( 34 ),	! THIS IS AN RRV
+		FLGHIKEY	=	BITN ( 33 ),	! THIS IS THE HIGHEST KEY POSSIBLE(INDEX ONLY)
+		FLGRRVUPD	=	BITN ( 32 ),	! RRV RECORDS FOR THIS RECORD HAVE BEEN UPDATED (IN-CORE FLAG ONLY)
+		FLGNOCOMPRESS	=	BITN ( 31 );	! DON'T COMPRESS THIS RECORD
+
+
+	LITERAL	DEFRRVFLAGS	=	FLGRRV;			! DEFAULT FLAGS FOR RRV RECORD
+
+	%([ MACRO TO ACCESS THESE FLAGS ])%
+
+	MACRO	RRVFLAG ( XRECPTR )= ( .XRECPTR [ DRFLAGS ] AND FLGRRV ) %,
+		DELETEFLAG ( XRECPTR )= ( .XRECPTR [ DRFLAGS ] AND FLGDELETE ) %;
+
+
+
+%([
+********************************************************************
+*			SECONDARY INDEX DATA RECORD STRUCTURE		*
+*********************************************************************
+])%
+
+%([	FORMAT OF A SECONDARY INDEX DATA RECORD:
+	========================================
+
+	!=====================================!
+	!      FLAGS       !    RECORD ID     !
+	!-------------------------------------!
+	!     <UNUSED>     !   RECORD SIZE    !
+	!-------------------------------------!
+	!                                     !
+	!              KEY VALUE              !
+	!                                     !
+	!-------------------------------------!
+	!               RFA #1                !
+	!-------------------------------------!
+	!                  .                  !
+	!                  .                  !
+	!                  .                  !
+	!-------------------------------------!
+	!               RFA #N                !
+	!=====================================!
+
+])%
+
+	%([ SIZE VALUES FOR THE HEADER OF SECONDARY DATA RECORDS ])%
+
+	LITERAL	SIDRHDRSIZE	=	2,		! ONLY 2 WORDS
+		SIDRBYTESIZE	=	36;		! BYTE SIZE FOR SIDR RECORDS
+
+	%([ SIDR FORMAT DEFINITIONS ])%
+
+	MACRO	SIDRRECSIZE	=	1,RH %,		! RECORD SIZE FIELD
+		SIDRDUPCOUNT	=	1,LH %;		! DUP COUNT (FUTURE)
+
+	%([ SIDR RECORD FLAG VALUES (NOT FLAGS IN RFA) ])%
+
+	LITERAL	DEFSIDRFLAGS 	=	0;		! DEFAULT VALUES
+
+	%([ FLAG BIT DEFINITIONS FOR EACH RFA IN A SIDR ARRAY ])%
+
+	LITERAL	NULLRFA		=	ZERO,		! AN EMPTY RECORD POINTER
+		ALLRFAFLAGS	=	BITN ( 0 );	! ONE BIT IS RESERVED
+	%([ OFFSET INTO THE SECONDARY RECORD WHERE THE RECORD SIZE IS KEPT ])%
+
+	LITERAL	SIDRRSZOFFSET	=	1;		! 2ND WORD OF HEADER
+
+	%([ MACROS USED TO MANIPULATE SIDR RFA'S TO DETERMINE IF
+	   THE RFA IS DELETED. ])%
+
+	MACRO	SETDELETEDRFA ( ARRAYPTR ) = ( ARRAYPTR [ WHOLEWORD ] = NULLRFA ) %,
+		DELETEDRFA ( ARRAYPTR ) = ( .ARRAYPTR [ WHOLEWORD ] IS NULLRFA ) %;
+
+
+
+%([
+****************************************************************
+*			RRV RECORD STRUCTURE			*
+*****************************************************************
+])%
+
+%([		FORMAT OF A RRV RECORD:
+		======================
+
+	!=====================================!
+	!      FLAGS       !    RECORD ID     !
+	!-------------------------------------!
+	!       ADDRESS OF RECORD (RFA)       !
+	!=====================================!
+
+])%
+
+
+	%([ THE STRUCTURE OF AN RRV RECORD IS IDENTICAL TO THE
+	   DEFINITION OF THE DATA RECORD FORMAT FOR ALL FIELDS
+	   OF THE RRV RECORD ])%
+
+	LITERAL	RRVRECSIZE	=	2;		! SIZE OF AN RRV RECORD
+
+
+
+
+%([
+*****************************************************************
+*		MACRO TO MOVE A PORTION OF A BUCKET DOWN		*
+*****************************************************************
+])%
+
+
+	%([ THIS MACRO IS USED WHEN A RECORD IS TO BE INSERTED
+	   INTO A INDEX OR DATA BUCKET. IT IS A COMPLEX MACRO
+	   SO AS TO MAXIMIZE THE EFFICIENCY OF THE OPERATION.
+	   THIS OPERATION COULD ALSO BE DONE BE A "MOVE,MOVEM"
+	   LOOP BUT IT WOULD NOT BE AS FAST AS THIS ALGORITHM. ])%
+
+	%([ THE MACRO WORKS AS FOLLOWS:
+
+		LET:
+		A	=	START OF CHUNK TO MOVE
+		B	=	START OF PLACE TO MOVE CHUNK
+		C	=	LAST WORD OF CHUNK TO MOVE
+		D	=	LAST WORD OF PLACE WHERE CHUNK WILL BE
+
+	THEN, WE SET THE AC TO BE:
+		AC/	XWD (C-A-1)+400000, C
+
+	AND DO THE FOLLOWING LOOP:
+
+	LOOP1:	POP	AC, D-C(AC)
+	LOOP2:	JUMPL	AC,.-1
+	LOOP3:	POPJ	P,
+
+
+	C-A-1 BECAUSE LOOPS TERMINATES WHEN LEFT HALF = 377777.
+	THIS EFFECTIVELY POPS THE DATA FROM ONE PLACE IN CORE
+	TO THE OTHER.
+	])%
+
+	MACRO	MOVEDOWN ( XSTART,XEND,XAMTDOWN )=
+		BEGIN
+
+		EXTERNAL
+		    LOOP1,
+		    LOOP2,
+		    LOOP3;
+		REGISTER
+		    TEMPAC = 1;
+		LOOP1 = (%O'262' ^ 27) OR (1 ^ 23 ) OR (1 ^ 18 ) OR (XAMTDOWN);
+		LOOP2 = (%O'321' ^ 27) OR (1 ^ 23 ) OR LOOP1;
+		LOOP3 = (%O'263' ^ 27) OR (%O'17' ^ 23 );
+		TEMPAC = (( XEND-XSTART ) ^ LEFTLSH) OR (XEND);
+		TEMPAC = (.TEMPAC OR (1^35));
+		CALL0 ( LOOP1 )
+		END %; 	
+
+
+
+
+
+%([
+*********************************************************
+*							*
+*	MISCELLANEOUS VALUES ASSOCIATED WITH BUCKETS	*
+*							*
+*********************************************************
+])%
+
+	LITERAL	HIGHESTID	=	%O'377777',	! HIGHEST LEGAL RECORD ID ( 17 BITS )
+		HIGHESTBUCKETno	=	%O'777777',	! HIGHEST LEGAL BUCKET NO ( 18 BITS )
+!
+!	**note: The 'no' to HIGHESTBUCKETNO was added for BLISS 36.
+!		The source module was using HIGHESTBUCKETNO even though
+!		only HIGHESTBUCKET was declared. BLISS-10 did'nt care 
+!		but BLISS-36 looks at all 15 characters.
+!
+		FIRSTID		=	1,		! FIRST VALID BUCKET ID
+		NULLID		=	0;		! NON-EXISTENT BKT ID
+							! (USED TO INDICATE "ID NOT GIVEN")
+
+
+%([
+********************************************************************
+*			MISCELLANEOUS MACROS				*
+*********************************************************************
+])%
+
+	%([ MACRO TO DETERMINE THE SIZE OF A DATA RECORD ])%
+	%([ NOTE THAT THIS MACRO WORKS ONLY ON DATA RECORDS...NOT RRV'S ])%
+
+	MACRO	SIZEOFDATARECRD (  RECPTR )=
+		BEGIN
+		REGISTER
+		    AC,TEMP;
+		IF .KDB [ KDBREF ] ISNT REFPRIMARY THEN AC = .RECPTR [ SIDRRECSIZE ]
+		ELSE
+			BEGIN
+			IF FIXEDLENGTH THEN TEMP = .FST [ FSTMRS ]
+			ELSE TEMP = .RECPTR [ DRRECSIZE ];
+			AC = SIZEINWORDS ( .TEMP, .FST [ FSTBSZ ] ) 
+			END; %(OF ELSE THIS IS A UDR)%
+			AC = .AC + .KDB [ KDBHSZ ]	! ADD HEADER SIZE
+		END %;%(OF SIZEOFDATARECRD)%
+
+	%([ MACRO TO FIND LENGTH OF JUST A USER DATA RECORD ])%
+
+	MACRO	SIZEOFUDR (  RECPTR )=
+		BEGIN
+		REGISTER
+		    TEMP;
+		IF FIXEDLENGTH THEN TEMP = .FST [ FSTMRS ]
+		ELSE TEMP = .RECPTR [ DRRECSIZE ];
+		SIZEINWORDS ( .TEMP,  .FST [ FSTBSZ ] ) + .KDB [ KDBHSZ ]
+		END %;%(OF SIZEOFUDR)%
+
+	%([ MACRO TO GET THE SIZE OF A "RECORD", EITHER A DATA
+	   RECORD OR AN RRV RECORD ])%
+
+	MACRO	SIZEOFANYRECORD (  RECPTR )=
+		BEGIN
+		IF RRVFLAG ( RECPTR ) ISON
+		THEN
+			RRVRECSIZE		
+		ELSE
+			SIZEOFDATARECRD ( RECPTR )
+		END %;
+
+
+	%([ MACRO TO DE-ALLOCATE A FILE BUCKET. ])%
+
+	%([ **NOTE THAT THIS MACRO IS CURRENTLY NULL. THAT'S
+	   BECAUSE SECONDARY BUCKET ALLOCATION (RE-USE OF
+	   BUCKETS THAT ARE NO LONGER NEEDED) IS NOT CURRENTLY
+	   SUPPORTED IN RMS-20. IN OTHER WORDS, UNTIL THIS MACRO IS IMPLEMENTED,
+	   THERE WILL BE SOME WASTED SPACE IN THIS SITUATION ])%
+
+	MACRO	DEALLOCBUCKET ( XBD, XSIZE )= %;
+
+
+%([
+****************************************************************
+*			STRUCTURES FOR "PATH" ARRAY		*
+*****************************************************************
+])%
+
+	%([ THESE TWO FIELDS ARE IN THE "PATH" ARRAY AND ARE
+	   USED BY THE FNDREC AND IDXUPDATE TO LOCATE THE
+	   INDEX BUCKET PATH USED TO PROCESS THE INDEX. ])%
+
+	MACRO	PATHBKT	= 0,BKTFLDSIZE %,	! BUCKET PROCESSED GOING DOWN INDEX
+		PATHOFFSET = BKTFLDSIZE,18 %;	! OFFSET INTO BUCKET OF
+						! INDEX RECORD USED IN SEARCH
+
+
+%([
+****************************************************************
+*			END OF BUCKET.REQ			*
+*****************************************************************
+])%
+
+%([
+******************************************************************
+*			START OF BUFFER.REQ			   *
+*								   *
+*			CONTENTS:				   *
+*								   *
+*		1. ALL BUFFER MANAGEMENT DATA STRUCTURES    	   *
+*								   *
+*******************************************************************
+
+%([
+
+	THIS FILE CONTAINS ALL MACROS AND DEFINITIONS WHICH
+	RELATE TO THE BUFFER MANAGEMENT WITHIN RMS-20. THIS
+	INCLUDES THE FOLLOWING STRUCTURES:
+
+		1.	BUFFER DESCRIPTORS
+		2.	BUCKET DESCRIPTORS
+
+	THE BUFFER DESCRIPTORS ARE MAINTAINED WITHIN THE RST
+	FOR EACH RECORD STREAM. THESE DESCRIPTORS ARE NEVER 
+	MOVED AROUNT NOR USED AS ARGUMENTS TO ANY ROUTINE.
+
+	THE BUCKET DESCRIPTORS ARE MULTI-WORD STRUCTURES WHICH
+	ARE PASSED AROUND BY MANY ROUTINES AND USED AS ARGUMENTS
+	FOR ROUTINES WHICH PROCESS INDEXED FILES. NOTE THAT
+	EXCEPT FOR THE "CURRENT BUCKET DESCRIPTOR" FIELD IN THE
+	RST, BUCKET DESCRIPTORS ARE NEVER PERMANENT...THEY
+	ARE CREATED, USED, AND LATER RELEASED. CONTRAST THIS
+	WITH THE BUFFER DESCRIPTORS WHICH ARE CREATED ONLY AT
+	$CONNECT-TIME, ARE NEVER MOVED, AND ARE RELEASED ONLY
+	WHEN THE RECORD STREAM IS DISCONNECTED.
+
+	THIS FILE CONTAINS NO INFORMATION OR DEFINITIONS CONCERNING
+	THE ACTUAL STRUCTURE OF EITHER A BUCKET OR THE RECORDS WITHIN
+	A BUCKET.
+])%
+
+
+%([
+*****************************************************************
+*		STRUCTURE OF BUFFER DESCRIPTORS			*
+*****************************************************************
+])%
+
+	%([ MACRO TO GET ADDRESS OF FIRST BUFFER DESCRIPTOR ])%
+
+	MACRO	BFDOFFSET = ADDR( RST [ RSTBFD ] ) %;
+
+	%([ MACROS FOR ACCESSING FIELDS IN BUFFER DESCRIPTORS ])%
+
+	MACRO	BFDBPAGE = 0,27,9 %,		! PAGE NO. OF BUFFER IN CORE
+		BFDUSECOUNT = 0,24,3 %,		! NO. OF USERS OF THIS BUFFER
+		BFDUPDFLAG = 0,23,1 %,		! IF ON, DATA IN BUFFER NEEDS TO BE OUTPUT
+		BFDBKTSIZ = 0,20,3 %,		!# OF PAGES IN BKT CURR IN BUF
+						! 0 INDICS BUF EMPTY
+		BFDFPAGE = 0,0,18 %;		! FILE PAGE NO. IN FIRST PAGE OF BUFFER
+
+	MACRO	BFDUPD (BFD)= .BFD [BFDUPDFLAG] ISON %;
+	MACRO	SETBFDUPD (BFD) =
+	BEGIN
+		LOCAL TEMP:POINTER;
+		TEMP = .BFD;
+		TEMP [BFDUPDFLAG] = 1
+	END %;
+	MACRO	CLEARBFDUPD (BFD) =
+	BEGIN
+		LOCAL TEMP:POINTER;
+		TEMP = .BFD;
+		TEMP [BFDUPDFLAG] = 0
+	END %;
+
+%([
+*****************************************************************
+*		STRUCTURE OF BUCKET DESCRIPTORS			*
+*****************************************************************
+])%
+
+%([
+	THE FORMAT OF A BUCKET DESCRIPTOR IS AS FOLLOWS:
+
+	!=====================================!
+	!      BFDADR      !      BKTADR      !
+	!-------------------------------------!
+	!<*>!BKTSIZE!FLAGS !      BKTNO       !
+	!=====================================!
+
+])%
+
+	%([ MACROS FOR ACCESSING FIELDS IN BUCKET DESCRIPTORS ])%
+
+	MACRO	BKDBFDADR	=	0,LH %,		! ADR OF BUFFER DESCRIPTOR
+		BKDBKTADR	=	0,RH %,		! ADR OF BUCKET IN CORE
+		! ***NOTE UNUSED 4 BITS IN LEFT OF WORD 1***
+		BKDBKTSIZE	=	1,24,8 %,	! BUCKET SIZE IN BLOCKS
+		BKDFLAGS	=	1,18,6 %,	! FLAGS
+		BKDBKTNO	=	1,RH %;		! BUCKET NO.
+
+	%([ SIZE OF A BUCKET DESCRIPTOR ])%
+
+	LITERAL	BDSIZE		=	2;
+
+
+	%([ MACRO TO DETERMINE IF A BUCKET DESCRIPTOR IS NULL ])%
+
+	MACRO	NULLBD ( BD )	=	( .BD [ BKDBKTADR ] IS ZERO ) %;
+
+	%([ MACRO TO SET A BUCKET DESCRIPTOR TO BE NULL ])%
+
+	MACRO	SETNULLBD (BD)	= ( BD [ BKDBKTADR ] = ZERO ) %;
+
+	%([ MACRO TO INDIC THAT BKT MUST BE UPDATED ])%
+
+	MACRO	SETUPD (BD) = SETBFDUPD (BD[BKDBFDADR]) %;
+
+	%([ BUCKET DESCRIPTOR FLAGS ])%
+
+	LITERAL	BKDFLGLOCKED	=	BITN ( 35 );	! BUCKET IS LOCKED
+
+	%([ VALUES USED FOR THE BUCKET SIZE OF NON-INDEXED FILES ])%
+	%([ **NOTE THAT FOR INDEXED FILES, THE BUCKET SIZE VALUE IS ])%
+	%([ A FILE-DEFINITION PARAMETER WHICH CAN POTENTIALLY VARY FOR ])%
+	%([ EACH FILE BUCKET. FOR NON-INDEXED FILES, THE BUCKET SIZE IS ])%
+	%([ ALWAYS IN TERMS OF PAGES. ])%
+
+	LITERAL	ASCIIBKTSIZE	=	1,		! USE PAGES
+		SEQBKTSIZE	=	1,		! SAME
+		RELBKTSIZE	=	1;		! SAME
+
+	%([ MACROS FOR ACCESSING BUCKET DESCRIPTOR FLAGS ])%
+
+	MACRO	BKTLOCKED (BKD)= ( .BKD [ BKDFLAGS ] AND BKDFLGLOCKED ) ISON %;
+
+	MACRO	SETBKTLOCKED (BKD) = SETFLAG ( BKD [ BKDFLAGS ] , BKDFLGLOCKED ) %;
+
+	MACRO	SETBKTUNLOCKED (BKD) = BKD [ BKDFLAGS ] = ( .BKD [ BKDFLAGS ] AND  NOT ( BKDFLGLOCKED ) ) %;
+
+	%([ MACRO TO MOVE A BUCKET DESCRIPTOR ])%
+
+	MACRO	MOVEBKTDESC (XFROM,XTO)=
+		BEGIN
+		XTO [ 0, WRD ] = .XFROM [ 0, WRD ];
+		XTO [ 1, WRD ] = .XFROM [ 1, WRD ];
+		END %;
+
+	%([ MACRO TO RETURN FILE PAGE OF A BUCKET ])%
+
+	MACRO	FILEPAGE ( BKD ) = ( .BKD [ BKDBKTNO ] ) %;
+
+	%([ MACRO TO CAUSE A BUCKET TO BE UPDATED ON DISK ])%
+
+	MACRO	UPDATEBUCKET ( BKD ) =
+	BEGIN
+		IF ( NOT DEFERREDWRITE )
+		THEN	BEGIN
+			LOCAL MEMPAGEGLOBAL;
+			%IF DBUG %THEN
+			LOOKAT ('**	BKT WRITTEN TO DISK: ', BKD [ BKDBKTNO ] );
+			%FI
+			MEMPAGEGLOBAL = (.BKD [BKDBKTADR] OR .RMSSEC ) ^ W2P;
+			$CALL (PAGOUT,	%( JFN )%	.FST [ FSTJFN ],
+					%( PAGE )%	FILEPAGE (BKD),
+					%( MEM )%	.MEMPAGEGLOBAL,
+					%( COUNT )%	 .BKD [ BKDBKTSIZE ] );
+			CLEARBFDUPD(BKD[BKDBFDADR])		!INSURE FLAG OFF
+		END
+		ELSE	SETBFDUPD(BKD[BKDBFDADR])			!DONT FORGET WHEN DEFER
+	END %;
+
+
+%([
+***********************************************************************
+*			END OF BUFFER.REQ			      *
+***********************************************************************
+])%
+
+%([
+***********************************************************************
+*								*
+*			START OF CALLS.REQ			*
+*								*
+*		THIS FILE CONTAINS ALL MACROS  USED		*
+*		FOR SUBROUTINE CALLING CONVENTIONS.		*
+*		CURRENTLY, THERE ARE 2 TYPES OF			*
+*		MACROS DEFINED HEREIN:				*
+*								*
+*			1 ) ACTUAL SUBROUTINE CALLS		*
+*			2 ) STANDARD ARGUMENT MACROS		*
+*								*
+***********************************************************************
+
+AUTHOR: S. BLOUNT
+
+])%
+
+
+%([
+***********************************************************************
+*			STANDARD ARGUMENT MACROS			*
+***********************************************************************
+])%
+
+
+	%([ THESE MACROS ARE USED FOR REFERENCING THE MOST COMMON
+	   FORMS OF ARGUMENTS. OTHER TYPES OF SUBROUTINE PARAMETERS
+	   ARE DEFINED IN EACH MODULE ])%
+
+	MACRO	PCI ( NUMBR )	=	NUMBR %,
+		PCT ( PLITS )	=	PLIT( plits, %remaining ) %,
+		PCA ( PASC )	=	PLIT(PASC) %,
+		LCI ( LOCNAM )	=	.LOCNAM %,
+		RLCI ( LOCNAM ) =	LOCNAM %,
+		BPT ( BASNAM )	=	.BASNAM %,
+		LPT ( LOCNM2 )	=	.LOCNM2 %,
+		GCA ( GLBNAM )	=	GLBNAM %,
+		GPT ( GLBNM3 )	=	.GLBNM3 %,
+		GCT ( GLBNM3 )	=	GLBNM3 %,
+		GCI ( GLBNM2 )	=	.GLBNM2 %,
+		RGCI ( GLBNAM ) =	GLBNAM %,
+		VCI ( VALNAM )	=	.VALNAM %,
+		RCI ( REFNAM ) =	.REFNAM %,
+		LCT ( LOCNM3 ) =	LOCNM3 %;
+
+! ARGUMENT DEFINITION MACROS
+! (VESTIGE OF DPSS)
+!
+MACRO ARGUMENT ( NAM, DEF, VEC ) = %NAME( DEF, 'ARG')(NAM,VEC) %;
+
+MACRO VALUEARG(NAM,VEC) = %;
+
+MACRO BASEADDARG(NAM,VEC) = %;
+
+MACRO REFERENCEARG(NAM,VEC) =
+	BIND TTT = .NAM;
+	UNDECLARE NAM;
+	BIND NAM = TTT;
+	UNDECLARE TTT %;
+
+MACRO IMMEDIATEARG(NAM,VEC) = %;
+
+MACRO CHECKEXACTCOUNT=%;	!USED TO BE FOR DPSS, RETAINED FOR DOC PURPOSES
+
+!LINKAGE FOR CALL OF MACRO SUBROUTINE
+!
+LINKAGE MACROSUB=
+	PUSHJ:
+		LINKAGE_REGS(15,13,1)
+		PRESERVE(6,7,8,9,10,11,12)
+		NOPRESERVE(0,2,3,4,5,14);
+
+!LINKAGE FOR CALL OF ROUTINE THAT DOESNT RETURN
+!
+LINKAGE EXITSUB=
+	PUSHJ:
+		LINKAGE_REGS(15,13,0)
+		PRESERVE(1,2,3,4,5,6,7,8,9,10,11,12,14);
+
+! ***	CALL MACROS	***
+
+! ORDINARY BLISS TO BLISS CALLS (ANY NUMBER OF ARGS)
+!
+MACRO $CALL(FN)=
+BEGIN
+	EXTERNAL ROUTINE FN;
+	FN(%REMAINING)
+END %;
+
+! CALL TO OS ROUTINE THAT WONT RETURN IF THERE IS MONITOR ERROR
+!
+MACRO $CALLOS(CODE$,CALL$)=			!USE OS, BUT RET SPEC CODE IF CALL FAILS
+BEGIN
+	EXTERNAL USTOSF;
+	USTOSF=CODE$;			!PROVIDE FAILURE STATUS CODE
+	CALL$;				!DO THE CALL
+	USTOSF=ZERO;			!RETURNED, SO CLEAR SUGG
+END %;
+
+! CALL TO MACRO SUBROUTINE
+!
+MACRO $CALLM(FN)=			!CALL MACRO SUBROUTINE
+BEGIN					!PRESERVES ONLY 10-12
+	EXTERNAL ROUTINE FN:MACROSUB;
+	FN(%REMAINING)
+END %;
+
+! CALL TO "ROUTINE" THAT DOESNT RETURN
+!
+!	USRRET, OABORT, MAPCODES, MONERR, FOPERR ARE ONLY ONES ???
+!
+MACRO $EXIT(FN)=			!CALL MACRO SUBROUTINE
+BEGIN					!SAY PRESERVES ALL BECAUSE DOESNT RET
+	EXTERNAL ROUTINE FN:EXITSUB;
+	FN(%REMAINING)
+END %;
+
+! OLD CALL MACROS -- VESTIGE OF BLISS-10
+!
+MACRO	CALL0	(FN)	=
+BEGIN
+	EXTERNAL ROUTINE
+	    FN;
+	FN()
+END %;
+
+MACRO	CALL1	(FN,ARG1)	=
+BEGIN
+	EXTERNAL ROUTINE
+	    FN;
+	FN(ARG1)
+END %;
+
+MACRO	CALL2	(FN,ARG1,ARG2)	=
+BEGIN
+	EXTERNAL ROUTINE
+	    FN;
+	FN(ARG1,ARG2)
+END %;
+
+MACRO	CALL3	(FN,ARG1,ARG2,ARG3)	=
+BEGIN
+	EXTERNAL ROUTINE
+	    FN;
+	FN(ARG1,ARG2,ARG3)
+END %;
+
+MACRO	CALL4	(FN,ARG1,ARG2,ARG3,ARG4)	=
+BEGIN
+	EXTERNAL ROUTINE
+	    FN;
+	FN(ARG1,ARG2,ARG3,ARG4)
+END %;
+
+MACRO	CALL5	(FN,ARG1,ARG2,ARG3,ARG4,ARG5)	=
+BEGIN
+	EXTERNAL ROUTINE
+	    FN;
+	FN(ARG1,ARG2,ARG3,ARG4,ARG5)
+END %;
+
+MACRO	CALL6	(FN,ARG1,ARG2,ARG3,ARG4,ARG5,ARG6)	=
+BEGIN
+	EXTERNAL ROUTINE
+	    FN;
+	FN(ARG1,ARG2,ARG3,ARG4,ARG5,ARG6)
+END %;
+
+MACRO	CALL7	(FN,ARG1,ARG2,ARG3,ARG4,ARG5,ARG6,ARG7)	=
+BEGIN
+	EXTERNAL ROUTINE
+	    FN;
+	FN(ARG1,ARG2,ARG3,ARG4,ARG5,ARG6,ARG7)
+END %;
+
+
+! ***** RUNTIME CALL MACROS
+
+MACRO	CALLN	(FN,LST,CNT)  =
+	LST = (-CNT)^18;
+	AP=((LST)+1);
+	FN()
+ %;
+
+
+
+MACRO
+	CALLADJEOF ( X )	= CALL1 ( ADJEOF, X ) %,
+	CALLCHECKRP		= CALL0 ( CHECKRP ) %,
+	CALLDCNTRAB		= CALL0 ( DCNTRAB ) %,
+	CALLDELSQR		= CALL0 ( DELSQR ) %,
+	CALLDOEOF 		= CALL0 ( DOEOF ) %,
+	CALLDOOPEN		= CALL0 ( DOOPEN ) %,
+	CALLDOGETASCII		= CALL0 ( DOGETASCII ) %,
+	CALLDOGETREL		= CALL0 ( DOGETREL ) %,
+	CALLDOGETSEQ		= CALL0 ( DOGETSEQ ) %,
+	CALLDUMP	(A,B)	= CALL2 ( DUMP,  A,  B) %,
+	CALLFERROR		= CALL0 (FERROR) %,
+	CALLFILEQ	( A,B )	= CALL2 (FILEQ,  A,  B) %,
+	CALLFINDASC		= CALL0 ( FINDASC ) %,
+	CALLFINDREL		= CALL0 ( FINDREL ) %,
+	CALLFINDSEQ		= CALL0 ( FINDSEQ ) %,
+	CALLFPROBLEM ( FJFN, TEXTADR, FILEAD) = CALL3 ( FPROBLEM,  FJFN,TEXTADR,FILEAD) %,
+	CALLFSETUP		= CALL0 ( FSETUP ) %,
+	CALLGETASCII	( YESNO )= CALL1 ( GETASCII,  YESNO ) %,
+	CALLGETBUF (A,B,C,D,E,F)  = CALL6 (GETBUF,A,B,C,D,E,F) %,
+	CALLGETREC		= CALL0 ( GETREC ) %,
+	CALLGETLSN		= CALL0 ( GETLSN) %,
+	CALLGETWINDOW ( A , B ) = CALL2 ( GETWINDOW , A , B ) %,
+	CALLGMEM	( A )	= CALL1 ( GMEM,  A ) %,
+	CALLGPAGE	( A )	= CALL1 ( GPAGE,  A ) %,
+	CALLGTBYTE	( A,B )	= CALL2 ( GTBYTE,  A,  B ) %,
+	CALLLOCKIT	( A, B, C, D, E ) = CALL5 ( LOCKIT,  A,  B,  C,  D, E ) %,
+	CALLMAPCODES (A, B, C)	= CALL3 ( MAPCODES, A, B, C) %,
+	CALLMOVEREC	( A,B,C,D,E)	= CALL5 ( MOVEREC,A,B,C,D,E) %,
+!****	CALLMOVESTRING ( A, B, C, D )	= CALL4 ( MOVESTRING,  A, 0, B, 0, C, 0, D )$,
+	CALLNOSPAN	( A )	= CALL1 ( NOSPAN,  A ) %,
+	CALLNUMBERTORFA ( RRN ) = CALL1 ( NUMBERTORFA,  RRN ) %,
+	CALLOABORT	( A, B )	=  CALL2 (OABORT,  A,  B ) %,
+	CALLOFILE ( BITS )	= CALL1 ( OFILE,  BITS ) %,
+	CALLPADBUFFER		= CALL0 ( PADBUFFER ) %,
+	CALLPMEM	( A, B)	= CALL2 ( PMEM,  A,  B) %,
+	CALLPPAGE	( A, B, C)	= CALL3 ( PPAGE,  A,  B,  C ) %,
+	CALLPUTASCII		= CALL0 ( PUTASCII ) %,
+	CALLPUTLSN		= CALL0 ( PUTLSN ) %,
+	CALLPUTREC		= CALL0 ( PUTREC ) %,
+	CALLPUTREL		= CALL0 ( PUTREL ) %,
+	CALLPUTSQR		= CALL0 ( PUTSQR ) %,
+	CALLREADBUFFER		= CALL0 ( READBUFFER ) %,
+	CALLRSETUP ( ACCESS )	= CALL1 ( RSETUP,  ACCESS ) %,
+	CALLSETFST		= CALL0 ( SETFST ) %,
+	CALLSETRST ( EOFBYT )	= CALL1 ( SETRST, EOFBYT ) %,
+	CALLSETPLOG	 	= CALL0 ( SETPLOG) %,
+	CALLUPDIDX		= CALL0 ( UPDIDX ) %,
+	CALLUPDSQR		= CALL0 ( UPDSQR ) %,
+	CALLWRITEBUFFER		= CALL0 ( WRITEBUFFER ) %,
+	CALLPUTBUF (B,C,D,E)  = CALL4 (PUTBUF,B,C,D,E) %;
+
+
+	%([ ROUTINES USED ONLY IN UNIT-TEST PACKAGES ])%
+MACRO	CALLOPENFILE ( FILENAME ) = CALL1 ( OPENFILE, FILENAME ) %,
+	CALLSETUPBLOCKS		= CALL0 ( SETUPBLOCKS ) %;
+
+
+
+%([
+*********		END OF CALLS.REQ		*************
+])%
+
+%([
+*****************************************************************
+*								*
+*			START OF EXTEND.BLI			*
+*								*
+*								*
+*			CONTENTS:				*
+*								*
+*		1.  MACROS FOR USE IN "EXTEND" INSTRUCTION	*
+*
+*****************************************************************
+
+AUTHOR: S. BLOUNT
+
+])%
+
+%([
+*****************************************************************
+*		VARIOUS FLAG VALUES				*
+*****************************************************************
+])%
+
+
+	LITERAL	SFLG	=	BITN ( 18 ),		! SIGNIFICANCE
+		ABR	=	BITN ( 20 );		! ABORT FLAG
+
+
+%([
+*****************************************************************
+*		EXTEND OP-CODE VALUES				*
+*****************************************************************
+])%
+
+
+	LITERAL	CMPSLE	=	%O'3',			! COMPARE STRING, SKIP ON LEQ
+		CVTBDO	=	%O'12',			! BINARY TO DECIMAL
+		CVTDBO	=	%O'10',			! DECIMAL TO BINARY
+		MOVST	=	%O'15',			! MOVE STRING TRANSLATED
+		MOVSO	=	%O'14',			! MOVE STRING OFFSET
+		MOVSLJ	=	%O'16',			! MOVE STRING, LEFT-JUSTIFIED
+		XBLT	=	%O'20';			! EXTENDED BLT
+
+
+
+
+%([
+*****************************************************************
+*		DEFINITIONS FOR AC'S USED IN EXTEND			*
+*****************************************************************
+])%
+
+
+	LITERAL	ACFROMSIZE	=	0,	! SOURCE SIZE
+		ACFROMADR	=	1,	! SOURCE ADDRESS
+		ACTOSIZE	=	3,	! DEST SIZE
+		ACTOADR		=	4;	! DEST ADDRESS
+
+
+%([
+*****************************************************************
+*		BINARY-TO-DECIMAL CONVERSION			*
+*****************************************************************
+])%
+
+
+	MACRO	XIREGS=
+		REGISTER
+			R1 = 5,
+			R2 = 6,
+			R3 = 7,
+			R4 = 8,
+			R5 = 9 %;
+
+	MACRO XIREGS_EA=	!For Extended addressing, 2-word BPs
+		REGISTER
+			R1 = 5,
+			R2 = 6,
+			R3 = 7,
+			R4 = 8,
+			R5 = 9,
+			R6 = 10 %;
+
+	MACRO	BINARYTODECIMAL ( NUMBR, DEST, SIZE ) =
+
+		BEGIN
+		XIREGS;
+		BIND EXTENDBLOCK = PLIT (	CVTBDO ^ 27 + CHAR0,
+						CHAR0,
+						ZERO )	:VECTOR;
+		R1 = ZERO;			! CLEAR TOP HALF OF NUMBER
+		R2  = NUMBR;		! FETCH LOWER HALF OF NUMBER
+		R4 = SIZE + ( SFLG ^ 18 );			! SET SIGNIFICANCE
+		R5 = DEST;			! STRING POINTER
+		IF  EXTEND ( R1, EXTENDBLOCK )
+			THEN	TRUE
+			ELSE	FALSE
+		END %;
+
+
+
+	MACRO	MOVEASCIIRECORD ( FROMADR, TOADR, FROMSIZE, TOSIZE ) =
+			BEGIN
+			XIREGS;
+			EXTERNAL
+			    TABLE1;		! [**3**] ADD EXTERNAL DECLARATION
+			LOCAL
+			    VAL,
+			    EXTENDBLOCK:	VECTOR[ 3 ];
+			MAP
+			    EXTENDBLOCK:	FORMAT;
+			EXTENDBLOCK [ 0, WRD ] = ( MOVST ^ 27 ) + TABLE1;
+			EXTENDBLOCK [ 1, WRD ] = ZERO;
+			EXTENDBLOCK [ 2, WRD ] = ZERO;
+			R1 = .FROMSIZE;
+			R2 = .FROMADR;
+			R3 = .ZERO;
+			R4 = .TOSIZE;
+			R5 = .TOADR;
+			VAL = EXTEND ( R1, EXTENDBLOCK );
+			FROMADR = .R2;		! RETURN VALUES
+			TOADR = .R5;
+			FROMSIZE = .R1;
+			TOSIZE = .R4;
+			.VAL
+			END %;
+
+	MACRO	MOVEASCIIRECORD_EA ( FROMADR, TOADR, FROMSIZE, TOSIZE ) =
+			BEGIN
+			XIREGS_EA;
+			EXTERNAL
+			    TABLE1;		! [**3**] ADD EXTERNAL DECLARATION
+			LOCAL
+			    VAL,
+			    EXTENDBLOCK:	VECTOR[ 3 ];
+			MAP
+			    EXTENDBLOCK:	FORMAT;
+			EXTENDBLOCK [ 0, WRD ] = ( MOVST ^ 27 ) + TABLE1;
+			EXTENDBLOCK [ 1, WRD ] = ZERO;
+			EXTENDBLOCK [ 2, WRD ] = ZERO;
+			R1 = .FROMSIZE;
+			R2 = .FROMADR[0];
+			R3 = .FROMADR[1];
+			R4 = .TOSIZE;
+			R5 = .TOADR[0];
+			R6 = .TOADR[1];
+			VAL = EXTEND ( R1, EXTENDBLOCK );
+			FROMADR[0] = .R2;		! RETURN VALUES
+			FROMADR[1] = .R3;
+			TOADR[0] = .R5;
+			TOADR[1] = .R6;
+			FROMSIZE = .R1;
+			TOSIZE = .R4;
+			.VAL
+			END %;
+
+%([
+*****************************************************************
+*		DECIMAL-TO-BINARY CONVERSION			*
+*****************************************************************
+])%
+
+
+	MACRO	DECIMALTOBINARY ( SOURCE, ARGSIZE,RESULT ) =
+			BEGIN
+			XIREGS;
+			LOCAL VAL;
+			BIND EXTENDBLOCK = PLIT (	CVTDBO ^ 27 + ( -CHAR0 AND %O'777777' ),
+							ZERO,
+							ZERO )	:VECTOR;
+			R1 = ARGSIZE;
+			R2 = SOURCE;
+			R3 = ZERO;
+			R4 = ZERO;
+			R5 = ZERO;
+			VAL = EXTEND ( R1, EXTENDBLOCK );
+			RESULT = .R5;
+			.VAL
+			END %;
+
+
+
+
+%([
+*****************************************************************
+*		COMPARE STRING INSTRUCTIONS				*
+*****************************************************************
+])%
+
+	%([ # OF AC'S TO USE FOR EXTEND INSTRUCTION ])%
+
+	LITERAL	EXTENDACNUM	=	5;
+
+	%([ MACRO TO COMPARE TWO STRINGS, SKIP ON LEQ ])%
+
+	MACRO	CSTRINGLE ( SRCADR, DESTADR, SRCSIZE, DESTSIZE )=
+		BEGIN
+		XIREGS;
+		LOCAL
+			VAL;
+		BIND CSBLOCK	= PLIT (	CMPSLE ^ 27,
+							0,
+							0 )	:VECTOR;
+		R1 = .SRCSIZE;				! SET UP AC'S
+		R2 = .SRCADR;
+		R4  = .DESTSIZE;
+		R5  = .DESTADR;
+		VAL = EXTEND ( R1, CSBLOCK );
+		DESTADR = .R5;		! RETURN ADDR AT WHICH COMPARISON STOPPED
+		SRCADR = .R2;
+		.VAL
+		END %;
+
+
+
+%([
+*****************************************************************
+*		MOVE-STRING WITH JUSTIFICATION			*
+*****************************************************************
+])%
+
+
+	LITERAL	MOVELEFTACSIZE	=	5,		! NUMBER OF AC'S
+		EXTBLKSIZE	=	3;		! SIZE OF EXTEND BLOCK
+
+
+	MACRO	MOVELEFT (  FROMADR, TOADR, FROMSIZE, TOSIZE ) =
+		BEGIN
+		XIREGS;
+		LOCAL VAL;
+		BIND EXTENDBLOCK = PLIT (	MOVSLJ ^ 27,
+						ZERO,
+						ZERO );	
+		R1 = .FROMSIZE;			! SOURCE STRING SIZE
+		R2 = .FROMADR;			! SOURCE POINTER
+		R4 = .TOSIZE;			! DESTINATION SIZE
+		R5 = .TOADR;			! DESTINATION PINTER
+		VAL =   EXTEND ( R1, EXTENDBLOCK );
+
+		FROMSIZE = .R1;		! RETURN VALUES
+		FROMADR = .R2;
+		TOSIZE = .R4;
+		TOADR = .R5;
+
+		.VAL
+		END %;
+
+	MACRO	MOVELEFT_EA (  FROMADR, TOADR, FROMSIZE, TOSIZE ) =
+		BEGIN
+		XIREGS_EA;
+		LOCAL VAL;
+		BIND EXTENDBLOCK = PLIT (	MOVSLJ ^ 27,
+						ZERO,
+						ZERO );	
+		R1 = .FROMSIZE;			! SOURCE STRING SIZE
+		R2 = .FROMADR[0];			! SOURCE POINTER
+		R3 = .FROMADR[1];
+		R4 = .TOSIZE;			! DESTINATION SIZE
+		R5 = .TOADR[0];			! DESTINATION PINTER
+		R6 = .TOADR[1];
+		VAL =   EXTEND ( R1, EXTENDBLOCK );
+
+		FROMSIZE = .R1;		! RETURN VALUES
+		FROMADR[0] = .R2;
+		FROMADR[1] = .R3;
+		TOSIZE = .R4;
+		TOADR[0] = .R5;
+		TOADR[1] = .R6;
+
+		.VAL
+		END %;
+
+! XCOPY - Copy a block of words, possibly between sections.
+!	Do not call unless running in a non-zero section.
+
+	MACRO	XCOPY	(  FROMADR, TOADR, SIZE ) =
+		BEGIN
+			BIND EXTENDBLOCK = PLIT (  XBLT ^ 27 );
+			REGISTER
+				TMPAC1 = 5,
+				TMPAC2 = 6,
+				TMPAC3 = 7;
+			TMPAC1 = SIZE;
+			TMPAC2 = FROMADR;
+			TMPAC3 = TOADR;
+			IF .TMPAC2<LH> IS ZERO
+				THEN TMPAC2 = .TMPAC2 OR .RMSSEC;
+			IF .TMPAC3<LH> IS ZERO
+				THEN TMPAC3 = .TMPAC3 OR .RMSSEC;
+			EXTEND (TMPAC1, EXTENDBLOCK)
+		END %;
+
+%([
+*****************************************************************
+*			END OF EXTEND.BLI			*
+*****************************************************************
+])%
+
+%([
+********************************************************************
+*			START OF F/R/X AB.BLI			   *
+*								   *
+*			CONTENTS:				   *
+*								   *
+*		1.	SUPPORT INFO FOR USER ARG BLKS		*
+*								   *
+********************************************************************
+
+AUTHOR: S. BLOUNT
+
+])%
+
+	%([ MACROS USED TO ACCESS FAB FIELDS ])%
+
+	MACRO	DEFERREDWRITE	=	( .FST [ FSTFOP ] AND FOPDFW ) ISON %;
+
+
+	%([ MACROS USED TO ACCESS RAB FIELDS ])%
+
+		%([ MACROS FOR MODES OF REFERENCE ])%
+	MACRO	MOVEMODE = ( .RAB [ RABROP ] AND ROPLOC ) IS OFF %,
+		LOCATEMODE = ( .RAB [ RABROP ] AND ROPLOC ) ISON %;
+
+		%([ MACROS FOR RECORD-OPTIONS ( ROP ) ])%
+	MACRO	APPENDOPTION = ( .RAB [ RABROP ] AND ROPEOF ) %,
+		READAHEAD	= ( .RAB [ RABROP ] AND ROPRAH ) ISON %,
+		WRITEBEHIND	= ( .RAB [ RABROP ] AND ROPWBH ) ISON %;
+
+		%( MACROS FOR ADDRESSING-MODES )%
+	MACRO	RECORDACCESS	= .RAB [ RABRAC ] %,
+		SEQADR	= .RAB [ RABRAC ] IS RACSEQ %,
+		KEYADR	= .RAB [ RABRAC ] IS RACKEY %,
+		RFAADR	= .RAB [ RABRAC ] IS RACRFA %;
+
+%([
+***********************************************************************
+*			FORMAT OF KEY SEGMENT DESCRIPTORS	    *
+***********************************************************************
+])%
+
+
+
+	%([ STRUCTURE OF EACH KEY SEGMENT DESCRIPTOR ])%
+
+	%([ *THE KEY SEGMENT DESCRIPTOR FIELDS ARE NOT NAMED LIKE OTHER
+	   FIELDS IN THE XAB. THIS IS BECAUSE THE KEY SEGMENT
+	   DESCRIPTORS EXIST IN SEVERAL BLOCKS (XAB,IDB,KDB),
+	   AND THEY ARE USUALLY PROCESSED SEPARATELY INSTEAD
+	   OF BEING ACCESSED DIRECTLY FROM THE BLOCK. THUS, THESE
+	   FIELDS HAVE A GENERIC NAME NOT ASSOCIATED WITH ANY
+	   DATA STRUCTURE ])%
+
+	MACRO	KEYPOS		=	LH %,			! POSITION
+		KEYSIZ		=	RH %;			! KEY SIZE
+
+
+%([
+***********************************************************************
+*			VALUES FOR KEY XAB FIELDS		   	*
+***********************************************************************
+])%
+
+
+
+	%([ BYTE SIZES FOR EACH DATA-TYPE ])%
+
+	LITERAL	STRINGBYTESIZE	=	7,		! STRING
+		EBCDICBYTESIZE	=	9,		! EBCDIC
+		SIXBITBYTESIZE	=	6;		! SIXBIT KEYS
+
+
+
+	%([ KEY OF REFERENCE SYMBOL VALUES ])%
+
+	LITERAL	REFPRIMARY	=	0;		! PRIMARY KEY
+
+	%([ SIZE OF THE KEY-NAME STRING IN WORDS (30 BYTES) ])%
+
+	LITERAL	KEYNAMESIZE	=	7;		! 7 WORDS
+
+%([
+***********************************************************************
+*			STRUCTURE OF DATA-TYPE DESCRIPTOR TABLE	    *
+***********************************************************************
+])%
+
+
+	%([ STRUCTURE OF DATA-TYPE DESCRIPTOR TABLE ])%
+
+	MACRO	DTPBYTESIZE	=	RH %;		! ONLY ONE FIELD SO FAR
+
+%([****************	END OF -AB.REQ	*****************])%
+
+%([
+********************************************************
+*							*
+*		START OF FILES.REQ			*
+*							*
+*		CONTENTS:				*
+*							*
+*		1. BLOCK-TYPE DEFINITIONS		*
+*		2. BLOCK FORMAT DEFINITIONS		*
+*		3. RECORD FORMAT DEFINITIONS		*
+*							*
+*********************************************************
+
+AUTHOR: S. BLOUNT
+
+])%
+
+
+%([	EACH RMS-20 FILE BEGINS WITH A "FILE PROLOGUE BLOCK" WHICH
+	CONTAINS ALL INFORMATION (SUCH AS FILE ORGANIZATION, RECORD
+	FORMAT, ETC.) THAT IS COMMON TO ALL TYPES OF RMS-20 FILES.
+	THIS BLOCK IS CREATED WHEN A $CREATE IS ISSUED, AND IS
+	READ IN AND PROCESSED WHEN THE FILE IS OPENED.
+
+	FOR SEQUENTIAL AND RELATIVE FILES, THIS BLOCK IS THE ONLY
+	ONE CONTAINED IN THE ENTIRE FILE PROLOGUE (WITH THE EXCEPTION
+	OF A 1-WORD BLOCK INDICATING THE END OF THE FILE HEADER).
+
+	FOR INDEXED AND DIRECT FILES, THERE MAY BE OTHER BLOCKS (SUCH AS THE INDEX
+	DESCRIPTOR BLOCK, AREA DESCRIPTOR BLOCK, ETC. ). THE
+	DEFINITIONS OF THESE OTHER BLOCKS ARE CONTAINED IN THE
+	FILE "XFILES.REQ".
+
+	THE GENERAL STRUCTURE OF THE FILE HEADER FOR AN RMS-20
+	FILE IS AS FOLLOWS:
+
+		!=====================================!
+		!                                     !
+		!         FILE PROLOGUE BLOCK         !
+		!                                     !
+		!                                     !
+		!-------------------------------------!
+		!          AREA DESCRIPTORS           !
+		!           (INDEXED ONLY)            !
+		!-------------------------------------!
+		!                                     !
+		!         INDEX DESCRIPTOR #0         !
+		!           (INDEXED ONLY)            !
+		!-------------------------------------!
+		!                                     !
+		!         INDEX DESCRIPTOR #1         !
+		!           (INDEXED ONLY)            !
+		!-------------------------------------!
+		!                 .                   !
+		!                 .                   !
+		!-------------------------------------!
+		!                                     !
+		!         INDEX DESCRIPTOR #N         !
+		!                                     !
+		!-------------------------------------!
+		!    END BLOCK (NON-INDEXED ONLY)     !
+		!=====================================!
+	
+	
+
+		FORMAT OF THE FILE PROLOGUE BLOCK
+		=================================
+
+		!-------------------------------------!
+		!       BID        !       BLN        !
+		!-------------------------------------!
+		!   <**>   !  RFM  ! BSZ !  BKS  !ORG !
+		!-------------------------------------!
+		!       RAT        !       MRS        !
+		!-------------------------------------!
+		!                 MRN                 !
+		!-------------------------------------!
+		!     <UNUSED>     !     NEXTBKT      !
+		!-------------------------------------!
+		! AREAS  !ADBOFFSET!  KEYS  !IDBOFFSET!
+		!-------------------------------------!
+		!             <RESERVED>              !
+		!-------------------------------------!
+		!             <RESERVED>              !
+		!-------------------------------------!
+		!             <RESERVED>              !
+		!-------------------------------------!
+		!             <RESERVED>              !
+		!-------------------------------------!
+		!             <RESERVED>              !
+		!-------------------------------------!
+		!             <RESERVED>              !
+		!-------------------------------------!
+		!             <RESERVED>              !
+		!-------------------------------------!
+
+
+
+
+	FIELDS IN THE FILE PROLOGUE BLOCK
+	=================================
+
+	FIELD		FUNCTION
+	=====		========
+
+	BID		BLOCK-ID OF THE FILE PROLOGUE BLOCK
+
+	BLN		LENGTH OF THE FILE PROLOGUE BLOCK
+
+	RFM		RECORD FORMAT
+
+	BSZ		BYTE SIZE OF FILE.
+
+	BKS		DEFAULT BUCKET SIZE FOR INDEXED FILES.
+
+	ORG		FILE ORGANIZATION.
+
+	RAT		RECORD ATTRIBUTES
+
+	MRS		MAXIMUM RECORD SIZE.
+
+	MRN		MAXIMUM RECORD NUMBER (RELATIVE FILES ONLY).
+
+	NEXTBKT		NEXT BUCKET AVAILABLE FOR ALLOCATION.
+			USED ONLY FOR INDEXED FILES, THIS FIELD CONTAINS
+			THE ABSOLUTE PAGE NUMBER OF THE NEXT BUCKET WHICH
+			CAN BE ALLOCATED FOR INDEX OR DATA RECORDS.
+
+	AREAS		NUMBER OF FILE AREAS (INDEXED ONLY).
+
+	ADBOFFSET	OFFSET INTO PROLOGUE PAGE OF FIRST AREA DESCRIPTOR BLOCK.
+
+	KEYS		NUMBER OF KEYS DEFINED FOR FILE (INDEXED ONLY).
+
+	IDBOFFSET	OFFSET INTO PROLOGUE PAGE OF FIRST INDEX DESCRIPTOR BLOCK.
+
+	<ALL OTHER FIELDS ARE RESERVED>
+
+])%
+
+
+
+
+%([
+****************************************************************
+*			BLOCK-TYPE DEFINITIONS			*
+*****************************************************************
+])%
+
+
+		%([ BLOCK-TYPE FOR RMS-20 FILE PROLOGUES ])%
+
+	LITERAL	FPBLOCK	=	%O'1757',			! FILE PROLOGUE BLOCK
+		ENDBLOCK=	%O'1777',			! END BLOCK
+		ENDBLOCKSIZE =	%O'1';			! SIZE OF END BLOCK
+
+
+
+
+
+%([
+*****************************************************************
+*			FILE-PROLOGUE BLOCK STRUCTURE		*
+*****************************************************************
+])%
+
+	%([ BLOCK AND PAGE NUMBERS OF FILE PROLOGUE TABLE ])%
+
+	LITERAL	FPTBLOCKNO	=	ZERO,		! BLOCK NUMBER OF FPT
+		FPTPAGENO	=	ZERO;		 ! PAGE NUMBER OF FPT
+
+
+		%([ SIZE OF FILE-PROLOGUE BLOCK ])%
+
+	LITERAL	FPTSIZE	=	13;			! BLOCK SIZE
+
+		%([ STRUCTURE DEFINITIONS ])%
+
+	MACRO	!BLOCKTYPE = 0,LH$,			! BLOCK-TYPE
+		!BLOCKSIZE = 0,RH$,			! BLOCK SIZE
+		! **BITS 0-12 OF WORD 1 ARE UNUSED**
+		FPTRFM = 1,18,5 %,			! RECORD FORMAT
+		FPTBSZ = 1,12,6 %,			! BYTE SIZE
+		FPTBKS = 1,4,8 %,			! BUCKET SIZE
+		FPTORG = 1,0,4 %,			! FILE ORGANIZATION
+		FPTRAT = 2,LH %,				! RECORD ATTRIBUTES
+		FPTMRS = 2,RH %,				! MAX RECORD SIZE
+		FPTMRN = 3,WRD %,			! MAS RECORD NUMBER
+		FPTNXTBKT = 4,RH %,			! NEXT BUCKET (INDEXED FILES)
+		FPTAREAS = 5,27,9 %,			! # OF FILE AREAS
+		FPTADB = 5,18,9 %,			! OFFSET TO 1ST AREA DESCRIPTOR
+		FPTKEYS = 5,9,9 %,			! # OF KEYS
+		FPTIDB = 5,0,9 %,			! OFFSET TO 1ST INDEX DESCRIPTOR
+		FPTRS1 = 6,WRD %,			! <RESERVED>
+		FPTRS2 = 7,WRD %,			! <RESERVED>
+		FPTRS3 = 8,WRD %,			! <RESERVED>
+		FPTRS4 = 9,WRD %,			! <RESERVED>
+		FPTRS5 = 10,WRD %,			! <RESERVED>
+		FPTRS6 = 11,WRD %,			! <RESERVED>
+		FPTRS7 = 12,WRD %;			! <RESERVED>
+
+
+
+
+%([
+****************************************************************
+*			RECORD FORMAT DEFINITIONS		*
+*****************************************************************
+])%
+
+%([	FORMAT OF A RECORD HEADER IN A SEQUENTIAL/RELATIVE FILE:
+
+		+-------------------------------------+
+		!FLGS!  <UNUSED>   !   RECORD SIZE    !
+		+-------------------------------------+
+
+])%
+
+		%([ STRUCTURES FOR RECORD HEADER ])%
+
+	MACRO	RHDRSIZE = 0,RH %,			! BYTE COUNT OF RECORD
+		RHDRUNDEF = 0,18,16 %;			! THIS FIELD IN CURRENTLY UNDEFINED
+
+		%([ FLAG BITS IN THE RECORD HEADER OF SEQUENTIAL/RELATIVE FILES ])%
+
+	LITERAL	RHDRVALID = BITN ( 0 ),			! VALID BIT
+		RHDRDELETE= BITN ( 1 );			! RECORD IS DELETED
+
+
+%([
+****************************************************************
+*			MISCELLANEOUS DEFINITIONS		*
+*****************************************************************
+])%
+
+	LITERAL	OFSETMASK = %O'777',			! MASK TO GET OFFSET INTO PAGE
+		HEADERSIZE = 1,				! DEFAULT HEADER SIZE FOR RECORDS
+		RMSBYTESIZE = 36,			! BYTE SIZE FOR READING FILE
+		EOPMARKER = -1,				! MARKER TO DENOTE END-OF-PAGE FOR "BLK" FILES
+		MAXLSN = 99999,				! MAX LINE-NUMBER FOR LSA FILES
+		ASCIIBYTESIZE = 7,			! BYTE SIZE FOR ASCII FILES
+		ASCIIBYTPERWORD = 36 / ASCIIBYTESIZE;	! # OF ASCII BYTES IN EACH WORD
+
+	LITERAL CH_IN_P = ASCIIBYTPERWORD * PAGESIZE,
+		WD_IN_P = PAGESIZE;
+
+
+%([
+*****************************************************************
+*		STRUCTURE OF RECORD-FILE ADDRESS ( RFA )	*
+*****************************************************************
+])%
+
+
+	%([ RFA FOR SEQUENTIAL FILES ])%
+
+	MACRO	RFAPAGE	= 0,9,18 %;			! PAGE NUMBER OF FILE PAGE
+
+%([
+****************************************************************
+*			END OF FILES.REQ			*
+*****************************************************************
+])%
+
+%([
+******************************************************************
+*			START OF FST.REQ			   *
+*								   *
+*			CONTENTS:				   *
+*								   *
+*		1.	STRUCTURES FOR FILE STATUS TABLE	   *
+*								   *
+*******************************************************************
+
+AUTHOR: S. BLOUNT
+
+])%
+
+%([	THE FILE STATUS TABLE (FST) IS THE PRIMARY INTERNAL
+	RMS-20 DATA STRUCTURE WHICH REPRESENTS ALL INFORMATION
+	OF IMPORTANCE TO THE CORRECT PROCESSING OF THE FILE.
+	THE FST CAN BE THOUGHT OF AS BEING THE "INTERNAL FAB".
+	AN FST IS ALLOCATED WHEN THE FILE IS OPENED AND DE-ALLOCATED
+	ONLY WHEN THE FILE IS CLOSED. THERE IS ONLY ONE FST PER FILE,
+	PER PROCESS, REGARDLESS OF HOW MANY RECORD STREAMS MAY BECOME
+	ACTIVE ON THE FILE.
+
+	THE FORMAT OF THE FST IS AS FOLLOWS:
+
+	+-------------------------------------+
+	!       BID        !       BLN        !
+	!-------------------------------------!
+	!      BLINK       !      FLINK       !
+	!-------------------------------------!
+	!       ADB        !       JFN        !
+	!-------------------------------------!
+	!       ORG        !     SEQBKT       !
+	!-------------------------------------!
+	!     DEVTYPE      !      FLAGS       !
+	!-------------------------------------!
+	!  FAC   !   SHR   !       RFM        !
+	!-------------------------------------!
+	!MIN!NUMBUFF!BUFF- !       MRS        !
+	!BUF!       ! SIZE !                  !
+	!-------------------------------------!
+	! LOBYTE !           UNUSED           !
+	!-------------------------------------!
+	!                 MRN                 !
+	!-------------------------------------!
+	!       KDB        !KBFSZ!    FOP     !
+	!-------------------------------------!
+	!       RAT        !       BSZ        !
+	!-------------------------------------!
+	!		DATELASTACC	      !
+	!-------------------------------------!
+	!		CREATIME	      !
+	!-------------------------------------!
+	!		SIZEOFFILE	      !
+	+-------------------------------------+
+
+
+
+
+		FIELDS WITHIN THE FILE STATUS TABLE
+		===================================
+
+	FIELD		FUNCTION
+	=====		========
+
+	BID		BLOCK ID OF AN FST
+
+	BLN		LENGTH OF AN FST
+
+	BLINK		BACKWARD LINK TO LAST RST IN CHAIN
+
+	FLINK		FORWARD LINK TO FIRST RST IN CHAIN
+
+	JFN		JFN OF FILE
+
+	ORG		ORGANIZATION OF FILE
+
+	DEVTYPE		DEVICE TYPE CODE (AS RETURNED BY MONITOR)
+
+	FLAGS		PROCESSING FLAGS:
+
+		FLGTRUNC	A $TRUNCATE WAS DONE ON THIS STREAM
+		FLGFLOCKED	FILE IS LOCKED (BY OPEN)
+		FLGUNDEF	FILE IS CURRENTLY IN UNDEFINED STATE (UNUSED)
+		FLGNEWFILE	FILE IS BEING CREATED
+		FLGILOCKED	INDEX SEARCH CAPABILITY IS LOCKED
+		FLGREO		FILE SHOULD BE RE-ORGANIZED
+
+	FAC		USER'S FAC VALUE
+
+	SHR		USER'S SHR VALUE
+
+	RFM		RECORD FORMAT (NOTE 1/2 WORD FOR SPEED)
+
+	MINBUF		MIN. NUMBER OF BUFFERS REQUIRED FOR FILE
+
+	NUMBUFF		NUMBER OF BUFFERS WHICH SHOULD BE ALLOCATED
+
+	BUFFSIZE	SIZE IN PAGES OF EACH BUFFER
+
+	MRS		MAXIMUM RECORD SIZE
+
+	LOBYTE		WORD NUMBER OF FIRST DATA WORD IN FILE (WORD AFTER HEADER)
+
+	MRN		MAXIMUM RECORD NUMBER
+
+	KDB		ADDRESS OF KEY DESCRIPTOR BLOCK (INDEXED ONLY)
+
+	KBFSIZE		SIZE IN WORDS OF KEY BUFFER REQUIRED TO HOLD LARGEST KEY
+
+	FOP		FILE OPTIONS (NOT USED)
+
+	RAT		RECORD ATTRIBUTES
+
+	BSZ		BYTE SIZE (NOTE SIZE FOR SPEED)
+])%
+
+
+
+
+
+%([
+***********************************************************************
+*			FILE STATUS TABLE STRUCTURES		      *
+***********************************************************************
+])%
+
+	%([ NOTE THAT IF THE FST, THERE ARE CERTAIN FIELDS WHICH
+	   ARE SMALLER IN SIZE THAN THE AMOUNT OF STORAGE (# OF BITS)
+	   WHICH ARE USED TO CONTAIN THEM. FOR EXAMPLE, THE BSZ
+	   FIELD IN THE FAB IS 6 BITS WIDE, BUT IS KEPT IN 18
+	   BITS IN THE FST. THIS IS BECAUSE FOR ALL BYTE ACCESSES,
+	   A LDB OPERATION AND A BYTE POINTER WORD ARE NECESSARY 	
+	   FOR EACH SUCH ACCESS. IF THE SAME DATA IS STORED IN A
+	   HALF-WORD, 1 INSTRUCTION CAN ACCESS IT AND NO BYTE
+	   POINTER IS NECESSARY. THUS, ALL COMMONLY-USED FIELDS
+	   ARE STORED IN HALF-WORDS TO SPEED UP ACCESS. ])%
+
+
+
+
+	LITERAL	FSTCODE = 3,			! BLOCK-TYPE FOR FST
+		FSTSIZE = 14;			! LENGTH OF AN FST
+
+
+	MACRO	!BLOCKTYPE = 0,LH$,		! BLOCK-TYPE CODE
+		!BLOCKLENGTH = 0,RH$,		! BLOCK-LENGTH
+		!BLINK = 1,LH$,			! BACK POINTER TO LAST RST
+		!FLINK = 1,RH$, 		! FORWARD PTR TO NEXT RST
+		FSTADB = 2,LH %,			! ADDRESS OF FILE'S AREA DESCRIPTOR
+		FSTJFN = 2,RH %,			! JFN OF FILE
+		FSTORG = 3,LH %,			! FILE ORGANIZATION
+		FSTSEQBKT = 3,RH %,		! BKT FILE IS POSIT AT
+		FSTDEVTYPE = 4,LH %,		! DEVICE-TYPE FLAGS ( FROM DVCHR )
+		FSTFLAGS = 4,RH %,		! PROCESSING FLAGS
+		FSTFAC = 5,27,9 %,		! FILE ACCESS
+		FSTSHR = 5,18,9 %,		! SHARE ACCESS
+		FSTRFM = 5,RH %,		! RECORD FORMAT
+		FSTMINBUF = 6,33,3 %,		! MIN. NO. BUFERS TO ALLOCATE
+		FSTNUMBUF = 6,24,9 %,		! NO. BUFFERS TO TRY TO ALLOCATE
+		FSTBUFSIZ = 6,18,6 %,		! SIZE OF A BUFFER (IN PAGES)
+		FSTMRS = 6,RH %,			! MAX RECORD SIZE
+		FSTLOBYTE = 7,27,9 %,		! FIRST BYTE OF RECORD DATA
+!****BITS 0-27 ARE UNUSED
+		FSTMRN = 8,WRD %,		! MAX RECORD NUMBER
+		FSTKDB = 9,LH %,			! ADDRESS OF 1ST KEY BLOCK
+		FSTKBFSIZE = 9,10,8 %,		! SIZE OF KEY BUFFER (IN WORDS)
+		FSTFOP = 9,0,10 %,		! OPTIONS USED ON OPEN
+		FSTRAT = 10,LH %,		! RECORD ATTRIBUTES
+		FSTBSZ = 10,RH %,		! FILE BYTE SIZE
+						! NON-0 ON 10 ONLY
+		FSTDLA = 11,WRD %,		! DATE FILE WAS LAST ACCESSED
+		FSTCT  = 12,WRD %,		! TIME OF CREATION OF FILE
+		FSTSOF = 13,WRD %;		! SIZE OF FILE IN WORDS
+
+
+	MACRO
+		DATELASTACC = FST [ FSTDLA ] %,
+		CREATIME = FST [ FSTCT ] %,
+		SIZEOFFILE = FST [ FSTSOF ] %;
+
+	%([ VALUES OF MINBUF FIELD FOR THE FILE ORGANIZATIONS ])%
+
+	LITERAL	MINBUFASC	= 1,		! BUFFERS FOR ASCII FILE ORGANIZATION
+		MINBUFSEQ	= 1,		! BUFFERS FOR SEQUENTIAL FILE ORGANIZATION
+		MINBUFREL	= 1,		! BUFFERS FOR RELATIVE FILE ORGANIZATION
+		MINBUFIDX	= 3;		! BUFFERS FOR INDEXED FILE ORGANIZATION
+
+	%([ VALUES OF NUMBUF FIELD FOR THE VARIOUS FILE ORGANIZATIONS ])%
+
+	LITERAL	NUMBUFASC	= 1,		! BUFFERS FOR ASCII FILE ORGANIZATIONS
+		NUMBUFSEQ	= 2,		! BUFFERS FOR SEQUENTIAL FILE ORGANIZATION
+		NUMBUFREL	= 2,		! BUFFERS FOR RELATIVE FILE ORGANIZATION
+		NUMBUFIDX	= 3 %( + MAX NO. LEVELS )%; ! BUFFERS FOR INDEXED FILE ORGANIZATION
+
+	%([ VALUES OF BUFSIZ FIELD FOR VARIOUS FILE ORGANIZATIONS ])%
+
+	LITERAL	DEFBUFSIZ	= 1;		! DEFAULT BUFFER SIZE
+
+		%([ MACROS FOR ACCESSING FILE ORGANIZATION ])%
+
+	MACRO	FILEORG = .FST [ FSTORG ] %,
+		RMSFILE = ( .FST [ FSTORG ] GTR ORGASC ) %,	! THIS IS A RMS-FILE
+		ASCIIFILE = ( .FST [ FSTORG ] IS ORGASC ) %,	! THIS IS AN ASCII-FILE
+		SEQFILE = ( .FST [ FSTORG ] IS ORGSEQ ) %,
+		RELFILE = ( .FST [ FSTORG ] IS ORGREL ) %,
+		IDXFILE = ( FILEORG IS ORGIDX ) %;
+
+		%([ MACROS FOR ACCESSING RECORD FORMATS ])%
+	MACRO	VARIABLERLENGTH	= .FST [ FSTRFM ] IS RFMVAR %,
+		FIXEDLENGTH		= ( .FST [ FSTRFM ] IS RFMFIX) %,
+		STREAM = .FST [ FSTRFM ] IS RFMSTM %,		! ASCII STREAM RECORDS
+		SEQUENCED = .FST [ FSTRFM ] IS RFMLSA %;
+
+		%([ MACROS FOR DETERMINING DEVICE-TYPE ])%
+	MACRO	DASD = ( .FST [ FSTDEVTYPE ] IS DVDSK ) %,	! DISK DEVICE
+		MTA = ( .FST [ FSTDEVTYPE ] IS DVMTA ) %,	! MAGTAPE
+		TTY = ( .FST [ FSTDEVTYPE ] IS DVTTY ) %,	! TTY DEVICE
+		QING = ( .FST [ FSTFLAGS ] AND FLGQING ) %,	! Q'ING IS DONE TO FILE
+		BLOCKED = ( .FST [ FSTRAT ] AND RATBLK ) ISON %;
+
+		%([ MACROS FOR PROCESSING-MODE ])%
+	MACRO	INPUTMODE = ( .FST [ FSTFAC ] AND AXWRT ) IS ZERO %,
+		OUTPUTMODE = ( .FST [ FSTFAC ] AND AXWRT ) NEQ ZERO %,
+		IOMODE	  = ( ( .FST [ FSTFAC ] AND ( AXGET + AXPUT ) ) IS ( AXGET + AXPUT ) ) %,
+		UPDATEMODE = ( .FST [ FSTFAC ] AND ( AXDEL + AXUPD ) ) ISON %;
+
+		%([ MACROS TO ACCESS USER/CONNCURENT ACCESS FIELDS ])%
+	MACRO	FILEACCESS	= .FST [ FSTFAC ] %,
+		SHAREACCESS	= .FST [ FSTSHR ] %;
+
+
+	%([ FLAGS USED IN FST FLAG WORD ])%
+	%([ ***NOTE THAT BIT 35 IS UNUSED*** ])%
+	LITERAL	FLGLOCKING =	BITN ( 34 ),	! RECORDS ARE BEING LOCKED
+		FLGFLOCKED =	BITN ( 33 ),	! FILE IS LOCKED
+		FLGUNDEF =	BITN ( 32 ),	! FILE IS IN UNDEFINED STATE
+		FLGNEWFILE =	BITN ( 31 ),	! THIS IS A NEW FILE
+		FLGILOCKED =	BITN ( 29 ),	! INDEX STRUCTURE IS LOCKED
+		FLGREO	=	BITN ( 28 );	! FILE SHOULD BE RE-ORGANIZED
+
+
+
+	%([ MACROS USED TO ACCESS FST FLAGS ])%
+
+	MACRO	FILELOCKED	=	( .FST [ FSTFLAGS ] AND FLGFLOCKED ) ISON %,
+		LOCKING		=	( .FST [ FSTFLAGS ] AND FLGLOCKING ) ISON %,
+		NEWFILE		=	( .FST [ FSTFLAGS ] AND FLGNEWFILE ) ISON %,
+		INDEXLOCKED	=	( .FST [ FSTFLAGS ] AND FLGILOCKED ) ISON %;
+
+
+
+
+
+%([****************	END OF FST.REQ	*****************])%
+
+%([
+******************************************************************
+*			START OF HEADER.REQ			   *
+*								   *
+*			CONTENTS:				   *
+*								   *
+*		1.	STRUCTURE OF BLOCK HEADER		   *
+*								   *
+*******************************************************************
+
+AUTHOR: S. BLOUNT
+
+])%
+
+
+	%([ ALL INTERNAL DATA STRUCTURES WITHIN RMS-20 HAVE
+	   BASICALLY THE SAME FORMAT: A FIXED-LENGTH BLOCK
+	   HEADER FOLLOWED BY A VARIABLE-LENGTH AREA WHICH
+	   IS UNIQUE TO EACH BLOCK.  THE FIELDS WITHIN THE
+	   THE BLOCK HEADER ARE NAMED IDENTICALLY FOR ALL
+	   BLOCKS.  THE FIELDS WHICH ARE SPECIFIC TO EACH
+	   BLOCK ARE NAMED BY A 3-CHARACTER BLOCK NAME CODE
+	   FOLLOWED BY A FIELD-NAME ( E.G., "FABORG" DENOTES
+	   THE ORG FIELD OF THE FAB ).
+
+	   THE FIELDS WHICH COMPRISE THE FIXED-LENGTH HEADER
+	   ARE ARE FOLLOWS:
+
+		BLOCKTYPE		CODE WHICH IDENTIFIES THE BLOCK
+
+		BLOCKLENGTH		SIZE IN WORDS OF BLOCK
+
+		BLINK			BACKWARDS LINK ( RST AND FST )
+
+		FLINK			FORWARDS LINK ( RST AND FST )
+
+		STATUS			USER STATUS CODE ( FAB AND RAB )
+
+		STATUSVALUE		USER STATUS-VALUE CODE ( FAB AND RAB )
+
+
+])%
+
+!** [10] Add space fix to macros, JMT, 28-Feb-78
+%([10])%	MACRO	BLOCKTYPE = $$OPS(BID) %,		! BLOCK-TYPE CODE
+%([10])%		BLOCKLENGTH = $$OPS(BLN) %,		! LENGTH OF BLOCK
+%([10])%		STATUS = $$OPS(STS) %,		! STATUS CODE
+%([10])%		STATUSVALUE = $$OPS(STV) %,		! ADDITIONAL STATUS INFO
+		BLINK = 1,LH %,			! BACK LINK TO LAST BLOCK ON CHAIN
+		FLINK = 1,RH %;			! FORWARD LINK ON CHAIN
+
+	%([ MISCELLANEOUS VALUES AND MACROS FOR THE BLOCK HEADER ])%
+
+	MACRO	BLOCKHEADER = 0,WRD %;		! THE ENTIRE HEADER WORD
+
+	LITERAL	BLKTYPELSH  = 18;		! SHIFTING CONSTANT FOR BLOCK-TYPE
+
+
+	%([ MACROS TO LINK AND REMOVE A BLOCK (RST) FROM
+	   A CHAIN OF OTHER BLOCKS ])%
+
+	MACRO	LINK ( NEWBLOCK, OLDBLOCK )=
+		BEGIN
+		REGISTER
+		    TEMPADR:	POINTER;
+		TEMPADR = .OLDBLOCK [ BLINK ];		! GET BACK LINK
+		OLDBLOCK [ BLINK ] = .NEWBLOCK;		! POINT BACK TO THIS ONE
+		NEWBLOCK [ FLINK ] = .OLDBLOCK;
+		TEMPADR [ FLINK ] = .NEWBLOCK;		! POINT TO THIS ONE
+		NEWBLOCK [ BLINK ] = .TEMPADR
+		END %;
+
+	%([ MACRO TO REMOVE A BLOCK FROM A CHAIN ])%
+
+	MACRO	DELINK ( THISBLOCK )=
+		BEGIN
+		REGISTER
+		    TEMPADR1:	POINTER,
+		    TEMPADR2:	POINTER;
+		TEMPADR1 = .THISBLOCK [ BLINK ];	! GET BACK LINK
+		TEMPADR2 = .THISBLOCK [ FLINK ];	! AND FORWARD LINK
+		TEMPADR1 [ FLINK ] = .TEMPADR2;		! RELINK CHAIN
+		TEMPADR2 [ BLINK ] = .TEMPADR1
+		END %;
+
+
+%([ **********	END OF HEADER.REQ	************* ])%
+
+%([
+***********************************************************************
+*			INSTRUC.REQ				     *
+*									*
+*		1. MACHOPS AND OTHER MACHINE-LEVEL SYMBOLS		*
+*************************************************************************
+])%
+
+	MACRO
+	    Z[] = MACHOP(%O'0', %REMAINING) %,
+	    SUB[] = MACHOP(%O'274', %REMAINING) %,
+	    SKIPE[] = MACHOP(%O'332', %REMAINING) %,
+	    TLC[] = MACHOP(%O'641', %REMAINING) %,
+	    LSH[] = MACHOP(%O'242', %REMAINING) %,
+	    JUMPL[] = MACHOP(%O'321', %REMAINING) %,
+	    CAI[] = MACHOP(%O'300', %REMAINING) %,
+	    JSP[] = MACHOP(%O'265', %REMAINING) %,
+	    Blt[]  =  Machop(%o'251', %Remaining) %,
+	    Jrst[] = Machop(%o'254', %Remaining) %,
+	    MOVE[] = MACHOP ( %O'200', %REMAINING ) %,
+	    MOVEM[] = MACHOP ( %O'202', %REMAINING ) %,
+	    SOJG [] = MACHOP ( %O'377', %REMAINING ) %,
+	    MOVEI[] = MACHOP(%O'201', %REMAINING) %,
+	    Ldb[] = Machop (%o'135',%remaining ) %,
+	    ILDB[] = MACHOP (%O'134', %REMAINING) %,
+	    IDPB[] = MACHOP (%O'136', %REMAINING) %,
+	    ADJBP[] = MACHOP(%O'133', %REMAINING) %,
+	    HRL[] = MACHOP(%O'504', %REMAINING) %,
+	    AOJ[] = MACHOP(%O'340', %REMAINING) %,
+	    HLRE[] = MACHOP(%O'574', %REMAINING) %,
+	    IDIVI[] = MACHOP(%O'231', %REMAINING) %,
+	    IDIV[] = MACHOP(%O'230', %REMAINING) %,
+	    PUSHJ[] = MACHOP(%O'260', %REMAINING) %,
+	    DMOVE[] = MACHOP(%O'120', %REMAINING) %,
+	    DMOVEM[] = MACHOP(%O'124', %REMAINING) %,
+	    FIXOP[] = MACHOP(%O'122', %REMAINING) %,
+	    SETZB[] = MACHOP(%O'403', %REMAINING) %,
+	    JUMP[] = MACHOP(%O'320', %REMAINING) %,
+	    AOS[] = MACHOP(%O'350', %REMAINING) %,
+
+	    EXTEND[] = MACHSKIP(%O'123', %REMAINING) %;
+
+%([
+******************************************************************
+*			START OF KDB.REQ			   *
+*								   *
+*			CONTENTS:				   *
+*								   *
+*		1. STRUCTURE OF KEY DESCRIPTOR BLOCK		   *
+	
+*								   *
+*******************************************************************
+
+AUTHOR: S. BLOUNT
+
+])%
+
+	%([ THIS FILE CONTAINS ALL THE STRUCTURES AND DEFINITIONS
+	   FOR THE KEY DESCRIPTOR BLOCKS USED TO PROCESS AN
+	   INDEXED FILE. THESE BLOCKS (CALLED KDB'S) ARE CREATED
+	   IN FREE CORE WHEN AN INDEXED FILE IS INITIALLY OPENED
+	   OR CREATED.  EACH KDB CONTAINS A SUMMARY OF THE INFORMATION
+	   ABOUT THE INDEX CHARACTERISTICS WHICH IS KEPT IN THE
+	   FILE PROLOGUE.  SUCH CHARACTERISTICS AS THE KEY-NAME
+	   AND THE FIRST DATA BUCKET NUMBER ARE NOT MAINTAINED
+	   IN CORE BECAUSE THEY ARE SO SELDOM NEEDED.  THERE ARE
+	   ALSO SOME FIELDS IN THE KDB ( E.G., DATA RECORD HEADER
+	   SIZE) WHICH ARE COMPUTED DYNAMICALLY WHEN THE KDB IS
+	   INITIALLY CREATED.
+
+	   THE KDB'S ARE LINKED TOGETHER AND THE FIRST ONE (I.E.
+	   THE KDB FOR THE PRIMARY KEY) IS POINTED TO BY A FIELD
+	   IN THE FILE-STATUS TABLE. THE LINK OF THE LAST KDB IS
+	   NUL TO INDICATE THE END OF THE CHAIN.
+
+	   THE KDB'S REMAIN IN FREE CORE FOR THE DURATION OF THE
+	   PROCESSING OF THE FILE. THEY ARE FLUSHED ONLY WHEN THE
+	   FILE IS CLOSED.
+
+
+
+	])%
+
+
+%([	FORMAT OF THE KEY DESCRIPTOR BLOCK:
+	===================================
+
+
+	!=====================================!
+	!       BID        !       BLN        !
+	!-------------------------------------!
+	!       ROOT       !       REF        !
+	!-------------------------------------!
+	!HSZ! DTP !        IDB-ADDRESS        !
+	!-------------------------------------!
+	!      FLAGS       !    NXT (KDB)     !
+	!-------------------------------------!
+	!  IBKZ  !  DBKZ   !  IAN   !   DAN   !
+	!-------------------------------------!
+	!<**> !KBSZ !LEVELS!      MINRSZ      !
+	!-------------------------------------!
+	!    IFLOFFSET     !    DFLOFFSET     !
+	!-------------------------------------!
+	!       KSZ        !       KSZW       !
+	!-------------------------------------!
+	!       POS0       !       SIZ0       !
+	!-------------------------------------!
+	!                  .                  !
+	!                  .                  !
+	!-------------------------------------!
+	!       POS7       !       SIZ7       !
+	!=====================================!
+])%
+
+
+%([
+	FIELDS IN KEY DESCRIPTOR BLOCK
+	==============================
+
+	FIELDS		FUNCTION
+	======		========
+
+	BID		BLOCK ID OF KDB
+
+	BLN		LENGTH OF KDB
+
+	ROOT		ROOT BUCKET
+
+	REF		KEY OF REFERENCE
+
+	HSZ		SIZE OF HEADER (VAR=3,FIX=2,SIDR=2)
+
+	DTP		DATA-TYPE
+
+	IDBADDR		WORD ADDRESS OF IDB IN FILE
+
+	FLAGS		PROCESSING FLAGS
+		FLGNOINDEX	NO INDEX EXISTS FOR THIS KEY
+		FLGDIDCHANGE	THIS KEY DID CHANGE ON THIS $UPDATE
+		<ALL XAB FLAGS>
+
+	NXT		ADDRESS OF NEXT KDB
+
+	IBKZ		INDEX BUCKET SIZE
+
+	DBKZ		DATA BUCKET SIZE
+
+	IAN		INDEX AREA NUMBER (NOT USED)
+
+	DAN		DATA AREA NUMBER (NOT USED)
+
+	KBSZ		BYTE SIZE OF KEY
+
+	LEVELS		NUMBER OF LEVELS IN INDEX
+
+	MINRSZ		MIN RECORD SIZE TO ENCLOSE THIS KEY
+
+	IFLOFFSET	INDEX FILL OFFSET
+
+	DFLOFFSET	DATA FILL OFFSET
+
+	KSZ		SIZE OF KEY IN BYTES
+
+	KSZW		SIZE OF KEY IN WORDS (NOTE SIZE FOR SPEED)
+
+	POS0,SIZ0	KEY SEGMENTS DESCRIPTORS
+	.
+	.
+	.
+
+])%
+
+
+%([
+***********************************************************************
+*			STRUCTURE OF KEY DESCRIPTOR BLOCK	     *
+***********************************************************************
+])%
+
+
+	%([ SIZE VALUES FOR THE KDB'S ])%
+
+	LITERAL	KDBCODE		=	6,		! BLOCK-TYPE CODE FOR KDB
+		KDBSIZE		=	8 + MAXKEYSEGS;		! FIXED PART + KEY SEGMENTS
+
+
+	MACRO	!BLOCKLENGTH	=	0,LH$,		! KDB BLOCK-TYPE
+		!BLOCKLENGTH	=	0,RH$,		! SIZE OF THE KDB
+		KDBROOT		=	1,LH %,		! ROOT BUCKET NUMBER
+		KDBREF		=	1,RH %,		! KEY OF REFERENCE
+		KDBHSZ		=	2,33,3 %,	! SIZE OF HEADER
+		KDBDTP		=	2,27,6 %,	! DATA-TYPE OF KEY
+		KDBIDBADDR	=	2,0,27 %,	! DISK ADDRESS OF RELEATED IDB
+		KDBFLAGS	=	3,LH %,		! FLAGS (FROM XAB)
+		KDBNXT		=	3,RH %,		! LINK TO NEXT KDB
+		KDBIBKZ		=	4,27,9 %,	! INDEX BUCKET SIZE
+		KDBDBKZ		=	4,18,9 %,	! DATA BUCKET SIZE
+		KDBIAN		=	4,9,9 %,		! INDEX AREA NUMBER (FROM XAB)
+		KDBDAN		=	4,0,9 %,		! DATA AREA NUMBER (FROM XAB)
+		! **BITS 0-5 OF WORD 5 ARE UNUSED**
+		KDBKBSZ		=	5,24,6 %,	! BYTE SIZE OF KEY
+		KDBLEVELS	=	5,18,6 %,	! # OF LEVELS IN INDEX
+		KDBMINRSZ	=	5,RH %,		! MIN RSZ TO INCLUDE THIS KEY
+		KDBIFLOFFSET	=	6,LH %,		! OFFSET FOR IFL
+		KDBDFLOFFSET	=	6,RH %,		! OFFSET FOR DFL
+		KDBKSZ		=	7,LH %,		! TOTAL SIZE OF KEY (BYTES)
+		KDBKSZW		=	7,RH %;		! SIZE OF KEY IN WORDS
+
+
+	%([ FOLLOWING THESE FIXED FIELDS COMES THE LIST OF KEY SEGMENT
+	   DESCRIPTORS. THE FORMAT OF THESE IS THE SAME AS DEFINED IN
+	   THE XAB. THEREFORE, SEE "XAB.REQ" FOR THEIR STRUCTURE ])%
+
+	LITERAL	KDBKSDOFFSET	=	KDBSIZE-MAXKEYSEGS;		! OFFSET TO KEY SEGMENTS
+
+
+	%([ FLAG BITS DEFINED IN THE KDB ])%
+
+	%([ *NOTE* THE FLAG FIELD CONTAINS BOTH XAB FLAGS AND
+	   TEMPORARY PROCESSING FLAGS. THUS, THE DEFINITIONS OF
+	   THE FLAG BITS SHOULD BE SYNCHRONIZED. THAT IS, WHEN NEW
+	   PROCESSING FLAGS ARE ADDED, THEY SHOULD BE DEFINED
+	   FROM THE LEFT-MOST AVAILABLE BIT IN THE FIELD. USER
+	   FLAGS SHOULD BE DEFINED FROM THE RIGHT-MOST AVAILABLE
+	   BIT IN THE WORD  ])%
+
+	LITERAL	FLGNOINDEX	=	BITN ( 18 ),		! START FLAGS FROM LEFT
+		FLGDIDCHANGE	=	BITN ( 19 );		! KEY CHANGED DURING UPDATE
+
+	%([ MACROS USED TO ACCESS KDB FLAGS ])%
+
+	MACRO	NOINDEXFLAG	=	( .KDB [ KDBFLAGS ] AND FLGNOINDEX ) %,
+		DUPLICATES	=	( CHKFLAG ( KDB [ KDBFLAGS ], FLGDUP ) ISON ) %,
+		NODUPLICATES	=	NOT DUPLICATES %;
+
+	%([ MACROS USED TO ACCESS THE KEY-OF-REFERENCE FIELD ])%
+
+	MACRO	PRIMARYKEY	=	(.KDB [ KDBREF ] IS REFPRIMARY ) %,
+		SECONDARYKEY	=	( NOT PRIMARYKEY ) %;
+
+%([
+***********************************************************************
+*			END OF KDB.REQ			      *
+***********************************************************************
+])%
+
+
+%([
+******************************************************************
+*			START OF LOCKS.REQ			   *
+*								   *
+*			CONTENTS:				   *
+*								   *
+*		1.   ENQ/DEQ SYMBOLS				*
+*		2.   QUEUEING STRUCTURES FOR ENQ/DEQ		  *
+*		3.   MACROS FOR LOCKING RECORDS, BUCKETS, ETC.	   *
+*								   *
+*******************************************************************
+
+AUTHOR: S. BLOUNT
+
+])%
+
+
+%([	THERE ARE SEVERAL DIFFERENT TYPES OF LOGICAL RESOURCES
+	WHICH ARE LOCKED BY RMS-20 DURING THE COURSE OF ITS
+	PROCESSING. THE FOLLOWING TYPES OF LOCKS ARE DEFINED
+	WITHIN RMS-20:
+
+		1.	FILE LOCKS WHEN THE FILE IS OPENED.
+		2.	RECORD LOCKS FOR SEQUENTIAL OR RELATIVE FILES
+		3.	BUCKET LOCKS FOR INDEXED FILES.
+		4.	CAPABILITY LOCKS FOR INDEXED FILES.
+
+	ALL OF THESE LOGICAL RESOURCES CONFORM TO THE SAME FORMAT
+	OF LOCK NAMES. THIS MECHANISM INSURES THAT RESOURCE NAMES
+	DO NOT CONFLICT (E.G., A RECORD LOCK DOES NOT HAVE THE SAME
+	FORMAT AS A FILE LOCK, ETC. ). EACH RESOURCE NAME IS IN
+	THE FOLLOWING FORMAT:
+
+		!-------------------------------------!
+		! 5   !LOCK !          LOCK           !
+		!     !TYPE !       IDENTIFIER        !
+		!-------------------------------------!
+
+	THE "5" IS REQUIRED BY ENQ/DEQ. THE LOCK-TYPE IS 3 BITS
+	AND REPRESENTS THE GENERIC TYPE (FILE, RECORD, BUCKET, CAPABILITY)
+	OF THIS LOCK. THE "LOCK IDENTIFIER" IS THE ACTUAL RESOURCE
+	NAME (E.G, RECORD ID, BUCKET NUMBER, ETC. ). CARE MUST BE
+	USED IN THE CHOICE OF BOTH LOCK TYPE-CODES AND IDENTIFIERS
+	TO INSURE THAT A FUTURE CONFLICT DOES NOT ARISE.
+
+])%
+
+
+
+%([
+***********************************************************************
+*			INTERNAL RMS-20 QUEUEING STRUCTURES	      *
+***********************************************************************
+])%
+
+		%([ ***NOTE THAT IF A NEW BIT IS ADDED TO THIS LIST,
+		   ALL FLAG DEFINITIONS MUST BE SHIFTED LEFT 1 BIT,
+		   (E.G., #4 BECOMES #10, ETC...) ])%
+
+	LITERAL	ENQCALL = 1,			!FLAG TO CONTROL ENQ OR DEQ
+		DEQCALL = 0;
+
+%(ENQ JSYS)%
+	LITERAL	ENQBLK = 0,			! BLOCK FOR RESOURCE
+		ENQAA = 1,			! ALLOCATE IF AVAILABLE
+		ENAPSI = 2;			! WAIT FOR PSI
+%(DEQ JSYS)%
+	LITERAL	DEQDR = 0,
+		DEQDA = 1,			! DEQ ALL RESOURCES
+		DEQID = 2;			! DEQ BY REQUEST ID
+
+	LITERAL	ENQSHR = %O'10',			! SHARABLE RESOURCE
+		ENQEXC = %O'0',			! EXCLUSIVE ACCESS RESOURCE
+		ENQBLN = %O'4',			! BYPASS LEVEL NUMBERS
+		ENQNST = %O'2',			! ALLOW NESTING (NOT USED)
+		ENQLTL = %O'1';			! LONG TERM LOCK
+
+%(STRUCTURE OF ENQ/DEQ PARAMETER BLOCK)%
+	LITERAL	QBLKNTRYSZ = 3,			! SIZE OF AN ENQ ENTRY
+		QBLKHDRSZ = 2;			! SIZE OF HEADER IN ENQ BLOCK
+
+	MACRO	QHDRCOUNT = 0,LH %,		! COUNT OF LOCKS
+		QHDRLENGTH = 0,RH %,		! LENGTH OF RESOURCE BLOCK
+		QHDRPSI = 1,LH %,		! PSI CHANNEL
+		QHDRID = 1,RH %,			! REQUEST ID
+		QBLKFLAGS = 0,32,4 %,		! FLAGS IN LOCK BLOCK
+		QBLKLEVEL = 0,18,15 %,		! LEVEL NUMBER
+		QBLKJFN = 0,RH %,		! JFN
+		QBLKCODE = 1,WRD %,		! USER CODE
+		QBLKPOOL = 2,LH %,		! POOLED COUNT
+		QBLKGROUP = 2,RH %,		! SHARER'S GROUP
+		QBLKWORD3 = 2,WRD %;		! ENTIRE 3RD WORD OF BLOCK
+
+		%([ STRUCTURE OF ENQ/DEQ BLOCK FOR Q'ING FILES ])%
+
+	LITERAL	NUMFLOCKS = 6,			! NUMBER OF LOCKS FOR FILE
+		QBLKLENGTH = NUMFLOCKS * QBLKNTRYSZ + QBLKHDRSZ;
+
+		%([ STRUCTURE OF USER-ID CODE FOR FILE LOCKS ])%
+
+	LITERAL	RMSQCODE = %O'500000000000';	! 1ST  DIGIT IS 5 IN FILE LOCKS
+
+		%([ LOCK-TYPE CODES ])%
+
+	LITERAL	LTYPEREC = 0,			! THIS IS A RECORD ID
+		LTYPEFILE = 1,			! THIS IS A FILE LOCK
+		LTYPECAP = 2,			! THIS IS A CAPABILITY LOCK
+		LTYPEBKT = 3;			! THIS IS A BUCKET LOCK
+
+		%([ STRUCTURE MACROS FOR USER-ID CODE ])%
+
+	MACRO	QBLKLTYPE = 1,30,3 %,		! LOCK-TYPE CODE
+		QBLKLID = 1,RH %;		! PLACE FOR ID CODE
+
+		%([ CAPABILITIES ])%
+		LITERAL	CAPINDEX =	1;	! CAPABILITY OF TRAVERSING THE INDEX
+
+
+
+
+%([
+***********************************************************************
+*		MACROS FOR LOCKING AND UNLOCKING FILE RECORDS	      *
+***********************************************************************
+])%
+
+
+
+		%([ MACRO TO UNLOCK A SINGLE RECORD IN A SEQUENTIAL/RELATIVE FILE.
+		   NOTE THAT THIS MACRO AUTOMATICALLY SETS THE "DATALOCKED"
+		   BIT IN THE RST AFTER THE RECORD HAS BEEN LOCKED. ])%
+
+	MACRO	UNLOCK ( RECORDID ) =
+			BEGIN
+			LOCAL
+			    TEMP;
+			IF ( TEMP = .RECORDID ) ISNT ZERO		! IF THERE IS A CURRENTLY LOCKED RECORD
+				THEN
+				BEGIN					! TO UNLOCK RECORD
+				IF CALLLOCKIT (	PCI ( DEQCALL ), 		%(DEQ)%
+						PCI ( DEQDR ),		%(FUNCTION)%
+						LCI ( TEMP ),		%(RECORD ID)%
+						PCI ( ZERO ),		%(ACCESS)%
+						PCI ( LTYPEREC ) )	%(LOCK TYPE)%
+					IS FALSE THEN
+						BEGIN
+						FILEPROBLEM ( FE$UNL );
+						USEXITERR
+
+						END;
+				RST [ RSTFLAGS ] = .RST [ RSTFLAGS ] AND ( NOT FLGDLOCK );
+				END
+			END %, %( OF UNLOCK MACRO )%
+
+
+		%([ MACRO TO LOCK A SINGLE RECORD ])%
+
+		LOCKREC ( RECORDID ) =					! LOCK A RECORD
+			BEGIN
+			LOCAL
+			    TEMP,
+			    TEMP2;
+			IF INPUTMODE				! SET ACCESS
+			THEN TEMP2 = ENQSHR			!	SHARABLE
+			ELSE TEMP2 = ENQEXC;			!	EXCLUSIVE
+
+			IF CALLLOCKIT (	PCI ( ENQCALL ),	%(ENQCALL)%
+					PCI ( ENQAA ),		%(FUNCTION)%
+					LCI ( RECORDID ),	%(RECORD ID)%	
+					LCI ( TEMP2 ),		%(ACCESS)%
+					PCI ( LTYPEREC  ) )
+				IS FALSE THEN ERROR ( ER$RLK );
+
+			SETFLAG ( RST [ RSTFLAGS ] , FLGDLOCK );	! REMEMBER ITS LOCKED
+			END %; %( OF LOCK MACRO )%
+
+
+%([
+***********************************************************************
+*		MACROS FOR LOCKING AND UNLOCKING THE INDEX	     	*
+***********************************************************************
+])%
+
+
+	%([ THESE MACROS ARE USED TO LOCK/UNLOCK THE INDEX STRUCTURE OF AN
+	   INDEXED FILE. WHENEVER THE INDEX IS TO BE TRAVERSED, OR ANY DATA MOVED WITH
+	   THE FILE, THE INDEX STRUCTURE MUST BE LOCKED FOR
+	   THE DURATION OF THE OPERATION. ])%
+
+	MACRO	LOCKINDEX ( FUNC, ACC )=
+		BEGIN
+		LOCAL
+		    XF,
+		    XA;			! SOME LOCALS TO HOLD ARGS
+		XF = FUNC;			! PICK UP ARGUMENTS
+		XA = ACC + ENQLTL;		! GET ACCESS AND SET "LONG-TERM LOCK"
+		If    CALLLOCKIT (	%(ENQCALL)%	PCI ( ENQCALL ),
+				%(FUNC)%	LCI ( XF ),
+				%(ID)%	PCI ( CAPINDEX ),
+				%(ACCES)%	LCI ( XA ),
+				%(CAP)%	PCI ( LTYPECAP ))
+		ISNT FALSE  THEN
+		BEGIN 	%(SET THE FST FLAG BIT TO DENOTE INDEX IS LOCKED)%
+			SETFLAG ( FST [ FSTFLAGS ], FLGILOCKED );
+			TRUE	! VALUE TRUE
+		END   ELSE
+		       FALSE		!VALUE FALSE
+		END %;
+
+	%([ MACRO TO UNLOCK THE INDEX STRUCTURE OF AN INDEXED FILE ])%
+
+	MACRO	UNLOCKINDEX =
+		BEGIN
+		CLRFLAG ( FST [ FSTFLAGS ], FLGILOCKED );	! CLEAR FLAG BIT
+		CALLLOCKIT (	%(DEQCALL)%	PCI ( DEQCALL ),
+				%(FUNC)%	PCI ( DEQDR ),
+				%(ID)%	PCI ( CAPINDEX ),
+				%(ACC)%	PCI ( ZERO ),
+				%(CAP)%	PCI ( LTYPECAP ))
+		END %;
+
+
+%([
+***********************************************************************
+*		MACROS FOR LOCKING AND UNLOCKING BUCKETS	 *
+***********************************************************************
+])%
+
+
+	%([ MACRO TO LOCK A SINGLE BUCKET (I.E., A FILE PAGE NUMBER ) ])%
+
+	MACRO	LOCKBUCKET ( ACC, PNUM )=
+		BEGIN
+		LOCAL
+		    XACC,
+		    XPNUM;		! DEFINE LOCALS TO PASS ARGS IN
+		XACC = ACC;			! GET ARGS IN LOCALS
+		XPNUM = PNUM;
+		CALLLOCKIT (	%(ENQCALL)%	PCI ( ENQCALL ),
+				%(FUNC)%	PCI ( ENQAA ),
+				%(ID)%	LCI ( XPNUM ),
+				%(ACC)%	LCI ( XACC ),
+				%(TYPE)%	PCI ( LTYPEBKT ) )
+		END %;
+
+	%([ MACRO TO UNLOCK A FILE BUCKET FOR INDEXED FILES ])%
+
+	MACRO	UNLOCKBUCKET ( PNUM )=
+		BEGIN
+		LOCAL
+		    XPNUM;
+		XPNUM = PNUM;
+		CALLLOCKIT (	%(DEQCALL)%	PCI ( DEQCALL ),
+				%(FUNC)%	PCI ( DEQDR ),
+				%(ID)%	LCI ( XPNUM ),
+				%(ACC)%	PCI ( ZERO ),
+				%(TYPE)%	PCI ( LTYPEBKT ) )
+		END %;
+
+
+
+%([
+***********************************************************************
+*		MACROS FOR LOCKING AND UNLOCKING BUCKET DESCRIPTORS  *
+***********************************************************************
+])%
+
+
+	%([ MACRO TO LOCK A BUCKET DESCRIPTOR. THIS MACRO WILL
+	   LOCK THE BUCKET INDICATED BY THE BUCKET DESCRIPTOR,
+	   AND IF SUCCESSFUL, IT WILL SET THE BIT IN THE
+	   DESCRIPTOR WHICH INDICATES THAT THE BUCKET IS LOCKED. ])%
+
+	MACRO	LOCKBD ( BD, FUNC, ACC )=
+		BEGIN
+		LOCAL
+		    BNUM,
+		    LOCALFUNC,
+		    LOCALACC;
+		BNUM = .BD [ BKDBKTNO ];		! GET BUCKET NUMBER
+		LOCALFUNC = FUNC;
+		LOCALACC = ACC;
+		IF 	CALLLOCKIT (	%(ENQCALL)%	PCI ( ENQCALL ),
+				%(FUNC)%	LCI ( LOCALFUNC ),
+				%(ID)%	LCI ( BNUM ),
+				%(ACC)%	LCI ( LOCALACC ),
+				%(BKT)%	PCI ( LTYPEBKT ))
+		ISNT FALSE  THEN
+		BEGIN	%(REMEMBER THAT THE BUCKET IS LOCKED)%
+			SETBKTLOCKED ( BD );
+			TRUE	! RETURN VALUE TRUE
+		END  ELSE
+			FALSE
+		END %;
+
+
+%([****************** END OF LOCKS.REQ REQUIRE FILE**************])%
+%([****************************************************************])%
+
+
+%([
+*****************************************************************
+*			START OF OS.REQ				*
+*			CONTENTS:				*
+*	1.	JSYS & UUO STUFF FOR WHICH RMS USES COMMON SYMS	*
+*			(EXCEPT ENQ/DEQ -- SEE LOCKS)		*
+*	2.	MISCEL MONITOR DEPENDENT STUFF			*
+*****************************************************************
+])%
+
+! MACRO TO PUT SHORT OS DEP CODE SEQS IN A PROG
+!
+MACRO IF$10(CODE$) = %IF TOPS10 %THEN CODE$ %FI %;
+MACRO IF$20(CODE$) = %IF TOPS20 %THEN CODE$ %FI %;
+
+%([
+***********************************************************************
+*		TOPS-20/RMS-20 ERROR CODE MAPPING DEFINITIONS	     	*
+***********************************************************************
+])%
+
+	%([ FIELD DEFINITION MACROS FOR EACH ENTRY IN ERROR MAP TABLE ])%
+	LITERAL	SIZEOFEMTENTRY	=	1;		! EACH ENTRY IS TWO WORDS
+
+	MACRO	EMTSYSCODE	=	RH %,		! SYSTEM CODE
+		EMTRMSCODE	=	LH %;		! RMS-20 CODE
+
+	%([ MACRO TO PERFORM MAPPING (CALLS ROUTINE TO DO MAPPING) ])%
+
+	MACRO	MAPSYSTEMCODE ( DEFCODE, TABNAM )=
+			BEGIN
+			$EXIT (MAPCODES,%(SYS CODE)%	LCI ( AC1 ),
+					%(DEF CODE)%	PCI ( DEFCODE ),
+					%(TABLE)%	LCT ( TABNAM ));
+			END %;
+
+! MAP MONITOR STATUS CODES TO RMS STATUS CODES (BUILD MAPPING TABLE)
+!
+!	BIND table-name = UPLIT(
+!			1 or more OSERRMAPs
+!			OPSERRMEND;
+!
+MACRO OSERRMAP(RMERR$)[OSERR$] = RMERR$^18 OR OSERR$ %;
+MACRO OSERRMEND=0) %;
+
+
+%([
+***********************************************************************
+*		COMMON JSYS/UUO SYMBOL  DEFINITIONS		      *
+***********************************************************************
+])%
+
+	LITERAL	OPFBSZLSH=30;			!??? FOR NOW
+%(FILE DATES)%
+	LITERAL
+		DATES_BLKSIZ=4,			!SIZE OF BLK RET BY DATOFILE
+		DT_WRI=0,			!OFFSET WHERE LAST WRIT DATE IS
+		DT_CRE=1;			!OFFSET CREATE DATE
+
+%(DEVCHR JSYS BITS	)%
+	LITERAL	DVOUT = BITN (0),		! DVICE CAN DO OUTPUT
+		DVIN = BITN (1),			! INPUT
+		DVDIR = BITN (2),		! DIRECTORY DEVICE (DASD)
+		DEVASN = BITN (3);		! ASSIGNABLE
+
+	MACRO	DEVTYPE = 0,18,9 %;		! DEVICE-TYPE FIELD
+
+
+	LITERAL	DVDSK	=	0,		! DEVICE-TYPE CODES...
+		DVMTA	=	2,		! MAGTAPE
+		DVLPT	=	7,		! LPT
+		DVCDR	=	%O'10',		! CARD-READER
+		DVTTY	=	%O'12';		! TERMINAL
+
+
+
+%(GTFDB JSYS OFFSETS)%
+	LITERAL	FDBCTL = 1,			! CONTROL BITS
+		FDBBYV = %O'11',			! BYTE SIZE
+		FDBSIZ = %O'12';			! EOF BYTE NUMBER
+
+	%([ BIT DEFINITIONS FOR GTFDB JSYS ])%
+	LITERAL	FDBNXF = BITN ( 4 );		! NON-EXISTENT FILE
+
+	%([ FILE CLASS DEFINITIONS ])%
+	MACRO	FDBCLS = 0,18,4 %;		! FIELD WHICH DEFINES FILE CLASS
+
+	LITERAL	FDBCLSMASK = %O'17000000';		! MASK FOR FILE CLASS FIELD
+	LITERAL	CLSASC = 0,			! ASCII FILE
+		CLSRMS = 1;			! RMS-20 FILE
+
+	%([ SYMBOLS FOR THE FBBYV FIELD AND THE BSZ PORTION OF IT ])%
+
+	LITERAL	FDBBSZMASK = %O'7700000000',	! MASK FOR BSZ FIELD
+		FDBBSZLSH  = 24;		! LSH FOR BSZ FIELD
+
+
+
+%([
+******************************************************************
+*			START OF RDP.REQ			   *
+*								   *
+*			CONTENTS:				   *
+*								   *
+*		1. STRUCTURE OF THE RECORD DESCRIPTOR PACKET      	*
+	
+*								   *
+*******************************************************************
+
+AUTHOR: S. BLOUNT
+
+])%
+
+%([
+	THIS FILE CONTAINS THE STRUCTURE AND ACCESS MACROS USED
+	FOR THE RECORD DESCRIPTOR PACKET.  THIS PACKET (CALLED
+	THE "RECORD DESCRIPTOR" OR "RD" FOR SHORT) IS USED ONLY
+	DURING PROCESSING OF INDEXED FILES IN RMS-20. IT IS PASSED
+	BETWEEN ROUTINES AND CONTAINS TEMPORARY RESULTS WHICH
+	ARE REQUIRED BY OTHER ROUTINES. NOTE THAT THE RECORD DESCRIPTOR
+	DOESN'T ACTUALL "EXIST" ANYWHERE, IT IS ALLOCATED FROM LOCAL
+	STORAGE WHEN NEEDED, AND IS DEALLOCATED WHEN THE INVOKING
+	ROUTINE IS LEFT.
+
+
+	FORMAT OF THE RECORD DESCRIPTOR
+	===============================
+
+	!=====================================!
+	!      FLAGS       !      STATUS      !
+	!-------------------------------------!
+	!     USERSIZE     !      COUNT       !
+	!-------------------------------------!
+	!    LASTLEVEL     !      LEVEL       !
+	!-------------------------------------!
+	!               USERPTR               !
+	!-------------------------------------!
+	!             LASTRECPTR              !
+	!-------------------------------------!
+	!                RECPTR               !
+	!-------------------------------------!
+	!                 RFA                 !
+	!-------------------------------------!
+	!                 RRV                 !
+	!-------------------------------------!
+	!      LENGTH      !   SIDRELEMENT    !
+	!=====================================!
+
+
+	FIELDS WITHIN THE RECORD DESCRIPTOR
+	===================================
+
+
+	FIELD			FUNCTION
+	-----			--------
+
+	FLAGS		PROCESSING FLAGS USED AS INPUT TO EACH ROUTINE
+
+		FLGHORIZOK	"HORIZONTAL SEARCH IS OK".
+				THIS FLAG IS SET ON $FIND/$GET AND CLEARED
+				ON A $PUT OPERATION. IT INDICATES THAT WHEN
+				A HORIZONTAL SEARCH MUST BE DONE (IN THE
+				CASE OF A SYSTEM CRASH DURING AN INDEX UPDATE,
+				FOR EXAMPLE), THE SEARCH SHOULD CONTINUE
+				AT THE TOP OF THE NEXT BUCKET. IF THIS FLAG
+				IS NOT SET, THEN THE SEARCH ALGORITHM WILL
+				POSITION BACK TO THE END OF THE CURRENT 
+				BUCKET IF THE SEARCH KEY IS LESS THAN THE FIRST
+				RECORD IN THE NEW BUCKET.
+		FLGRETEX	FLAG SET BY RMSUTL. TELLS CHKDUP TO
+				RETURN IF CALLER'S RRV IS IN SIDR ARRAY.
+				WHEN OFF, CHKDUP 0'S SUCH ENTRIES.
+
+	STATUS		STATUS FLAGS USED AS OUTPUT FROM EACH ROUTINE
+
+		FLGIDXUPDATE		AN INDEX UPDATE IS REQUIRED
+		FLGDUP			A DUPLICATE KEY WAS SEEN
+		FLGEMPTY		CURRENT BUCKET IS EMPTY
+		FLGLSS			CURRENT SEARCH KEY IS LSS TARGET KEY
+		FLGDELETE		CURRENT RECORD IS DELETED
+		FLGIDXERROR		AN INDEX ERROR WAS DETECTED
+		FLGNOHIKEY		THERE IS NO NEW HI-KEY FOR A BUCKET
+					DURING A SPLIT (CAUSED BY BUCKET FILLED
+					WITH RRV'S ETC. )
+
+	USERSIZE	SIZE OF USER SEARCH KEY IN BYTES
+
+	COUNT		MISCELLANEOUS COUNTER VALUES.
+			USED BY SPLIT TO DENOTE THE NUMBER OF BUCKETS
+			WHICH WERE REQUIRED FOR THE SPLIT.
+
+	LASTLEVEL	THE LEVEL AT WHICH A SEARCH TERMINATED
+
+	LEVEL		THE LEVEL AT WHICH THE SEARCH SHOULD TERMINATE (INPUT)
+
+	USERPTR		ADDRESS OF USER SEARCH KEY
+
+	LASTRECPTR	ADDRESS OF RECORD BEFORE THE ONE WHICH TERMINATED
+			THE CURRENT SEARCH.
+
+	RECPTR		ADDRESS OF CURRENT RECORD IN BUCKET
+
+	RFA		ADDRESS (RFA FORMAT) OF TARGET RECORD.
+
+	RRV		ADDRESS (RRV FORMAT) OF CURRENT RECORD
+
+	LENGTH		MISCELLANEOUS LENGTH VALUES.
+
+	SIDRELEMENT	OFFSET INTO CURRENT SIDR ARRAY OF THE TARGET
+			RECORD POINTER (1 MEANS FIRST POINTER, ETC. ).
+			THIS FIELD IS SAME IN MEANING AS RSTSIDRELEMENT,
+			BUT IS PASSED IN THE RDP BECAUSE THE RST IS NOT
+			UPDATED ON EVERY OPERATION.
+
+	RPSIDR		TENTATIVE SIDRELEMENT AFTER $FIND
+
+])%
+
+
+%([
+*****************************************************************
+*		RECORD DESCRIPTOR PACKET DEFINITIONS		*
+*****************************************************************
+])%
+
+	%([ THE RECORD DESCRIPTOR PACKET IS A LOCAL ARGUMENT
+	   BLOCK WHICH IS USED TO PASS A SERIES OF ARGUMENTS
+	   BETWEEN ROUTINES FOR PROCESSING INDEXED FILES. THESE
+	   PARAMETERS ARE NOT PLACED IN THE RST TO CONSERVE SPACE
+	   AND BECAUSE THE CONTENTS OF THE PACKET MAY NOT BE
+	   INVARIENT ACROSS ROUTINE CALLS. ])%
+
+%IF INDX %THEN
+ 	LITERAL	RDSIZE		=	9;		! SIZE OF IT
+
+ 	MACRO	RDFLAGS		=	0,LH %,		! PROCESSING FLAGS
+ 		RDSTATUS	=	0,RH %,		! STATUS
+ 		RDUSERSIZE	=	1,LH %,		! SIZE OF RECORD/KEY
+ 		RDCOUNT		=	1,RH %,		! COUNT FIELD
+ 		RDLASTLEVEL	=	2,LH %,		! LAST LEVEL PROCESSED
+ 		RDLEVEL		=	2,RH %,		! INPUT LEVEL NUMBER
+ 		RDUSERPTR	=	3,WRD %,	! ADDR OF USER RECORD/KEY
+ 		RDLASTRECPTR	=	4,WRD %,	! LAST RECORD IN BKT
+ 		RDRECPTR	=	5,WRD %,	! ADDRESS OF RMS RECORD
+ 		RDRFA		=	6,WRD %,	! RECORD RFA
+ 		RDRRV		=	7,WRD %,	! RECORD RRV ADDRESS
+ 		RDLENGTH	=	8,LH %,		! LENGTH OF RECORD TO INSERT
+		RDSIDRELEMENT	=	8,RH %;		! OFFSET OF CURRENT RECORD POINTER
+
+%([
+***********************************************************************
+*		RECORD DESCRIPTOR FLAGS AND MACROS TO USE THEM	     *
+***********************************************************************
+])%
+
+ 	%([ RECORD DESCRIPTOR FLAG BIT DEFINITIONS ])%
+
+ 	LITERAL	RDFLGSSK	=	BITN ( 35 ),	! SEGMENTED SEARCH KEY
+		RDFLGRETEX	=	BITN ( 34 ),	!TELLS CHKDUP TO RET IMMED
+ 		RDFLGHORIZOK	=	BITN ( 33 );	! A HORIZONTAL SEARCH IS OK
+ 	! RETRY IF BUSY
+
+ 	%([ RECORD DESCRIPTOR STATUS BIT DEFINITIONS ])%
+
+ 	LITERAL	RDFLGIDXUPDATE	=	BITN ( 35 ),	! INDEX UPDATE REQUIRED
+RDFLGDUP	=	BITN ( 34 ):	,	! KEY ALR IN BKT (SEE FLGSAME)
+RDFLGEMPTY	=	BITN ( 33 ):	,	! BUCKET IS EMPTY
+RDFLGPST	=	BITN ( 32 ):	,	! SEARCH WENT PAST LAST RECORD IN BKT
+RDFLGLSS	=	BITN ( 31 ):	,	! SEARCH KEY IS LESS
+RDFLGDELETE	=	BITN ( 30 ):	,	! RECORD IS DELETED
+RDFLGIDXERROR	=	BITN ( 29 ):	,	! INDEX UPDATE ERROR OCCURED
+RDFLGNOHIKEY	=	BITN ( 28 ):	,	! NO HI-KEY IN OLD BKT (FOR SPLIT)
+RDFLGNEWINNEW	=	BITN ( 27 )	,	! SEQ ACC, 2-WAY SPLIT & R-NEW IN NEW BUCKET
+RDFLGSAME	=	BITN ( 26 )	;	! OTHER EXISTING REC HAS A KEY SAME AS A KEY OF NEW REC
+
+ 	%([ MACRO WHICH REFER TO THESE FLAGS AND STATUS BITS ])%
+
+ 	MACRO	SSKFLAG ( RDPTR )=	( .RDPTR [ RDFLAGS ] AND RDFLGSSK ) %,
+ 		RETRYFLAG ( RDPTR ) =	( .RDPTR [ RDFLAGS ] AND RDFLGRETRY ) %,
+ 		HORIZOKFLAG ( RDPTR )	= ( .RDPTR [ RDFLAGS ] AND RDFLGHORIZOK ) %,
+ 		EMPTYFLAG ( RDPTR ) =	( .RDPTR [ RDSTATUS ] AND RDFLGEMPTY ) %,
+ 		IDXERRORFLAG ( RDPTR )	= ( .RDPTR [ RDSTATUS ] AND RDFLGIDXERROR ) %,
+ 		IDXUPDATEFLAG ( RDPTR )	= ( .RDPTR [ RDSTATUS ] AND RDFLGIDXUPDATE ) %,
+ 		LSSFLAG ( RDPTR )	= ( .RDPTR [ RDSTATUS ] AND RDFLGLSS ) %,
+ 		PASTLASTFLAG ( RDPTR )	= ( .RDPTR [ RDSTATUS ] AND RDFLGPST ) %,
+ 		DUPLICATEFLAG ( RDPTR )	= ( .RDPTR [ RDSTATUS ] AND RDFLGDUP ) %,
+ 		SAMEKEYFLAG ( RDPTR )	= ( .RDPTR [ RDSTATUS ] AND RDFLGSAME ) %,
+%([**])%	FLUSHORIGBD ( RDPTR ) = (.RDPTR [ RDSTATUS ] AND RDFLGNEWINNEW ) %;
+
+ 	%([ MACROS TO SET OR CLEAR THESE FLAGS ])%
+
+ 	MACRO	SETEMPTYFLAG ( RDPTR )= SETFLAG ( RDPTR [ RDSTATUS ], RDFLGEMPTY ) %,
+ 		SETRETRYFLAG ( RDPTR ) = SETFLAG ( RDPTR [ RDFLAGS ], RDFLGRETRY) %,
+ 		SETLSSFLAG ( RDPTR )= SETFLAG ( RDPTR [ RDSTATUS ], RDFLGLSS ) %,
+ 		SETPASTLASTFLAG ( RDPTR )= SETFLAG ( RDPTR [ RDSTATUS ], RDFLGPST ) %,
+ 		SETDUPLICATFLAG ( RDPTR )= SETFLAG ( RDPTR [ RDSTATUS ], RDFLGDUP ) %,
+ 		SETSAMEKEYFLAG ( RDPTR )= SETFLAG ( RDPTR [ RDSTATUS ], RDFLGSAME ) %,
+ 		SETIDXUPDATFLAG ( RDPTR ) = SETFLAG ( RDPTR [ RDSTATUS ], RDFLGIDXUPDATE) %,
+ 		SETIDXERRORFLAG ( RDPTR ) = SETFLAG ( RDPTR [ RDSTATUS ], RDFLGIDXERROR ) %,
+%([**])%	SETNEWINNEWFLG ( RDPTR ) = SETFLAG ( RDPTR [ RDSTATUS ], RDFLGNEWINNEW ) %;
+
+
+ 	%([ MACRO TO DUMP OUT THE CONTENTS OF THE RECORD DESCRIPTOR.
+ 	   NOTE THAT THE SECOND ARGUMENT TO THIS MACRO MUST BE A
+ 	   BASE PARAMETER. ])%
+
+ 	MACRO	DUMPTHERD ( TEXT, RDADR )=
+		%IF DBUG %THEN
+ 		BEGINDEBUG ( DBLOCAL )
+ 		TYPE ( TEXT );
+ 		CALLDUMPRD ( BPT ( RDADR ) );
+ 		ENDDEBUG
+		%FI %;
+%FI
+
+%([
+***********************************************************************
+*			END OF RDP.REQ			      *
+***********************************************************************
+])%
+
+%([
+******************************************************************
+*			START OF RST.BLI			   *
+*								   *
+*			CONTENTS:				   *
+*								   *
+*		1..	STRUCTURES FOR RECORD STATUS TABLE	   *
+*								   *
+*******************************************************************
+
+AUTHOR: S. BLOUNT
+])%
+
+%([	THE RECORD STATUS TABLE (RST) IS THE INTERNAL
+	DATA STRUCTURE WHICH REPRESENTS ALL CURRENT INFORMATION,
+	BOTH STATIC AND DYNAMIC, CONCERNING THE STATE OF
+	THE CORRESPONDING RECORD STREAM. THERE IS EXACTLY ONE
+	RST FOR EACH RECORD STREAM WHICH IS CONNECTED TO A
+	PARTICULAR FILE. AN RST IS ALLOCATED WHEN A $CONNECT
+	IS ISSUED AND DE-ALLOCATED WHEN A $DISCONNECT (OR $CLOSE)
+	IS ISSUED.
+
+	IN THE DESIGN OF THE STRUCTURE OF THE RST, THE ISSUE OF
+	ACCESS PERFORMANCE WAS AFFORDED A HIGHER PRIORITY THAN
+	THAT OF INTERNAL BLOCK SIZE. THEREFORE, THERE ARE SEVERAL
+	FIELDS (EXPLAINED BELOW) WHICH ARE NOT ABSOLUTELY NECESSARY
+	FOR THE CORRECT PROCESSING OF THE FILE, BUT WHICH ARE
+	MAINTAINED IN THE RST BECAUSE THEY SERVE TO SPEED UP
+	CERTAIN OPERATIONS ON THE FILE.
+
+	THE FORMAT OF THE RST IS AS FOLLOWS:
+
+
+	!=====================================!
+	!       BID        !       BLN        !
+	!-------------------------------------!
+	!      BLINK       !      FLINK       !
+	!-------------------------------------!
+	!       FST        !      FLAGS       !
+	!-------------------------------------!
+	!       RSZ        !       RSZW       !
+	!-------------------------------------!
+	!               PAGPTR                !
+	!-------------------------------------!
+	!               DATARFA               !
+	!-------------------------------------!
+	!                 NRP                 !
+	!-------------------------------------!
+	!     KEYBUFF      !BFDCNT.!RH !LOPER !
+	!-------------------------------------!
+	!                CBKD                 !
+	!     (CURRENT BUCKET DESCRIPTOR)     !
+	!                                     !
+	!-------------------------------------!
+	!              HYBYTE                 !
+	!-------------------------------------!
+	! RPREF  ! NRPREF  !    BYTECOUNT     !
+	!-------------------------------------!
+	!               NRPRRV                !
+	!-------------------------------------!
+	!     RPSIDR       !   SIDRELEMENT    !
+	!-------------------------------------!
+	!           BUFFER DESC. #1           !
+	!-------------------------------------!
+	!                  .                  !
+	!                  .                  !
+	!-------------------------------------!
+	!           BUFFER DESC. #N           !
+	!=====================================!
+])%
+
+
+
+%([	FIELDS WITHIN THE RECORD STATUS TABLE
+	=====================================
+
+
+	FIELD		FUNCTION
+	=====		========
+
+	BID		BLOCK ID OF RST
+
+	BLN		LENGTH OF RST
+
+	BLINK		BACK LINK TO LAST RST ON CHAIN
+
+	FLINK		FORWARD LINK TO NEXT RST ON CHAIN
+
+	FST		ADDRESS OF RELATED FST
+
+	FLAGS		PROCESSING FLAGS
+		FLGPARTIAL	THE LAST RECORD WAS A "PARTIAL" RECORD (ASCII/LSA)
+		FLGEOF		THE EOF HAS BEEN REACHED..NO MORE INPUT ALLOWED (STM/LSA)
+		FLGDLOCK	THE CURRENT RECORD (IN DATARFA) IS LOCKED
+				(SEQUENTIAL/RELATIVE ONLY)
+		FLGSUCCESS	LAST OPERATION WAS A SUCCESS
+		FLGUPDPTR	PAGPTR MUST BE UPDATED BEFORE NEXT OPERATION
+				(STM/LSA ONLY)
+		FLGLASTSEQ	LAST OPERATION USED SEQ ACCESS (USED TO CHECK
+				KEYS ON SEQ $PUT TO INDEXED FILE)
+		FLGTRUNC	A $TRUNCATE WAS DONE ON THIS STREAM
+
+	RSZ		SIZE IN BYTES OF CURRENT RECORD (OPTIMIZATION)
+
+	RSZW		SIZE IN WORDS OF CURRENT RECORD ( " )
+
+	PAGPTR		POINTER INTO FILE BUFFER OF CURRENT RECORD.
+			FOR ASCII/LSA FILES, THIS IS A BYTE PTR. FOR
+			SEQ/REL FILES, IT IS A WORD ADDRESS WHICH IS NOT
+			PRESERVED ACROSS USER CALLS. FOR INDEXED FILES,
+			IT POINTS TO HEADER OF CURRENT RECORD.
+
+	DATARFA		RFA OF CURRENT RECORD
+			ASCII/LSA:	BYTE NUMBER OF THE START OF CURRENT RECORD
+			SEQ/REL:	RFA OF CURRENT RECORD/0
+			INDEXED:	RFA OF DATA RECORD (NOT RRV)
+
+	NRP		NEXT RECORD POINTER.
+			ASCII/LSA:	BKT# OF NEXT I/O FOR ASCII RECORDS
+			SEQ/REL:	RFA OF NEXT RECORD
+			INDEXED:	RFA OF DATA RECORD (NOT RRV) OF  THE
+					LAST RECORD WHICH CHANGED THE NRP.
+					(FOR PRIMARY KEYS, THIS IS THE UDR RFA,
+					FOR SECONDARY KEYS, IT'S THE SIDR RFA)
+
+	KEYBUFF		ADDRESS OF KEY BUFFER FOR INDEXED FILES
+
+	BFDCOUNT	NUMBER OF BUFFERS ALLOCATED TO THIS STREAM
+
+	RHSIZE		SIZE OF RECORD HEADER (STM/LSA).
+			USED TO COMPUTE WHERE NEXT RECORD BEGINS.
+	
+	LASTOPER	OPERATION CODE OF LAST SUCCESSFUL OPERATION
+
+	CBKD		CURRENT BUCKET DESCRIPTOR
+
+	RPREF		KEY OF REFERENCE OF CURRENT RECORD (INDEXED)
+
+	NRPREF		KEY OF REFERENCE OF NEXT RECORD POINTER
+
+	NRPRRV		ADDRESS (RRV FORMAT) OF NEXT RECORD
+
+	SIDRLELEMENT	OFFSET INTO CURRENT SIDR SEGMENT (POINTER ARRAY)
+			OF CURRENT RECORD POINTER (1 MEANS FIRST POINTER, ETC.)
+
+	BUFFER DESC'S	BUFFER DESCRIPTORS FOR THIS STREAM
+
+])%
+
+
+
+
+
+%( RECORD STATUS TABLE (RST) STRUCTURE MACROS )%
+%(==========================================)%
+
+	LITERAL	RSTCODE = 4,			! BLOCK-TYPE FOR RST
+		RSTSIZE = 15;			! LENGTH OF FIXED PORTION OF AN RST
+
+
+	MACRO	!BLOCKTYPE = 0,LH$,		! BLOCK-TYPE COD	E
+		!BLOCKLENGTH = 0,RH$,		! LENGTH OF RST
+		!BLINK = 1,LH$,			! BACK LINK TO LAST BLOCK ON CHAIN
+		!FLINK = 1,RH$,			! FORWARD LINK ON CHAIN
+		RSTFST = 2,LH %,			! POINTER TO FILE FST
+		RSTFLAGS = 2,RH %,		! PROCESSING FLAGS
+		RSTRSZ = 3,LH %,			! SIZE OF CURRENT RECORD IN BYTES
+		RSTRSZW= 3,RH %,			! SIZE OF RECORD IN WORDS
+		RSTPAGPTR = 4,WRD %,		! POINTER TO CURRENT RECORD
+		RSTDATARFA = 5,WRD %,		! RFA OF LAST RECORD ACCESSED
+		RSTNRP = 6,WRD %,		! NEXT RECORD POINTER
+		RSTKEYBUFF = 7,LH %,		! ADDRESS OF KEY BUFFER
+		RSTBFDCOUNT = 7,10,8 %,		! COUNT OF BUFFER DESCRIPTORS
+		RSTRHSIZE = 7,6,4 %,		! SIZE OF RECORD HEADER FOR STREAM FILE
+		RSTLASTOPER = 7,0,6 %,		! LAST OPERATION ON THIS RST
+		RSTCBKD1 = RSTCBDOFFSET,WRD %, ! CURRENT BUCKET DESCRIPTOR
+		RSTCBKD2 = RSTCBDOFFSET+1,WRD %,  ! REST OF CURRENT BKT DESC.
+		RSTHYBYTE = 10,WRD %,		! HIGHEST BYTE WRITTEN INTO
+		RSTRPREF = 11,27,9 %,		! KEY OF REFER. FOR RP
+		RSTNRPREF = 11,18,9 %,		! KEY OF REFER. FOR NRP
+		RSTBYTECOUNT = 11,RH %,		! FOR STM AND LSA:  NO. CHARS LEFT ON PAGE
+		RSTNRPRRV = 12,WRD %,		! RRV ADDRESS OF NRP (INDEXED)
+		RSTRPSIDR = 13,LH %,		! TENTATIVE SIDR ELEM AFT $FIND
+		RSTSIDRELEMENT = 13,RH %,	! OFFSET OF CURRENT RECORD POINTER
+		RSTBFD = 14,WRD %;		! FIRST BUFFER DESCRIPTOR
+		!RSTLRU = 14+NUMBUF,WRD		! LRU VECTOR FOLLOWS BFD VECTOR
+
+
+		%([ FLAGS USED IN RST FLAG WORD ])%
+
+	LITERAL	FLGPARTIAL	= BITN ( 35 ),	! PARTIAL RECORD
+		FLGEOF		= BITN ( 34 ),	! EOF ON THIS BUFFER
+		FLGDLOCK	= BITN ( 33 ),	! CURRENT RECORD ( DATARFA ) IS LOCKED
+		FLGSUCCESS	= BITN ( 32 ),	! LAST OPERATION WAS A SUCCESS
+!***BIT 31 IS FREE
+		FLGUPDPTR	= BITN ( 30 ),	! PAGPTR MUST BE UPDATED
+						! ON NEXT OPER. (ASCII ONLY)
+		FLGLASTSEQ	= BITN ( 29 ),	! LAST OPERATION WAS SEQUENTIAL
+		FLGTRUNC	= BITN ( 28 );	! A $TRUNCATE WAS DONE
+
+
+	%([ MACROS FOR ACCESSING RST FLAG BITS ])%
+
+	MACRO	DATALOCKED	= ( .RST [ RSTFLAGS ] AND FLGDLOCK ) ISON %,	! DATA RECORD IS LOCKED
+		DATANOTLOCKED	= NOT DATALOCKED %,
+		CLEARLOCKEDBIT	= CLRFLAG ( RST [ RSTFLAGS ], FLGDLOCK ) %,
+		SETRPLOCKED	= SETFLAG ( RST [ RSTFLAGS ], FLGDLOCK ) %;
+
+	%([ MACRO FOR CHECKING END-OF-FILE FLAG ])%
+
+	MACRO	ENDOFFILE	= ( .RST [ RSTFLAGS ] AND FLGEOF ) ISON %;
+
+	%([ MACROS FOR CHECKING RST FLAGS ])%
+
+	MACRO	PARTIALFLAG	= ( .RST [ RSTFLAGS ] AND FLGPARTIAL ) %,
+		EOFFLAG		= ( .RST [ RSTFLAGS ] AND FLGEOF ) %;
+
+
+	%([ STREAM FILE RECORD HEADER SIZE DEFINITIONS ])%
+
+	LITERAL	STMRHASC	=	ZERO,		! NO RECORD HEADER FOR ASCII STREAM FILES
+		STMRHLSN	=	5+1,		! LSN FOR LSA FILE
+		STMRHPM		=	5;		! PAGEMARK FOR LSA FILE
+
+
+	%([ MACROS FOR ACCESSING THE "SUCCESS" FLAG ])%
+
+
+	MACRO	SUCCESS	=	( .RST [ RSTFLAGS ] AND FLGSUCCESS ) ISON %,	! THERE WAS SUCCESS
+		CLEARSUCCESS =	RST [ RSTFLAGS ] = ( .RST [ RSTFLAGS ] AND (NOT FLGSUCCESS)) %,
+		SETSUCCESS =
+			BEGIN
+			RST [ RSTFLAGS ] = .RST [ RSTFLAGS ] OR FLGSUCCESS;
+			RST [ RSTLASTOPER ] = CURRENTJSYS;
+			END %;
+
+
+%([
+*****************************************************************
+*		"CURRENT" BUCKET DESCRIPTOR DEFINITIONS		*
+*****************************************************************
+])%
+
+	%([ OFFSET INTO THE RST FOR THE CURRENT BUCKET DESCRIPTOR ])%
+
+	LITERAL	RSTCBDOFFSET	=	8;	! OFFSET INTO RST
+
+	%([ MACROS TO SET OR RELEASE THE CURRENT BUCKET FOR INDEXED FILES ])%
+
+	MACRO	SETCURRENTBKT ( BKTDESC )=
+		BEGIN
+		MOVEBKTDESC ( %(FROM)% BKTDESC, %(TO)% CBD );
+		END %;
+
+	MACRO	FETCHCURRENTBKT ( BKTDESC )=
+		MOVEBKTDESC ( %(FROM)% CBD, %(TO)% BKTDESC ) %;
+
+	MACRO	RELEASCURENTBKT =
+		BEGIN
+		IF NOT NULLBD ( CBD )
+		THEN	%(RELEASE THE BUCKET)%
+			CALLPUTBKT ( %(NO UPDATE)%	PCI ( FALSE ),
+				     %(THIS BKT)%		GPT ( CBD ) );
+		SETNULLBD ( CBD );			! FLAG AS EMPTY
+		END %;
+
+	%([ MACROS FOR ACCESSING FIELDS IN THE CURRENT BUCKET DESCRIPTOR ])%
+
+	MACRO	CURRENTWINDOW = CBD [ BKDBKTADR ] ^ W2P %,	! CURRENT WINDOW
+		CURRENTFILEPAGE = CBD [ BKDBKTNO ] %,		! FILE PAGE IN WINDOW
+		CURENTBUFFERADR = CBD [ BKDBKTADR ] %;		! ADDR OF BUFFER
+
+
+
+
+%([****************	END OF RST.REQ	*****************])%
+
+%([
+******************************************************************
+*			START OF STATUS.REQ			   *
+*								   *
+*			CONTENTS:				   *
+*								   *
+*		1. RMS-20 STATUS BIT DEFINITIONS   		   *	
+*								   *
+*******************************************************************
+
+AUTHOR: S. BLOUNT
+
+])%
+
+%([
+***********************************************************************
+*			STATUS BIT DEFINITIONS			*
+***********************************************************************
+])%
+
+	%([ EACH OF THE FOLLOWING BITS IS CONTAINED WITHIN "RMSSTS" ])%
+
+	LITERAL	STSNOMESSAGE	=	BITN ( 35 );	! DON'T PRINT ERROR MESSAGES
+
+
+%([
+*****************************************************************
+*								*
+*								*
+*	$UTLINT  INTERFACE - PRIVATE RMS ENTRIES		*
+*								*
+*								*
+*****************************************************************
+
+])%
+
+	MACRO $$U_FUNCT(FUNC) =
+		LITERAL %NAME('U$',FUNC) = U$$MAX;
+		%ASSIGN(U$$MAX,U$$MAX+1);
+		%;
+
+	COMPILETIME U$$MAX = 0;
+	$$U_FUNCT(SETENVIR)
+	$$U_FUNCT(GMEM)
+	$$U_FUNCT(GPAGE)
+	$$U_FUNCT(PMEM)
+	$$U_FUNCT(PPAGE)
+	$$U_FUNCT(UNUSED1)
+
+	$$U_FUNCT(CHKDUP)
+	LITERAL U$ENVNEED=U$CHKDUP;	!GE THIS NEEDS RST/FST
+	$$U_FUNCT(CKEYKU)
+	$$U_FUNCT(CKEYKK)
+	$$U_FUNCT(FBYRRV)
+	$$U_FUNCT(FBYRFA)
+	$$U_FUNCT(FNDDATA)
+	$$U_FUNCT(FOLOPATH)
+	$$U_FUNCT(GETBKT)
+	$$U_FUNCT(GETIDB)
+	$$U_FUNCT(GETKDB)
+	$$U_FUNCT(GETROOT)
+	$$U_FUNCT(GTBKTPTR)
+	$$U_FUNCT(MOVEKEY)
+	$$U_FUNCT(PATH)
+	$$U_FUNCT(PUTBKT)
+	$$U_FUNCT(PUTSIDR)
+
+
+
+!	Definition of the argument list passed to RMSUIN.
+!
+
+MACRO
+	NO_OF_ARGS = 0,LH %,
+	RMS_FUNC = 0,RH %,
+
+	ARG_1 = 1,WRD %,
+	ARG_2 = 2,WRD %,
+	ARG_3 = 3,WRD %,
+	ARG_4 = 4,WRD %,
+	ARG_5 = 5,WRD %;
+
+
+! Definition of  a macro to build the argument list to interface with RMS.
+!
+! arg_lst_ptr:	Must be POINTER Struct if it contains addr of argblk.
+!		Must be FORMATS struct if it is addr of argblk.
+! function:	Must be one of the U$$  functions.
+! a1,...  :	List of arguments
+
+MACRO	BLD_ARG_LST (arg_lst_ptr,function) =	!iterative macro
+BEGIN
+
+	MACRO  BLD_LST (a1)[] =		! this is a recursive macro
+	arg_lst_ptr[%COUNT+1,WRD] = a1;	!first argument to the list
+	bld_lst(%REMAINING)			!subsequent args
+	%QUOTE %;
+
+	arg_lst_ptr[RMS_FUNC] = function;	
+	arg_lst_ptr[NO_OF_ARGS] = -(%LENGTH -2);
+					!because this macro has two extra args
+	bld_lst(%REMAINING);
+END %;					!END OF MACRO BLD_ARG_LST
+
+%([
+***********************************************************************
+*								*
+*			START OF XCALLS.REQ			*
+*								*
+*		THIS FILE IS USED ONLY FOR SUBROUTINES		*
+*		USED IN THE PROCESSING OF INDEXED FILES.	*
+*		FOR SUBROUTINES USED FOR SEQUENTIAL OR		*
+*		RELATIVE FILES, SEE "CALLS.REQ".		*
+*		CURRENTLY, THERE ARE 2 TYPES OF			*
+*		MACROS DEFINED HEREIN:				*
+*								*
+*			1 ) ACTUAL SUBROUTINE CALLS		*
+*			2 ) STANDARD ARGUMENT MACROS		*
+*								*
+***********************************************************************
+
+AUTHOR: S. BLOUNT
+
+])%
+
+%([
+***********************************************************************
+*		CALL MACROS (SHORTENED FOR EASE OF USE)		      *
+***********************************************************************
+])%
+
+
+MACRO
+	CALLADJIPTR ( A, B )	=	CALL2 ( ADJIPTR, A, B ) %,
+	CALLALCBKT ( A,B,C,D)=	CALL4 ( ALCBKT,A,B,C,D) %,
+	CALLALCNEWIDS ( A )	=	CALL1 ( ALCNEWIDS, A ) %,
+	CALLALCRFA ( A )	=	CALL1 ( ALCRFA , A ) %,
+	CALLALCROOT ( A,B)	=	CALL2 ( ALCROOT, A,B ) %,
+	CALLBLDCSIDR ( A,B,C)	=	CALL3 ( BLDCSIDR,A,B,C) %,
+	CALLBLDISIDR ( A,B,C)	=	CALL3 ( BLDISIDR,A,B,C) %,
+	CALLCHECKXAB		=	CALL0 ( CHECKXAB ) %,
+	CALLCHKDUP (A, B)	=	CALL2 ( CHKDUP, A, B) %,
+
+	CALLCKEYKK ( A, B )	=	CALL2 ( CKEYKK, A, B) %,
+	CALLCKEYUU ( A, B )	=	CALL2 ( CKEYUU, A, B) %,
+	CALLCKEYKU ( A, B )	=	CALL2 ( CKEYKU, A, B) %,
+	CALLCLEANUP (A)		=	CALL1 ( CLEANUP,A) %,
+	CALLCOMPRESS ( A,B )	=	CALL2 ( COMPRESS,A,B) %,
+	CALLCOMPRRV (A,B,C,D,E,F)=	CALL6 (COMPRRV,A,B,C,D,E,F) %,
+	CALLCSPT2 ( A,B,C,D,E)	=	CALL5 (CSPT2,A,B,C,D,E) %,
+	CALLDELIDX		=	CALL0 ( DELIDX ) %,
+	CALLDELSIDR ( A )	=	CALL1 ( DELSIDR, A ) %,
+	CALLDELUDR ( A, B)	 =	CALL2 ( DELUDR, A, B) %,
+	CALLDISPFILE		=	CALL0 ( DISPFILE ) %,
+	CALDOAREABLOCKS ( A,B )	=	CALL2 ( DOAREABLOCKS,A, B ) %,
+	CALLDODELIDX ( A, B )	=	CALL2 ( DODELIDX, A, B ) %,
+	CALLDOGETIDX		=	CALL0 ( DOGETIDX ) %,
+	CALLDOKEYBLOCKS ( A,B )	=	CALL2 ( DOKEYBLOCKS,A, B ) %,
+	CALLDOSIDR (A,B,C)	=	CALL3 ( DOSIDR,A,B,C) %,
+	CALLDOUPDIDX ( A, B )	=	CALL2 ( DOUPDIDX, A, B) %,
+	CALLDUMPHEADER ( A )	=	CALL1 ( DUMPHEADER, A ) %,
+	CALLDUMPIDB ( IDBADR )	=	CALL1 ( DUMPIDB, IDBADR ) %,
+	CALLDUMPIRECORD ( A )	=	CALL1 ( DUMPIRECORD, A ) %,
+	CALLDUMPKDB ( KDBADR )	=	CALL1 ( DUMPKDB, KDBADR ) %,
+	CALLDUMPRD ( A )	=	CALL1 ( DUMPRD, A ) %,
+	CALLFBYKEY ( A,B )	=	CALL2 ( FBYKEY,A,B) %,
+	CALLFBYRFA ( A,B,C )	=	CALL3 ( FBYRFA,A,B,C) %,
+	CALLFBYRRV ( A,B )	=	CALL2 ( FBYRRV,A,B) %,
+	CALLFENDOFKEY (A,B)	=	CALL2 ( FENDOFKEY,A,B) %,	! LOCAL ROUTINE
+	CALLFIDXSEQ ( A, B )	=	CALL2 ( FIDXSEQ,A,B) %,
+	CALLFINDIDX (A, B )	=	CALL2 ( FINDIDX,A, B ) %,
+	CALLFNDDATA ( A, B )	=	CALL2 ( FNDDATA, A, B ) %,
+	CALLFNDREC (A,B,C)	=	CALL3 ( FNDREC, A, B, C) %,
+	CALLFOLLOWPATH ( A,B)	=	CALL2 ( FOLLOWPATH,A,B) %,
+	CALLFRECRFA ( A, B )	=	CALL2 ( FRECRFA, A, B ) %,
+	CALLGETBKT (A,B,C,D)	=	CALL4 ( GETBKT,A,B,C,D) %,
+	CALLGETIDB ( A )	=	CALL1 ( GETIDB, A ) %,
+	CALLGETIDX ( A, B)	=	CALL2 ( GETIDX,A , B ) %,
+	CALLGETKDB ( A )	=	CALL1 ( GETKDB, A ) %,
+	CALLGETROOT ( A, B )	=	CALL2  ( GETROOT, A, B ) %,
+	CALLGTNBKT ( A,B,C )	=	CALL3 ( GTNBKT, A, B, C ) %,
+	CALLGTBKTPTR ( A, B, C )=	CALL3 ( GTBKTPTR,A,B,C) %,
+	CALIDXFILPROLOG 	=	CALL0 ( IDXFILEPROLOG ) %,
+	CALLIDXUPDATE (A,B,C,D)	=	CALL4 ( IDXUPDATE,A,B,C,D) %,
+	CALLI1STSIDR ( A,B,C)	=	CALL3 ( I1STSIDR,A,B,C) %,
+	CALINSRTIRECORD(A,B,C,D,E)=	CALL5 ( INSRTIRECORD,A,B,C,D,E) %,
+	CALLINSRTUDR ( A,B,C,D,E)	=	CALL5 ( INSRTUDR,A,B,C,D,E) %,
+	CALLINSRTSIDR( A,B,C)	=	CALL3 ( INSRTSIDR,A,B,C) %,
+	CALLMAKEIDB ( A,B,C )	=	CALL3 ( MAKEIDB, A, B, C) %,
+	CALLMAKEIRECORD ( A, B, C )=	CALL3 ( MAKEIRECORD,A, B, C) %,
+	CALLMAKEUDR ( A,B )	=	CALL2 ( MAKEUDR,A,B) %,
+	CALLMAKESIDR (A,B)	=	CALL2 ( MAKESIDR,A,B) %,
+	CALLMAKIDX		=	CALL0 ( MAKIDX ) %,
+	CALLMAKROOT ( A, B )	=	CALL2 ( MAKROOT, A, B ) %,
+	CALLMOVEKEY ( A, B )	=	CALL2 ( MOVEKEY, A, B) %,
+	CALLPOSNEXT ( A, B )	=	CALL2 ( POSNEXT, A, B ) %,
+	CALLPOSRP ( A, B )	=	CALL2 ( POSRP,A, B) %,
+	CALLPOSRFA ( A, B )	=	CALL2 ( POSRFA, A, B ) %,
+	CALLPUTBKT ( A, B )	=	CALL2 ( PUTBKT, A, B ) %,
+	CALLPUTIDX		=	CALL0 ( PUTIDX ) %,
+	CALLPUTSIDR ( A )	=	CALL1 ( PUTSIDR, A ) %,
+	CALLREADADB ( A )	=	CALL1 ( READADB, A ) %,
+	CALLREMOVRECORD(A,B)	=	CALL2 ( REMOVRECORD,A,B) %,
+	CALLSDATABKT ( A, B )	=	CALL2 ( SDATABKT, A, B ) %,
+	CALLSHUFFLEIDS ( A )	=	CALL1 ( SHUFFLEIDS, A ) %,
+	CALLSINDEXBKT ( A, B )	=	CALL2 ( SINDEXBKT, A, B ) %,
+	CALLSKIPRECORD ( A, B,C )=	CALL3 ( SKIPRECORD, A, B, C) %,
+	CALLSETKDB ( A )	=	CALL1 ( SETKDB, A ) %,
+	CALLSETNRP ( A, B )	=	CALL2 ( SETNRP, A, B ) %,
+	CALLSETPUT ( A )	=	CALL1 ( SETPUT, A ) %,
+	CALLSPLIT ( A,B,C,D )	=	CALL4 ( SPLIT,A,B,C,D) %,
+	CALLSPTINDEX ( A, B, C)	=	CALL3 ( SPTINDEX, A, B, C) %,
+	CALLSPTSIDR ( A,B,C)	=	CALL3 ( SPTSIDR, A, B, C ) %,
+	CALLSQUEEZESIDR ( A, B)	=	CALL2 ( SQUEEZESIDR, A, B ) %,
+	CALLUNDOKDBS		=	CALL0 ( UNDOKDBS ) %,
+	CALLUPDRRVS ( A, B )	=	CALL2 ( UPDRRVS,A,B) %,
+	CALLUPDUDR (A, B)	=	CALL2 ( UPDUDR,A, B) %;
+
+%([*********	END OF XCALLS.REQ	*********** ])%
+
+%([
+********************************************************
+*							*
+*		START OF XFILES.REQ			*
+*							*
+*		CONTENTS:				*
+*							*
+*	1. BLOCK-TYPE DEFINITIONS FOR INDEXED FILES	*
+*	2. AREA DESCRIPTOR STRUCTURES			*
+*	3. INDEX DESCRIPTOR STRUCTURES		*
+*	4. MISCELLANEOUS MACROS USED IN CONVERSIONS	*
+*							*
+*********************************************************
+
+AUTHOR: S. BLOUNT
+
+])%
+
+%([
+****************************************************************
+*			BLOCK-TYPE DEFINITIONS			*
+*****************************************************************
+])%
+
+
+		%([ BLOCK-TYPES FOR RMS-20 INDEXED FILE PROLOGUES ])%
+
+	LITERAL	ADBCODE =	%O'1756',			! AREA DESCRIPTOR BLOCK
+		IDBCODE =	%O'1755';			! INDEX DESCRIPTORS
+
+
+
+
+
+%([
+*****************************************************************
+*		AREA DESCRIPTOR BLOCK				*
+*****************************************************************
+])%
+
+%([	FORMAT OF THE AREA DESCRIPTOR BLOCK
+	===================================
+
+	!=====================================!
+	!       BID        !       BLN        !
+	!-------------------------------------!
+	!         <UNUSED>          !   BKZ   !	AREA #0
+	!-------------------------------------!
+	!              <UNUSED>               !
+	!-------------------------------------!
+	!              <UNUSED>               !
+	!-------------------------------------!
+	!              <UNUSED>               !
+	!-------------------------------------!
+	!              <UNUSED>               !
+	!-------------------------------------!
+	!         <UNUSED>          !   BKZ   !	AREA #1
+	!-------------------------------------!
+	!                  .                  !	  .
+	!                  .                  !	  .
+	!                  .                  !	  .
+	!=====================================!
+])%
+
+
+	%([ STRUCTURE DEFINITIONS FOR AREA DESCRIPTOR ])%
+
+	MACRO	ADBBKZ	=	0,9 %;			! BUCKET-SIZE FOR AREA
+
+	%([ SIZE OF EACH AREA DESCRIPTOR (ALWAYS ONE WORD) ])%
+
+	LITERAL	AREADESCSIZE	=	5;		! EACH ABD ENTRY
+
+
+
+
+
+
+
+
+%([
+*****************************************************************
+*		INDEX DESCRIPTOR BLOCK				*
+*****************************************************************
+])%
+
+%([	FORMAT OF AN INDEX DESCRIPTOR BLOCK
+	===================================
+
+	!=====================================!
+	!       BID        !       BLN        !
+	!-------------------------------------!
+	!       ROOT       !     <UNUSED>     !
+	!-------------------------------------!
+	! LEVELS !            NXT             !
+	!-------------------------------------!
+	!              <UNUSED>               !
+	!-------------------------------------!
+	!              <UNUSED>               !
+	!-------------------------------------!
+	!              <UNUSED>               !
+	!-------------------------------------!
+	!                                     !
+	!                                     !
+	!            COPY OF USER             !
+	!                                     !
+	!               KEY XAB               !
+	!                                     !
+	!                                     !
+	!                                     !
+	!-------------------------------------!
+	!                                     !
+	!                                     !
+	!              KEY NAME               !
+	!              (7 WORDS)              !
+	!                                     !
+	!=====================================!
+])%
+
+	%([ DEFINITIONS FOR IDB FIXED-LENGTH HEADER ])%
+
+	LITERAL	IDBXABOFFSET	=	6,		! OFFSET TO USER XAB
+		IDBHDRSIZE	=	IDBXABOFFSET,	! SIZE OF HEADER (SAME)
+		IDBSIZE		=	IDBHDRSIZE + KEYNAMESIZE;	! SIZE OF IDB (MINUS XAB)
+
+	%([ STRUCTURE DEFINITIONS FOR FIXED HEADER ])%
+
+	MACRO	!BLOCKTYPE	=	0,LH$,		! BLOCK-TYPE
+		!BLOCKLENGTH	=	0,RH$,		! SIZE OF BLOCK
+		IDBROOT		=	1,LH %,		! ROOT BUCKET FOR INDEX
+		IDBRESER1	=	1,RH %,		! ***<UNUSED>***
+		IDBLEVELS	=	2,27,9 %,	! # OF LEVELS
+		IDBNXT		=	2,0,27 %,	! NEXT IDB IN CHAIN
+		IDBRESER2	=	3,WRD %,	! ***<UNUSED>***
+		IDBRESER3	=	4,WRD %,	! ***<UNUSED>***
+		IDBRESER4	=	5,WRD %;	! ***<UNUSED>***
+
+
+
+
+
+
+
+%([
+****************************************************************
+*			MISCELLANEOUS MACROS				*
+*****************************************************************
+])%
+
+
+	%([ MACRO TO CONVERT AN AREA NUMBER TO A BUCKET SIZE ])%
+
+	MACRO	AREATOBKTSIZE ( AREANUM )=
+		.ADB [  ( AREANUM * AREADESCSIZE ) + 1, ADBBKZ ] %;
+
+
+
+%([
+****************************************************************
+*			END OF XFILES.REQ			*
+*****************************************************************
+])%
+

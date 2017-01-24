@@ -1,0 +1,252 @@
+;<SU-UTILITIES>BMERGE.MAC.5, 26-Apr-85 10:55:45, Edit by FMF
+; Create a FIXSW to enable edit 4, assume off
+;<SU-UTILITIES>BMERGE.MAC.4, 24-Apr-85 11:00:00, Edit by FMF
+; Make sure the dates we put in the .IDX file aren't more current than
+;  the write date of the .TXT file
+;<SU-UTILITIES>BMERGE.MAC.3, 23-Apr-85 08:44:39, Edit by FMF
+; Make sure to close the .IDX JFN
+;<SU-UTILITIES>BMERGE.MAC.2, 23-Apr-85 08:43:05, Edit by FMF
+; Open the .DATA file in thawed mode
+
+TITLE BMERGE - Merge BBOARD .DATA files into .IDX files
+SUBTTL Frank M. Fujimoto / Stanford University / April 1985
+
+;This program will read all the .DATA files in BBD: and merge them into
+; .IDX files.  Note that this program will check if that particular
+; user exists.  It will also use the more recent date and put it into
+; the .IDX file
+
+;This program will create a table of which user numbers are real users.
+; This is used to speed up processing of multiple BBOARDS.
+
+;To update the .IDX file of the SYSTEM: bboard, make sure that an .IDX
+; file exists, then drop a non-zero value into SYSBBD and run the program.
+
+SEARCH MONSYM,MACSYM
+.REQUIRE SYS:MACREL
+ASUPPRESS
+SALL
+
+.TEXT "BMERGE/SAVE"
+
+IFNDEF FIXSW,<FIXSW==0>		;Set to non-zero to "fix" .IDX file (i.e.
+				; guarantee that the dates set aren't past
+				; the last write date of the .TXT file)
+				; Normally this should be off
+
+;Macro definitions
+
+;Like TMSG, but for an error
+DEFINE EMSG (STR) <
+	HRROI A,[ASCIZ \STR\]
+	ESOUT%
+>;EMSG
+
+;Constant definitions
+
+A=1				;Standard ACs
+B=2
+C=3
+D=4
+
+PDLEN==100			;Length of push-down stack
+.USRLH==500000			;Left half of a user number
+
+MMRPAG==20			;Page for .IDX read date
+MMWPAG==40			;Page for .IDX write date
+
+DATPAG==100			;Page to use for .DATA file
+IDXRPG==101			;Page for .IDX read
+IDXWPG==102			;Page for .IDX write
+USRMAP==103			;User map here (=0 if not usr, <> 0 if so)
+
+;Block storage
+
+PDL:	BLOCK PDLEN		;The push-down stack
+
+IFN FIXSW,<
+WRITED:	BLOCK 1			;Write date of the .TXT file
+>;IFN FIXSW
+SYSBBD:	1			;<> 0 if doing system bboard
+DATJFN:	BLOCK 1			;JFN for .DATA file list goes here
+DATLEN:	BLOCK 1			;Length of this data file
+IDXJFN:	BLOCK 1			;JFN for current .IDX file here
+IDXNAM:	BLOCK 10		;Name for current .IDX file
+MAXUSR:	BLOCK 1			;Largest user number we've done so far
+
+;Code starts here
+
+START:	RESET%			;Clear up the world
+	MOVE P,[IOWD PDLEN,PDL]	;Set the stack up
+	CALL INIT		;Set things up
+START0:	HRRZ A,DATJFN		;Get the JFN
+	MOVX B,OF%RD!OF%THW	;Want thawed read access
+	OPENF%			;Try to get it
+	IFJER.
+	  EMSG <Couldn't open .DATA file, continuing...
+>
+	  JRST START1		;Shouldn't get this...
+	ENDIF.
+IFN FIXSW,<
+	HRRZS A			;Isolate the JFN
+	MOVE B,[1,,.FBWRT]	;Get the write date of the file
+	MOVEI C,WRITED		;Save as the write date
+	GTFDB%			;Try to get it
+>;IFN FIXSW
+	HRROI A,IDXNAM		;We're going to make the name for this file
+	HRRZ B,DATJFN		;Get the JFN
+	MOVX C,FLD(.JSAOF,JS%DEV)!FLD(.JSAOF,JS%DIR)!FLD(.JSAOF,JS%NAM)!JS%PAF
+	JFNS%			;Output the name of the file
+	HRROI B,[ASCIZ \.IDX\]	;But want the .IDX file type
+	SETZ C,			;This code is executed relatively rarely,
+	SOUT%			; thus the lack of a CPYSTR-type subroutine
+	IDPB C,A		;Tie it off with a null
+	MOVX A,GJ%SHT!GJ%OLD	;See if the file lives
+	HRROI B,IDXNAM		;Pointer to the name of the file
+	GTJFN%			;Get it
+	IFJER.			;We lose
+	  MOVX A,GJ%SHT!GJ%OLD	;Try to create it
+	  HRROI B,IDXNAM
+	  GTJFN%		;Does this win?
+	  IFJER.		;No...
+	    EMSG <Couldn't create >
+	    HRROI A,IDXNAM
+	    PSOUT%		;Say what made us bomb
+	    JRST STOP		;And shut down
+	  ENDIF.
+	ENDIF.
+	HRRZM A,IDXJFN		;Save the JFN
+	MOVX B,OF%RD!OF%WR!OF%THW ;Want read/write access
+	OPENF%			;Try to open it
+	IFJER.
+	  EMSG <Couldn't open >
+	  HRROI A,IDXNAM	;Good thing we have this name!
+	  PSOUT%
+	  JRST STOP		;Don't even try to recover
+	ENDIF.
+	CALL PROCES		;Try to process this bboard
+	HRRZ A,DATJFN		;Get the JFN
+	SKIPN SYSBBD		;Only if we aren't doing the system bboard...
+	 TXO A,CO%NRJ		;Don't want to release the JFN
+	CLOSF%			;But want to close the file
+	 ERJMP .+1
+	MOVE A,IDXJFN		;Get the JFN for the .IDX file
+	CLOSF%			;Close it
+	 ERJMP .+1
+START1:	SKIPE SYSBBD		;Doing the system bboard?
+	 JRST STOP		;Yes, stop now
+	MOVE A,DATJFN		;Get the JFN with flags
+	GNJFN%			;Try to get more
+	 ERJMP STOP		;If no more, then we're all done
+	JRST START0		;Otherwise go for more
+
+INIT:	SKIPE SYSBBD		;Doing system bboard?
+	IFSKP.			;No...
+	  MOVX A,GJ%SHT!GJ%OLD!GJ%IFG ;Short form, old file, wildcards
+	  HRROI B,[ASCIZ \BBD:*.DATA\] ;Get all the data files
+	ELSE.			;Otherwise, we are
+	  MOVX A,GJ%SHT!GJ%OLD	;Short form, old file
+	  HRROI B,[ASCIZ \SYSTEM:MAIL.DATA\] ;Get the data file
+	ENDIF.
+	GTJFN%			;See if there are any?
+	IFJER.
+	  EMSG <No BBOARDS!>	;What???
+	  JRST STOP
+	ENDIF.
+	MOVEM A,DATJFN		;Save the JFN away
+	SETOM MAXUSR		;We haven't tried any users yet
+	RET			;And go back
+
+;PROCES - Process a bboard
+
+PROCES:	HRRZ A,DATJFN		;Get the JFN for the data file
+	SIZEF%			;How long?
+	 ERJMP R		;Forget it...
+	MOVEM C,DATLEN		;How many pages we need to do
+	ACVAR <CURUSR>
+	SETZM CURUSR		;Start off with no user
+PROCE0:	SOSG DATLEN		;Do we have more pages to do?
+	 RET			;No, go back
+	MOVE A,CURUSR		;Get the current user
+	LSH A,1			;Multiply by two to get our page number
+	LSH A,-^D9		;Get page number into the right half
+	HRL A,DATJFN		;Get the JFN in the left
+	MOVE B,[.FHSLF,,DATPAG]	;Where we want to read the page in
+	MOVX C,PM%RD		;Read access
+	PMAP%			;Read it in
+	MOVE A,CURUSR		;Get the user number again
+	LSH A,-^D9		;Make it a page number
+	ADDI A,MMRPAG		;Get location of the read page
+	HRL A,IDXJFN		;Want this page of the .IDX file
+	MOVE B,[.FHSLF,,IDXRPG]	;And want to map it to our idx read area
+	MOVX C,PM%RD!PM%WR!PM%PLD ;Read-write preloaded
+	PMAP%			;Get it
+	MOVS IDXRPG*1000	;Touch the page
+	MOVE A,CURUSR		;Same, but for the write page
+	LSH A,-^D9
+	ADDI A,MMWPAG
+	HRL A,IDXJFN
+	MOVE B,[.FHSLF,,IDXWPG]
+	MOVX C,PM%RD!PM%WR!PM%PLD
+	PMAP%
+	MOVS IDXWPG*1000
+	MOVEI D,400		;How many users per page
+PROCE1:	CAMG CURUSR,MAXUSR	;Have we done this user yet?
+	IFSKP.			;No...
+	  MOVEM CURUSR,MAXUSR	;Save it away
+	  MOVEI A,.NULIO	;Go to the bit bucket
+	  MOVE B,CURUSR		;Get the user
+	  HRLI B,.USRLH		;Make this a user number
+	  DIRST%		;Does the person exist?
+	  IFNJE.		;Yes...
+	    SETOM USRMAP*1000(CURUSR) ;Yes, flag so
+	  ELSE.
+	    SETZM USRMAP*1000(CURUSR) ;No, say that, then
+	    JRST PROCE2		;And go to the end of the loop
+	  ENDIF.
+	ENDIF.
+	SKIPN USRMAP*1000(CURUSR) ;See if this user exists
+	 JRST PROCE2		;No, go around
+	MOVE A,CURUSR		;Get the current user
+	LSH A,1			;Double it
+	ANDI A,777		;Get only the right 9 bits
+	MOVE B,CURUSR		;Get the user again
+	ANDI B,777		;Mask this off, too
+	MOVE C,DATPAG*1000(A)	;Get the read date
+	 ERJMP PROCE2		;Page no good, inefficient, but go on
+	CAMLE C,IDXRPG*1000(B)	;Is it less than the .IDX read date?
+	 MOVEM C,IDXRPG*1000(B)	;No, save it away
+	MOVE C,DATPAG*1000+1(A)	;Now take a look at the write date
+	CAMLE C,IDXWPG*1000(B)
+	 MOVEM C,IDXWPG*1000(B)	;Write it if we need to
+IFN FIXSW,<
+	MOVE C,WRITED		;Get the write date of the .TXT file
+	CAMGE C,IDXRPG*1000(B)	;Do they have a reasonable read date?
+	 MOVEM C,IDXRPG*1000(B)	;No, make it so
+	CAMGE C,IDXWPG*1000(B)	;How about the write date
+	 MOVEM C,IDXWPG*1000(B)	;No, fix that, too
+>;IFN FIXSW
+PROCE2:	AOS CURUSR		;Bump up our user number count
+	SOJG D,PROCE1		;Go until we're done
+	SETO A,			;Want to unmap
+	MOVE B,[.FHSLF,,DATPAG]
+	SETZ C,
+	PMAP%			;Do the .DATA page
+	MOVE B,[.FHSLF,,IDXRPG]	;.IDX read page
+	PMAP%
+	MOVE B,[.FHSLF,,IDXWPG]	;And the .IDX write page
+	PMAP%
+	JRST PROCE0		;Go until we're done
+	ENDAV.
+
+ERROR:	EMSG <JSYS error - >	;Not too informative...
+	MOVEI A,.PRIOU		;To the tty
+	HRLOI B,.FHSLF		;Latest error for ourselves
+	SETZ C,			;No maximum length for message
+	ERSTR%			;Output the error message
+	 JFCL
+	 JFCL
+STOP:	HALTF%			;Shut down
+	JRST START		;Give 'em another chance...
+
+END START

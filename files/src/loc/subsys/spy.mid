@@ -1,0 +1,272 @@
+;-*-Midas-*-
+
+	Title @SPY -- Create a spy link to a terminal
+
+.DECSAV
+
+	A=1
+	B=2
+	C=3
+	D=4
+	V=5
+	t=6
+	tt=7
+	t3=10
+	t4=11
+	P=17
+
+.insrt lib:symbols
+.insrt lib:macros
+.insrt lib:prarg
+
+InfBlk:	Block 20
+
+Term:	0			;saved tty# for TLINK
+WUser:	Block 10		;wild username
+TUser:	Block 10		;test username
+WPrefx:	Asciz "*."
+UsrNum:	0
+
+RSCLen==60
+RSCTxt:	Block RSCLen
+RSCUsr:	Block 50
+
+PDLen==10
+PDL:	Block PDLen
+
+Start:	RESET
+	Move p,[-PDLen,,PDL-1]
+	ENABLE
+Ena:	Movei a,.fhslf
+	Setob b,c
+	EPCAP			;enable myself, please
+GetJCL:	Movei a,.rsini
+	RSCAN
+	  Jrst [Type "?RSCAN failure: "
+		Call Barf
+		.Logout]
+
+ChLoop:	PBIN
+	Cain a,40
+	  Jrst GtRest
+	Cain a,^J
+	  Jrst CtyLuk
+	Jrst ChLoop
+
+GtRest:	Movei a,.priin
+	Hrroi b,RSCTxt
+	Movei c,RSCLen*5-1
+	Movei d,^J
+	SIN
+	Setz d,
+	Dpb d,b
+TryNum:	Hrroi a,RSCTxt		;try a number
+	Movei c,8.
+	NIN
+	  Jrst WoUser		;not a number, get the user for this string
+	Addi b,.fhslf		;400000 + tty number
+	Movem b,Term
+
+WoUser:	Hrroi a,RSCTxt
+	Hrroi b,RSCUsr
+	Movei c,40.
+	Movei d,40		;space
+	SIN			;this will put all until a space into RSCUsr
+	Setz d,
+	Dpb d,b
+
+	Hrroi a,RSCUsr
+	Movei c,8.
+	NIN
+	  Jrst TryUsr
+	Addi b,.ttdes
+	Movem b,Term
+	Jrst MakLnk		;trust me, this is really a tty, uh huh...
+
+TryUsr:	Movx a,RC%EMO
+	Hrroi b,RSCUsr
+	Setz c,
+	RCUSR
+	  Erjmp FillIn
+	Jumpe c,FillIn
+	Movem c,UsrNum
+	Jrst Lookee
+
+
+Lookee:	Setz v,			;job number
+Look1:	Aos v			;increment
+	Move a,v
+	Move b,[-3,,InfBlk]
+	Movei c,.jijno
+	GETJI
+	  Jrst [Cain a,GTJIX3	;invalid -- all outta jobs
+		  Jrst FillIn
+		Jrst Look1]	;otherwise, just "no such job"
+	Move a,InfBlk+.jiuno
+	Came a,UsrNum		;is it who we want?
+	  Jrst Look1		;no, get the next
+	Hrre a,InfBlk+.jitno
+	Jumpl a,Look1		;detached, punt
+	Addi a,400000		;terminal designator time
+	Movem a,Term
+	Jrst MakLnk		;linkem' time!
+
+NoLuck:	Type "?Nobody here by that name"
+	.Logout
+
+FillIn:	Hrroi a,WPrefx
+	Hrroi b,WUser
+	Setz c,
+	SIN
+	Hrroi a,RSCUsr
+	SIN
+	IDpb c,b
+Lookie:	Setz v,			;look again
+LAgain:	Aos v
+	Move a,v
+	Move b,[-3,,InfBlk]
+	Movei c,.jijno
+	GETJI
+	  Jrst [Cain a,GTJIX3	;invalid -- all outta jobs
+		  Jrst NoLuck
+		Jrst LAgain]	;otherwise, just "no such job"
+	Skipg InfBlk+.jitno	;if tty# = -1, it's detached
+	  Jrst LAgain		;  so look again
+	Hrroi a,TUser
+	Move b,InfBlk+.jiuno
+	DIRST
+	  Nop
+	Movei a,.wlstr		;wild strings (actually 0,,0)
+	Hrroi b,WUser
+	Hrroi c,TUser
+	WILD%
+	Jumpn a,LAgain		;a=0 means match
+	Hrrz a,InfBlk+.jitno	;terminal number now
+	Addi a,.ttdes
+	Movem a,Term
+	Jrst MakLnk
+
+CTYLuk:	Hrroi a,[Asciz "CTY:"]
+	STDEV
+	  Jrst [Type "?Can't find the CTY: "
+		Call Barf
+		.Logout]
+	Tlz b,-1
+	Addi b,400000		;make it a designator
+	Movem b,Term
+MakLnk:	Movx a,TL%ERO		;establish remote to object,
+	Tro a,-1		;  to me
+	Hrrz b,Term		;  from this terminal designator
+	TLINK
+	  Jrst [Type "?Linking failure: "
+		Call Barf
+		.Logout]
+
+shohoo:	Hrrz a,Term
+	Move b,[-<.JIMAX+1>,,InfBlk]
+	Movei c,.jijno
+	GETJI
+	  Jrst [Type "?GETJI lossage: "
+		Call Barf
+		.Logout]
+	Move a,InfBlk+.jijno	;get job number
+	tlne a,-1		;-1 is no job, lh might have assign bit flag
+	  jrst [Type "[No Job]"
+		 .Logout]
+	Type "[Job "
+	Movei a,.priou
+	Move b,InfBlk+.jijno
+	Movei c,10.
+	NOUT
+	  Nop
+	Skipn InfBlk+.jiuno	;if no user,
+	  Jrst [Type ", Not logged in"
+		jrst shoho0]
+	Type ", User "
+	Movei a,.priou
+	Move b,InfBlk+.jiuno
+	DIRST
+	  Jrst [Type "?DIRST lossage: "
+		Call Barf
+		.Logout]
+shoho0:	Type ", "
+	Skipn b,InfBlk+.jipnm	;if there's no program name,
+	  Move b,InfBlk+.jisnm	; use the subsytem name
+	Call SixTyp
+	type ", idle "
+	move 1,infblk+.JIJNO
+	txo 1,ID%TTY		;want tty idle time
+	IDLE%
+	  erjmp [setz 1,
+		 jrst .+1]
+	move t,1
+	movei tt,1000.
+	call timprt
+	CType "]
+	.Logout
+
+SixTyp:	Setz a,
+	Lshc a,6
+	Addi a,40
+	PBOUT
+	Jumpn b,sixtyp
+	Ret
+
+;TIME PRINTER
+
+;	T:	TIME TO BE PRINTED IN SECONDS
+;	TT:	NUMBER OF TICKS PER SECOND
+
+tquant:	<60.*60.>			;hours
+	60.				;minutes
+	1				;seconds
+ntquant==.-tquant
+
+TIMPRT:	jumpl t,[movei 1,"?
+		 PBOUT%
+		 return]			
+	pushn p,[t,tt,t3,t4]
+	IDIVI	T,0(TT)		;GET SECONDS
+	PUSH	P,T+1
+	idivi t,<24.*60.*60.>	;get days
+	skipg 2,t		;any?
+	  jrst tp0		;  nope...
+	movei 1,.priou
+	movei 3,10.
+	NOUT%
+	  nop
+	type "d "
+tp0:	move t,tt		;use remainder from days
+	setz t4,		;use temp flag to say first non-0 quanta found
+	movsi t3,-ntquan	;aobjn to quant table
+timpr0:	move 1,tquant(t3)	;divisor
+	idivi t,(1)		;see how many of this size quanta
+	caig 1,1		;if 1 (seconds)
+	  jrst timpr1		;  then always show, even if 0
+	jumpn t,timpr1		;some...
+	jumpe t4,timpr2		;need to see 0's now?  no, so ignore
+timpr1:	movei 1,":
+	skipe t4		;first one?
+	  PBOUT%		;  no, so colon as separator
+	movei 1,.priou
+	move 2,t		;the units
+	skipe t4		;first one?
+	 skipa 3,[no%lfl+no%zro+no%oov+field(2,no%col)+10.]
+	  movei 3,10.		;yes, floating width decimal
+	NOUT%			;output it
+	  nop			;  shouldn't fail
+	seto t4,		;not the first one anymore
+timpr2:	move t,t+1		;work on the remainer now
+	aobjn t3,timpr0		;go do the next quanta
+	movei 2,".		;decimal point
+	BOUT%			;now
+	move 2,-3(p)		;get ticks/sec
+	idivi 2,10.		;TICKS PER 1/10 TH OF A SECOND
+	pop p,t			;fractions of seconds (in ticks)
+	idivi t,(2)		;FIND OUT HOW MANY TENTHS
+	movei 2,"0(t)		;turn into a char
+	BOUT%			;blast it out
+	popn p,[t4,t3,tt,t]
+	return
+
+	End Start

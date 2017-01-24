@@ -1,0 +1,651 @@
+Title RUNNER - Run a program
+Search Monsym, Macsym
+.require sys:macrel.rel
+extern .jbsym			;for symbolic pc lookup in error routine
+
+
+bugs==:0			;no bugs
+pdllen==:100			;stack size
+buflen==:200			;command and atom buffer size
+
+
+a=:1
+b=:2
+c=:3
+d=:4
+e=:5
+ac16=:16
+p=:17
+sym==:6				;ac used by error routines for symbol address
+.chdqt==:42			;char defn ala Macsym
+
+
+define parse (field) <
+	movei b,field
+	call parser
+>
+
+define putchr (char) <
+	movei c,char
+	idpb c,a
+>
+
+define putstr (ptr) <
+	move b,ptr
+	call cpystr
+>
+
+define makptr (ac) <
+	tlc ac,-1
+	tlce ac,-1
+	 tlnn ac,-1
+	  hrli ac,(<point 7,0>)
+>
+
+define amsg (msg) <
+ifn bugs,<
+	push p,a
+	tmsg <msg>
+	pop p,a
+	>
+>
+
+define dmsg (msg) <
+ifn bugs,<
+	push p,a
+	hrroi a,[asciz \
+msg\]
+	call domsg
+	pop p,a
+	>
+>
+
+define trace (lbl) <
+	dmsg <lbl:
+>
+>
+
+define show (nam,loc) <
+ifn bugs,<
+	dmsg <	nam = >
+	push p,b
+ifnb <loc>,<move b,loc>
+ifb <loc>,<move b,nam>
+	call shower
+	pop p,b
+	call pcrlf
+	>
+>
+
+define say (nam,loc) <
+ifn bugs,<
+	dmsg <	nam = >
+	push p,sym
+ifnb <loc>,<move sym,loc>
+ifb <loc>,<move sym,nam>
+	call what
+	pop p,sym
+	call pcrlf
+	>
+>
+
+define saystk (n) <
+ifn bugs,<
+	dmsg <	stack = >
+	push p,b
+	hlrz b,n-1(p)
+	call shower
+	pop p,b
+	amsg <,,>
+	push p,sym
+	hrrz sym,n-1(p)
+	call what
+	pop p,sym
+	call pcrlf
+	>
+>
+
+	Subttl	Storage
+
+
+zerbeg==:.
+evpt:	block 1			;entry vector point desired
+exejfn:	block 1			;file handle on program to run
+exefrk:	block 1			;fork handle on program to run
+snames:	block 2			;system and program names
+rparse:	block 1			;reparse address
+rparsp:	block 1			;stack value at reparse
+prserr:	block 1			;alternate branch address for parsing error
+cmderr:	block 1			;alternate branch address for comndjsys error
+cstate:	block .cmgjb+1		;command state block
+ csbend==:.-1			;end of CSB
+gjfnbk:	block .gjatr+1		;long form get-jfn block
+ gjbend==:.-1			;end of GJB
+combuf:	block buflen		;command buffer
+atmbuf:	block buflen		;atom buffer
+rscbuf:	block buflen+9		;rescan buffer buffer
+filnam:	block 8			;put the program filename here
+errpc:	block 1			;pc error routine called from
+erracs:	block 17		;acs preserved by error routines
+pdl:	block pdllen		;stack
+zerend==:.-1
+
+	Subttl	Main
+
+
+start:	jsp p,init
+	call getjcl		;input command line
+	call putjcl		;load rescan buffer
+	call runfrk		;run the program in a subfork
+stop:	HALTF%
+	jrst stop
+
+
+;JSP P,INIT [a]			!init routine called before stack set up
+
+init:	setzm zerbeg		;note that this clears stack, so give
+	move a,[zerbeg,,zerbeg+1]  ; thanks our return address is not there
+	blt a,zerend
+	RESET%
+	movem p,pdl		;store our return address on the stack
+	move p,pdlini		;init the stack pointer
+	ret			;and return as if called normally
+
+
+getjcl:	trace getjcl
+	call inicsb		;initialize parser command state block
+	movei a,.nulio		;set command jfns not to echo
+	hrrm a,cstate+.cmioj
+	hrroi a,zero		;no prompt string needed at this point
+	movei b,jcltop		;reparse address
+	call promp1
+	movei a,.rsini		;look for jcl
+	RSCAN%
+	 erjmp askjcl		;none if error
+	jumple a,askjcl		;none if zero chars
+jcltop:	trace jcltop
+	movei a,askjcl		;set up so parse error in jcl
+	movem a,prserr		; will simply go prompt user
+	parse runcmd		;look for RUNNER
+toplvl:	trace toplvl
+	parse evnum		;parse number defaulted to 0
+	jumpl b,everr		;as entry vector offset, negative is error
+	movem b,evpt
+	call prssys		;parse name of system program
+	movem b,exejfn
+	parse rscmd		;parse text to pass as command line arg
+	call cpycmd		;copy atom buffer to rescan buffer
+	call confrm
+	ret
+
+
+;no valid command line, need to prompt user
+
+askjcl:	trace askjcl
+	skipn p,rparsp		;restore stack
+	 move p,pdlini
+	hrroi a,runner		;print a meaningful prompt
+	call prompt
+	jrst toplvl
+
+
+everr:	skipe prserr		;look for non-default error handler
+	 jrst @prserr		;use special handler
+	hrroi a,[asciz /Entry vector offset cannot be negative/]
+	ESOUT%
+	jrst noprs1		;reprompt
+
+	Subttl	Utilities
+
+
+cpycmd:	move a,fnptr		;get the filename proper of the program
+	move b,exejfn
+	movx c,<fld .jsaof,js%nam>
+	JFNS%
+	move a,rscptr		;put the program name in its cmd line
+	putstr fnptr
+	ldb b,atmpt1		;check for no data line
+	jumpe b,cpycm1
+	putchr .chspc		;space
+	putstr atmptr		;plus the specified command line arg
+cpycm1:	putchr .chlfd		;terminate line with lf
+	putchr .chnul		;make asciz
+	ret
+
+
+putjcl:	move a,rscptr		;send it
+	RSCAN%
+	 ercal warn
+	ret
+
+
+;CALL GTSNMS [a-c]		!get subsystem/program names into SNAMES
+;gives	snames/ subsystem name
+;	snames+1/ program name
+
+gtsnms:	skipe snames		;only if we have not done so once
+	 ret
+	seto a,
+	move b,[-2,,snames]
+	movei c,.jisnm		;note .jipnm = .jisnm + 1
+	GETJI%
+	 ercal fatal
+	ret
+
+
+;CALL PCRIF			!print a crlf if not at left margin already
+
+pcrif:	saveac <a,b>
+	movei a,.priou		;cursor position as vert,,horiz
+	RFPOS%
+	jxn b,.rhalf,pcrlf1	;print a crlf if rh neq 0
+	ret
+
+pcrlf:	saveac a
+pcrlf1:	hrroi a,crlf		;print a crlf on primary output
+	PSOUT%
+	ret
+
+
+;CALL DOMSG (a)	 		!print a message
+;takes	a/ string pointer to message
+
+domsg:	saveac b
+	makptr a		;convert -1 or zero lh in arg into byte ptr
+	push p,a		;save arg
+	movei a,.priou		;cursor position as vert,,horiz
+	RFPOS%
+	pop p,a			;restore arg
+	jxn b,.rhalf,domsg1	;skip crlf if all rh bits 0
+	ibp a
+	ibp a
+domsg1:	PSOUT%
+	ret
+
+
+;CALL SHOWER (b)		!show numeric value
+;takes	b/ value
+
+shower:	saveac <a,c>
+	movei a,.priou
+	movei c,8
+	NOUT%
+	 ercal warn
+	ret
+
+
+;CALL WHAT (sym)		!show symbolic value
+;takes	sym/ value to display symbolically
+
+what:	saveac <a,b,c,d,e>
+	callret symout
+
+
+;dumb string copy
+
+cpyst1:	idpb c,a		;copy an asciz not including the zero
+cpystr:	ildb c,b
+	jumpn c,cpyst1
+	ret
+
+
+;CALL RLJFNS [a]		!releases jfns
+
+rljfns:	seto a,
+	RLJFN%			;release jfns
+	 ercal warn		;just print message on error
+	ret
+
+	Subttl	Command processing
+
+
+;CALL INICSB [b]
+
+inicsb:	move b,[csbini,,cstate]	;initialize command state block
+	blt b,csbend
+	setzm prserr		;reset error handlers to default 
+	setzm cmderr		; (reparse address must reinitialize)
+	ret
+
+
+;CALL PROMPT (a) [b]		!usual way of setting up command parse
+;takes	a/ ptr to prompt string
+
+prompt:	trace prompt
+	call inicsb		;initialize command parser jsys
+	hrrz b,(p)		;set reparse address automagically
+promp1:	movem a,cstate+.cmrty	;set prompt
+	movem b,rparse
+	move a,p		;save where to restore stack on reparse
+	adjsp a,-1
+	movem a,rparsp
+promp0:	movei b,cmini
+	jrst parser
+
+
+;{a-c} = CALL CONFRM		!waits for carriage return
+
+confrm:	movei b,cmcfm
+;	jrst parser
+
+
+;{a-c} = CALL PARSER (b)
+;takes	b/ address of parse list
+;	cstate+.cmrty/ prompt string
+;	rparse/ reparse address
+;	rparsp/ stack pointer value at reparse address
+;	prserr/ address of alternate parser error handler
+;	cmderr/ address of alternate comndjsys error handler
+;gives	a/ function code of field parsed
+;	b/ comnd data
+;	c/ address of field parsed
+
+parser:	trace parser
+	say field,b
+	movei a,cstate		;command state block
+	COMND%			;parse a field
+	 erjmp cmdbad
+	jxn a,cm%nop,nopars	;could we parse it?
+	hrrzs c			;address of field parsed
+	load a,cm%fnc,(c)	;yes, fetch what field type we parsed
+	ret
+
+nopars:	trace nopars
+	skipe prserr		;look for non-default error handler
+	 jrst @prserr
+	call errout		;print informative error message
+	ldb a,atmpt1		;print anything in the atom buffer
+	jumpe a,noprs1		;skip it if nothing
+	tmsg < - ">
+	hrroi a,atmbuf		;print the guilty typein
+	PSOUT%
+	movei a,.chdqt
+	PBOUT%
+noprs1:	call promp0		;reprompt
+;	jrst repars
+
+
+repars:	trace repars
+	skipn p,rparsp		;automate stack restore and avoid having to
+	 move p,pdlini		; change reparse address in cstate
+	call rljfns
+	setzm prserr		;reset error handlers to default 
+	setzm cmderr		; (reparse address must reinitialize)
+	skipe rparse		;use reparse address provided if any
+	 jrst @rparse
+	jrst toplvl		;otherwise try going back to top
+
+
+cmdbad:	trace cmdbad
+	skipe cmderr		;look for non-default error handler
+	 jrst @cmderr
+	hlrz a,cstate+.cmioj	;normal input?
+	cain a,.priin
+	 jrst fatal		;yes, forget possibility of command file eof
+	movei a,.fhslf
+	GETER%
+	camn b,[.fhslf,,iox4]	;end of file?
+	 jrst cmdeof		;command file ended, go fix
+	jrst fatal		;not just an eof, unrecoverable
+cmdeof==:.-1			;What?  But no command files implemented!
+
+	Subttl	Filename parsing
+
+
+;parse a system program name
+
+prssys:	trace prssys
+	move a,[gjbini,,gjfnbk]	;set up file parse block
+	blt a,gjbend
+	hrroi a,[asciz /SYS/]	;default device SYS:
+	movem a,gjfnbk+.gjdev
+	hrroi a,[asciz /EXE/]	;default extension .EXE
+	movem a,gjfnbk+.gjext
+	movei a,prsif0		;retry w/non-exe file
+	movem a,prserr		;joined here by PRSSYS
+	parse cmfil		;input filename
+	ret
+
+
+;parse an input filename with no defaults
+
+prsif0:	trace prsif0
+	adjsp p,-1		;here on PRSSYS noparse, avoid recursion
+	setzm prserr
+prsifi:	trace prsifi
+	move a,[gjbini,,gjfnbk]	;set up file parse block
+	blt a,gjbend
+	parse cmfil		;input filename
+	ret
+
+	Subttl	Fork processing
+
+
+;CALL RUNFRK
+;takes	evpt/ entry vector offset to use
+;	exefrk/ fork handle of existing fork to run, or zero if none
+;	exejfn/ file handle on program to load into fork, or zero for EXEC
+
+runfrk:	call gtsnms		;get system names
+	skipe a,exefrk		;use existing fork if any
+	 jrst confrk
+getexe:	skipe exejfn		;use existing file, if any, otherwise run EXEC
+	 jrst getfrk
+	movx a,gj%old!gj%sht	;try to get an exec
+	hrroi b,[asciz "SYSTEM:EXEC.EXE"]
+	GTJFN%
+	 ercal nofork
+	movem a,exejfn		;save EXEC's jfn
+getfrk:	movx a,cr%cap		;make an inferior fork
+	CFORK%
+	 ercal nofork
+	movem a,exefrk		;remember this program's fork handle
+	move a,exejfn		;get jfn
+	hrl a,exefrk		;stuff the fork
+	GET%
+	 ercal norun
+	setzm exejfn		;jfn got released on success
+	movei a,.fhslf		;get my current capabilities
+	RPCAP%
+	move a,exefrk		;get back fork handle of inferior
+	move c,b		;enough already, enable the bloody caps
+	EPCAP%
+	 ercal norun
+	move a,exefrk		;run it and wait for it to stop
+	move b,evpt		;start it at the desired entry point
+	SFRKV%
+	 ercal norun
+waitfk:	RFORK%			;resume fork if frozen
+	WFORK%			;wait for it to finish
+	 ercal norun		;no need to make this a fatal error
+	move a,exefrk		;short form rfsts to see if fork succeeded
+	RFSTS%
+	 erjmp endrun		;if we can't diagnose, that's life, give up
+	load a,rf%sts,a
+	cain a,.rfhlt		;normal halt condition?
+	 jrst endrun
+	hrroi a,[asciz/Error in inferior fork - /]
+	ESOUT%
+	hrlo b,exefrk		;go print last error in subfork
+	call error1
+endrun:	dmove a,snames		;restore system names
+	SETSN%
+	 ercal warn
+	ret
+
+
+confrk:	txo a,sf%con		;continue the extant fork
+	SFORK%
+	 erjmp getexe		;fork vanished or something
+	jrst waitfk		;wait for it to finish
+
+
+nofork:	setzm exefrk		;no fork
+norun:	pop p,errpc		;grab the address of our caller
+	call warn1		;non-fatal error (?)
+	skipe a,exejfn		;get jfn back
+	 RLJFN%			;flush it
+	  nop
+	setzm exejfn
+	jrst endrun
+
+
+	Subttl	Error processing
+
+
+error:	movem ac16,erracs+16	;save acs
+	movei ac16,erracs
+	blt ac16,erracs+15
+	hrroi a,zero		;?
+	ESOUT%
+	hrloi b,.fhslf
+error1:	movei a,.priou		;print the error
+	setz c,
+	ERSTR%
+	 nop
+	 nop
+	ret
+
+
+errout:	pop p,errpc		;grab the address of our caller
+	push p,errpc
+	call error		;error prolog
+errend:	movsi ac16,erracs	;restore acs and return
+	blt ac16,ac16
+	ret
+
+
+warn:	pop p,errpc		;grab the address of our caller
+	push p,errpc
+warn1:	sos errpc		;point at jsys
+	call error		;error prolog
+	tmsg <, >
+	move sym,errpc		;get PC
+	move sym,-1(sym)	;get jsys which lost
+	call symout		;print it
+	tmsg < at >
+	move sym,errpc		;get back pc
+	movei sym,-1(sym)	;output pc
+	call symout
+	callret errend		;and go finish up with the pc
+
+
+fatal:	pop p,errpc		;grab the address of our caller
+	push p,errpc
+	call warn1
+death:	HALTF%
+	tmsg <?Cannot continue>
+	jrst death
+
+	Subttl	Symbol manipulation
+
+
+;CALL SYMOUT (sym) [a-e]	!clever symbol table lookup routine.
+;Takes	SYM/ desired symbol
+;(For details, read "Introduction to DECSYSTEM-20 Assembly Language
+; Programming", by Ralph Gorin, published by Digital Press, 1981.)
+
+symout:	setzb c,e		;no current program name or best symbol
+	move d,.jbsym		;symbol table pointer
+	hlro a,d
+	sub d,a			;-count,,ending address +1
+symlup:	ldb a,[point 4,-2(d),3]	;symbol type
+	jumpe a,nxtsym		;program names are uninteresting
+	caile a,2		;0=prog name, 1=global, 2=local
+	 jrst nxtsym		;none of the kind we want
+	move a,-1(d)		;value of the symbol
+	camn a,sym		;exact match?
+	 jrst [	move e,d	;yes, select it
+		jrst fndsym]
+	caml a,sym		;smaller than value sought?
+	 jrst nxtsym		;too large
+	skipe b,e		;get best one so far if there is one
+	 caml a,-1(b)		;compare to previous best
+	  move e,d		;current symbol is best match so far
+nxtsym:	add d,[2000000-2]	;add 2 in the left, sub 2 in the right
+	jumpl d,symlup		;loop unless control count is exhausted
+	skipn d,e		;did we find anything helpful?
+	 jrst octsym
+
+;;;Found an entry that looks close.  See if it really is and if so use it.
+
+fndsym:	move a,sym		;desired value
+	sub a,-1(d)		;less symbol's value = offset
+	cail a,200		;is offset small enough?
+	 jrst octsym		;no, not a good enough match
+	move d,e		;get the symbol's address
+	move a,-2(d)		;symbol name
+	tlz a,740000		;clear flags
+	call r50out		;print symbol name
+	move b,sym		;get desired value
+	sub b,-1(d)		;less this symbol's value
+	jumpe b,r		;if no offset, don't print "+0"
+	movei a,"+"		;add + to the output line
+	PBOUT%
+	skipa
+octsym:	 move b,sym		;here if pc must be in octal
+	movei a,.priou		;and copy numeric offset to output
+	movei c,8
+	NOUT%
+	 halt .-1		;bleah
+	ret
+
+
+;CALL R50OUT (a) [b]		!output a squoze
+;takes	a/ radix50 symbol
+;This is a more or less standard routine.  Snarfed from TELNET.MID (Crispin,
+;1981).
+
+r50out:	idivi a,50		;divide by 50
+	push p,b		;save remainder, a character
+	skipe a			;if a is now zero, unwind the stack
+	 call r50out		;call self again, reduce a
+	pop p,a			;get character
+	adjbp a,[point 7,[ascii/ 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ.$%/],6]
+	ldb a,a			;convert squoze code to ascii
+	PBOUT%
+	ret
+
+	Subttl	Pure data
+
+
+csbini:	repars			;the reparse address
+	.priin,,.priou		;i/o jfns
+	-1,,zero		;default no prompt
+	-1,,combuf		;can't edit past this point
+	-1,,combuf		;pointer to next field
+	buflen*5-1		;remaining space in command buffer
+	0			;remaining unparsed characters
+	-1,,atmbuf		;last field parsed
+	buflen*5-1		;size of atom buffer
+	gjfnbk			;address of jfn block
+
+
+gjbini:	gj%old			;to initialize file parse block
+	block .gjatr+1+gjbini-.	;rest of block
+
+
+runtbl:	2,,2			;not intended to have additional entries
+	[cm%fw!cm%nor
+	 asciz /RUNNE/],,0
+	[asciz /RUNNER/],,0
+
+
+cmini:	flddb. .cmini
+cmcfm:	flddb. .cmcfm
+cmfil:	flddb. .cmfil
+runcmd:	flddb. .cmkey,,runtbl
+evnum:	flddb. .cmnum,cm%sdh,<^D10>,<input filespec
+  or decimal entry vector offset>,<0>
+rscmd:	flddb. .cmtxt,cm%sdh,,<data line to be sent to program>
+rscptr:	point 7,rscbuf
+atmptr:	point 7,atmbuf
+atmpt1:	point 7,atmbuf,6
+fnptr:	point 7,filnam
+pdlini:	iowd pdllen+1,pdl+1
+runner:	asciz /RUNNER>/
+crlf:	asciz /
+/
+zero:	0
+
+end	start

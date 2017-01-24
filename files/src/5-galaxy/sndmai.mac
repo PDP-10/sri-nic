@@ -1,0 +1,568 @@
+;SRC:<5-GALAXY>SNDMAI.MAC.2, 11-Jun-86 10:54:38, Edit by KNIGHT
+;Flush any PUP junk
+;SRA:<FMF.WORK>SNDMAI.MAC.42, 29-Mar-83 22:07:21, Edit by FMF
+
+TITLE SNDMAI - Subroutine to queue mail
+
+SEARCH MONSYM,MACSYM
+.REQUIRE SYS:MACREL
+ASUPPRESS
+
+T1=1
+T2=2
+T3=3
+T4=4
+
+;Convert -1,,<loc> into POINT 7,<loc>
+DEFINE MAKPTR (AC) <
+	TLC AC,-1		;;Want to see if it's -1,,FOO
+	TLCN AC,-1		;;Do the actual test
+	 HRLI AC,(<POINT 7,0>)	;;Make it a string pointer
+>;
+
+STRLEN==20			;Maximum length for filenames
+HNMLEN==4			;Maximum length for host names
+
+;Offsets for argument block
+.QMLEN==:0			;Length of block (including this word)
+.QMFRM==:1			;Pointer to FROM field
+.QMTO==:2			;Pointer to TO field
+.QMSUB==:3			;Pointer to SUBJECT field
+.QMMSG==:4			;Pointer to message body
+.QMMAX==:5			;Maximum length of argument block
+
+;SNDMAI - Send mail to a user
+;Takes - T1/ Address of argument block
+;Returns +1 Failure, T1/ contains either a TOPS-20 error code or a
+;				string to a non-jsys error message
+;	 +2 Success, message successfully queued to MAILQ:
+;
+;argument block
+;	offset		description
+;	   0 (.QMLEN)	   length of argument block (including this word)
+;	   1 (.QMFRM)	   pointer to FROM field
+;	   2 (.QMTO)	   pointer to TO field
+;	   3 (.QMSUB)	   pointer to SUBJECT field
+;	   4 (.QMMSG)	   pointer to message body
+
+SNDMAI::TRVAR <SNDFRM,SNDTO,SNDSUB,SNDMSG,SNDJFN,<HSTNAM,HNMLEN>>
+	SETZM HSTNAM		;Zero first word in Host name block
+	MOVEM T1,T4		;Save location of argument block
+	MOVE T2,.QMLEN(T4)	;Get length of block
+	CAILE T2,.QMTO		;Have to have at least FROM and TO
+	 IFSKP.			;If not,
+	  MOVE T1,[POINT 7,[ASCIZ \Invalid argument block length\]]
+	  RET			; get pointer to error and return +1
+	 ENDIF.
+	CALL INIPTR		;Initialize pointers
+	CALL GETFIL		;Get queued file name
+	 RET			;Just return on error, T1 already set up
+	MOVEM T1,SNDJFN		;Save away our JFN
+	CALL GTRCPT		;Get the recipients to the file
+	 RET			;Return on error, either jsys error or string
+	CALL MAKMSG		;Make the message
+	 RET			;Return +1 on error, either jsys err or string
+	CALLRET CLSFIL		;Go finish up
+
+;INIPTR - Initialize pointers to different fields
+;Takes T2/ Length of argument block (including first word)
+;      T4/ Location of argument block
+;Returns nothing, +1 always
+
+INIPTR:	MOVE T1,.QMFRM(T4)	;Get pointer to FROM field
+	MAKPTR T1		;Make it into a byte pointer
+	MOVEM T1,SNDFRM		;Save it away
+	MOVE T1,.QMTO(T4)	;Get to whom this message will go
+	MAKPTR T1		;Make a byte pointer
+	MOVEM T1,SNDTO		;Save it
+	SETZM SNDSUB		;Assume no SUBJECT field
+	SETZM SNDMSG		;or message body
+	CAIG T2,.QMSUB		;Do we have a SUBJECT field?
+	 RET			;No, nothing else to do
+	MOVE T1,.QMSUB(T4)	;Yes, get pointer to SUBJECT
+	MAKPTR T1		;Make it a pointer
+	MOVEM T1,SNDSUB		;Save it as a subject field
+	CAIG T2,.QMMSG		;Do we have a message body?
+	 RET			;No, return
+	MOVE T1,.QMMSG(T4)	;Get pointer to message text
+	MAKPTR T1		;Make it a byte pointer
+	MOVEM T1,SNDMSG		;Save it away
+	RET			;Go back
+
+;GETFIL - Get a JFN on the Queue file
+;Takes nothing
+;Returns +1 Failure
+;	 +2 Success, T1/ JFN
+
+GETFIL:	TRVAR <<STRBUF,STRLEN>> ;Reserve some place to build our filename
+	MOVE T1,[POINT 7,STRBUF] ;Build name in STRBUF
+	MOVE T2,[POINT 7,[ASCIZ \MAILQ:[--QUEUED-MAIL--].NEW-\]]
+	CALL CPYSTR		;Append initial string
+	PUSH P,T1		;Save string pointer
+	GTAD%			;Get time and date
+	MOVEM T1,T2		;Use this for our unique queued file ext.
+	POP P,T1		;Restore pointer
+	MOVEI T3,^D8		;Radix octal
+	NOUT%			;Append the number
+	 ERJMP ERRRET		;Return +1 on failure
+	MOVEI T2,"-"		;Delimit with a dash
+	IDPB T2,T1		;Do so
+	PUSH P,T1		;Save string pointer
+	GETNM%			;Get our program name
+	IFE. T1			;Do we have no name?
+	 POP P,T1		;Get back string pointer
+	 MOVE T2,[POINT 7,[ASCIZ \SNDMAI\]] ;Default to SNDMAI
+	 CALL CPYSTR		;Add this as our name
+	ELSE.			;Otherwise, we have a name
+	 MOVEM T1,T3		;Save name in T3
+	 POP P,T1		;Get back string pointer
+	 DO.
+	  SETZ T2,		;Zerofy AC we're shifting into
+	  LSHC T2,6		;Get a sixbit char in T2
+	  ADDI T2," "		;Convert to ASCII
+	  IDPB T2,T1		;Deposit the byte
+	  JUMPN T3,TOP.		;Any more chars?  Yes, get them
+	 ENDDO.
+	ENDIF.
+	MOVE T2,[POINT 7,[ASCIZ \-J\]] ;Delimit for job number
+	CALL CPYSTR		;Add it to our file spec
+	PUSH P,T1		;Preserve updated string pointer
+	GJINF%			;Want our job number
+	POP P,T1		;Get string pointer back
+	MOVE T2,T3		;Get job number in T2
+	MOVEI T3,^D10		;Radix decimal
+	NOUT%			;output it
+	 ERJMP ERRRET		;Return +1 on flailure
+	MOVE T2,[POINT 7,[ASCIZ \.-1;P770000\]] ;Want to tie off string
+	CALL CPYSTR		;Do so
+	SETZ T2,		;Get a null
+	IDPB T2,T1		;Make sure we end with this
+	MOVX T1,GJ%NEW!GJ%FOU!GJ%PHY!GJ%SHT ;Same as normal, but also physical
+	MOVE T2,[POINT 7,STRBUF] ;Get pointer to our file name
+	PUSH P,T1		;Save flags,,ver number
+GETFI1:	MOVE T1,(P)		;Get args
+	GTJFN%			;Try to get the JFN
+	 ERJMP ERRRET		;Just return on failure
+	PUSH P,T1		;Save JFN
+	MOVX T2,FLD(7,OF%BSZ)!OF%WR ;7 bit Write access
+	OPENF%			;Try to open the file
+	 ERJMP GETFI2		;Failed, see why
+	ADJSP P,-2		;Success, reset stack
+	HRLI T1,.FBBYV		;Want to change File I/O information
+	MOVX T2,FB%RET		;Change generation retention count
+	SETZ T3,		;Want to keep all versions
+	CHFDB%			;Try to do so
+	 ERJMP .+1		;Ignore errors
+	HRRZS T1		;Isolate JFN
+	RETSKP			;Return +2
+
+GETFI2:	EXCH T1,(P)		;Recover JFN
+	RLJFN			;Release it
+	 ERJMP .+1		;Ignore errors here
+	POP P,T1		;Recover error code
+	CAIE T1,OPNX9		;If file busy, try again
+	 CAIN T1,OPNX2		;File disappeared?
+	  JRST GETFI1		;Try it again
+	ADJSP P,-1		;Flush pushed flags
+	JRST ERRRET		;Go do an error return
+
+;GTRCPT - Output to MAILQ: file to whom we wish to send
+;Takes nothing
+;Returns +1 on failure, JSYS error code or string pointer in T1
+;	 +2 success
+
+GTRCPT:	STKVAR <EOFLD,<UNAME,STRLEN>,UNMPTR,TOPTR>
+	MOVE T1,SNDTO		;Get TO Pointer
+	MOVEM T1,TOPTR		;Save it
+	SETZM EOFLD		;Assume haven't reached end of field yet
+GTRCP0:	MOVE T2,[POINT 7,UNAME]	;Pointer to user name
+	MOVEM T2,UNMPTR		;Save it away
+	DO.
+	 ILDB T1,TOPTR		;Get another char
+	 CAIN T1," "		;Do we have a space?
+	  LOOP.			;Yes, continue loop
+	ENDDO.
+	IFE. T1			;Did we get a null?
+	 MOVE T1,[POINT 7,[ASCIZ \Null recipient in TO: field\]]
+	 JRST ERRABT		;Yes, error
+	ENDIF.
+	DO.
+	 JUMPE T1,GTRCP1	;End on null, will need site name
+	 CAIN T1,","		;A comma?
+	  JRST GTRCP2		;Yes, end of this field, need site name
+	 CAIN T1,"@"		;A delimiter for a site name?
+	  JRST GTRCP5		;Yes, go get it
+	 CAIN T1," "		;Or space meaning possibly " at "?
+	  EXIT.			;Yes, go get site name
+	 IDPB T1,UNMPTR		;Deposit the byte in uname
+	 ILDB T1,TOPTR		;Get a byte
+	 LOOP.
+	ENDDO.
+	DO.
+	 CAIE T1," "		;Slurp all spaces
+	  EXIT.
+	 ILDB T1,TOPTR
+	 LOOP.
+	ENDDO.
+	SKIPE T1		;Is it a null?
+	 CAIN T1,","		;Or a comma?
+	  JRST GTRCP2		;Yes, end of this field, need site name
+	CALL UPCASE		;Uppercasify it
+	CAIE T1,"A"		;First char for " at "?
+	 JRST GTRCPE		;No, error
+	ILDB T1,TOPTR		;Get next char
+	CALL UPCASE
+	CAIE T1,"T"		;The "t"?
+	 JRST GTRCPE		;No, error
+	ILDB T1,TOPTR		;Finally, last char
+	CAIE T1," "		;The delimiting space?
+	 JRST GTRCPE		;No, we have an error
+GTRCP5:	MOVE T1,SNDJFN		;Get our JFN
+	MOVEI T2,.CHFFD		;Get a ^L
+	BOUT%			;Append it to our mail file
+	 ERJMP ERRCLS
+	DO.
+	 ILDB T2,TOPTR		;Get a char
+	 CAIN T2," "		;Is it a space?
+	  LOOP.			;No, get another
+	ENDDO.
+	CAIE T2,","		;Was it a comma?
+	 SKIPN T2		;Or a null?
+	  JRST GTRCPE		;Either means error here
+	DO.
+	 CAIN T2,","		;Comma?
+	  JRST GTRCP6		;Yes, exit loop
+	 IFE. T2		;Did we get a null?
+	  SETOM EOFLD		;Flag end of this field
+	  JRST GTRCP6		;Go out of loop
+	 ENDIF.
+	 CAIN T2," "		;Do we have a space?
+	  EXIT.			;Yes, go out of loop
+	 BOUT%			;Otherwise, output the char
+	 ILDB T2,TOPTR		;Get next char
+	 LOOP.
+	ENDDO.
+	DO.
+	 ILDB T2,TOPTR		;Get a byte
+	 CAIN " "		;Is it a space?
+	  LOOP.			;Yes, loop
+	ENDDO.
+	SKIPN T2		;Did we get a null?
+	 SETOM EOFLD		;Yes, flag end of field
+	JRST GTRCP6		;Go finish off line
+
+GTRCP1:	SETOM EOFLD		;Flag this is end of the field
+GTRCP2:	SETZ T1,		;Get a null
+	IDPB T1,UNMPTR		;Delimit our username
+	CALL GETHST		;Get our host name
+	 JRST ERRABT		;Lossage, go out
+	MOVE T1,SNDJFN		;Get our file JFN
+	MOVEI T2,.CHFFD		;Start with a ^L
+	BOUT%
+	 ERJMP ERRCLS
+	MOVE T2,[POINT 7,HSTNAM] ;Pointer to our local host name
+	JSP T4,CPYFIL		;Copy it to our output file
+	 JRST ERRCLS
+GTRCP6:	CALL QFCRLF		;Append a crlf at the end of the string
+	 JRST ERRCLS
+GTRCP4:	SETZ T2,		;Get a null
+	IDPB T2,UNMPTR		;Tie off username with it
+	MOVE T2,[POINT 7,UNAME]	;Pointer to the name
+	JSP T4,CPYFIL		;Append to our queue file
+	 JRST ERRCLS
+	CALL QFCRLF		;Append a crlf
+	 JRST ERRCLS
+	SKIPE EOFLD		;End of this field?
+	 RETSKP			;Yes, go back +2
+	JRST GTRCP0		;Otherwise go get next name
+
+GTRCPE:	MOVE T1,[POINT 7,[ASCIZ \Incorrect format for TO: field\]]
+	JRST ERRABT		;Go abort the file
+
+;MAKMSG - Actually format message and write to queue file
+;Returns +1 on failure, JSYS error code or string pointer in T1
+;	 +2 success
+
+MAKMSG:	MOVE T1,SNDJFN		;Get JFN
+	MOVEI T2,.CHFFD		;Get a form feed
+	BOUT%			;Add the character
+	 ERJMP ERRCLS		;Return +1 on error, error code in T1
+	CALL QFCRLF		;Add CRLF
+	 RET			;Here on failure, return +1
+	CALL ADDDAT		;Add date
+	 RET
+	CALL ADDFRM		;Add from field
+	 RET
+	CALL ADDSUB		;Add subject field
+	 RET			;Sigh...
+	CALL ADDTO		;Add to field
+	 RET
+	CALL ADDMSG		;Add message
+	 RET
+	CALL QFCRLF		;Add an extra crlf
+	 RET
+	HRROI T2,[ASCIZ \-------\] ;Add delimiting string
+	SETZ T3,		;Stop on null
+	SOUT%			;Add it
+	 ERJMP ERRCLS
+	CALLRET QFCRLF		;Add our final crlf and return
+
+;ADDDAT - Add date field
+;Takes T1/ JFN
+;Returns +1 failure
+;	 +2 success
+
+ADDDAT:	HRROI T2,[ASCIZ \Date: \] ;Start date field
+	SETZ T3,		;End on null
+	SOUT%
+	 ERJMP ERRCLS
+	SETO T2,		;For current time
+	MOVX T3,OT%DAY!OT%FDY!OT%TMZ ;Full day of week and append time zone
+	ODTIM%			;Add it
+	CALLRET QFCRLF		;Add a crlf
+
+;ADDFRM - Add from field
+;Takes T1/ JFN
+;Returns +1 failure
+;	 +2 Success
+
+ADDFRM:	HRROI T2,[ASCIZ \From: \] ;Start from field
+	SETZ T3,		;Stop on null
+	SOUT%
+	 ERJMP ERRCLS
+	SKIPN T2,SNDFRM		;Get pointer to FROM field
+	 JRST ADDFR0		;If zero, put our username here
+	ILDB T2,T2		;Get first byte
+	JUMPE T2,ADDFR0		;If it's null, add ourselves
+	MOVE T2,SNDFRM		;Get pointer to FROM field again
+	SETZ T3,		;Stop on null
+	SOUT%			;Add it to queued mail
+	 ERJMP ERRCLS
+	CALLRET QFCRLF
+
+ADDFR0:	PUSH P,T1		;Save JFN
+	GJINF%			;Get our user number
+	MOVEM T1,T2		;Put it where DIRST% likes it
+	POP P,T1		;Get back JFN
+	DIRST%			;Add username to field
+	 ERJMP ERRCLS
+	CALL GETHST		;No, get the host name
+	 JRST ERRABT		;Couldn't get site name, shut down
+	MOVN T2,HSTNAM		;Get negative of first word
+	JFFO T2,.+1		;Will never jump, because we will never have 0
+	SUBI T3,^D35		;See if last bit is only odd
+	JUMPE T3,QFCRLF		;Yes, we have no available site name
+	MOVEI T2,"@"		;To say this is a host name
+	BOUT%			;Add it
+	 ERJMP ERRCLS
+	MOVE T2,[POINT 7,HSTNAM] ;Point to our net name
+	SETZ T3,		;End on null
+	SOUT%			;add it
+	 ERJMP ERRCLS
+	CALLRET QFCRLF		;Tie off with a crlf
+
+;ADDSUB - Add subject field to queue file
+;Takes %1/ JFN
+;Returns +1 failure
+;	 +2 success
+
+ADDSUB:	MOVE T2,SNDSUB		;Get pointer to subject
+	JUMPE T2,RSKP		;Go back if none
+	ILDB T2,T2		;Get fist byte
+	JUMPE T2,RSKP		;Go back if it's null
+	HRROI T2,[ASCIZ \Subject: \] ;Begin subject field
+	SETZ T3,		;End on null
+	SOUT%			;Append it
+	 ERJMP ERRCLS		;Return +1 on jsys error
+	MOVE T2,SNDSUB		;Get pointer to subject
+	SOUT%			;Out to the file
+	 ERJMP ERRCLS
+	CALLRET QFCRLF		; so we have an extra line before the text
+
+;ADDTO - Add TO Field
+;Takes T1/ JFN
+;Returns +1 failure
+;	 +2 success
+
+ADDTO:	HRROI T2,[ASCIZ \To: \] ;Begin to field
+	SETZ T3,		;Stop on null
+	SOUT%
+	 ERJMP ERRCLS
+	MOVE T2,SNDTO		;Get pointer to TO field
+	SOUT%			;Append that
+	 ERJMP ERRCLS
+	CALLRET QFCRLF		;Get a crlf and return
+
+;ADDMSG - Add message to queue file
+;Takes T1/ JFN
+;Returns +1 failure
+;	 +2 success
+
+ADDMSG:	MOVE T2,SNDMSG		;Get pointer to message
+	JUMPE T2,RSKP		;Go back if none
+	SETZ T3,		;Stop on null
+	SOUT%			;Output the message
+	 ERJMP ERRCLS		;JSYS error, return error code
+	CALLRET QFCRLF		;Add a crlf
+
+;CLSFIL - Close queue file
+;Takes nothing
+;Returns +1 on failure, JSYS error code or string pointer in T1
+;	 +2 on success
+
+CLSFIL:	MOVE T1,SNDJFN		;Get JFN for the queue file
+	CLOSF%			;Try to close it
+	 ERJMP ERRRET		;Sigh, return error and +1
+	RETSKP			;else return +2 success
+
+;GETHST - Get our local host name in HSTNAM
+;Takes nothing
+;Returns +1 Failure, error message in T1
+;	 +2 Success, HSTNAM/ ASCIZ host name
+
+GETHST:	SAVEAC <T1>
+	SKIPE HSTNAM		;Do we have a host yet?
+	 RETSKP			;Yes, return unconditionally
+	MOVEI T1,.SFLHN		;Try to get local arpanet host number
+	TMON%			;See if we have one
+IFE NICSW,<
+	JUMPL T2,GETHS0		;-1 means not arpanet host
+>;IFE NICSW
+IFN NICSW,<
+	JUMPL T2,GETHS4		;-1, no arpa go do DECNET
+>;IFN NICSW
+	MOVE T1,[POINT 7,HSTNAM] ;Point to host name string
+	CVHST%			;Convert it to a string
+IFE NICSW,<
+	 ERJMP GETHS0		;Something wrong, try ethernet
+>;IFE NICSW
+IFN NICSW,<
+	 ERJMP GETHS4
+>;IFN NICSW
+	SETZ T2,		;Get a null
+	IDPB T2,T1		;Make sure it's on our string
+	RETSKP			;Go back
+
+IFE NICSW,<
+GETHS0:	STKVAR <ETBNUM,<PUPBLK,2>>
+	MOVE T1,[SIXBIT \PUPROU\] ;PUP routing table
+	SYSGT%			;Get table length, first entry in table
+	JUMPE T2,GETHS4		;If zero, no such table.  Try DECNET
+	HRRZM T2,ETBNUM		;Save table number
+	HLLZS T2		;Set up aobjn pointer
+	JRST GETHS2		;Already have first word
+
+GETHS1:	HRL T1,T2		;Left half of G1 is index (net number - 1)
+	HRR T1,ETBNUM		;Right half is number of table
+	GETAB%			;Get contents of table
+	 ERJMP GETHS4		;Failed, go try DECNET
+GETHS2:	HRRZS T1		;Isolate right half to get only host number
+	JUMPN T1,GETHS3		;Non-zero, get name
+	AOBJN T2,GETHS1		;Otherwise get next entry
+	JRST GETHS4		;Couldn't find net we're on, try DECNET
+
+GETHS3:	HRLI T1,1(T2)		;Get net number,,host number
+	MOVEM T1,PUPBLK		;Save it as Net address
+	SETZM 1+PUPBLK		;No socket
+	MOVE T1,[POINT 7,HSTNAM] ;Point to our host name string
+	MOVX T2,1B1		;Abbreviated name
+	HRRI T2,PUPBLK		;Get location of argument block
+	PUPNM%			;Translate the name
+	 ERJMP GETHS4		;Failed, try DECNET
+	SETZ T2,		;Get a null
+	IDPB T2,T1		;Make sure it's where we want it
+	RETSKP			;Go back
+>;IFE NICSW
+
+GETHS4:	MOVEI T1,.NDGLN		;Get local node name
+	MOVEI T2,T4		;Address of argument block
+	MOVE T4,[POINT 7,HSTNAM] ;Pointer to where to put name
+	NODE%			;Look up our name
+	 IFJER.			;If error
+	  MOVE T1,[POINT 7,[ASCIZ \Couldn't get local host name\]]
+	  RET			;Go back
+	 ENDIF.
+	SETZ T2,		;Get a null byte
+	IDPB T2,T4		;tie off node name with it
+	RETSKP			;Go back
+
+;CPYSTR - Copy string from one location to another
+;Takes T1/ Pointer to destination
+;      T2/ Pointer to source, ending with null
+;Returns updated pointers in T1 and T2, string copied, null not copied
+;	T3 smashed
+
+CPYSTR:	ILDB T3,T2		;Get a character
+	JUMPE T3,R		;Want to return if it's a null
+	IDPB T3,T1		;Drop the byte in the destination
+	JRST CPYSTR		;go get more info
+
+;CPYFIL - Same as CPYSTR but outputs to file
+;Called by: JSP T4,CPYFIL
+;Takes T2/ Pointer to source
+;Returns +1 Failure, error code in T1
+;	 +2 Success
+
+CPYFIL:	MOVE T1,SNDJFN
+	MOVEM T2,T3		;Save pointer
+	DO.
+	 ILDB T2,T3		;Get a byte
+	 JUMPE T2,ENDLP.	;Success on null
+	 BOUT%			;Output the byte
+	  IFJER.
+	   MOVEI T1,.FHSLF	;For ourselves
+	   GETER%		;Get our last error
+	   HRRZ T1,T2		;Put code in T1
+	   JRST (T4)		;Do +1 return
+	  ENDIF.
+	 LOOP.
+	ENDDO.
+	JRST 1(T4)		;Do a +2 return
+
+;QFCRLF - Add CRLF to queue file
+;Takes T1/ JFN to Queue file
+;Returns +1 Failure, error code in T1
+;	 +2 Success
+
+QFCRLF:	MOVEI T2,.CHCRT		;Carriage return
+	BOUT%			;Add it
+	 ERJMP ERRCLS		;Shouldn't happen
+	MOVEI T2,.CHLFD		;Get a line feed
+	BOUT%			;Add it
+	 ERJMP ERRCLS
+	RETSKP			;Here on success
+
+;UPCASE - Uppercasify character in T1
+
+UPCASE:	CAIL T1,"a"		;If it's .LT. lowercase a
+	 CAILE T1,"z"		;Or .GT. lowercase z
+	  RET			;Don't change it
+	SUBI T1,"a"-"A"		;Otherwise convert to uppercase
+	RET
+
+;ERRRET - Return +1 with error code in T1
+
+ERRRET:	MOVEI T1,.FHSLF		;For ourselves
+	GETER%			;Get last error code
+	HRRZ T1,T2		;Get error code in T1
+	RET			;Go back +1
+
+;ERRCLS - Same as ERRRET but aborts queued file
+
+ERRCLS:	MOVE T1,SNDJFN		;Get our JFN
+	TXO T1,CZ%ABT		;Want to abort the file
+	CLOSF%			;Close and abort the file
+	 ERJMP .+1		;Ignore errors here
+	CALLRET ERRRET		;Go finish up
+
+;ERRABT - Same as ERRCLS but does not return JSYS error
+;Assumes T1 set up with error message
+
+ERRABT:	SAVEAC <T1>
+	MOVE T1,SNDJFN		;Get our JFN
+	TXO T1,CZ%ABT		;Want to abrot the file
+	CLOSF%			;Close and abort the file
+	 ERJMP .+1		;Ignore errors here
+	RET			;Go back +1
+
+END

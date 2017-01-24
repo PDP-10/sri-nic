@@ -1,0 +1,329 @@
+;<EXEC.CMU>DKTBLD.MAC.1,  4-Apr-85 20:28:27, Edit by VAF
+; Make into DKTBLD...
+;<5.1.CMU>HKTBLD.MAC.1,  9-May-83 20:01:01, Edit by PA0B
+;Created...
+;
+; DKTBLD is a program which produces the keyword tables used by the "Help"
+; and, where such exists, the "Document" command.
+;
+; This file is the source for both the program (if RELFLG = 1) and for
+; DKTbld.Unv, which contains the definitions necessary to access the tables.
+;
+;		Philip Almquist		9-May-83
+;
+
+IFNDEF RELFLG,<RELFLG==0>	;Default is universal
+DEFINE UNV <IFE RELFLG>
+DEFINE REL <IFN RELFLG>
+
+UNV,<
+	UNIVERSAL DKTBLD
+>
+
+REL,<
+	TITLE DKTBLD
+	SEARCH MONSYM,MACSYM
+>
+
+;Version number:
+
+	VMAJ==1
+	VMIN==0
+	VEDT==1
+	VWHO==0
+
+;Defininitions:
+
+;Version word macro:
+
+DEFINE DKTVER,<
+	FLD(VWHO,VI%WHO)!FLD(VMAJ,VI%MAJ)!FLD(VMIN,VI%MIN)!FLD(VEDT,VI%EDN)
+>
+
+;Name of the keyword table file:
+
+DEFINE DKTFIL,<
+	ASCIZ "SYSTEM:PASSWORD-DICTIONARY.BIN"
+>
+
+UNV,<
+	END			;End of UNV file
+>
+
+DEFINE DKXFIL,<
+	ASCIZ "SYSTEM:PASSWORD-DICTIONARY.TXT"
+>
+
+;Random constants, needed by REL file only:
+
+REL,<
+	STDAC.			;Define AC names
+	PDLEN==20		;Stack size
+	MTOPIC==10000		;Maximum number of keywords we support
+>
+
+;The rest of the file is after the END of the UNV file...
+
+;Entry vector:
+
+ENTVEC:	JRST START
+	JRST START
+	DKTVER			;Version number
+
+;Initialize the world:
+
+START:	RESET%			;Be good
+	MOVE P,[IOWD PDLEN,PD]	;Set up stack
+	MOVEI T1,TABBUF+1	;Get address of first free word for tables
+	MOVEM T1,TABFRE		;Save for later
+	MOVEI T1,STRBUF		;Get address of string buffer
+	MOVEM T1,STRFRE		;Save for later, too
+	MOVX T1,<0,,MTOPIC>	;Max number we can have
+	MOVEM T1,TABBUF		;Put in as header
+
+	MOVX T1,<GJ%SHT!GJ%OLD>
+	HRROI T2,[DKXFIL]
+	GTJFN%			;Get a jfn on the dictionary
+	IFJER.
+	  TMSG <? SYSTEM:PASSWORD-DICTIONARY.TXT not found >
+	  JSHLT
+	ENDIF.
+	MOVE Q1,T1		;Save JFN away
+	MOVX T2,<OF%RD!FLD(7,OF%BSZ)>
+	OPENF%			;Open the file
+	IFJER.
+	  TMSG <? Cannot open dictionary file >
+	  JSHLT
+	ENDIF.
+
+;Main loop to read file
+
+	DO.
+	  MOVE T1,Q1		;Get JFN
+	  HRROI T2,TMPBUF
+	  MOVEI T3,WRDLEN	;Max length of word
+	  MOVEI T4,.CHLFD	;Break on LF
+	  SIN%			;Read a line from the file
+	   ERJMP ENDLP.		;EOF
+	  CAILE T3,<WRDLEN-3>	;Blank line (e.g. CR/LF or just LF?)
+	  LOOP.			;Yes - punt it
+	  LDB T3,[POINT 7,TMPBUF,6] ;Get first character
+	  CAIN T3,";"		;Comment?
+	  LOOP.			;Yes - skip this line
+	  MOVNI T3,1
+	  ADJBP T3,T2		;Back up one byte
+	  SETZ T2,
+	  DPB T2,T3		;Kill CR
+	  HRROI T1,TMPBUF
+	  CALL ADDNAM
+	  LOOP.			;Do for all
+	ENDDO.
+	HLRS TABBUF		;Make both counts same in header
+	MOVE T1,Q1		;Get back JFN
+	CLOSF%			;Close it
+	 TRN
+
+;Stick strings immediately after tables:
+
+	MOVE T1,TABFRE		;Get address of word right after tables
+	HRLI T1,STRBUF		;Get address of first word of strings
+	MOVE T2,STRFRE		;Get address of first free string space
+	SUBI T2,STRBUF+1	;Compute length of strings
+	ADD T2,TABFRE		;Compute address of last word to move
+	MOVEM T2,HLPEND		;Save for PMAP% code below
+	BLT T1,(T2)		;Copy the strings
+
+;Make addresses in table relative to the beginning of the table file:
+
+	MOVEI T2,STRBUF		;Get address of string buffer
+	SUB T2,TABFRE		;Compute relocation caused by moving strings
+	ADDI T2,TABBUF		;Make relative to beginning of file
+	MOVNS T2		;Change sign so subr can add relocation factor
+	MOVEI T1,TABBUF		;Get address of table
+	CALL DKTRLC		;Relocate its entries
+
+;Write tables out to the file:
+
+	HRROI T1,[DKTFIL]	;Get name of file
+	CALL DKTWRT		;Write the tables
+
+;Done:
+
+	HALTF%
+	JRST .-1
+
+;Routine to add an entry to a TBLUK table.  Called from main routine above
+;for each word in the dictionary.
+;
+;Takes:
+;	T1/	Pointer to keyword
+;	TABFRE/	Address at which to put table entry
+;	STRFRE/	Address at which to put string (if one is needed)
+;Returns:
+;	+1/	always
+;	does not return on serious error
+;Outputs:
+;	TABFRE/	Incremented
+;	STRFRE/	Address of next free string space
+;
+ADDNAM:	STKVAR <NEWFRE>
+	MOVE T2,T1
+	HRRO T1,STRFRE		;Pointer to string space
+	SETZB T3,T4
+	SOUT%			;Copy the string
+	IBP T1			;Skip over null (for calculation on next line)
+	AOS T1			;Save address of next free word of
+	HRRM T1,NEWFRE		; string space
+	HRRO T1,STRFRE		;Get -1,,address of string
+	CALL FOLDST		;Make uppercase
+	MOVEI T1,TABBUF		;Get address of table again
+	HRLZ T2,STRFRE		;Make table entry for new string
+	TBADD%			;Add it to the table
+	 ERJMP .+1
+	MOVE T1,NEWFRE		;Get new value for STRFRE
+	EXCH T1,STRFRE		;Update STRFRE, get address of new string
+	AOS T1,TABFRE		;Update free pointer
+	CAIG T1,STRBUF		;Table expanded into string space?
+	 RET			;No, ok
+	TMSG<? DKTBLD: Table overflow in ADDNAM>
+	JSHLT			;Die
+
+	ENDSV.	  
+
+;Routine to upper case null-terminated string.
+;
+;Takes:
+;	T1/	byte pointer to string to be "fixed" (-1,,addr ok)
+;Returns:
+;	+1/	always
+;
+FOLDST::HLRZ T3,T1		;Get left half of the byte pointer
+	CAIN T3,-1		;Is it a -1,, pseudo byte pointer?
+	 HRLI T1,440700		;Yes, make it a real one
+	DO.
+	  ILDB T3,T1		;Get char
+	  CAIL T3,"a"		;Lower case?
+	  CAILE T3,"z"		;...
+	  TRNA
+	  TXZ T3," "		;Make lower case
+	  DPB T3,T1		;Put back in string
+	  JUMPN T3,TOP.		;Loop...
+	ENDDO.
+	RET
+
+
+;Routine to change the string addresses in a table from absolute to relative
+;addresses or visa versa.  Does not touch the data (right) half of the table
+;entries.
+;
+;Takes:
+;	T1/	Address of table
+;	T2/	Relocation factor (number to add to an address to do the
+;		proper conversion
+;Returns:
+;	+1/	always
+;
+DKTRLC:	MOVEI T4,1(T1)		;Get address of first entry in table
+	HLRZ T1,(T1)		;Get number of entries in table
+	SKIPN T1		;Zero-length table?
+	 RET			;Yes, done
+	MOVNS T1		;Make count negative
+	HRLM T1,T4		;Make AOBJN pointer
+	DO.
+	  HLRZ T1,(T4)		;Get string address
+	  ADD T1,T2		;Relocate it
+	  HRLM T1,(T4)		;Store it back
+	  AOBJN T4,TOP.		;Loop again if more entries
+	OD.
+	RET			;Done
+
+;Routine which writes the table we have generated out to the dictionary
+;keywords table file.
+;
+;Takes:
+;	T1/	pointer to output file name
+;	HLPEND/	address of last word of the tables
+;	(assumes that tables begin at TABBUF)
+;Returns:
+;	+1/	success
+;	does not return on serious error
+;
+DKTWRT:	STKVAR <DKTJFN>
+	MOVE T2,T1		;Get filespec pointer into T2
+	MOVX T1,GJ%SHT!GJ%FOU	;Make new version
+	GTJFN%
+	IFJER.
+	  TMSG <? DKTBLD: Couldn't GTJFN% DKT file>
+	  JSHLT
+	ENDIF.
+	MOVEM T1,DKTJFN		;Save the JFN
+	MOVX T2,FLD(^D36,OF%BSZ)!OF%WR
+	OPENF%			;Open it for write
+	IFJER.
+	  MOVE T1,DKTJFN
+	  RLJFN%
+	   ERMSG <DKTBLD: Couldn't release DKT JFN after OPENF% failed>
+	  TMSG <? DKTBLD: Couldn't open DKT file>
+	  JSHLT
+	ENDIF.
+	HRLZ T2,T1		;Make JFN,,page #0 as destination for PMAP%
+	MOVE T1,[.FHSLF,,<TABBUF/1000>]	;Source is in-core table
+	MOVE T3,HLPEND		;Get address of last word of table
+	SUBI T3,TABBUF-1	;Compute length in words
+	IDIVI T3,1000		;Convert to number of pages
+	SKIPE T4		;Remainder?
+	 AOS T3			;Yes count as another full page
+	TXO T3,PM%WR!PM%CNT	;Turn on appropriate PMAP% bits
+	PMAP%			;Write the file
+	IFJER.
+	  MOVE T1,DKTJFN
+	  RLJFN%
+	   ERMSG <DKTBLD: Couldn't release DKT JFN after PMAP% failed>
+	  TMSG <? DKTBLD: Couldn't write DKT file>
+	  JSHLT
+	ENDIF.
+	HRRZ T1,DKTJFN		;Get back the JFN
+	TXO T1,CO%NRJ		;Keep the JFN
+	CLOSF%			;Close the file
+	IFJER.
+	  MOVE T1,DKTJFN
+	  RLJFN%
+	   ERMSG <DKTBLD: Couldn't release DKT file after CLOSF% failed>
+	  TMSG <? DKTBLD: Couldn't close DKT file>
+	  JSHLT
+	ENDIF.
+	TMSG <DKTBLD: >
+	MOVX T1,.PRIOU
+	MOVE T2,DKTJFN
+	SETZ T3,
+	JFNS%			;Put out filespec
+	 ERJMP .+1
+	TMSG < written
+>
+	MOVE T1,DKTJFN		;Get back JFN
+	RLJFN%			;Release it
+	 ERJMP .+1		;Ignore error
+	RET			;Done
+
+	ENDSV.
+
+;Impure storage:
+
+TABFRE:	BLOCK 1			;Address of next free word in TABBUF
+STRFRE:	BLOCK 1			;Address of next free word in STRBUF
+HLPEND:	BLOCK 1			;Address of last word of constructed tables
+				; (after strings have been merged with tables)
+WRDLEN==^D200			;Max length of a word
+WRDLNW==<WRDLEN+4>/5		;36-bit word count
+TMPBUF:	BLOCK WRDLNW		;Buffer for reading string
+PD:	BLOCK PDLEN		;Stack
+
+	LIT			;Don't put literals in buffer area
+	LOC 100000		;Get above code, macrel, etc.
+TABBUF=.			;Start of buffer where tables and file are
+				; built
+STRBUF=.+MTOPIC+2		;String space begins after table space.  The
+				; "+2" is to allow for a header word for each
+				; table
+
+	END <3,,ENTVEC>

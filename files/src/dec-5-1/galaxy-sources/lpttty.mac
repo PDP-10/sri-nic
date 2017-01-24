@@ -1,0 +1,434 @@
+	Title	LPTTTY - TOPS20 TTY routines for LPTSPL
+
+	Comment	~
+
+LPTTTY written by:	Robert M. Gerber
+			Academic Computing Center
+			Graduate School of Business Administration
+			New York University
+			90 Trinity Place
+			New York, NY  10006
+
+	~
+
+	SEARCH	GLXMAC		;Search GALAXY parameters
+	PROLOGUE(LPTTTY)
+	SEARCH	QSRMAC		;Search QUASAR parameters
+	SEARCH	ORNMAC		;Search ORION/OPR parameters
+	SEARCH	D60UNV		;Search for DN60 symbols
+
+	SALL			;Suppress macro expansions
+	.DIRECT	FLBLST
+
+IF1,<
+	PRINTX	ASSEMBLING GALAXY-20 LPTTTY - TTY support for LPTSPL
+>  ;END IF1
+IF2,<PRINTX BEGIN ASSEMBLER PASS # 2.>
+	Subttl	$DSCHD macro and flags from LPTSPL
+
+
+;SCHEDULER FLAGS
+	PSF%OB==1B1		;OUTPUT BLOCKED
+	PSF%DO==1B2		;DEVICE IS OFF-LINE
+	PSF%ST==1B3		;STOPPED BY OPERATOR
+	PSF%OR==1B4		;OPERATOR RESPONSE WAIT
+	PSF%AL==1B5		;ALIGNMENT TIMER WAIT STATE.
+	PSF%OO==1B6		;WAITING FOR 2780/3780 OPERATOR OUTPUT
+
+DEFINE $DSCHD(FLAGS),<
+	PUSHJ	P,DSCHD
+	XLIST
+	JUMP	[EXP FLAGS]
+	LIST
+	SALL
+>  ;END DEFINE $DSCHD
+	Subttl	Internal/External stuff
+
+	J==15		;JOB CONTEXT POINTER
+	C==16		;HOLDS A CHARACTER - ALMOST NEVER PRESERVED
+
+External	DSCHD		;Where to go when we have to wait..
+External	ISEOL		;Checks to see if the current char is a
+				;line terminator.
+External	J$DCND		;The Conditioning block for the Net Node
+External	J$DFLG		;Net Node Status Falgs
+External	J$FLVT		;Currently loaded VFU type
+External	J$LBCT		;Byte count
+External	J$LBPT		;Byte Pointer
+External	J$LBTZ		;Byte pointer for output
+External	J$LCHN		;The output devices JFN
+External	J$LDEV		;The name of the device that we are using
+External	J$LDVF		;DAVFU flag (do we have it?)
+External	J$LLCL		;Lowercase Flag
+External	J$LLPP		;Number of lines/page from VFU
+External	J$LPVB		;Store VFU byte between snacks
+External	J$LREM		;Flag Local/Remote
+External	J$LSPC		;Number of spaces stored up...
+External	J$LSTG		;Holds device name string
+External	J$LSVL		;-1 if simulated VFU is loaded
+External	J$LSVT		;Address of VFU simulation table
+External	J$LVLP		;Current line number (0 = TOP)
+External	J$MTAP		;Magtape flag
+External	J$TTYD		;Universal TTY device designator
+External	J$TTYT		;Internal type,,Internal baud rate word
+External	JOBOBA		;JOB OBJECT AREA
+External	JOBWAC		;WTOR Ack Code
+External	LODV.Z		;Where TTLDVF returns to in LPTSPL
+External	NOVFU		;Where to go when VFU can't be loaded
+External	OUTOUT		;Output a buffer
+External	OUTRES		;Routine to reset the output pointers
+External	OUTSOK		;OK so far, continue the set up
+External	Stream		;Our stream number
+External	TAPG.1		;Where to go on setup error after we have JFN
+External	TAPG.2		;Where to go on GTJFN failure for device
+Internal	TTDVOU		;DEVOUT for TTY
+Internal	TTLDVF		;Load VFU into a buffer for simulation
+Internal	TTY.SU		;TTY Net Node setup routine
+Internal	TTYOpn		;Routine to open the TTY as a local unit
+Internal	TTYRel		;TTY Release routine for shutdown
+	Subttl	TTY.SU - Set up TTY Net node
+
+TTY.Su:	Hrlzi	S1,(Point 7,0)	;Say what byte size we use
+	Movem	S1,J$LBTZ(J)	;Save it for later use
+	Setzm	J$LREM(J)	;Say that we are semi-local
+	Load	S1,J$DCND(J),NT.TTL ;Get the TTY line number
+	Hrli	S1,.DvDes+.DvTTY ;Include the device designator
+	Movem	S1,J$TTYD(J)	;Save away the device designator
+	Hrrz	S1,J$TTYD(J)	;Just get the TTY #
+	$Text	(<-1,,J$LSTG(J)>,<TTY^O/S1/^0>) ;Make a name minus the colon
+	Hrroi	S1,J$LSTG(J)	;Point to the Name for conversion to sixbit
+	$Call	S%SIXB		;Convert it to SIXBIT
+	Movem	S2,J$LDEV(J)	;Save away the sixbit version
+	Hrrz	S1,J$TTYD(J)	;Just get the TTY #
+	$Text	(<-1,,J$LSTG(J)>,<TTY^O/S1/:^0>) ;Make the ascii device name
+	Load	T1,J$DCND(J),NT.TTT ;Load The Terminal Type
+	Hrlzm	T1,J$TTYT(J)	;Save the terminal type internal number
+	Load	T2,J$DCND(J),NT.TTS ;Load The Baud Rate
+	Hrrm	T2,J$TTYT(J)	;Save the Baud rate internal number
+	Hlrz	T1,TTYTYP(T1)	;Get the address of the name string
+	Hlrz	T2,TTYSpd(T2)	;Get address of the baud rate string
+	Hrrz	S2,S1		;Get just the line number again
+	Move	S1,Stream	;Get our stream number
+	$WTO	(<Setting Up TTY Net Node>,<Line# ^O/S2/, Type: ^T/@T1/, Speed: ^T/@T2/>,@JOBOBA(S1)) ;Say whats Happening
+	Hrlzi	S1,(Gj%Sht+Gj%Fou) ;Get the GTJFN flag bits
+	Hrroi	S2,J$LSTG(J)		;POINT TO THE DEVICE NAME
+	Gtjfn%				;GET A JFN
+	 Jrst	TAPG.2			;CANT,,TOUGH BREAKEEE
+	Movem	S1,J$LCHN(J)	;Save the JFN away for much assorted use
+	Setzm	J$MTAP(J)	;Say not a magtape
+	Setom	J$LDVF(J)	;Say that we have a DAVFU (can't mount a
+				; CC-Tape on a TTY can we?)
+	Setom	J$LLCL(J)	;Say we are lower case
+	Move	S2,[Fld(7,OF%BSZ)+OF%RTD+OF%WR+OF%APP+OF%RD]
+				;How we want to
+	Openf%			; open the TTY: for use
+	 Erjmp	TAPG.1		;Couldn't open, complain
+
+	Jrst	TTY.S1		;Join the common code
+	Subttl	TTYOPN  --  Routine to open a TTY as a LPT
+
+TTYOPN:	Move	S1,J$LCHN(J)	;Get the JFN
+	Move	S2,[Fld(7,OF%BSZ)+OF%RTD+OF%WR+OF%APP+OF%RD]
+				;How we want to
+	Openf%			; open the TTY: for use
+	 Erjmp	TAPG.1		;Couldn't open, complain
+
+	Move	S1,Stream	;Tell operator whats going on
+	Hrrz	S2,J$TTYD(J)	;Get tty number
+	Hrrzi	T1,T.LS12	;Use LA180 for local terminal for now
+	Hrlzm	T1,J$TTYT(J)	;Save the terminal type internal number
+	Hrrzi	T2,T.SASS	;Say that the speed is 'As-Is' for now
+	Hrrm	T2,J$TTYT(J)	;Save the Baud rate internal number
+	Hlrz	T1,TTYTYP(T1)	;Get the address of the name string
+	Hlrz	T2,TTYSpd(T2)	;Get address of the baud rate string
+	$WTO	(<Setting Up TTY Printer>,<Line# ^O/S2/, Type: ^T/@T1/, Speed: ^T/@T2/>,@JOBOBA(S1)) ;Say whats Happening
+	Jrst	TTY.S1		;Join common setup code...
+	Subttl	TTY.S1 - Common set-up parameters between for local and	NET TTY
+
+TTY.S1:	Hrrz	S1,J$TTYD(J)	;Get the TTY number
+	Tro	S1,.TTDES	;Turn on TTY des bit
+	Hrli	S1,(Tl%Cro+Tl%Cor+Tl%Sab+Tl%Sta)
+				;Set No Links/No Advise/
+	Seto	S2,		; Clear Links bits, with all objects.
+	Tlink%			;Refuse links, advise
+	 Erjmp	.+1		;Ignore errors
+
+	Hrrz	S1,J$TTYD(J)	;Get the TTY number
+	Tro	S1,.TTDES	;Turn on TTY des bit
+	Movei	S2,.MOSNT	;For system messages
+	Movei	T1,.MOSMN	; refuse them
+	Mtopr%			; or output looks funny
+	 Erjmp	.+1		;Ignore errors
+
+	Hrrz	S1,J$TTYD(J)	;Get the TTY number
+	Tro	S1,.TTDES	;Turn on TTY des bit
+	Hlrz	S2,J$TTYT(J)	;Get internal term type
+	Hrrz	S2,TTYTYP(S2)	;Get address of term type descriptor
+				;block
+	Hrrz	S2,0(S2)	;Get system terminal type
+	STTyp%
+	 Erjmp	.+1		;Ignore errors here
+
+	Hrrz	T1,J$TTYT(J)	;Get internal baud rate number
+	Cain	T1,T.SASS	;Is it Speed As-Is?
+	 Jrst	TTY.S2		; Yes, skip speed setting.....
+	Hrrz	T1,TTYSPD(T1)	;Get address of baud descriptor block
+	Hrrz	T1,0(T1)	;Get baud rate
+	Hrls	T1		;Baud is the same both ways
+	Hrrz	S1,J$TTYD(J)	;Get the TTY number
+	Tro	S1,.TTDES	;Turn on TTY des bit
+	Movei	S2,.MOSPD	;Say to set the speed
+	Mtopr%			;Set the speed
+	 Erjmp	.+1		;Ignore errors for now...
+
+TTY.S2:	Hrrz	S1,J$TTYD(J)	;Get the TTY number
+	Tro	S1,.TTDES	;Turn on TTY des bit
+	RFCoc%			;Get the curren CCOC word for the TTY
+	Tdz	S2,[Fld(3,3b25)] ;Clear out FF control code
+	Hlrz	T2,J$TTYT(J)	;Get internal TTY type
+	Tdo	S2,TTYCOC(T2)	;Or in what type of FF action to do
+	SFCoc%
+
+	Move	S1,J$LCHN	;Get the JFN of the TTY
+	Movei	S2,.CHFFD	;Blurt out a formfeed to keep TTY lined
+	Bout%			;up.
+	 Erjmp	.+1		;Ignore errors for now.
+
+	$Call	OUTRES		;Setup the output pointers
+	Jrst	OUTSOK		;Say setup ok and continue on...
+
+	Subttl	TTY Indexing blocks
+
+Define	Word	(Txt)	<[Asciz /Txt/]>
+
+	4,,4			;Number of entries in the table
+TTYTYP:	Word(LA120),,[T.LA12,,.TT120]
+;	Word(LA180),,[T.LA18,,.TT180]
+	Word(LA36),,[T.LA36,,.TTL36]
+;	Word(LS120),,[T.LS12,,.TTLS3]
+
+	7,,7
+TTYSPD:	Word(1200),,[T.S120,,^d1200]
+	Word(1800),,[T.S180,,^d1800]
+	Word(2400),,[T.S240,,^d2400]
+	Word(300),,[T.SD30,,^d300]
+	Word(4800),,[T.S480,,^d4800]
+	Word(9600),,[T.S960,,^d9600]
+	Word(As-Is),,[T.SASS,,0]
+
+TTYCOC:	FLD(2,3b25)		;LA120 - T.LA12 (Real FF)
+	FLD(2,3b25)		;LA180 - T.LA18 (Real FF)
+	FLD(3,3b25)		;LA36  - T.LA36 (Simulation FF)
+	FLD(3,3b25)		;LS120 - T.LS12 (Simulation FF)
+	Subttl	TTDVOU - DEVOUT for TTY printer
+
+TTDVOU:	$CALL	ISEOL		;Is this a line-ender?
+	Jumpf	DEVO.L		; No, Just print it.
+	Setzm	J$LSPC(J)	; Yes, cancel stored up spaces
+	Skipn	J$LSVL(J)	;Is simulated VFU loaded?
+	 Jrst	DEVO.L		; No, Don't meddle
+	Push	P,C		;Make sure a CR gets out
+	Movei	C,15
+	$Call	DEVO.L		;Go put it out
+	Pop	P,C		;Restore it
+	Caie	C,.CHFFD	; Yes, is it a FF?
+	 Jrst	DEVO.C		;  No, more complicated than that
+	Setzm	J$LVLP(J)	;  Yes, say at line zero
+	Jrst	DEVO.L		;  And buffer character
+
+;Check whether and which channel to do..
+
+DEVO.C:	Move	T1,VFUCHN(C)	;Get character description
+	Jumpe	T1,DEVO.L	;If no VFU bit is on...Just do normal things
+	Jrst	DEVCHS		;Do device channel simulated
+
+DEVO.L:	Caie	C," "		;Is this a space?
+	Jrst	BUFOUT		; No, buffer it to device
+	Aos	J$LSPC(J)	; Yes, just tally it for now
+	$Ret			; And consider it done
+	Subttl	BUFOUT - Buffers a ready character ready for device
+
+BUFOUT:	Skipn	J$LSPC(J)	;Any spaces stored up?
+	 Jrst	BUFO.O		; No, just transmit character
+	Push	P,C		; Yes, save character for a bit
+	Movei	C," "		;Get a space for that bit
+BUFO.S:	$CALL	BUFO.O		;Put out a space
+	Sosle	J$LSPC(J)	;Any more owed?
+	 jrst	BUFO.S		; Yes, dribble them out
+	Pop	P,C		;Fetch back real character
+BUFO.O:	SOSGE	J$LBCT(J)	;Decrement the byte count
+	 Jrst	[Push	P,S1	;Save S1
+		 Pushj	P,OUTOUT ;Dump buffer
+		 Pop	P,S1	;Fetch S1 back
+		 Jrst	BUFO.O]	;Now we have room in buffer
+	Idpb	C,J$LBPT(J)	;Deposit the byte
+	$Ret			;Return (what else?)
+	Subttl	DEVCHS - Simulate VFU skips...
+
+DEVCHS:	$SAVE	<P1,P2,P3>	;Do unto others as.....
+	Move	P1,J$LVLP(J)	;Get VFU line pos into fast memory
+	Move	P3,J$LSVT(J)	;Address of VFU table
+	Jrst	DEVCHE		;Skip into loop entry
+
+DEVCHL:	Camn	P1,J$LVLP(J)	;Full circle and no match?
+	Jrst	DEVCHR		; Yes, error!
+DEVCHE:	MOVEI	C,.CHLFD	;Get a line-feed (to munch)
+	$Call	DEVO.L		;Output a LF
+	Addi	P1,1		;Incr line POS
+	Idiv	P1,J$LLPP(J)	;Modulo Lines-Per-VFU
+	Move	P1,P2		;That's remainder BOSS
+	Add	P2,P3		;Double subscript (J$LSVT(J)(P1))
+	Tdnn	T1,0(P2)	;Found our bit?
+	Jrst	DEVCHL		; No, Loop onward
+	Movem	P1,J$LVLP(J)	; Yes, save new position
+	$Ret			;All done
+
+;ERROR - LOOPED the VFU without a hit
+
+DEVCHR:	Setz	P3,		;Find out which channel bombed
+				; if here we check all
+DEVCRL:	Aos	P3		;Try next channel
+	Trne	T1,CHNBIT(1)	;Is that the channel?
+	 Jrst	DEVCRX		; Yes, tell operator so
+	Lsh	T1,-1		; No, keep looking
+	Jumpn	T1,DEVCRL	;Loop only if a bit is still on
+	Setz	P3,		;Big error - can't tell channel
+DEVCRX:	Move	S1,Stream	;Get the stream
+	$WTOJ	(Error in VFU ^W/J$FLVT(J)/ Channel ^O/P3/,,@JOBOBA(S1)) ;
+				;Say what happened
+	$Ret			;But continue
+	Subttl	TTLDVF - Load VFU file for simulation
+
+TTLDVF:	Hrrz	S1,S1		;Throw away any flags....
+	Move	S2,[FLD(8,OF%BSZ)+OF%RD] ;8-Bit file to read
+	Openf%			;Try to open it
+	 Erjmp	NOVFU		;Error, say so
+	Setzm	J$LPVB(J)	;Clear the Left Cheek
+	$Call	LODVTG		;Get a VFU byte
+	Caie	S2,356		;Is it default setting
+	Cain	S2,354		;Or is it 6 LPI?
+	 Jrst	LODVTP		; Yes, go load this VFU
+	Jrst	NOVFU		; No, give error....
+
+;Make sure we have a page to load the VFU into...
+
+LODVTP:	Push	P,S1		;Save VFU jfn
+	Move	S1,J$LSVT(J)	;Get a core page if necessary..
+	Skipn	S1		;Don't call M%GPAG if we have page
+	 $CALL	M%GPAG		;Yes, go get page
+	Movem	S1,J$LSVT(J)	;Save address away
+	Move	T2,S1		;Also put into T2 fo use...
+	Pop	P,S1		;Restore VFU jfn
+
+;Now we can load the VFU into the scratch page
+
+LODVTR:	$CALL	LODVTG		;Go get a VFU byte
+	Cain	S2,357		;Are we at end of VFU?
+	 Jrst	LODVTB		; Yes, clean up
+	Move	T1,S2		;Build a 12-bit field
+	$Call	LODVTG		;Need two bytes for a VFU point
+	Lsh	S2,6		;Make room for other part
+	Add	T1,S2		;Now VFU 12-bits are in b24-b35
+	Lsh	T1,8		;Shift to match CHTAB masks
+	Movem	T1,0(T2)	;Save it in our page
+	Aoja	T2,LODVTR	;Loop controlled at top
+
+;Clean-up, we have our table
+
+LODVTB:	Sub	T2,J$LSVT(J)	;Get forms length for
+	Movem	T2,J$LLPP(J)	; our own use
+	Closf%			;Close the file
+	 Ercal	[Move	S1,STREAM ;Get the stream number
+		 $WTO	(Error closing VFU file,This should be no problem,@JOBOBA(S1))
+				;Tell OP we failed, continuing
+		 $RET]		;And continue
+	Setom	J$LSVL(J)	;Say we have simulated VFU loaded
+	Move	S1,STREAM	;Get the stream number
+	$WTO	(TTY VFU simulation in effect,,@JOBOBA(S1))
+				;Say what is happening
+	Jrst	LODV.Z		;Merge back with regular VFU load
+
+;LODVTG - Get next VFU byte
+;
+;	S1/VFU file JFN
+;	$CALL LODVTG
+;	Return +1
+;	S2/VFU Byte
+
+LODVTG:	SKIPE	J$LPVB(J)	;Do we have a Byte in our cheek?
+	 Jrst	LODVTH		; Yes, go use that one
+	Bin%			;Get a Byte
+	 Erjmp	[Movei	S2,357	;At EOF-VFU supply End-Of-VFU mark
+		 $Ret]		;Continue
+	Movem	S2,J$LPVB(J)	;Save this in the Left cheek
+	Bin%			;Get the matching Byte
+	 Erjmp	NOVFU
+	$RET			;Return to caller
+
+;Bytes are stored like on an Eleven for convinince of LP20
+;We must tore one in our cheek for a while
+
+LODVTH:	Move	S2,J$LPVB(J)	;Eat like a Chipmunk (from left cheek)
+	Setzm	J$LPVB(J)	;Clear cheek (left)
+	$Ret			;And return...
+
+	Subttl	VFUCHN - VFU Channel table
+
+Define	ChnBit(Chn)	<1b<28-CHN>>
+
+VFUCHN:	Z			;(00) Null
+	Z			;(01) ^A
+	Z			;(02) ^B
+	Z			;(03) ^C
+	Z			;(04) ^D
+	Z			;(05) ^E
+	Z			;(06) ^F
+	Z			;(07) ^G
+	Z			;(10) ^H
+	Z			;(11) ^I
+	ChnBit(8)		;(12) ^J 1 Line
+	ChnBit(7)		;(13) ^K 1/3 Page
+	ChnBit(1)		;(14) ^L Form feed
+	Z			;(15) ^M
+	Z			;(16) ^N
+	Z			;(17) ^O
+	ChnBit(2)		;(20) ^P 1/2 Page
+	ChnBit(3)		;(21) ^Q 2 Lines
+	ChnBit(4)		;(22) ^R 3 Lines
+	ChnBit(5)		;(23) ^S 1 Line
+	ChnBit(6)		;(24) ^T 1/6 Page
+	Z			;(25) ^U
+	Z			;(26) ^V
+	Z			;(27) ^W
+	Z			;(30) ^X
+	Z			;(31) ^Y
+	Z			;(32) ^Z
+	Z			;(33) ^[
+	Z			;(34) ^\
+	Z			;(35) ^]
+	Z			;(36) ^^
+	Z			;(37) ^_
+	Subttl	TTYRel - TTY release routine for shutdown
+
+TTYRel:	Move	S1,J$LCHN(J)	;Get the JFN
+	Movei	S2,14		;Get a 
+	Bout%			;Dump it onto the TTY for alignment....
+	 Erjmp	.+1		;Ignore errors....
+
+	Dobe%			;Wait until the output buffer emptys
+
+	Tlo	S1,(Cz%Abt)	;Say abort any output...
+	Closf%			;Close the JFN
+	 Erjmp	.+1		;Ignore errors here too...
+
+	$Rett			;And return to the caller
+	Subttl	End of LPTTTY.Mac
+
+	End
+
+;* Local Modes: *
+;* Mode:Macro *
+;* Auto Fill Mode:1 *
+;* Fill Column:72 *
+;* Reqion Query Size:500 *
+;* End: *

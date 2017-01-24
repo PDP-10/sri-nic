@@ -1,0 +1,211 @@
+11-Mar-88 15:08:28-PST,1470;000000000015
+Return-Path: <BEEBE@SCIENCE.UTAH.EDU>
+Received: from SCIENCE.UTAH.EDU by SRI-NIC.ARPA with TCP; Fri 11 Mar 88 15:08:22-PST
+Date: Fri 11 Mar 88 15:51:19-MST
+From: "Nelson H.F. Beebe" <Beebe@SCIENCE.UTAH.EDU>
+Subject: Version numbers in KCC
+To: klh@SRI-NIC.ARPA
+cc: BEEBE@SCIENCE.UTAH.EDU
+X-US-Mail: "Center for Scientific Computing, South Physics, University of Utah, Salt Lake City, UT 84112"
+X-Telephone: (801) 581-5254
+Message-ID: <12381572906.30.BEEBE@SCIENCE.UTAH.EDU>
+
+It is traditional in TOPS-20 for systems programs to be able
+to identify themselves via the EXEC "INFORMATION (about)
+VERSION" command.  KCC in <xxx.KCC.KCC>CCOUT.C outputs a
+2-element PDV with the start and re-enter address; to get a
+version number location, it should issue an "END
+<3,,$$STRT>" instead of "END <2,,$$STRT>", and issue a 0
+word for the 3rd entry. I patched the .FAI file of a simple
+test program this way, and INFO VERSION now works.  Would
+you consider a change to KCC for the next release that does
+this?  It should be easy then to have some macros which
+define a standard version number field at $$STRT+2.
+
+While doing this, I discovered that 
+
+	kcc -o foo foo.fai
+
+makes kcc try to compile foo.fai as C code, instead of
+invoking FAIL directly.  Most Unix cc's recognize extensions
+belonging to other languages (.p = Pascal, .f = Fortran, .r
+= Ratfor, .s = assembly, etc), and call the correct
+compiler.  I think that KCC should too.
+-------
+11-Mar-88 15:59:32-PST,745;000000000001
+Mail-From: KLH created at 11-Mar-88 15:59:31
+Date: Fri, 11 Mar 88 15:59:30 PST
+From: Ken Harrenstien <KLH@SRI-NIC.ARPA>
+Subject: Re: Version numbers in KCC
+To: Beebe@SCIENCE.UTAH.EDU
+cc: KLH@SRI-NIC.ARPA
+In-Reply-To: <12381572906.30.BEEBE@SCIENCE.UTAH.EDU>
+Message-ID: <12381585318.28.KLH@SRI-NIC.ARPA>
+
+Well, the part you think is easy is the hard one.  How should a "version
+number" be derived?
+
+The only Unix convention I have seen is to have a character string
+literal somewhere in the program which starts with 4 or so magic
+char values.  Should KCC look for those literals and hack them?
+Should it use the file generation number?  Should it recognize some
+special nonportable keyword (yech)?
+
+What does PCC do?
+-------
+11-Mar-88 17:35:29-PST,2620;000000000011
+Return-Path: <BEEBE@SCIENCE.UTAH.EDU>
+Received: from SCIENCE.UTAH.EDU by SRI-NIC.ARPA with TCP; Fri 11 Mar 88 17:35:23-PST
+Date: Fri 11 Mar 88 18:33:57-MST
+From: "Nelson H.F. Beebe" <Beebe@SCIENCE.UTAH.EDU>
+Subject: Re: Version numbers in KCC
+To: KLH@SRI-NIC.ARPA
+cc: Beebe@SCIENCE.UTAH.EDU
+In-Reply-To: <12381585318.28.KLH@SRI-NIC.ARPA>
+X-US-Mail: "Center for Scientific Computing, South Physics, University of Utah, Salt Lake City, UT 84112"
+X-Telephone: (801) 581-5254
+Message-ID: <12381602512.22.BEEBE@SCIENCE.UTAH.EDU>
+
+No, I don't want a Unix-style SCCS id; neither Unix nor VMS
+have the concept of a version number in the header of an
+executable program, which is a great pity.  Try some time to
+figure out which version of Fortran, C, or Pascal you have
+on your VMS system; the only way I've found is to compile a
+program with a listing option, then examine the page
+headers.
+
+What is want is what I see at TOPS-20 level:
+
+@get sys:tputil.exe
+@e 137
+137/ 200500,,124
+@i ver
+ College of Science DecSystem-20, TOPS-20 Monitor 6.1(7030)
+ TOPS-20 Command processor 5(712)
+ Program is TPUTIL, version is 5(124)-2
+
+@; TPUTIL is a MACRO program with its version number at .jbver (0137)
+
+@get system:exec.exe
+@i mem
+
+164. pages, Entry vector loc 10000 len 3
+
+0-5      PS:<SYSTEM.5-4>EXEC.EXE.19  1-6   R, CW, E
+10-227   PS:<SYSTEM.5-4>EXEC.EXE.19  7-226   R, E
+400-412  PS:<SYSTEM.5-4>EXEC.EXE.19  227-241   R, CW, E
+470      PS:<SYSTEM.5-4>EXEC.EXE.19  242   R, CW, E
+554      PS:<SYSTEM.5-4>EXEC.EXE.19  243   R, CW, E
+565      PS:<SYSTEM.5-4>EXEC.EXE.19  244   R, CW, E
+@e 10002
+10002/ 500,,712
+@i ver
+ College of Science DecSystem-20, TOPS-20 Monitor 6.1(7030)
+ TOPS-20 Command processor 5(712)
+ Program is EXEC, version is 5(712)
+@
+
+@;EXEC has its version number in the entry vector (3rd word)
+
+CC has a magic number in its version number field in the
+entry vector.  I'll have to dig into it to see what it is
+putting there.  I'd rather use KCC for systems programming
+however.
+
+I don't think you have to do anything extra other than
+generate a 3-word entry vector by trivial changes in
+CCOUT.C.  I can always use a short #asm sequence to deposit
+my desired version number into the 3rd slot at $$STRT+2.
+I cannot think of a good C idiom to statically deposit a
+value at a fixed memory address.  Neither CC nor KCC will
+compile
+
+int *0137 = 0377123654321;
+main()
+{
+  printf("jbver = %d\n",*0137); 
+}
+
+In the worst case, I can always generate a trivial .MAC or
+.FAI file to set the version number, then load that with the
+C program.
+-------
+11-Mar-88 18:25:01-PST,1466;000000000001
+Mail-From: KLH created at 11-Mar-88 18:25:00
+Date: Fri, 11 Mar 88 18:25:00 PST
+From: Ken Harrenstien <KLH@SRI-NIC.ARPA>
+Subject: Re: Version numbers in KCC
+To: Beebe@SCIENCE.UTAH.EDU
+cc: KLH@SRI-NIC.ARPA
+In-Reply-To: <12381602512.22.BEEBE@SCIENCE.UTAH.EDU>
+Message-ID: <12381611804.28.KLH@SRI-NIC.ARPA>
+
+Perhaps this would be a place to use #pragma, as much as I hate the thing.
+
+Mainly what I am trying to figure out is which of the following would be
+best:
+
+(1) V# automatically generated, say from the main() file's version #
+	(this isn't difficult)
+(2) V# specified by the main() file using some KCC-specific idiom, programmer
+	is responsible for the values provided.  Do-able, main objection
+	is the non-portability.
+(3) V# derived from a sccsid literal string (this is do-able).
+(4) V# associated with each module of the program, or just with the one
+	that contains main().
+(5) What components should the "version #" have?  Just numbers, or
+	allow alphas?
+
+I have already been considering using the PDV to help with PSECTs.
+
+Primarily, I would like to use some mechanism that has a ghost of a
+chance at being portable to other systems, which probably means a
+macro obtained from a <versio.h> file and invoked by the main()
+module.  It should also not interfere with attempts to compare object
+files produced by re-compilation (that is, it should not change in the
+binary unless the source changes, at the very least).
+-------
+11-Mar-88 22:27:19-PST,1981;000000000005
+Return-Path: <BEEBE@SCIENCE.UTAH.EDU>
+Received: from SCIENCE.UTAH.EDU by SRI-NIC.ARPA with TCP; Fri 11 Mar 88 22:27:16-PST
+Date: Fri 11 Mar 88 23:26:07-MST
+From: "Nelson H.F. Beebe" <Beebe@SCIENCE.UTAH.EDU>
+Subject: Re: Version numbers in KCC
+To: KLH@SRI-NIC.ARPA
+cc: Beebe@SCIENCE.UTAH.EDU
+In-Reply-To: <12381611804.28.KLH@SRI-NIC.ARPA>
+X-US-Mail: "Center for Scientific Computing, South Physics, University of Utah, Salt Lake City, UT 84112"
+X-Telephone: (801) 581-5254
+Message-ID: <12381655699.13.BEEBE@SCIENCE.UTAH.EDU>
+
+For TOPS-20, I need to get specific numbers into the version
+field in .jbver, and these numbers will in general bear no
+relation whatever to the file generation numbers, so precise
+control over the contents is needed.  I don't think an
+automatic scheme based on file versions/dates is of much
+use, inasmuch as most significant programs are built from
+many source files, and one of then cannot be usefully
+singled out to determine the version number.
+
+It is not evident that one can do much for other systems,
+since they lack the concept of a version number for an
+executable program.  In Unix, the SCCS ID string is often
+used, but lots of folks do not use sccs.  In VAX VMS and MS
+DOS, there is nothing equivalent.  At run-time, my DVI
+drivers print a message like "[TeX82 DVI Driver Version
+2.10b]"; what I want to do is change to a scheme where there
+is a major, minor, and edit number, and those numbers will
+be displayed in that message at run-time, as well as be
+determinable on TOPS-20 from the EXEC "INFORMATION VERSION"
+command.
+
+#pragma is no good, because most C preprocessors die at #
+lines they cannot understand, EVEN IF INSIDE #if ... #endif
+blocks that would not otherwise be processed.  That is why
+#pragma and #error are completely useless in portable C
+code.
+
+I'd be happy just to have the 3-element PDV so I can get my
+own version word installed transparently to the rest of the
+code.
+-------

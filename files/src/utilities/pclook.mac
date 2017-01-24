@@ -1,0 +1,1946 @@
+;<BEEBE.UTILITY>PCLOOK.MAC.94, 12-May-84 18:10:27, Edit by BEEBE
+;[NHFB0033]	Force SYMLST back to 0 when symbol not found
+;		and updated vedit and startup message
+;<BEEBE.UTILITY>PCLOOK.MAC.93,  7-May-84 13:36:55, Edit by BEEBE
+;[NHFB0032]	Save RUN command text for output by TYPE/LIST/APPEND commands
+;[NHFB0031]	See PCSYMB.MAC
+;<BEEBE.UTILITY>PCLOOK.MAC.90,  7-May-84 12:47:40, Edit by BEEBE
+;[NHFB0030]	inserted missing RET in literal subroutine at LSTPC+20
+       title	PCLOOK -- User-Mode PC histogram look at a subprocess
+COMMENT \
+
+This program consists of the files:
+
+	PCLOOK.MAC + PCSYMB.MAC (to make PCLOOK.EXE)
+	HLP:PCLOOK.HLP   	(help file)
+	DOC:PCLOOK.INFO	 	(EMACS INFO-ized version of PCLOOK.HLP)
+
+PCLOOK has uncertain origin;  it was obtained as a file LOOK.EXE  (minus
+source and  help) via  Namur,  Belgium who  got  it from  a  now-defunct
+software distribution center in Cologne.  The present authors are:
+
+Cedric Griss, Pieter Bowman, and Nelson Beebe
+College of Science Computer
+Department of Physics
+University of Utah
+Salt Lake City, UT 84112
+USA
+
+Cedric did the  DDT patches to  allow a command-line  text string to  be
+passed  to  the  sampled  program,   Pieter  did  the  massive  job   of
+disassembling, commenting, and testing the source code, and Nelson  made
+a few changes to the histograms  to include module totals and  percents,
+added the  INFORMATION  command  interface  to  XINFO,  and  wrote  this
+documentation and  the help  file.   We consider  this a  PUBLIC  DOMAIN
+utility, and if you make any improvements, or fix any bugs, please  send
+the new version to us.
+
+Unlike DEC's  PCHIST,  which  requires WHEEL  capability  to  patch  the
+running monitor timer code and to lock its histogram tables into memory,
+and can then look at any job or fork in the system at intervals of a few
+microseconds, PCLOOK runs a user program in a lower fork and wakes up at
+regular intervals  to  request the fork status  and PC  value  which  it
+records.  This makes it available to unprivileged users, at the  expense
+of  considerably  lower  sampling  frequency  (about  20   milliseconds,
+according to the DISMS% JSYS documentation).
+
+PCHIST at present has  no capability of getting  symbols for PC  values;
+this routine maps  the watched fork's  symbol table pages  into its  own
+space and can therefore obtain  symbolic values for each histogram  bar.
+Symbol  table   access   is  relegated   to   a  modified   version   of
+FORTRAN-callable subroutine PCSYMB which in turn was taken largely  from
+Ralph Gorin's  excellent book:  "Introduction to  DECSYSTEM-20  Assembly
+Language Programming", Digital Press, Bedford, MA (1981), p. 424.
+
+\
+
+        search  MONSYM, MACSYM
+	extern	PCSYMB
+
+	page
+        subttl  Constant assignments
+
+;	vedit==27
+;	vedit==30		;[NHFB0030]
+;	vedit==32		;[NHFB0032]
+	vedit==33		;[NHFB0033]
+	vmajor==3
+	vminor==2
+	vwho==0
+
+; Accumulator symbols
+
+	t0==0
+        t1==1
+        t2==2
+        t3==3
+        t4==4
+	p1==5
+	p2==6
+	p3==7
+	p4==10
+	c==11
+	ap==16
+        p==17
+
+.JBSYM==116			; Missing in MACSYM/MONSYM
+
+DEFINT==^D25			; Default wakeup interval
+FRKPAG==100			; Fork table page
+FRKTAB==FRKPAG_^D9		;  "     "   address.  Need siztab words
+PCshft==2			; PC shift count: bucket size = 2**PCshft
+SIZTAB==<1000000_<-<PCshft>>>	; table size
+SYMPAG==<FRKPAG+<<FRKTAB+SIZTAB>_<-^D9>>>	; Symbol table page
+SYMTAB==SYMPAG_^D9		;   "      "   address
+
+	page
+	subttl	Macro definitions
+
+define	blkb(bytes%, bsize%<7>)	<block	<bytes%/<^D36/bsize%>>+1>
+
+define	retskp	<jrst	rskp>	; Return +2
+
+	page
+	subttl	Storage
+
+STOBGN==.			; Start of zero'd storage
+XINFRK:	0			; XINFO fork handle
+XINJFN:	0			; XINFO JFN
+FRKFRK:	0
+TOTAL:	0
+STCNT:	block	10
+INTRVL:	0			; Interval
+SCALE:	0			; Scale factor
+CTIME:	0
+CRUNTM:	0
+IRFMOD:	0			; Init. term. mode word
+CRFMOD:	0
+IRFCOC:	block	2		; Init. term. CCOC words
+CRFCOC:	block	2
+IRTIW:	0			; Terminal interrupt word
+CRTIW:	0
+INTCHR:	0			; Interrupt char.
+PRGCHR:	0			; Program status char.
+SAVPDL:	0			; Save stack pointer
+RUNFLG:	0
+FILNAM:	blkb	^D30
+OURNAM:	block	2		; Words .JISNM & .JIPNM from GETJI (SIXBIT)
+PRGNAM:	block	2		; Program name (SIXBIT)
+FRKNAM:	blkb	^D200		; Fork name
+FRKNMP:	0
+PRGADD:	0			; [9 Oct 83] Program address
+MODULE:	blkb	^D200		; current module name (7-bit ASCII)
+MODCNT:	0			; count of bars printed for this module
+MODSUM:	0			; count of PC hits for this module
+MODHIT:	0			; save area for current count
+CUMHIT:	0			; cumulative count for
+				; percent field of TYPE/LIST
+MARKER:	0			; histogram marker
+SYMPTR:	0			; Symbol pointer
+SYMLST:	0			; Last symbol table module pointer
+				; (updated by PCSYMB)
+TOTFLG:	0			; Total flag
+TTLTXT:	blkb	^D200		; Title text
+SBTTXT:	blkb	^D200		; Subtitle text
+SCRLEN:	0			; [9 Oct 83] SCRBUF length
+SCRBUF:	blkb	^D200		; Scratch buffer
+CHN1PC:	0			; Ch. 1 PC
+RNGBEG:	0			; Begin address for histogram display
+RNGEND:	0			; End   address for histogram display
+XRFMOD:	block	1
+XRFCOC:	block	2
+XRTIW:	block	3
+XMORLW:	block	1
+XMORLL:	block	1
+PDLLEN==^D200
+PDL:	block	PDLLEN		; Stack
+STOEND==.-1			; End zero'd storage area
+
+	page
+	subttl	COMND JSYS storage
+
+$CMBEG:
+$CMBLK:	block	12		; COMND state block
+$GJBLK:	block	17		; GTJFN block (COMND)
+
+$CMBLN==^D200
+$CMBUF:	blkb	$CMBLN		; COMND buffer
+
+$ATBLN==^D200
+$ATBUF:	blkb	$ATBLN		; COMND atom buffer
+
+$TXBLN==^D200
+$TXBUF:	blkb	$TXBLN		; Text buffer
+$PRGNM:	blkb	^D10		; Program name (asciz)
+$NOFLG:	0			; NO keyword used
+$RSCNT:	0			; Rescan count
+
+$JFTLN==12			; Length of JFN table
+$JFTAB:	block	$JFTLN		; JFN table
+$PRMPT:	blkb	^D10		; COMND prompt string
+$CMTLF:	0
+$SVPDL:	0			; Save stack pointer here
+$CMEND:
+RSCBUF:	blkb	^D200		; Rescan buffer
+RUNTXT: blkb	$CMBLN		; [NHFB0032]  GET/MERGE/RUN command string
+
+CMDTAB:	CMDLEN,,CMDLEN
+	[asciz/APPEND/],,$APPEN
+	[asciz/BREAK-CHARACTER/],,$BREAK
+	[asciz/CLEAR/],,$CLEAR
+	[asciz/CONTINUE/],,$CONTI
+	[asciz/EXIT/],,$EXIT
+	[asciz/GET/],,$GET
+	[asciz/HELP/],,$HELP
+	[asciz/INFORMATION/],,$XINFO
+	[asciz/INTERVAL/],,$INTER
+	[asciz/LIST/],,$LIST
+	[asciz/MERGE/],,$MERGE
+	[asciz/NO/],,$NO
+	[asciz/PROGRAM-STATUS-CHARACTER/],,$PROGR
+	[asciz/RANGE/],,$RANGE
+	[asciz/REENTER/],,$REENT
+	[asciz/RESET/],,$RESET
+	[asciz/RUN/],,$RUN
+	[asciz/SCALE-FACTOR/],,$SCALE
+	[asciz/START/],,$START
+	[asciz/SUBTITLE/],,$SUBTI
+	[asciz/SYMBOLS/],,$SYMBO
+	[asciz/TAKE/],,$TAKE
+	[asciz/TITLE/],,$TITLE
+	[asciz/TOTALS/],,$TOTAL
+	[asciz/TYPE/],,$TYPE
+CMDLEN==.-CMDTAB-1
+
+NOCTAB:	NOCLEN,,NOCLEN
+	[asciz/NO/],,$NO
+	[asciz/SYMBOLS/],,$SYMBO
+NOCLEN==.-NOCTAB-1
+
+TOTINC==0			; zero value for default flag (TOTFLG is
+TOTEXC==1			; in zeroed memory)
+TOTONL==2
+
+TOTTAB:	TOTLEN,,TOTLEN
+	[asciz/EXCLUDED/],,TOTEXC
+	[asciz/INCLUDED/],,TOTINC
+	[asciz/ONLY/],,TOTONL
+TOTLEN==.-TOTTAB-1
+
+SPCTAB: [asciz"TOTAL"],,TOTAL
+	[asciz"RUN"],,STCNT
+	[asciz"I/O"],,STCNT+1
+	[asciz"FRK WT"],,STCNT+4
+	[asciz"SLEEP"],,STCNT+5
+SPCLEN==.-SPCTAB
+
+LEVTAB:	CHN1PC			; Level table
+	block	2
+
+CHNLST:	1b0!1b1!1b19		; Channels 0, 1, 19
+
+CHNTAB:	1,,BREAK		; Interrupt Channel table, chn. 0.
+	1,,CTLY			; Prg status char., Chn. 1.
+	block	21
+	1,,FRKTRM		; Fork termination, Chn. 19.
+	block	20
+
+	page
+	subttl	PCLOOK code
+
+$$$EV$:	jrst	PCLOOK		; Start location
+	jrst	REENTE		; Reenter location
+	<vwho>b2 + <vmajor>b11 + <vminor>b17 + <vedit>
+
+PCLOOK:	move	p, [iowd PDLLEN, PDL]	; Main entry point entered in
+					; response to an EXEC START
+					; command or a PCLOOK RESET
+					; command.
+	RESET%
+	call	CLRSYM		; Clear the program symbols
+	setzb 	STOBGN
+	move	t1, [xwd STOBGN, STOBGN+1]
+	blt	t1, STOEND	; Zero the storage area
+	movei	t1, 777777
+	movem	t1, RNGEND	; Initial memory range
+;[NHFB0030]
+;PCLOOK -- PC Histogram Utility -- Version of 20-Oct-83
+	hrroi	t1, [asciz/
+---------------------------------------------------------------
+PCLOOK  -- PC Histogram Utility -- Version 3.2(33) of 12-May-84
+---------------------------------------------------------------
+Type CTL-Y for program status, CTL-C to interrupt sampled fork.
+Minimum sampling interval is about 20 msec due to job scheduler
+time-slicing.
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
+/]
+	PSOUT%
+	setz	t1,		; USE whatever the system calls us
+				; for our name
+	call	$CMINI		; Init. COMND parse
+	hrroi	t1, [asciz/RUN (program from file)/]
+	call	$CMIN7		; command line can be "prgnam.exe parameters"
+	 jfcl			; which will fake a RUN command
+	movx	t1, .FHSLF
+	move	t2, [xwd LEVTAB, CHNTAB]
+	SIR%
+	move	t2, CHNLST	; channels 0,1,19
+	AIC%
+	EIR%
+	movei	t1, 1
+	movem	t1, SCALE	; Default SCALE factor = 1
+	movx	t1, DEFINT
+	movem	t1, INTRVL	; Set the init. interval
+	movx	t1, .TICCC
+	movem	t1, INTCHR
+	movx	t1, .TICCY	;Use CTL-Y for status in order
+				;to preserve EXEC's CTL-T.
+	movem	t1, PRGCHR
+	seto	t1,
+	MOVE	t2, [xwd -2, OURNAM]
+	movx	t3, .JISNM
+	GETJI%
+	 ercal	$ERJSY
+	movx	t1, .PRIIN
+	RFMOD%
+	movem	t2, IRFMOD
+	RFCOC%
+	dmovem	t2, IRFCOC
+	movx	t1, .FHJOB
+	RTIW%
+	movem	t2, IRTIW
+	movx	t1, .FHSLF
+	RPCAP%
+	txnn	t2, SC%CTC
+	 call	[hrroi	t2, [asciz"? ^C Capability required"]
+		jrst	$ERSTR]
+	txon	t3, SC%CTC
+	 EPCAP%
+	  ercal	$ERJSY
+	call	CMDLP
+	jrst	.-1
+
+CMDLP:	movem	p, SAVPDL
+	hrli	t1, [FLDDB. .CMKEY,,NOCTAB]
+	hrri	t1, [FLDDB. .CMKEY,,CMDTAB]
+	call	$CMTLC
+	HALTF%
+	ret
+
+	page
+	subttl	MERGE, RUN, GET commands
+$MERGE:	seto	p4,
+	jrst	$GET1
+
+$RUN:	movei	p4, 1
+	jrst	$GET1
+
+$GET:	setz	p4,
+$GET1:	movei	t2, [FLDDB. .CMNOI,,<point 7, [asciz/program from file/]>]
+	call	$CMNOI
+	movx	t1, GJ%OLD	; Want a file which exists
+	setz	t2,		; NO default device
+	skipe	t3, FILNAM	; Have a file name?
+	 hrroi	t3, FILNAM	; Yes, use as default
+	hrroi	t4, [asciz/EXE/]	; .EXE default extension
+	call	$CMFIL		; Parse a file
+	move	p3, t2		; Save the JFN in p3
+	call	$CMRSC		; Get confirm or text in rescan buffer
+	hrroi	t1, RUNTXT
+	hrroi	t2, $CMBUF
+	setz	t3,
+	SOUT%			; save GET/MERGE/RUN command string
+	jumpl	p4, $GET3	; Merging?
+	skipe	t1, FRKFRK	; Have a fork already?
+	 KFORK%			; Yes, kill old fork first.
+	setzm	FRKFRK
+	movx	t1, CR%CAP
+	CFORK%
+	 ercal	$ERJSY
+	movem	t1, FRKFRK	; Save the fork handle
+	hrroi	t1, FILNAM
+	hrrz	t2, P3
+	movx	t3, FLD(.JSAOF, JS%NAM)
+	JFNS%			; Get the programs name
+	move	t1, [SIXBIT/(PRIV)/]
+	movem	t1, PRGNAM	; The sub-system is "(PRIV)"
+	setzm	PRGNAM+1	; No program name yet
+	move	t1, [point 7, FILNAM]
+	move	t2, [point 6, PRGNAM+1]
+	movei	t3, 6
+$GETNL:	ildb	t4, T1		; Copy the first 6 chars. of the file name to
+	jumpe	t4, $GETNX	; be the SIXBIT program name
+	trc	t4, 140
+	trnn	t4, 140
+	 tro	t4, 140
+	idpb	t4, T2
+	sojg	t3, $GETNL
+$GETNX:	hrroi	t1, FRKNAM
+	jrst	$GET4
+$GET3:	skipn	t1, FRKFRK
+	 call	NOPRG
+	GEVEC%
+	move	p1, t2
+	move	t1, FRKNMP
+	hrroi	t2, [asciz/ + /]
+	call	LSTSTR
+$GET4:	hrrz	t2, P3
+	movx	t3, FLD(.JSAOF,JS%DEV)!FLD(.JSAOF,JS%DIR)!FLD(.JSAOF,JS%NAM)!FLD(.JSAOF,JS%TYP)!FLD(.JSAOF,JS%GEN)!JS%LWR!JS%PSD!JS%PAF
+	JFNS%
+	movem	t1, FRKNMP	; Save the pointer to the fork's name
+	hrlz	t1, FRKFRK	; Fork handle
+	hrr	t1, P3		; JFN
+	movei	t2, 777		; Address range (0 - 777)
+	GET%			; GET the program (section zero only)
+	 ercal	$ERJSY
+	jumpl	p4, $GET7	; Merging?
+	skipg	SYMPTR		; Have symbols?
+	 call	$SYM1		; No, go get them.
+	setzm	CRFMOD		; No term. mode word
+	call	$CLR1		; Clear the look stuff
+	jumpg	p4, $STRT2	; Running program?
+	ret
+$GET7:	hrroi	t2, [asciz"Entry vector is at "]
+	call	$TYSMS
+	move	t1, FRKFRK
+	GEVEC%			; Get the entry vector
+	hrrz	t1, $CMBLK+.CMIOJ
+	push	p, t2
+	hrrz	t2, T2
+	call	LSTPC
+	hrroi	t2, [asciz", length is "]
+	call	$TYSTR
+	pop	p, t2
+	hlrz	t2, T2
+	hrrz	t1, $CMBLK+.CMIOJ
+	call	LSTOCT
+	call	$TYEMS
+	move	t1, FRKFRK
+	move	t2, P1
+	SEVEC%			; Set the entry vector
+	ret
+
+	page
+	subttl	CLEAR and RESET commands
+
+$CLEAR:	movei	t2, [FLDDB. .CMNOI,,<point 7, [asciz/PC histogram tables/]>]
+	call	$CMNCF
+$CLR1:	skipn	t1, FRKFRK
+	 call	NOPRG
+	RUNTM%			; Get the current runtime for the program
+	movem	t1, CRUNTM
+	TIME%			; Get the current system up time.
+	movem	t1, CTIME
+	setzm	TOTAL
+	move	t1, [xwd TOTAL, TOTAL+1]
+	blt	t1, STCNT+7	; Clear info tables
+	setzm	FRKTAB
+	move	t1, [xwd frktab, frktab+1]
+	blt	t1, FRKTAB+<siztab-1>	; Clear fork's tables
+	ret
+
+$RESET:	movei	t2, [FLDDB. .CMNOI,,<point 7, [asciz/the world/]>]
+	call	$CMNCF
+	jrst	PCLOOK
+
+	page
+	subttl	BREAK-CHARACTER and PROGRAM-STATUS-CHARACTER commands
+
+$PROGR:	movx	p1, PRGCHR	; Getting program status char. (Default ^Y)
+	movei	t2, [FLDDB. .CMNOI,,<point 7, [asciz/code is/]>]
+	call	$CMNOI
+	movei	t2, [FLDDB. .CMKEY,,BRKTAB,,<CONTROL>]
+	call	$CMCMD
+	 call	[hrroi	t2, [asciz/Invalid response/]
+		 jrst	$ERATM]
+	hrre	p3, (t2)	; rhs of BRKTAB entry
+	jumpge	p3, $BRK2	; positive if not CONTROL
+	movei	t2, [FLDDB. .CMFLD,,,<Alphabetic character>,Y]
+	jrst	$BRK1		; join common code
+
+$BREAK:	movx	p1, INTCHR	; Getting interrupt char. (Default ^C)
+	movei	t2, [FLDDB. .CMNOI,,<point 7, [asciz/code is/]>]
+	call	$CMNOI
+	movei	t2, [FLDDB. .CMKEY,,BRKTAB,,<CONTROL>]
+	call	$CMCMD
+	 call	[hrroi	t2, [asciz/Invalid response/]
+		 jrst	$ERATM]
+	hrre	p3, (t2)	; rhs of BRKTAB entry
+	jumpge	p3, $BRK2	; positive if not CONTROL
+	movei	t2, [FLDDB. .CMFLD,,,<Alphabetic character>,C]
+$BRK1:	call	$CMCMD
+	 call	[hrroi	t2, [asciz/Invalid control character/]
+		 jrst	$ERATM]
+	move	t2, $CMBLK+.CMABP
+	ildb	p3, t2
+	cail	p3, "a"
+	 caile	p3, "z"
+	  jrst	.+2
+	subi	p3, "a"-"A"	; convert lowercase to uppercase
+	cail	p3, "A"		; Must be an uppercase char.
+	 caile	p3, "Z"
+	  call	[hrroi	t2, [asciz/Invalid control character/]
+		jrst	$ERATM]
+	subi	p3, 100		; Make into control char.
+	ildb	t1, T2
+	jumpe	t1, $BRK2
+	caie	t1, 12
+	 call	[hrroi	t2,[asciz/Invalid control character/]
+		 jrst	$ERATM]
+	jrst	$BRK3
+$BRK2:	call	$CMCFM
+$BRK3:	movem	p3, (p1)
+	ret
+
+BRKTAB:	10,,10
+	[asciz"BREAK"],,.TICBK
+	[asciz"CONTROL"],,777777	; special -1 flag
+	[asciz"DELETE"],,.TICRB
+	[asciz"ESCAPE"],,.TICES
+	[asciz"INPUT"],,.TICTI
+	[asciz"NULL"],,.TICBK
+	[asciz"OUTPUT"],,.TICTO
+	[asciz"SPACE"],,.TICSP
+
+	page
+	subttl	INTERVAL and SCALE commands
+
+$INTER:	movei	t2, [FLDDB. .CMNOI,,<point 7, [asciz/in milliseconds between looks is/]>]
+	movx	p4, INTRVL
+	call	$CMNOI
+	movei	t2, [FLDDB. .CMNUM,,^D10,<milliseconds>,25]
+	jrst	$SCL1		; join common code
+
+$SCALE:	movei	t2, [FLDDB. .CMNOI,,<point 7, [asciz/for asterisks in listing/]>]
+	movei	p4, SCALE
+	call	$CMNOI
+	movei	t2, [FLDDB. .CMNUM,,^D10,<integral divisor>,1]
+$SCL1:	call	$CMCMD
+	 call	[hrroi	t2, [asciz/Invalid decimal number/]
+		jrst	$ERATM]
+	skipg	t4, T2
+	 call	[hrroi	t2, [asciz/Number must be greater than zero/]
+		jrst	$ERATM]
+	call	$CMCFM
+	movem	t4, (p4)
+	ret
+
+	page
+	subttl	SUBTITLE and TITLE commands
+
+$SUBTI:	hrroi	p4, SBTTXT
+	jrst	$TITL1
+
+$TITLE:	hrroi	p4, TTLTXT
+$TITL1:	movei	t2, [FLDDB. .CMNOI,,<point 7, [asciz/text for listing is/]>]
+	call	$CMNOI
+	setzm	$ATBUF
+	move	t2, [xwd $ATBUF, $ATBUF+1]
+	blt	t2, $TXBUF+<$TXBLN/5>-1
+	movei	t2, [FLDDB. .CMTXT]
+	call	$CMCMD
+	 call	[hrroi	t2, [asciz/Invalid text/]
+		jrst	$ERATM]
+	setzm	(p4)
+	move	t1, p4
+	move	t2, $CMBLK+.CMABP
+	call	LSTSTR
+	idpb	t3, T1
+	ret
+
+	page
+	subttl	RANGE command
+
+$RANGE:	movei	t2, [FLDDB. .CMNOI,,<point 7, [ascii/of memory in histogram from/]>]
+	call	$CMNOI
+	movei	t2, [FLDDB. .CMNUM,,^D8,<beginning address>,0]
+	call	$CMCMD
+	 call	[hrroi	t2, [asciz/Invalid octal address/]
+		jrst	$ERATM]
+	caig	t2, 777777
+	 caige	t2, 0
+	  call	[hrroi	t2, [asciz/Octal address out of range 0..777777/]
+		jrst	$ERATM]
+	push	p, t2
+	movei	t2, [FLDDB. .CMNOI,,<point 7, [ascii/to/]>]
+	call	$CMNOI
+	movei	t2, [FLDDB. .CMNUM,,^D8,<ending address>,777777]
+	call	$CMCMD
+	 call	[hrroi	t2, [asciz/Invalid octal address/]
+		jrst	$ERATM]
+	caig	t2, 777777
+	 caige	t2, 0
+	  call	[hrroi	t2, [asciz/Octal address out of range 0..777777/]
+		jrst	$ERATM]
+	camge	t2, 0(p)
+	 call	[hrroi	t2, [asciz/Beginning address > ending address/]
+		jrst	$ERATM]
+	push	p, t2
+	call	$CMCFM
+	pop	p, RNGEND
+	pop	p, RNGBEG
+	ret
+
+	page
+	subttl	SYMBOL command
+
+$SYMBO:	skipe	$NOFLG
+	 jrst	[call	$CMCFM
+		 movei	t1, 1
+		 movem	t1, SYMPTR
+		 jrst	CLRSYM]
+	movei	t2, [FLDDB. .CMNOI,,<point 7, [asciz/from pointer at/]>]
+	call	$CMNOI
+	call	GETOCT
+$SYM1:	movei	t2, .JBSYM
+	setzm	SYMPTR
+	skipn	FRKFRK
+	 call	NOPRG
+	hrro	p1, t2		; Pointer to location of symbol table pointer
+	call	MAPSYM		; Map page with pointer.
+	 jrst	$SYM9		; Couldn't map page.
+	skipge	p1, (p1)	; Is there a symbol table pointer?
+	 call	MAPSYM		; .JBSYM contains (-length,,address) map it.
+$SYM9:	  setz	p1,		; No symbols found.
+	movem	p1, SYMPTR
+	jumpge	p1, [call	[hrroi	t2,[asciz/No symbols available/]
+			    	jrst	$ERWRN]
+		     ret]
+	hrroi	t2, [asciz/Loaded /]
+	call	$TYSMS
+	hlre	t2, p1		; Get neg. length sym table
+	movn	t2, t2		; ABS()
+	lsh	t2, -1		; Change from # words to # syms.
+	hrrz	t1, $CMBLK+.CMIOJ
+	call	LSTDEC
+	hrroi	t2, [asciz/ symbols/]
+	call	$TYSTR
+	jrst	$TYEMS
+
+MAPSYM:	call	CLRSYM
+	hrrz	t1, p1		; Address of symbol table pointer
+	hlre	t3, p1		; Neg. length of map in words
+	movn	t3, t3
+	addi	t3, 777(t1)	; Get number of words to map + addr.
+	lsh	t1, -^D9	; Change to page #
+	lsh	t3, -^D9
+	sub	t3, t1		; Number of pages to map
+	hrl	t1, FRKFRK
+	RPACS%			; Get page access of process
+	txne	t2, PA%PEX	; Page exist
+	 txnn	t2, PA%RD	; and read access?
+	  ret			; No, return.
+	move	t2, [xwd .FHSLF, SYMPAG]
+	txo	t3, PM%CNT!PM%RD
+	PMAP%
+	trz	p1, 777000	; Address in page of symbol table pointer
+	addi	p1, SYMTAB	; this page.
+	retskp
+
+CLRSYM:	seto	t1,		; CLEAR the symbol pages.
+	move	t2, [xwd .FHSLF, SYMPAG]
+	movx	t3, PM%CNT!FLD(100, PM%RPT)
+	PMAP%
+	ret
+
+GETOCT:	movei	t2, [FLDDB. .CMNUM,,^D8,<Carriage return or>]
+	call	$CMCMD
+	 jrst	$CMCFM
+	push	p, t2
+	call	$CMCFM
+	pop	p, t2
+	retskp
+
+	page
+	subttl	TOTAL command
+$TOTAL:	movei	t2, [FLDDB. .CMNOI,,<point 7, [asciz/lines in histogram/]>]
+	call	$CMNOI
+	movei	t2, [FLDDB. .CMKEY,,TOTTAB,,<INCLUDED>]
+	call	$CMCMD
+	 call	[hrroi	t2, [asciz/Invalid response/]
+		 jrst	$ERATM]
+	hrrz	t0, (t2)	; rhs of TOTTAB entry
+	push	p, t0		; save value until confirmed
+	call	$CMCFM
+	pop	p, TOTFLG	; store new flag value
+	ret
+
+	page
+	subttl	CONTINUE, REENTER, and START commands and PC sampling
+
+PROGRM:	movei	t2, [FLDDB. .CMNOI,,<point 7, [asciz/program/]>]
+	call	$CMNOI
+	jrst	$CMCFM
+
+NOPRG:	hrroi	t2, [asciz/No program/]
+	jrst	$ERSTR
+
+
+$CONTI:	call	PROGRM		; Continue program
+	skipn	t1, FRKFRK
+	 call	NOPRG
+	RFSTS%			; Return fork status
+	load	t1, RF%STS, t1
+	caie	t1, .RFHLT	; Process halted
+	 cain	t1, .RFFPT	; or forced process termination?
+	  jrst	STFRKP		; Continue
+	jrst	DOLOOK		; Start
+
+$REENT:	call	PROGRM
+	movei	t2, 1
+	jrst	STFRKV
+
+$START:	movei	t2, [FLDDB. .CMNOI,,<point 7, [asciz/program/]>]
+	call	$CMNOI
+	call	GETOCT
+	 jrst	$STRT2
+STFRKP:	skipn	t1, FRKFRK
+	 call	NOPRG
+	SFORK%			; Start fork
+	 ercal	$ERJSY
+	jrst	DOLOOK
+$STRT2:	setz	t2,
+STFRKV:	skipn	t1, FRKFRK
+	 call	NOPRG
+	SFRKV%			; Start the fork
+	 ercal	$ERJSY
+DOLOOK:	hrlz	t1, PRGCHR
+	hrri	t1, 1
+	ATI%			; Activate Interrupt "Prgm status char." chn. 1
+	 ercal	$ERJSY
+	hrlz	t1, INTCHR
+	ATI%			; Activate Interrupt "Interrupt char." chn. 0
+	 ercal	$ERJSY
+	movx	t1, RT%DIM!.FHSLF
+	RTIW%			; Return deferred term. int. mask
+	movn	t4, INTCHR
+	movx	t3, 1B0
+	lsh	t3, (t4)
+	STIW%			; Set deferred term. int. mask for "INTCHR"
+	skipn	t2, CRFMOD
+	 jrst	DOLK1
+	movx	t1, .PRIIN
+	SFMOD%			; Set term. mode word
+	dmove	t2, CRFCOC
+	SFCOC%			; Set term. CCOC words
+	movx	t1, .FHJOB
+	move	t2, CRTIW
+	STIW%			; Set term. int. word mask
+	 ercal	$ERJSY
+DOLK1:	dmove	t1, PRGNAM
+	SETSN%			; Set subsys and program names
+	 ercal	$ERJSY
+	setzm	$RSCNT		; Nothing in ReSCAN buffer
+	movem	p, SAVPDL	; Save stack pointer
+	setom	RUNFLG
+	move	t1, FRKFRK
+	RFORK%			; Resume fork
+LKLOOP:	move	t1, INTRVL
+	DISMS%			; Wait for a little while
+	aos	TOTAL		; Increment count of times through here
+	move	t1, FRKFRK
+	RFSTS%			; Return fork status
+	hrrz	t2, t2		; Zero PC flags
+	lsh	t2, -PCshft	; Drop low-order bits of PC address
+	load	t1, RF%STS, t1	; Get fork's status
+	skipn	t1		; Count only if running, .RFRUN (= 0)
+	 aos	FRKTAB(t2)	; Running at area as shown by t2
+	aos	STCNT(t1)	; Count of status for is in.
+	jrst	LKLOOP		; Back to do again.
+
+REENTE:	setzm	CHN1PC
+	hrroi	p1, [asciz/Reenter/]
+	jrst	BREAKM
+
+FRKTRM:	hrroi	p1, [asciz/Program HALT/]
+	move	t1, FRKFRK
+	RFSTS%
+	load	t2, RF%STS, t1
+	caie	t2, .RFFPT	; Forced process termination?
+	 jrst	BREAKM		; No.
+	hrrz	t1, $CMBLK+.CMIOJ	; get current primary output jfn
+	move	p1, t1
+	hrroi	t2, [asciz/Program error: /]
+	call	LSTSTR
+	hrlo	t2, FRKFRK
+	setz	t3,
+	ERSTR%			; Get the error which caused the HALT
+	 jfcl
+	  jfcl
+	hrroi	t2, [asciz/,
+  /]
+	call	LSTSTR
+	jrst	BREAKM
+
+BREAK:	hrroi	p1, [asciz/Break/]
+BREAKM:	skipe	t1, FRKFRK
+	 FFORK%			; Freeze the fork
+	hrrz	t1, PRGCHR
+	DTI%			; Disable term. int. prog. status char.
+	hrrz	t1, INTCHR
+	DTI%			; Disable term. int. int. char.
+	aose	RUNFLG		; Inc. RUNFLG, zero yet?
+	 jrst	BREAKX		; No.
+	move	t2, p1
+	call	$TYSMS
+	hrroi	t2, [asciz/ from /]
+	call	$TYSTR
+	call	TYPSTS
+	call	$TYEMS
+	movx	t1, .PRIIN
+	RFMOD%			; Get the current term. mode word
+	movem	t2, CRFMOD
+	RFCOC%			; Get the current term. CCOC words
+	dmovem	t2, CRFCOC
+	movx	t1, .FHJOB
+	RTIW%			; Get the current term. int. word
+	movem	t2, CRTIW
+	movx	t1, .PRIIN
+	move	t2, IRFMOD
+	SFMOD%			; Set the term. mode word to init.
+	movx	t1, .PRIIN
+	move	t2, IRFMOD
+	STPAR%			; Set the term. mode word to init.
+	movx	t1, .PRIIN
+	dmove	t2, IRFCOC
+	SFCOC%			; Set CCOC words to init.
+	movx	t1, .FHJOB
+	move	t2, IRTIW
+	STIW%			; Reset term. int. word to init.
+	seto	t1,
+	MOVE	t2, [xwd -2, prgnam]
+	movx	t3, .JISNM
+	GETJI%			; Get the current SUBSYS and PROG names
+	 ercal	$ERJSY
+	dmove	t1, OURNAM
+	SETSN%			; Set our SUBSYS and PROG names
+	 ercal	$ERJSY
+BREAKX:	move	p, SAVPDL	; Restore old stack pointer
+	movei	t1, CPOPJ	; Where to DEBRK to
+	exch	t1, CHN1PC
+	jumpe	t1, CPOPJ	; No int., just return then
+	DEBRK%
+
+CTLY:	push	p, t1		; ^Y typed (Program status char.)
+	push	p, t2
+	push	p, t3
+	push	p, t4
+	hrrz	t1, $CMBLK+.CMIOJ	; get current primary output jfn
+	movem	t1, P3
+	skipn	frkfrk
+	 jrst	[hrroi	t2, [asciz/No program/]
+		 call	$ERWRN
+		 jrst	CTLYX]
+	hrroi	t2, FRKNAM
+	call	$TYSMS
+	hrroi	t2, [asciz/
+/]
+	call	$TYSTR
+	call	TYPSTS
+	hrroi	t2, [asciz/ used /]
+	call	$TYSTR
+	move	t1, FRKFRK
+	RUNTM%			; Get the fork's runtime
+	call	LSTTM		; List CPU time
+	hrroi	t2, [asciz/ in /]
+	call	$TYSTR
+	TIME%
+	sub	t1, CTIME	; Amount of time since last run.
+	call	LSTTM		; List console time
+CTLYX:	call	$TYEMS
+	pop	p, t4
+	pop	p, t3
+	pop	p, t2
+	pop	p, t1
+	DEBRK%			; return from interrupt
+
+TYPSTS:	hrrz	t1, FRKFRK
+	RFSTS%			; Return fork's status
+	push	p, t2		; Save PC
+	load	t1, RF%STS, t1
+	move	t2, STSTAB(t1)	; Get message which goes with status
+	call	$TYSTR
+	hrroi	t2, [asciz/ at /]
+	call	$TYSTR
+	hrrz	t1, $CMBLK+.CMIOJ
+	pop	p, t2
+	jrst	LSTPC
+
+STSTAB:	point	7, [asciz/Running/]	; .RFRUN
+	point	7, [asciz/IO wait/]	; .RFIO
+	point	7, [asciz/Halt/]	; .RFHLT
+	point	7, [asciz/Error/]	; .RFFPT
+	point	7, [asciz/Fork wait/]	; .RFWAT
+	point	7, [asciz/Sleep/]	; .RFSLP
+	point	7, [asciz/Break/]	; .RFTRP
+	point	7, [asciz/Error/]	; .RFABK
+
+	page
+	subttl	APPEND, LIST, and TYPE commands
+
+$TYPE:	movei	t2, [FLDDB. .CMNOI,,<point 7, [asciz/PCLOOK data on terminal/]>]
+	call	$CMNCF
+	hrrz	p3, $CMBLK+.CMIOJ
+	jrst	$LIST2
+
+$APPEN:	movx	t4, GJ%MSG
+	jrst	$LIST1
+
+$LIST:	movx	t4, GJ%FOU!GJ%MSG
+$LIST1:	movei	t2, [FLDDB. .CMNOI,,<point 7, [asciz/PCLOOK data to file/]>]
+	call	$CMNOI
+	move	t1, t4
+	setz	t2,
+	SKIPE	t3, FILNAM
+	 hrroi	t3, FILNAM
+	hrroi	t4, [asciz/PCLOOK/]
+	call	$CMFIL
+	hrrz	p3, t2		; Save output JFN
+	call	$CMCFM
+	move	t1, P3
+	movx	t2, FLD(7, OF%BSZ)!OF%APP
+	OPENF%
+	 ercal	$ERJSY
+$LIST2:	skipn	frkfrk
+	 call	NOPRG
+	move	t1, P3
+	movei 	p4, ^D132	; Default page width
+	DVCHR%
+	load	t2, DV%TYP, t2
+	caie	t2, .DVTTY	; Listing to TTY?
+	 jrst	LSTHDR		; No, use default page width
+	move	t1, P3
+	RFMOD%
+	load	p4, TT%WID, t2	; Get the page width
+	caige	p4, ^D16	; Width < 16?
+	 addi	p4, ^D128	; width = width + 128
+LSTHDR:	move	t1, P3
+	skipn	TTLTXT		; Have a title?
+	 jrst	LSTHD2		; No, don't list it.
+	hrroi	t2, TTLTXT
+	call	LSTSTR		; list title
+	call	LSTCR
+LSTHD2:	hrroi	t2, FRKNAM
+	call	LSTSTR		; List the fork's name
+	call	LSTTAB
+	seto	t2,
+	SETZ	t3,
+	ODTIM%			; Current time and date
+	call	LSTCR
+	hrroi	t2, [asciz/ Interval: /]
+	call	LSTSTR
+	move	t2, INTRVL
+	call	LSTDEC		; Interval in milliseconds
+	hrroi	t2, [asciz/ msec, Scale factor: /]
+	call	LSTSTR
+	move	t2, SCALE
+	call	LSTDEC		; Scale factor
+	hrroi	t2, [asciz/, Run time: /]
+	call	LSTSTR
+	move	t1, FRKFRK
+	RUNTM%			; Get the fork's runtime
+	sub	t1, CRUNTM	; ms of runtime (current - last)
+	call	LSTTM
+	hrroi	t2, [asciz/, Elapsed time: /]
+	call	LSTSTR
+	TIME%
+	sub	t1, CTIME	; Amount of time since last run.
+	call	LSTTM
+	call	LSTCR
+	skipn	SBTTXT		; Have a subtitle?
+	 jrst	LSTHD4		; No, skip listing it then
+	hrroi	t2, SBTTXT
+	call	LSTSTR		; List subtitle
+	call	LSTCR
+LSTHD4:	call	LSTCR
+	hrroi	t2, RUNTXT	; [NHFB0032] print GET/MERGE/RUN command
+	call	LSTSTR
+	call	LSTCR
+	call	LSTCR
+	movsi	p1, -SPCLEN	; AOBJN pointer/counter for status PC table
+	movei	t4, "="
+	movem	t4, MARKER
+	setzm	CUMHIT		; Clear cumulative hit count
+
+SPLOOP:	hrrz	t4, SPCTAB(p1)
+	skipn	t4, (t4)	; Equal to zero?
+	 jrst	SPLPX		; Yes, don't output
+	hlro	t2, SPCTAB(p1)
+	call	LSTSTR		; Output string
+	hrroi	t2, [asciz/:		/]
+	call	LSTSTR
+  	call	LSTHST		; Output hist. of value
+SPLPX:	aobjn	p1, SPLOOP
+	call	LSTCR
+
+	hrroi	t2, [asciz /Histogram printing for address range /]
+	call	LSTSTR
+	move	t2, RNGBEG
+	call	LSTOCT
+	hrroi	t2, [asciz / : /]
+	call	LSTSTR
+	move	t2, RNGEND
+	call	LSTOCT
+	call	LSTCR
+
+	hrroi	t2, [asciz /
+=====================================================================
+..........Address..........   .......Hits....... Scale	Histogram Bar
+ Value	Module_local+offset   Count   Cumulative
+=====================================================================
+/]
+	call	LSTSTR
+
+	setzm	CUMHIT		; Clear counters
+	setzm	MODCNT
+	setzm	MODHIT
+	setzm	MODSUM
+
+	movei	t4, "*"
+	movem	t4, MARKER	; Default histogram bar marker
+
+	move	p1, RNGEND
+	addi	p1, 1_<PCshft>	; RNGEND + bucketsize
+	aos	p1		; RNGEND + bucketsize + 1
+	sub	p1, RNGBEG	; (RNGEND + bucketsize + 1 - RNGBEG) =
+				; (size of section to print)
+	caile	p1, 777777
+	 movei	p1, 777777	; enforce maximum range in 0..777777
+	lsh	p1, -PCshft	; form FRKTAB table index
+	movn	p1, p1		; -size
+	hrl	p1, p1		; -size,,-size
+	move	t2, RNGBEG
+	lsh	t2, -PCshft	; form FRKTAB table index
+	hrr	p1, t2		; -size,,begin_offset for loop control
+	setzm	SYMLST		; must force search of entire symbol
+				; table initially
+
+CTLOOP:	skipn	t2, FRKTAB(p1)	; Zero?
+	 jrst	CTLPX		; Yes, don't output
+	addm	t2, CUMHIT	; No, update cumulative hit count
+	hrrz	t2, p1		; Get address in table
+	lsh	t2, PCshft	; Make into address in program
+	call	LSTSYM		; Output as symbol
+	 skipa	t2, [point 7, [asciz"		"]]	; Value only printed
+	  hrroi	t2, [asciz"	"]	; Value + Symbol printed
+	move	t0, TOTFLG
+	cain	t0, TOTONL
+	 jrst	CTLPX		; TOTALS ONLY wanted
+	move	t4, FRKTAB(p1)	; [18-Oct-83] get count
+	camge	t4, SCALE	; [18-Oct-83] smaller than SCALE?
+	 jrst	CTLPX		; No, suppress it since it would be
+				; smaller than one asterisk
+	move	t3, SCRLEN
+	caige	t3, ^D16	; Longest symbol, no tabs to print!
+	 call	LSTSTR
+	move	t4, FRKTAB(p1)
+	call	LSTHST		; Output histogram bar
+CTLPX:	aobjn	p1, CTLOOP
+
+CTDONE:
+	hrroi	t2,[asciz /=====================================================================
+/]
+	call	LSTSTR
+	hrroi	t2, [BYTE (7).CHFFD]
+	call	LSTSTR
+CLSLST:	hrrz	t2, $CMBLK+.CMIOJ
+	camn	t2, t1		; Using terminal?
+	 ret			; Yes, all done
+	CLOSF%			; No, close listing file first
+	 ercal	$ERJSY
+	call	$JFCLR		; then remove jfn from table
+	ret
+
+; Routine to print current PC value in form
+;
+; oooooo<TAB>module_local+offset
+;
+; if a symbol can be found, otherwise as
+;
+; oooooo
+;
+; Expects jfn in t1, PC value in t2, destroys t3, t4.
+; Returns +1 always.
+
+LSTPC:	push	p, t2		; Save it
+	push	p, p4
+	hrrz	t2, t2		; Address part of PC only (no flags)
+	movem	t2, PRGADD	; address to print
+	movx	t2, .MORLW
+	MTOPR%
+	 ercal	$ERJSY
+	move	p4, t3		; Terminal width
+	setzm	SYMLST		; must force search of entire symbol table
+	push	p, t1		; Save t1
+	movei	ap, SYMSTF
+	call	PCSYMB		; Get a symbol
+	pop	p, t1		; restore t1 (jfn)
+	move	t2, PRGADD
+	movx	t3, NO%LFL!FLD(^D8,NO%RDX)!FLD(6,NO%COL)
+	call	LSTNUM		; oooooo
+	skipe	SCRLEN
+	 call	[call	LSTTAB	; oooooo<TAB>
+		hrroi	t2, SCRBUF
+		call	LSTSTR	; oooooo<TAB>module_localsymbol+offset
+		ret		; [NHFB0030] - missed this
+		]
+	pop	p, p4
+	pop	p, t2		; Restore rhs of PC
+	ret
+
+; Routine to print out program address and nearest preceding symbol
+; in form
+;
+; oooooo<TAB>module_local+offset
+;
+; or
+;
+; oooooo<TAB>
+;
+; A module total of the form
+;
+; <TAB>module_{total}<TAB>{optional scale factor, else TAB}#########
+;
+; will be printed if the module has changed.
+; On entry, t1 contains the destination designator, t2 the address,
+; and p1 the hit table index.  If the hit count is smaller than SCALE,
+; nothing is printed, but the two returns are taken as if printing was
+; done.
+; Printing is also affected by the value of TOTFLG (TOTINC, TOTEXC, and
+; TOTONL).
+; Returns +1 if only value printed, or +2 if value plus symbol printed.
+; t0,t2..t4 are destroyed.
+;
+LSTSYM:	movem	t2, PRGADD	; address to print
+	move	t4, FRKTAB(p1)	; get hit count and
+	movem	t4, MODHIT	; save it
+	movei	ap, SYMSTF
+	call	PCSYMB		; Get a symbol
+	skipn	SCRLEN		; Symbol found?
+	 jrst	[setzm	SYMLST	; [NHFB0033] no, make search restart next time
+		movx	t3, NO%LFL!FLD(^D8,NO%RDX)!FLD(6,NO%COL)
+		move	t0, TOTFLG	; No symbol available
+		cain	t0, TOTONL
+		 ret		; TOTAL ONLY wanted, no output if no symbol
+		move	t0, MODHIT
+		camge	t0, SCALE
+		 ret		; no output when MODHIT less than SCALE
+		call	LSTNUM	; No, just output value and
+		call	LSTTAB	; tab
+		ret]
+
+	call	LSTSUM		; Update and possibly output cumulative
+				; module count
+	move	t0, TOTFLG
+	cain	t0, TOTONL
+	 ret			; TOTAL ONLY wanted, so no more output
+	move	t4, MODHIT	; Get hit count for this symbol.
+	camge	t4, SCALE	; [18-Oct-83] smaller than SCALE?
+	 retskp			; No, suppress it since it would be
+				; smaller than one asterisk
+
+	move	t2, PRGADD
+	movx	t3, NO%LFL!FLD(^D8,NO%RDX)!FLD(6,NO%COL)
+	call	LSTNUM		; oooooo
+	call	LSTTAB		; oooooo<TAB>
+	hrroi	t2, SCRBUF
+	call	LSTSTR		; oooooo<TAB>module_localsymbol+offset
+	retskp			; Skip return to flag printing of symbol
+
+	-5,,0			; -argcount,,0 (arglist for PCSYMB)
+SYMSTF:	PRGADD			; address of searched symbol
+	SYMPTR			; symbol table pointer (-count,,firstaddress)
+	SCRBUF			; symbol name area (returned)
+	SCRLEN			; symbol length (returned)
+	SYMLST			; last module symbol table index (returned)
+				; if 0, search starts from beginning and
+				; is MUCH slower
+
+; Routine to update module histogram count and print it if the module
+; has changed.  SCRBUF is expected to contain the name of the last
+; symbol, MODHIT the current PC bucket count, and p3 the output jfn.
+; If any printing occurs, the file position is at the beginning of a new
+; line on return.
+; Returns +1 always.  Destroys t0,t2..t4.
+
+LSTSUM:	move	t1, [point 7,MODULE]	; current module name
+	move	t3, [point 7,SCRBUF]	; new module name
+
+MODLOP:	ildb	t0, t1		; get current module byte
+	ildb	t2, t3		; get new module byte
+	caie	t0, "_"		; end of current string?
+	 jrst	MODCMP		; no
+	caie	t2, "_"		; end of new string?
+	  jrst	MODCMP		; no
+	jrst	MODDON		; yes, names match
+MODCMP:	camn	t0, t2		; same?
+	 jrst	MODLOP		; yes, continue scan
+				; names are different, so
+	move	t2, MODCNT	; we have a new module
+	caig	t2, 1		; more than one bucket in
+				; previous module?
+	 jrst	[hrroi	t1, MODULE	; no, first time, so
+		hrroi	t2, SCRBUF	; save module name
+		movei	t3, 7
+		movei	t4, "_"
+		SOUT%
+		movei	t1, 1
+		movem	t1, MODCNT	; set MODCNT = 1
+		setzm	MODSUM	; clear hit count for this module
+		jrst	MODDON]
+
+	move	t1, MODSUM	; yes, get cumulative hits of previous module
+	camge	t1, SCALE
+	 jrst	MODNEW		; no output when count less than SCALE
+	move	t0, TOTFLG
+	cain	t0, TOTEXC
+	 jrst	MODNEW		; no output when TOTAL EXCLUDED
+	move	t1, p3		; jfn
+	call	LSTTAB		; <TAB>
+	hrroi	t2, MODULE
+	movei	t3, 7
+	movei	t4, "_"
+	SOUT%
+				; <TAB>module_
+	hrroi	t2,[asciz/{total}	/]
+	call	LSTSTR		; <TAB>module_{total}<TAB>
+
+	move	t4, MODSUM	; get previous module total hit count
+	push	p, MARKER	; save current marker symbol
+	movei	t0, "#"		; flag with different symbol
+	movem	t0, MARKER
+	call	LSTHST		; histogram bar
+	pop	p, MARKER	; restore marker symbol
+
+MODNEW:	setzm	MODSUM		; clear for new module
+	setzm	MODCNT
+
+MODDON:	aos	MODCNT		; increment module count
+	move	t1, MODHIT
+	addm	t1, MODSUM	; update module hit count
+	move	t1, p3		; restore jfn
+	ret			; return to caller
+
+; Routine to print hh:mm:ss.  On entry, t1 contains the time, and p3 the
+; output jfn.  Returns +1 always.
+
+LSTTM:	imuli	t1, 1750	; time * 1000.
+	idiv	t1, t2		; time / 1000.
+	move	t2, t1		; Store time
+	hrrz	t1, P3
+	idiv	t2, [^D3600000]	; time / 1 hour
+	push	p, t3		; mod(time, 1 hour)
+	jumpe	t2, LSTTM2	; no hours.
+	call	LSTDEC		; output hours
+	movei	t2, ":"
+	BOUT%
+LSTTM2:	pop	p, t2		; restore time (less hours)
+	idivi	t2, ^D60000	; time / 1 minute
+	push	p, t3		; mod(time, 1 minute)
+	call	LSTDC2		; output minutes
+	movei	t2, ":"
+	BOUT%
+	pop	p, t2		; restore time (less hours, minutes)
+	idivi	t2, ^D1000	; time / 1 second
+	push	p, t3		; mod(time, 1 second)
+	call	LSTDC2		; output seconds
+	movei	t2, "."
+	BOUT%
+	pop	p, t2		; restore time (fraction of seconds)
+	idivi	t2, ^D10	; 10ths of second
+
+LSTDC2:	skipa	t3, [NO%LFL!NO%ZRO!FLD(2, NO%COL)!FLD(^D10, NO%RDX)]
+LSTDEC:	movx	t3, FLD(^D10, NO%RDX)
+LSTNUM:	NOUT%
+	 ercal	$ERJSY
+	ret
+LSTOCT:	movx	t3, FLD(^D8, NO%RDX)
+	jrst	LSTNUM
+LSTFLT:	FLOUT%
+	 ercal	$ERJSY
+	ret
+;
+; Routine to print histogram bar.  Expects jfn in t1, count in t4, line
+; width in p4.  Destroys t0, t2..t4.
+; Returns +1 always.
+LSTHST:	move	t2, t4		; Get value to output
+	push	p, t2		; save it
+	movx	t3, NO%LFL!NO%OOV!FLD(7,NO%COL)!FLD(^D10,NO%RDX)
+	call	LSTNUM
+	fltr	t2, t2
+	fltr	t0, STCNT	; RUN time (TOTAL - SLEEP - I/O)
+	fdvr	t2, T0
+	fmpr	t2, [100.0]	; type a percent of value in t2
+	movx	t3, FL%ONE!FL%PNT!FLD(37,FL%RND)!FLD(4,FL%FST)!FLD(2,FL%SND)
+	call	LSTFLT
+	hrroi	t2, [asciz/% /]
+	call	LSTSTR
+	fltr	t2, CUMHIT
+	fltr	t0, STCNT	; RUN time (TOTAL - SLEEP - I/O)
+	fdvr	t2, T0
+	fmpr	t2, [100.0]	; type a percent of value in t2
+	movx	t3, FL%ONE!FL%PNT!FLD(37,FL%RND)!FLD(4,FL%FST)!FLD(2,FL%SND)
+	call	LSTFLT
+	hrroi	t2, [asciz/% /]
+	call	LSTSTR
+	pop	p, t2		; restore number of hits
+	move	t4, t2
+	hrrei	t3, -1(t4)
+	add	t3, SCALE
+	idiv	t3, SCALE	; number of stars = (count+SCALE-1)/SCALE
+	caig	t3, -30(p4)	; Length < width - 24?
+	 jrst	LSTHS2		; Yes,
+	movei	t2, "x"		; No, create scale factor of 10, 100, etc.
+	BOUT%
+	movei	t2, "1"
+	BOUT%
+
+LSTHS1:	caig	t3, -40(p4)	; Length < width - 32?
+	 jrst	LSTHS2		; Yes, exit loop
+	idivi	t3, ^D10
+	movei	t2, "0"
+	BOUT%
+	jrst	LSTHS1
+
+LSTHS2:	push	p, t3
+	call	LSTTAB		; <TAB>
+	pop	p, t3
+
+LSTHS3:	move	t2, MARKER
+	BOUT%			; Output marker symbol
+	sojg	t3, LSTHS3
+
+	call	LSTCR
+	ret
+
+LSTSTR:	setz	t3,
+	SOUT%
+	ret
+
+LSTTAB:	hrroi	t2, [asciz/	/]
+	call	LSTSTR
+	ret
+
+LSTCR:	hrroi	t2, [asciz/
+/]
+	call	LSTSTR
+	ret
+
+	page
+	subttl	COMND JSYS support tables and routines
+
+$CMSIN:	$CMREP			; Initial COMND state block
+	.PRIIN,,.PRIOU
+	point	7, $PRMPT
+	point	7, $CMBUF
+	point	7, $CMBUF
+	$CMBLN
+	0
+	point	7, $ATBUF
+	$ATBLN
+	$GJBLK
+$CMINI::			; Initialize COMND
+	setzm	$CMBEG
+	move	t4, [xwd $CMBEG, $CMBEG+1]
+	blt	t4, $SVPDL
+	move	t4, [xwd $CMSIN, $CMBLK]
+	blt	t4, $CMBLK+.CMGJB
+	skipn	t2, t1		; Have pointer to program name?
+	 jrst	$CMIN1		; No, go get our own
+	hrroi	t1, $PRGNM
+	movei	t3, 11
+	setz	t4,
+	SOUT%			; move up to 9 chars. for program name
+	jrst	$CMIN6
+
+$CMIN1:	GETNM%			; Ask the system for our name
+	move	t2, [point 6, t1]
+	move	t3, [point 7, $PRGNM]
+	movei	t4, 6
+
+$CMIN2:	ildb	c, t2
+	jumpe	c, $CMIN3
+	addi	c, " "
+	idpb	c, t3
+	sojg	t4, $CMIN2
+
+$CMIN3:
+$CMIN6:	hrroi	t1, $PRMPT
+	hrroi	t2, $PRGNM
+	call	$MVSTR		; Copy program name for prompt
+	movei	c, ">"		; Make prompt look like "prog name>"
+	idpb	c, t1
+	setz	c,
+	idpb	c, t1		; End prompt string with NUL
+	ret
+
+$CMIN7:	tlc	t1, 777777	; Check to see if pointer is of type -1,,addr.
+	tlcn	t1, 777777	; if it is then make it 440700,,addr.
+	 hrli	t1, 440700	; otherwise leave it alone.
+	setz	t4,
+
+$CMRS1:	ildb	c, t1		; Copy string pointed to by t1 into COMND's
+	jumpe	c, $CMRS2	; buffer.
+	idpb	c, $CMBLK+.CMPTR
+	aoja	t4, $CMRS1
+
+$CMRS2:	movx	t1, .RSINI	; Init. ReSCAN
+	RSCAN%
+	 erjmp	cpopj
+	move	t3, t1		; Save the number of chars. in Rescan buffer
+	call	RSCHSK
+	 ret
+	move	t2, [point 7, $TXBUF]
+
+$CMRS5:	cail	t1, "A"		; Lowercase letter?
+	 subi	t1, 40		; Yes, make in to uppercase
+	cail	t1, "A"
+	 caile	t1, "Z"
+	  jrst	[cail t1, "0"	; If t1 < "0" or t1 > "9" THEN not a number
+		 caile t1, "9"
+		  jrst [caie t1, "-"	; If t1 <> "-" and "_" THEN done here.
+			 cain t1, "_"
+			  jrst $CMRS5+5
+			jrst $CMRS6]
+		jrst $CMRS5+5]
+	idpb	t1, t2		; Store the letter
+	call	RSCHAR		; Get the next char.
+	 ret			; None left.
+	jrst	$CMRS5		; Got it.
+
+$CMRS6:	setz	c,
+	idpb	c, t2		; Finish off string
+	call	RSCHS1		; Get the rest of the rescan buffer (if any)
+	 ret
+
+$CMRS7:	idpb	t1, $CMBLK+.CMPTR	; Store the byte read from rescan buf.
+	call	RSCHAR		; Read another char.
+	 skipa			; No more chars left.
+	aoja	t4, $CMRS7	; Increment the count of chars read
+	hrroi	t1, $PRGNM
+	hrroi	t2, $TXBUF
+	STCMP%			; Does the program name match ours?
+	txnn	t1, SC%SUB
+	 jumpn	t1, CPOPJ	; Program names don't match.
+	movem	t4, $RSCNT
+	retskp
+
+$CMRS0:	hrroi	t1, RSCBUF	; Start rescan buffer off with file name of
+	move	t2, P3		; program being run.
+	movx	t3, FLD(.JSSSD, JS%NAM)
+	JFNS%
+	movei	t2, " "
+	idpb	t2, t1		; Then a space.
+	ret
+
+$CMRSC:	movei	t2, [FLDDB. .CMTXT,CM%SDH,,<Rescan command string for program>]
+	call	$CMCMD
+	 jrst	$ERJSY
+	call	$CMRS0
+	move	t2, $CMBLK+.CMABP
+	ildb	t3, t2		; Pickup first char in atom buffer
+	skipn	t3		; Nul?
+	 ret			; Yes, no text for rescan buffer
+	idpb	t3, t1		; Copy from atom buffer to RSCBUF
+	ildb	t3, t2
+	jumpn	t3, .-2		; Copy until NUL.
+	movx	t4, .CHLFD
+	idpb	t4, t1
+	idpb	t3, t1
+	hrroi	t1, RSCBUF	; Put RSCBUF in ReSCAN buffer
+	RSCAN%
+	 jrst	$ERJSY
+	ret
+
+RSCHSK:	call	RSCHAR		; Get char from Rescan buffer
+	 ret			; None left.
+
+RSCHS1:	caie	t1, " "		; A space
+	 cain	t1, .CHTAB	; or tab?
+	  jrst	RSCHSK		; YES, get next char.
+	caie	t1, .CHLFD	; Line feed
+	 cain	t1, .CHCRT	; or return?
+	  jrst	RSCHSK		; YES, get next char
+	retskp
+
+RSCHAR:	sojl	t3, CPOPJ	; Exhausted count of chars. in rescan buffer
+	PBIN%			; Read char from rescan buffer
+	retskp			; Return +2 if have one.
+
+$CMTLC::
+	movem	p, $SVPDL	; Save stack pointer
+	movem	t1, $CMTLF	; Save addresses of FLDDB.s
+	hrrz	t1, $CMBLK+.CMIOJ	; Get input designator
+	hrroi	t2, $PRMPT	; Pointer to prompt
+	skipn	$RSCNT		; Any chars in rescan?
+	 caie	t1, .PRIOU	; No, Using primary IO?
+	  hrroi	t2, [asciz//]	; Use null string for prompt.
+	movem	t2, $CMBLK+.CMRTY	; Save prompt pointer.
+	movei	t1, $CMBLK
+	movei	t2, [FLDDB. .CMINI]
+	call	$CMCMD		; Do init for COMND
+	 jfcl
+	skiple	t1, $RSCNT	; Any chars in rescan?
+	 movem	t1, $CMBLK+.CMINC	; Yes, store here.
+
+$CMREP:	setzm	$NOFLG		; No "NO"
+	move	p, $SVPDL	; Get stack pointer back.
+	call	$JFCLS		; Close all JFNs
+	hrrz	t2, $CMTLF	; Get pointer to FLDDB.
+
+$CMTL3:	call	$CMCMD		; Parse a word.
+	 call	[hrroi	t2, [asciz/Unknown keyword/]
+		    jrst	$ERATM]
+	hrrz	t2, (t2)
+	call	(T2)		; Dipatch to routine for keyword parsed.
+	jrst	$CMDON
+	jrst	$CMTL3
+
+$CMDON:	skipn	p, $SVPDL	; Restore stack pointer
+	 jrst	%%DIE		; No stack pointer saved, go die.
+	call	$JFCLS		; Close JFNs
+	skipn	t1, $RSCNT	; Doing rescan?
+	 retskp			; No.
+	setzm	$RSCNT		; Nothing in rescan.
+	ret
+
+$NO::	setcmm	$NOFLG		; "NO" has been parsed.
+	hlrz	t2, $CMTLF	; Use "NO" FLDDB.
+	retskp
+
+$ERWRN::			; t2 contains message.
+	hrroi	t1, [asciz/% /]
+	call	$TYMSG
+	jrst	$TYCRL
+
+$ERCMD:	hlrz	t1, $CMBLK+.CMIOJ
+	GTSTS%
+	txnn	t2, GS%EOF	; Hit EOF of take file?
+	 call	$ERJSY		; Must've been jsys error.
+	hrroi	t1, $TXBUF
+	hlrz	t2, $CMBLK+.CMIOJ
+	setz	t3,
+	JFNS%
+	call	$CMCLS		; Close take file.
+	hrroi	t2, [asciz/End of command file /]
+	call	$TYSMS
+	hrroi	t2, $TXBUF
+	call	$TYSTR
+	call	$TYEMS
+	jrst	$CMDON
+
+$ERATM::			; t2 contains pointer to message
+	hrroi	t1, $TXBUF
+	call	$MVSTR		; Output error message
+	hrroi	t2, [asciz/ "/]
+	call	$MVSTR
+	hrroi	t2, $ATBUF
+	call	$MVSTR		; then atom buffer.
+	hrroi	t2, [asciz/"/]
+	call	$MVSTR
+	call	$MVEND
+	jrst	$ERJS2
+
+$ERJSS::			; t2 contains pointer to message
+	hrroi	t1, $TXBUF
+	call	$MVSTR
+	hrroi	t2, [asciz/ /]
+	call	$MVSTR
+	jrst	$ERJS1
+$ERJSY::
+	hrroi	t1, $TXBUF
+$ERJS1:	hrloi	t2, .FHSLF
+	setz	t3,
+	ERSTR%			; Get last error message for self
+	 jfcl
+	  jfcl
+$ERJS2:	hrroi	t2, $TXBUF
+$ERSTR::
+	push	p, t2
+	hrrz	t4, $CMBLK+.CMIOJ
+	call	$CMCLS		; Close input and output JFNs
+	movx	t1, .PRIIN
+	CFIBF%
+	pop	p, t2
+	hrroi	t1, [asciz/? /]
+	call	$TYMSG
+	cain	t4, .PRIOU	; Using primary output?
+	 jrst	$ERST2		; Yes.
+	hrroi	t2, [asciz/:
+  /]
+	call	$TYSTR
+	hrroi	t2, $PRMPT
+	call	$TYSTR
+	move	t1, $CMBLK+.CMINC
+	ibp	t1, $CMBLK+.CMPTR
+	call	$MVEND
+	move	t2, $CMBLK+.CMBFP
+	call	$TYSTR
+$ERST2:	call	$TYTST
+	jrst	$CMDON
+
+$CMNCF::			; Confirm with noise
+	call	$CMNOI
+$CMCFM::			; Confirm
+	movei	t2, [FLDDB. .CMCFM]
+	call	$CMCMD
+	call	[hrroi	t2, [asciz/Invalid confirmation/]
+		jrst	$ERSTR]
+	ret
+
+$CMNOI::			; Noise
+	call	$CMCMD
+	call	[hrroi	t2, [asciz/Invalid guide word/]
+		jrst	$ERSTR]
+	ret
+
+$CMFIL::			; File spec
+	setzm	$GJBLK
+	move	c, [xwd $GJBLK, $GJBLK+1]
+	blt	c, $GJBLK+15
+	movem	t1, $GJBLK+.GJGEN
+	movem	t2, $GJBLK+.GJDEV
+	movem	t3, $GJBLK+.GJNAM
+	movem	t4, $GJBLK+.GJEXT
+	movei	t2, [FLDDB. .CMFIL]
+	call	$CMCMD
+	 call	$ERJSY
+	jrst	$JFSET
+
+$CMCMD::			; Command (keyword)
+	movei	t1, $CMBEG
+	COMND%
+	 erjmp	$ERCMD
+	txne	t1, CM%NOP
+	 ret
+	retskp
+
+$CMCLS:	move	t3, [xwd .PRIIN, .PRIOU]
+	exch	t3, $CMBLK+.CMIOJ
+	hrrz	t1, t3
+	CLOSF%			; Close input JFN
+	 ercal	$ERJSY
+	hlrz	t1, t3
+	CLOSF%			; Close output JFN
+	 ercal	$ERJSY
+	ret
+
+$JFSET::			; Store JFN in table
+	push	p, t1
+	movsi	t1, -$JFTLN
+SETJF1:	skipe	$JFTAB(t1)	; Looking for a place to put it.
+	 aobjn	t1, SETJF1
+	jumpge	t1, RLSJF0	; Ran out of room?
+	hrrzm	t2, $JFTAB(t1)	; Store JFN
+	pop	p, t1
+	ret
+
+$JFCLR::			; Clear JFN from table
+	movsi	t2, -$JFTLN
+CLRJF1:	camn	t1, $JFTAB(t2)	; Found JFN?
+	 setzm	$JFTAB(t2)	; Yes, clear it.
+	aobjn	t2, CLRJF1
+	ret
+
+$JFCLS::			; Close JFNs
+	movsi	t2, -$JFTLN
+CLSJF1:	skipn	t1, $JFTAB(t2)
+	 jrst	CLSJF2
+	txo	t1, CZ%ABT
+	CLOSF%
+	 erjmp	rlsjfn
+CLSJF2:	setzm	$JFTAB(t2)
+	aobjn	t2, CLSJF1
+	ret
+
+JFNTE:	hrroi	t2, [asciz/JFN table exhausted/]
+	jrst	$ERSTR
+RLSJF0:	call	JFNTE
+RLSJFN:	move	t1, $JFTAB(t2)
+	RLJFN%
+	 jfcl
+	jrst	clsjf2
+
+$TYSMS::			; Type start message
+	hrroi	t1, [asciz/[/]
+$TYMSG::			; Type message
+	push	p, t2
+	push	p, t1
+	call	$TYTST
+	pop	p, t2
+	call	$TYSTR
+	hrroi	t2, $PRGNM
+	call	$TYSTR
+	hrroi	t2, [asciz/: /]
+	call	$TYSTR
+	pop	p, t2
+	jrst	$TYSTR
+$TYEMS::			; Type end message
+	hrroi	t2, [asciz/]
+/]
+	jrst	$TYSTR
+$TYTST::			; Type test (where doing IO?)
+	hrrz	t1, $CMBLK+.CMIOJ	; Get output JFN
+	DOBE%			; Wait for output buffer to empty
+	RFPOS%			; Return position
+	trnn	t2, 777777	; Column position -1?
+	 ret
+$TYCRL::			; Carriage return and linefeed
+	hrroi	t2, [asciz/
+/]
+$TYSTR::			; Type string
+	hrrz	t1, $CMBLK+.CMIOJ
+$MVSTR::			; move string
+	call	LSTSTR
+	ret
+$MVEND::			; End string (NUL)
+	setz	c,
+	idpb	c, t1
+	ret
+
+%%DIE:	HALTF%
+	hrroi	t2, [asciz/Can't continue/]
+	call	$ERSTR
+	jrst	%%DIE
+
+RSKP:	aos	(p)		; Return +2
+CPOPJ:	ret			; Return +1
+
+	page
+	subttl	TAKE command
+
+$TAKE::	movei	t2, [FLDDB. .CMNOI,,<point 7, [asciz/commands from file/]>]
+	call	$CMNOI
+	movx	t1, GJ%OLD
+	setzb	t2, t3
+	hrroi	t4, [asciz/CMD/]
+	call	$CMFIL		; Parse command file spec
+	hrlz	p1, t2		; Save input jfn here.
+	setzm	$TXBUF
+	hrroi	t1, $TXBUF
+	movx	t3, FLD(.JSAOF, JS%NAM)
+	JFNS%
+	movei	t2, [FLDDB. .CMNOI,,<point 7, [asciz/logging output on/]>]
+	call	$CMNOI
+	movx	t1, GJ%FOU!GJ%MSG
+	hrroi	t2, [asciz/TTY/]
+	skipe	t3, $TXBUF
+	 hrroi	t3, $TXBUF
+	hrroi	t4, [asciz/LOG/]
+	call	$CMFIL
+	hrr	p1, t2		; Save output jfn here.
+	call	$CMCFM
+	call	$CMCLS
+	hlrz	t1, p1
+	movx	t2, FLD(7, OF%BSZ)!OF%RD
+	OPENF%			; Open input
+	 ercal	$ERJSY
+	hrrz	t1, p1
+	movx	t2, FLD(7, OF%BSZ)!OF%APP
+	OPENF%			; Open output
+	 ercal	$ERJSY
+	movem	p1, $CMBLK+.CMIOJ	; Setup COMND for parsing anew.
+	call	$JFCLR
+	hlrz	t1, p1
+	jrst	$JFCLR
+
+	page
+	subttl	EXIT and HELP commands
+
+$EXIT::	hrroi	t2, [asciz/from /]
+	call	$HLPEX
+	setom	$RSCNT
+	ret
+
+$HELP::	hrroi	t2, [asciz/with /]
+	call	$HLPEX
+	hrroi	t1, $TXBUF
+	hrroi	t2, [asciz/File HLP:/]
+	call	$MVSTR
+	hrroi	t2, $PRGNM
+	call	$MVSTR
+	hrroi	t2, [asciz/.HLP/]
+	call	$MVSTR
+	call	$MVEND
+	movx	t1, GJ%OLD!GJ%SHT
+	hrroi	t2, $TXBUF+1
+	GTJFN%
+	 ercal [hrroi	t2, $TXBUF
+		jrst	$ERJSS]
+	movx	t2, FLD(7, OF%BSZ)!OF%RD
+	OPENF%
+	 ercal [hrroi	t2, $TXBUF
+		jrst	$ERJSS]
+$HELP1:	hrroi	t2, $TXBUF
+	movei	t3, $TXBLN-1
+	setz	t4,
+	SIN%
+	 jfcl
+	move	t4, t3
+	push	p, t1
+	setz	t1,
+	idpb	t1, t2
+	hrroi	t2, $TXBUF
+	call	$TYSTR
+	pop	p, t1
+	jumpe	t4, $HELP1
+	ret
+
+$HLPEX:	hrroi	t1, $TXBUF
+	call	$MVSTR
+	hrroi	t2, $PRGNM
+	call	$MVSTR
+	call	$MVEND
+	movei	t2, [FLDDB. .CMNOI,,<point 7, $TXBUF>]
+	jrst	$CMNCF
+
+	page
+	subttl	INFORMATION command
+
+$XINFO:	movei	t2, [FLDDB. .CMNOI,,<point 7, [asciz/about PCLOOK via XINFO/]>]
+	call	$CMNOI
+	call	$CMCFM
+	skipe	t1, XINFRK	; Do we have a fork yet?
+	 jrst	XINFO1		; yes
+	movx	t1, GJ%SHT!GJ%OLD
+	hrroi	t2, [asciz /SYS:XINFO.EXE/]
+	GTJFN%
+	 erjmp	[hrroi	t2,[asciz /% SYS:XINFO.EXE is not available for this command.
+Use HELP command instead.
+/]
+		hrrz	t1, $CMBLK+.CMIOJ	; Get output JFN
+		call	LSTSTR
+		ret]
+
+	movem	t1, XINJFN	; save JFN
+	movx	t1, CR%CAP
+	CFORK%			; create a fork
+	 ercal	$ERJSY
+	movem	t1, XINFRK	; save fork handle
+
+;
+; GET the .EXE file into the just-created inferior fork.
+
+	hrl	t1, XINFRK	; fork handle
+	hrr	t1, XINJFN	; form Fork Handle,,JFN
+	GET%			; Copy EXEFIL into inferior fork
+				; and release the JFN.
+	 ercal	$ERJSY
+	setzm	XINJFN		; Clear the JFN
+
+; Save the terminal characteristics
+
+	movx	t1, .PRIOU
+	RFMOD%			; Get the current term. mode word
+	 ercal	$ERJSY
+	movem	t2, XRFMOD
+	RFCOC%			; Get the current term. CCOC words
+	 ercal	$ERJSY
+	dmovem	t2, XRFCOC
+	movx	t1, .FHJOB
+	RTIW%			; Get the current term. int. word
+	 ercal	$ERJSY
+	movem	t1, XRTIW
+	dmovem	t2, XRTIW+1
+	movx	t1, .PRIOU
+	movx	t2, .MORLW
+	MTOPR%
+	 ercal	$ERJSY
+	movem	t3, XMORLW
+	movx	t2, .MORLL
+	MTOPR%
+	 ercal	$ERJSY
+	movem	t3, XMORLL
+
+; Clear the terminal input buffer and give XINFO some input before
+; starting it.   The buffer clear is essential to prevent intermixed
+; input.
+;
+	MOVX	t1,.PRIIN
+	CFIBF%
+	move	t4, [point 7, [asciz/G(DOC:PCLOOK.INFO)
+/]]				; simulate terminal input string
+
+XINSTI:	ildb	t2, t4		; get input byte
+	jumpe	t2, XINRUN	; quit at end-of-string
+	hrrz	t1, $CMBLK+.CMIOJ	; use current primary input
+	STI%			; input the character
+	 ercal	$ERJSY
+	jrst	XINSTI		; keep stashing input
+
+XINFO1:	hrrz	t1, XINFRK	; Fork handle
+	RFSTS%			; Get fork status to test if handle OK
+	 erjmp	XINDON		; Return on error
+	load	t1, RF%STS, t1
+	cain	t1, .RFHLT	; is the fork halted?
+	 jrst	XINRUN		; yes
+	move	t1, XINFRK	; Get the fork handle
+	HFORK%			; Halt the fork
+	 erjmp	XINDON		; Return on error
+;
+; Start XINFO.  Interrupts are disabled so that the full range of
+; EMACS control characters is available, and so that fork termination
+; will return here and not to FRKTRM routine.
+;
+XINRUN:	movx	t1, .FHSLF
+	move	t2, CHNLST
+	DIC%
+	 ercal	$ERJSY
+	movx	t1, .FHSLF
+	DIR%			; disable our own interrupts
+	 ercal	$ERJSY
+	move	t1, XINFRK	; get the fork handle
+	setz	t2,		; START at offset 0 in entry
+				; vector
+	SFRKV%			; start the fork
+	 ercal	$ERJSY
+	move	t1, XINFRK	; get the fork handle
+	WFORK%			; wait for it to finish
+	 ercal	$ERJSY
+	movx	t1, .FHSLF
+	move	t2, [xwd LEVTAB, CHNTAB]
+	SIR%
+	 ercal	$ERJSY
+	move	t2, CHNLST	; channels 0,1,19
+	AIC%
+	 ercal	$ERJSY
+	EIR%			; reactivate interrupt handling
+	 ercal	$ERJSY
+;
+; Restore the terminal state
+;
+	movx	t1, .PRIOU
+	move	t2, XRFMOD
+	SFMOD%
+	 ercal	$ERJSY
+	movx	t1, .PRIOU
+	move	t2, XRFMOD
+	STPAR%
+	 ercal	$ERJSY
+	movx	t1, .PRIOU
+	dmove	t2, XRFCOC
+	SFCOC%
+	 ercal	$ERJSY
+	move	t1, XRTIW
+	dmove	t2, XRTIW+1
+	STIW%
+	 ercal	$ERJSY
+
+	movx	t1, .PRIOU
+	movx	t2, .MOSLW
+	move	t3, XMORLW
+	MTOPR%
+	 ercal	$ERJSY
+
+	movx	t2, .MOSLL
+	move	t3, XMORLL
+	MTOPR%
+	 ercal	$ERJSY
+
+
+XINDON:	ret			; Return to caller
+
+	xlist			; do not want literals in listing
+LITTER:	lit
+	list
+        END     3,,$$$EV$

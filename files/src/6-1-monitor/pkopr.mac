@@ -1,0 +1,1030 @@
+;<6-1-MONITOR>PKOPR.MAC.75, 18-Mar-85 00:15:39, Edit by LOUGHEED
+;<6-1-MONITOR>PKOPR.MAC.73, 15-Mar-85 15:01:46, Edit by LOUGHEED
+; Move into extended code section
+; Flush old edit history
+
+
+SEARCH PROLOG,ANAUNV
+TTITLE (PKOPR,PKOPR,< - Network dependent packet level operations>)
+SUBTTL Kirk Lougheed / Stanford University / 7-May-83 /KSL/JPB
+
+; Copyright (c) 1983, 1984, 1985
+; The Board of Trustees, Leland Stanford Junior University, Stanford, CA  94305
+; All Rights Reserved.
+
+; The information in this software is subject to change without notice
+; and should not be construed as a commitment by Stanford University.
+; Stanford assumes no responsibility for the use or reliability of
+; this software.
+
+EXTN <STAERC>			;Statistics cell defined in ENET.
+EXTN <.NCTS>			;Start of NCT storage.  Defined in STG.
+
+IFNDEF REL6,<REL6==1>		;Default to 6.X series monitor
+
+IFE REL6,<DEFINE XSWAPCD <SWAPCD>>
+IFE REL6,<DEFINE XRESCD <RESCD>>
+
+IFE REL6,<DEFINE DSP(ARG) <IFIW!ARG>>
+IFN REL6,<DEFINE DSP(ARG) <XWD XCDSEC, ARG>>
+
+SUBTTL Definitions and Storage
+
+	XSWAPCD			;We start out swappable
+
+;Types of transport media
+
+.PK3MB==0			;3MB Ethernet MEIS
+.PK10E==1			;10MB Ethernet MEIS
+.PKANA==2			;1822 interface - AN20
+MAXPKN==.PKANA			;Maximum network (transport medium) number
+
+;Function codes
+
+.PKOPN==0			;Open a connection
+.PKCLZ==1			;Close a connection
+.PKSND==2			;Send a packet
+.PKRCV==3			;Receive a packet
+.PKOWF==4			;Open/setup a process for WAIF processing
+.PKCWF==5			;Close a process for WAIF processing
+.PKRWF==6			;Receive a WAIF packet
+.PKSPM==7			;Set promiscuous mode
+.PKCPM==10			;Clear promiscuous mode
+.PKSLL==11			;Set local loopback mode
+.PKCLL==12			;Clear local loopback mode
+.PKNCT==13			;Copy NCT to user buffer
+
+;Offsets into the argument block
+
+.PKLEN==0			;Count of words in block, including this word
+.PKNET==1			;Network type code
+.PKINT==2			;Network interface
+.PKPRT==3	 		;Protocol type (network dependent)
+.PKFLG==4			;Flag word
+    PK%MOD==1B0			;Set data mode from .PKNTD offset
+    PK%FLG==1B1			;Get waif flags from LH of .PKNTD offset
+.PKBUF==5			;Buffer address
+.PKBYT==6			;Packet length (network dependent)
+.PKNTD==7			;Network dependent data
+
+;Waif flags
+
+WA%INT==:1B0			;Interrupt level waifs accepted
+WA%ARP==:1B1			;Input ARP packets accepted
+WA%IPG==:1B2			;Gateway IP's accepted
+WA%IPB==:1B3			;Discarded IP's accepted
+WA%IPA==:1B4			;All good IP's accepted
+
+;Offsets into Internet buffers used by PKOPR%
+;N.B. there are only 6 available offsets (we are using 4 of them)
+
+..PKT==PKTSII-LCLPKT		;We are using datagram relative pointers
+
+PKOTAD==..PKT+0			;TAD of receipt
+PKONET==..PKT+1			;Interface/network,,protocol
+PKOBYT==..PKT+2			;Packet length according to hardware
+PKOINP==..PKT+3			;Input queue index
+
+
+NPKCON==6			;Max number of interface/net/protocol triples
+NPKIQS==6			;Max number of input queues
+MAXPKQ==^D10			;Max number of queued packets/input queue
+
+RS PKSTGB,0			;Beginning of PKOPR% resident storage
+
+;The following tables are in parallel, but in no particular order
+
+RS PKTRPL,NPKCON		;(Interface/network,,protocol) or -1 if free
+RS PKINPQ,NPKCON		;Index into input queue tables
+RS PKNETD,NPKCON		;Network dependent connection data
+
+;PKOPR% input queues - Internet conventions followed
+; Each input queue is unique to a fork.  A fork may sign up for any number
+; of interface/network/protocol triples.  Input for each triple goes to
+; the same input queue.  These tables are in parallel with no particular order.
+
+RS PKOWNR,NPKIQS		;Owning fork or -1 if free
+RS PKIQCT,NPKIQS		;PKTRPL triple count,,count of queued packets
+RS PKIQHD,NPKIQS		;Input queue head
+RS PKIQTL,NPKIQS		;Input queue tail
+RS WAIFRK,1			;Fork number of the waif listening process
+RS WAIFOF,1			;Index into the database table
+RS WAIFLG,1			;Flag word for selecting classes of waifs
+RS PKSTGE,0			;End of PKOPR% resident storage
+
+;Defstr's for PKIQCT
+
+DEFSTR PKISHR,PKIQCT,17,18	;Share count for this input queue
+DEFSTR PKICNT,PKIQCT,35,18	;Count of packets in input queue
+
+;Defstr's for PKTRPL, etc.
+
+DEFSTR NETWRK,,17,9		;Network type code
+DEFSTR INTRFC,,8,9		;Interface code
+DEFSTR PRTOCL,,35,18		;Protocol code
+
+;Defstr's for PKNETD
+
+DEFSTR NETMOD,PKNETD,3,4	;MEIS data mode (for 3 and 10MB Ethernet)
+
+SUBTTL Literals, tables, data
+
+;Table of PKOPR% functions
+
+FNCTAB:	DSP (PKOOPN)		;Sign up for an triple
+	DSP (PKOCLZ)		;Release a tiple assignment
+	DSP (PKOSND)		;Send a packet
+	DSP (PKORCV)		;Receive a packet
+	DSP (PKOOWF)		;Set up waif process
+	DSP (PKOCWF)		;Close the waif process
+	DSP (PKORWF)		;Read waif packet
+	DSP (PKOSPM)		;Set MEIS promiscuous mode
+	DSP (PKOCPM)		;Clear MEIS promiscuous mode
+	DSP (PKOSLL)		;Set MEIS local loopback mode
+	DSP (PKOCLL)		;Clear MEIS local loopback mode
+	DSP (PKONCT)		;Copy NCT to user buffer
+MAXPKF==.-FNCTAB		;Maximum function number
+
+;Network dependent open routines
+
+OPNNET:	DSP (OPNMEI)		;Set data mode for MEIS-based 3MB Ethernet.
+	DSP (OPNMEI)		;Set data mode for MEIS-based 10MB Ethernet.
+	DSP (R)			;No data modes for AN20 based 1822 networks
+
+;Network dependent send routines
+
+TONET:	DSP (SND3MB)		;Send a packet to the 3MB Ethernet
+	DSP (SNDETH)		;Send a packet to the 10MB Ethernet
+	DSP (SNDANA)		;Send a packet to the 1822 network
+
+;Network dependent reception routines
+
+FRMNET:	DSP (RCVETH)		;Receive a packet from the 3MB Ethernet
+	DSP (RCVETH)		;Receive a packet from the 10MB Ethernet
+	DSP (RCVANA)		;Receive a packet from the 1822 network
+
+;Mapping of PKOPR% hardware types to Multinet hardware types
+
+NETTYP:	NT.3MB			;3MB Ethernet
+	NT.ETH			;10MB Ethernet
+	NT.NCP			;1822 network
+SUBTTL  Central processing routine
+
+;The PKOPR% jsys has the following calling conventions:
+;
+;	T1/ function code
+;	T2/ argument block address
+;	T3/ reserved, should be zero
+;	T4/ reserved, should be zero
+;
+;PKOPR% returns +1 always, illegal instruction interrupt on error.
+;
+;TRVAR usage:
+; IQINDX - input queue index
+; DBINDX - database index
+; NETPRT - interface/network,,protocol triple
+; MONBUF - monitor buffer address
+;
+;AC usage:
+; Q1 - function code
+; Q2 - (user) address of argument block
+; P1 - NCT address
+
+IFE REL6,<.PKOPR::>
+IFN REL6,<XNENT .PKOPR,G>
+	MCENT			;Enter monitor context
+	SKIPN INTON		;Internet up?
+	 ITERR(ETHRX1)		;No, "Ethernet service not available"
+	TRVAR <IQINDX,DBINDX,NETPRT,MONBUF> ;Declare storage
+	SKIPL Q1,T1		;Range check the function code
+	 CAIL Q1,MAXPKF		; ...
+	  ITERR(ARGX02)		;Bad, return "Invalid function" error
+	SKIPG Q2,T2		;Positive argument block address?
+	 ITERR(ARGX02)		;No, return "Invalid function" error
+	MOVE T3,CAPENB		;Get enabled capabilities
+	CAIE Q1,.PKSND		;If sending a packet
+	 TXNE T3,SC%WHL!SC%OPR!SC%NWZ	;Or user has WOPR or Net wizard
+	  TRNA			;Allow the function
+	   ITERR(NTWZX1)	;Else return "NET WIZARD capability required"
+	CALL @FNCTAB(Q1)	;Perform the requested function
+	 ITERR()		;Pass errors back to user
+	MRETNG			;Good return to caller
+
+SUBTTL Process user datagram reception and transmission
+
+;PKOOPN - sign up for a interface/network/protocol triple
+;Takes	Q2/ address of argument block
+;Returns +1 error, T1/ code
+;	 +2 success, process signed up
+
+PKOOPN: CALL GETNET		;Get triple from user
+	 RETBAD()		;Pass error back
+	NOSKED			;No timing races please
+	CALL PKDBLK		;Look up the entry
+	 TRNA			;Not in table, we can sign up
+	  RETBAD(OPNX7,<OKSKED>) ;"Device already assigned to another job"
+	SKIPGE T2		;Skip if we have a free index
+	 RETBAD(MONX01,<OKSKED>) ;"Insufficient system resources"
+	MOVEM T2,DBINDX		;Save database index 
+	MOVE T1,FORKX		;Get our fork number
+	CALL PKIQLK		;Look up our input queue
+	 JUMPL T1,[RETBAD(MONX01,<OKSKED>)] ;"Insufficient system resources"
+	MOVE T2,DBINDX		;Get back database index
+	MOVE T3,NETPRT		;Interface/Network/protocol triple
+	CALL ASGPKO		;Assign PKOPR% database
+	NOINT			;Interlock so we are uninterruptable
+	OKSKED			;Resume scheduling and stay NOINT
+	MOVE T1,DBINDX		;Get database index
+	LOAD T2,NETWRK,NETPRT	;Get network type
+	CALL @OPNNET(T2)	;Set network dependent data
+	OKINT			;Reallow PSI
+	RETSKP			;Return to caller
+
+;PKOCLZ - release sign up for a triple
+;Calling process must own the triple being released
+;Takes	Q2/ address of argument block
+;Returns +1 error, T1/ code
+;	 +2 success, assignment released
+
+PKOCLZ: CALL GETNET		;Get interface/network/protocol triple
+	 RETBAD()		;Pass error back to caller
+	CALL PKDBLK		;Look up the triple, get database index
+	 RETSKP			;Not assigned, just quietly return
+	MOVE T1,PKINPQ(T2)	;Get input queue index
+	MOVE T1,PKOWNR(T1)	;Get owner of our input queue
+	CAME T1,FORKX		;Triple owned by this process?
+	 RETBAD(DESX5)		;No. "File is not open"
+	MOVE T1,T2		;Get database index into place
+	CALL RELPKO		;Release PKOPR% database
+	RETSKP			;Return to caller
+
+;PKOSND - transmit a packet
+;Takes	Q2/ address of argument block
+;Returns +1 error, T1/ code
+;	 +2 success
+
+PKOSND: CALL GETNET		;Get interface/network/protocol triple
+	 RETBAD()		;Pass error back to caller
+PKOSN0:	NOINT			;No PSI
+	CALL GETBFF		;Get a free Internet buffer
+	IFNSK.
+	  OKINT			;No buffers. Reallow PSI.
+	  MOVE T1,[XWD INTNFI,DISGT] ;Wait until free buffer count non-zero
+	  MDISMS		;Block
+	  JRST PKOSN0		;Try again
+	ENDIF.
+	MOVEM T1,MONBUF		;Save pointer to buffer
+	LOAD T1,NETWRK,NETPRT	;Get the network type
+	CALL @TONET(T1)		;Send the packet to the net
+	IFNSK.
+	  PUSH P,T1		;Save error code
+	  MOVE T1,MONBUF	;Get address of monitor buffer
+	  CALL RETBUF		;Release it
+	  POP P,T1		;Restore error code
+	  RETBAD(,<OKINT>)	;Allow PSI and pass error back to user
+	ENDIF.
+	OKINT			;Reallow software interrupts
+	RETSKP			;Return to caller
+
+;PKORCV - receive next packet for this fork
+;Takes	Q2/ address of argument block
+;Returns +1 error, T1/ code
+;	 +2 success, user argument block updated
+
+PKORCV:	CALL GETNET		;Set up network information
+	 RETBAD()		;Bad arguments
+	MOVE T1,FORKX		;Get system fork number
+	CALL PKIQLK		;Look up input queue index
+	 RETBAD(IOX1)		;"File is not opened for reading"
+	MOVEM T1,IQINDX		;Save input queue index
+PKORC0:	NOINT			;Disallow PSI
+	CALL PKIDEQ		;Dequeue a packet
+	IFNSK.
+	  OKINT			;Allow software interrupts again
+	  MOVE T1,IQINDX	;Get back input queue index
+	  MOVSI T1,PKIQHD(T1)	;Form swapped address of input queue head
+	  HRRI T1,DISNT		;Test is wait for non-zero queue head
+	  MDISMS		;Block
+	  MOVE T1,IQINDX	;Test satisfied, get back index
+	  JRST PKORC0		;Go try again
+	ENDIF.
+	MOVEM T1,MONBUF		;Save pointer to dequeued packet
+	LOAD T1,NETWRK,PKONET(T1) ;Get network information
+	CALL @FRMNET(T1)	;Copy packet to user buffer
+	 NOP			;No error conditions yet
+	MOVE T1,MONBUF		;Get address of monitor buffer
+	LOAD T2,NETWRK,PKONET(T1) ;Get network type code
+	UMOVEM T2,.PKNET(Q2)	;Update user argument block
+	LOAD T2,INTRFC,PKONET(T1) ;Get interface number
+	UMOVEM T2,.PKINT(Q2)	;Update user argument block
+	LOAD T2,PRTOCL,PKONET(T1) ;Get protocol type
+	UMOVEM T2,.PKPRT(Q2)	;Update user argument block
+	MOVE T2,PKOBYT(T1)	;Get byte count
+	UMOVEM T2,.PKBYT(Q2)	;Update user argument block
+	CALL RETBUF		;Return buffer to the Internet queue
+	OKINT			;Allow PSI
+	RETSKP			;Take success return
+
+SUBTTL Waif Reception
+
+;PKOOWF - sign up for the waif listening process
+;Takes	Q2/ address of argument block
+;Returns +1 error, T1/ code
+;	 +2 success, process signed up
+
+PKOOWF:	SKIPE WAIFRK		;Another waif fork?
+	 RETBAD(OPNX7)		;"Device already assigned to another job"
+	NOINT			;Turn off PSI
+	CALL PKOOPN		;Open up a PKOPR% port
+	 RETBAD(,<OKINT>)	;Some error
+	MOVE T2,DBINDX		;Get database index
+	MOVEM T2,WAIFOF		;Store it as the waif database index
+	SETO T4,		;Default to setting all waif flags
+	UMOVE T2,.PKLEN(Q2)	;Get length of argument block
+	CAIGE T2,.PKNTD+1	;Must be at least this long
+	IFSKP.
+	  UMOVE T2,.PKFLG(Q2)	;Get flags
+	  TXNE T2,PK%FLG	;Get flags from user
+	   UMOVE T4,.PKNTD(Q2)	;Yes, get them from user
+	ENDIF.	  
+	MOVEM T4,WAIFLG		;Set up waif selection flags
+	MOVE T2,FORKX		;Get the fork number
+	MOVEM T2,WAIFRK		;Store it as the fork of the waif process
+	OKINT			;Reallow PSI
+	RETSKP			;Success return
+
+;PKOCWF - release sign up for the waif process
+;Calling process must be the waif process
+;Takes Q2/ address of argument block
+;Returns: +1 error, T1/ code
+; 	  +2 success, waif assignment released
+
+PKOCWF:	CALL GETNET		;Get interface/network/protocol triple
+	 RETBAD()		;Pass error back to caller
+	MOVE T1,FORKX		;get the  fork number.
+	CAME T1,WAIFRK		;Is it the waif fork?
+	 RETBAD(DESX5)		;"File is not open"
+	MOVE T1,WAIFOF		;Get the waif offset
+	CAMN T1,[-1]		;Sanity check
+	 RETSKP			;Do nothing if already not assigned
+	NOINT			;Disable PSI to keep things consistent
+	CALL RELPKO		;Release PKOPR% database
+	SETZM WAIFRK		;Clear the waif fork number
+	SETOM WAIFOF		;No offset into triple database
+	OKINT			;Reallow interrupts
+	RETSKP			;Success return
+
+;PKORWF - receive next packet for the waif queue
+;Takes	Q2/ address of argument block
+;Returns +1 error, T1/ code
+;	 +2 success, user argument block updated
+
+PKORWF:	CALL GETNET		;Set up network information
+	 RETBAD()		;Bad arguments
+	MOVE T1,FORKX		;Is this the waif fork?
+	CAME T1,WAIFRK		; ...
+	 RETBAD(IOX1)		;"File is not opened for reading"
+	MOVE T1,WAIFOF		;Get the offset into the input queue
+	MOVE T2,PKINPQ(T1)	; ...
+	MOVEM T2,IQINDX		;Save input queue index
+	JRST PKORC0		;Go to common datagram reception code
+
+SUBTTL Set/clear MEIS promiscuous/loopback modes
+
+;PKOSPM - set promiscuous mode on a network
+;Returns - +1 error, T1/ error code
+;	   +2 success, MEIS promiscuous mode set
+
+PKOSPM:	CALL GETNET		;Figure out which interface
+	 RETBAD()		;Pass error back
+	SKIPN T1,NTENCU(P1)	;T1/ CDB,,UDB for this interface
+	 RETBAD(IOX5)		;Not a MEIS. "Device or data error"
+	SETO T2,		;T2/ -1 to enable feature
+	CALL MEIPRM		;Place in promiscuous mode
+	MOVE T1,INTNIB		;Get count of input buffers
+	LSH T1,2		;Quadruple that count
+	MOVEM T1,INTNIB		;And update count 
+	AOS INTFLG		;Run Internet fork right away
+	RETSKP			;Return to caller
+
+
+;PKOCPM - clear promiscuous mode on a network
+;Returns - +1 error, T1/ error code
+;	   +2 success, MEIS promiscuous mode cleared
+
+PKOCPM:	CALL GETNET		;Figure out which interface
+	 RETBAD()		;Pass error back
+	SKIPN T1,NTENCU(P1)	;T1/ CDB,,UDB for this interface
+	 RETBAD(IOX5)		;Not a MEIS. "Device or data error"
+	SETZ T2,		;T2/ 0 to disable feature 
+	CALL MEIPRM		;Take out of promiscuous mode
+	MOVE T1,INTNIB		;Get count of input buffers
+	LSH T1,-2		;Reduce the count
+	MOVEM T1,INTNIB		;And update it
+	RETSKP			;Return to caller
+
+;PKOSLL - set local loopback on a network
+;Returns - +1 error, T1/ error code
+;	   +2 success, MEIS loopback mode set
+
+PKOSLL:	CALL GETNET		;Figure out which interface
+	 RETBAD()		;Pass error back
+	SKIPN T1,NTENCU(P1)	;T1/ CDB,,UDB for this interface
+	 RETBAD(IOX5)		;Not a MEIS. "Device or data error"
+	SETO T2,		;T2/ -1 to enable feature
+	CALL MEILLP		;Place in local loopback
+	RETSKP			;Return to caller
+
+;PKOCLL - clear local loopback mode on a network
+;Returns - +1 error, T1/ error code
+;	   +2 success, MEIS loopback mode cleared
+
+PKOCLL:	CALL GETNET		;Figure out which interface
+	 RETBAD()		;Pass error back
+	SKIPN T1,NTENCU(P1)	;T1/ CDB,,UDB for this interface
+	 RETBAD(IOX5)		;Not a MEIS. "Device or data error"
+	SETZ T2,		;T2/ 0 to disable feature
+	CALL MEILLP		;Take out of local loopback
+	RETSKP			;Return to caller
+SUBTTL  Read a Network Control Table
+
+;PKONCT - copy NCT of specified interface to user space
+;Takes	Q2/ pointer to argument block in user space
+;Returns +1 error, T1/ error code
+;	 +2 success, interface copied to user space, .PKNET offset updated
+
+PKONCT:	UMOVE T1,.PKLEN(Q2)	;Get length of argument block
+	CAIGE T1,.PKBUF+1	;Minimum length for this function
+	 RETBAD(ARGX17)		;"Invalid argument block length"
+	UMOVE T1,.PKINT(Q2)	;Copy interface number specified by user
+	XMOVEI P1,NCTVT		;Pointer to NCT vector table
+PKONC0:	LOAD P1,NTLNK,(P1)	;Get next NCT
+	JUMPE P1,[RETBAD(DEVX5)] ;Error return if no such beast
+	LOAD T2,NTNUM,(P1)	;Get interface number
+	CAME T1,T2		;Match what user wants?
+	 JRST PKONC0		;No, try another NCT
+	MOVEI T1,<NCTVT-.NCTS>/%NETS	;T1/ length of an NCT
+	MOVE T2,P1		;T2/ source address (monitor)
+	UMOVE T3,.PKBUF(Q2)	;T3/ destination address (user)
+	CALL BLTMU1		;Copy from monitor to user
+	MOVSI T1,-<MAXPKN+1>	;Set up counter for PKOPR% hardware types
+	LOAD T2,NTTYP,(P1)	;Get Multinet hardware type for this interface
+PKONC1:	CAME T2,NETTYP(T1)	;Compare with PKOPR% hardware type
+	AOBJN T1,PKONC1		;If no match, keep on looking
+	SKIPL T1		;Skip if we have a match
+	 SETO T1,		;Else return -1 as hardware type (unsupported)
+	XCTU [HRRZM T1,.PKNET(Q2)]	;Update user argument block
+	RETSKP			;All done
+SUBTTL  Utility routines
+
+;GETNET - read interface/network/protocol triple from user
+;Takes	Q2/ pointer to argument block in user space
+;Returns +1 error, T1/ error code
+;	 +2 success, T1/ byte(9)<interface>,<network>,byte(18)<protocol>
+;		    		copy of T1 in NETPRT trvar
+;		     P1/ address of appropriate NCT
+
+GETNET:	UMOVE T1,.PKLEN(Q2)	;Get length of argument block
+	CAIGE T1,4		;Minimum length
+	 RETBAD(ARGX17)		;"Invalid argument block length"
+	UMOVE T3,.PKINT(Q2)	;Get network interface number
+	UMOVE T2,.PKNET(Q2)	;Get network type code
+	CAILE T2,MAXPKN		;Within range?
+	 RETBAD(DEVX5)		;"No such device"
+	MOVE T4,NETTYP(T2)	;Get Multinet network type number
+	XMOVEI P1,NCTVT		;Pointer to NCT vector table
+GETNT0:	LOAD P1,NTLNK,(P1)	;Get next NCT
+	JUMPE P1,[RETBAD(DEVX5)] ;Error return if no such beast
+	LOAD T1,NTNUM,(P1)	;Get interface number
+	CAME T1,T3		;Match what user wants?
+	 JRST GETNT0		;No, try another NCT
+	LOAD T1,NTTYP,(P1)	;Get network type
+	CAME T1,T4		;Match what user wants?
+	 JRST GETNT0		;No, try another NCT
+	UMOVE T1,.PKPRT(Q2)	;Get protocol type
+	STOR T2,NETWRK,T1	;Add network type 
+	STOR T3,INTRFC,T1	;Set interface number
+	MOVEM T1,NETPRT		;Save copy of the triple
+	RETSKP			;Return to caller
+
+;PKDBLK - look up a triple
+;Called from either process or interrupt level
+;Takes	T1/ interface/network,,protocol triple
+;Returns +1 not in table, T2/ first free database index or -1 if full
+;	 +2 in table, T2/ database index
+;Clobbers T2-T4
+
+	XRESCD
+
+PKDBLK: MOVSI T2,-NPKCON	;Loop over all triples
+	SETO T4,		;Flag no free entries yet
+PKDBL0: SKIPL T3,PKTRPL(T2)	;Get triple
+	IFSKP.
+	  JUMPGE T4,PKDBL1	;Free entry, jump if we already have an index
+	  MOVEI T4,(T2)		;Set free index in case we fail
+	  JRST PKDBL1		;Go on to next slot
+	ENDIF.
+	CAME T1,T3		;Match?
+	IFSKP.
+	  MOVEI T2,(T2)		;Return index of matching entry
+	  RETSKP		;Skip return to caller 
+	ENDIF.
+PKDBL1:	AOBJN T2,PKDBL0		;Loop over all entries
+	MOVE T2,T4		;Failure, return first free index or -1
+	RET			;Return to caller
+
+;ASGPKO - assign PKOPR% database entries
+;Call from process level, scheduler turned off
+;Takes	T1/ input queue index
+;	T2/ database index
+;	T3/ interface/network,,protocol triple
+;Returns +1 always
+;Clobbers T3
+
+	XRESCD
+
+ASGPKO:	PIOFF			;Turn off interrupts
+	MOVEM T3,PKTRPL(T2)	;Set up network
+	MOVEM T1,PKINPQ(T2)	;Set up input queue index
+	MOVE T3,PKOWNR(T1)	;Get fork number of input queue owner
+	CAMN T3,FORKX		;Same as our fork number?
+	IFSKP.
+	  CAME T3,[-1]		;Different, was it not set before?
+	   BUG.(CHK,AGPKOX,PKOPR,SOFT,<PKOPR% database screwed up>) ;Bug
+	  MOVE T3,FORKX		;First owner, get our fork number
+	  MOVEM T3,PKOWNR(T1)	;Set up fork index
+	ENDIF.
+	INCR PKISHR,(T1)	;Increment share count of triples
+	PION			;Reallow interrupts
+	RET			;Return to caller
+
+	XSWAPCD
+
+;RELPKO - release PKOPR% database entries
+;Call from process level
+;Takes	T1/ database index
+;Returns +1 always
+;Clobbers T3
+
+	XRESCD
+
+RELPKO:	PIOFF			;Turn off interrupts (and scheduler)
+	SETOM PKTRPL(T1)	;Release network assignment
+	MOVE T2,PKINPQ(T1)	;Get input queue index
+	SETZM PKINPQ(T1)	;Release queue assignment
+	DECR PKISHR,(T2)	;Decrement share count
+	OPSTR <SKIPE>,PKISHR,(T2) ;Has share gone to zero?
+	IFSKP.
+	  DO.
+	    CALL PKIDEQ		;Dequeue a packet
+	     EXIT.		;Queue is empty
+	    PUSH P,T2		;Save input queue index
+	    CALL RETBUF		;Release the packet to Internet free queue
+	    POP P,T2		;Restore index
+	    LOOP.		;Loop over all packets
+	  ENDDO.
+	  SKIPE PKIQCT(T2)	;Sanity check (neither owners nor packets)
+	   BUG.(CHK,RLPKOX,PKOPR,SOFT,<Bad PKOPR% deletion>) ;Bugchk
+	  SETOM PKOWNR(T2)	;Finish deleting input queue
+	ENDIF.
+	PION			;Reallow interrupts
+	RET			;Return to caller
+
+	XSWAPCD
+
+;PKIQLK - look up input queue index
+;Takes	T1/ fork number
+;Returns +1 no queue assigned, T1/ first free queue index, or -1 if full
+;	 +2 queue assigned, T1/ input queue index
+;Clobbers T2-T4
+
+PKIQLK:	SETO T4,		;No free index yet
+	MOVSI T2,-NPKIQS	;Loop over all entries
+PKIQL0:	SKIPL T3,PKOWNR(T2)	;Owned?
+	IFSKP.
+	  JUMPGE T4,PKIQL1	;No, keep on if already know a free index
+	  MOVEI T4,(T2)		;Set up free index
+	  JRST PKIQL1		;Keep looking
+	ENDIF.
+	CAME T1,T3		;Match?
+	IFSKP.
+	  MOVEI T1,(T2)		;Yes, set up index
+	  RETSKP		;And take success return
+	ENDIF.
+PKIQL1:	AOBJN T2,PKIQL0		;Loop over all entries
+	MOVE T1,T4		;Not found, return free index or -1
+	RET			;Take failure return
+
+;PKIDEQ - dequeue a packet from an input queue
+;Decrements queued packet count as well
+;Takes	T2/ input queue index
+;Returns +1 queue empty
+;	 +2 packet dequeued, T1/ packet pointer
+;Clobbers T1-T4
+
+	XRESCD
+
+PKIDEQ:	SETO T4,		;Assume PION
+	CONSO PI,PIPION		;Is PION?
+	 TDZA T4,T4		;No PIOFF
+	  PIOFF			;Preserve queue integrity
+	MOVE T1,PKIQHD(T2)	;Get head of queue
+	JUMPE T1,PKIDE1		;Queue is empty
+	LOAD T3,NBQUE,(T1)	;Get successor, if any.
+	JUMPN T3,PKIDE0		;Queue not about to run dry
+	SETZM PKIQTL(T2)	;Make empty queue
+	SKIPA			;Don't set section bits on nil pointer
+PKIDE0:	  SETSEC T3,INTSEC	;Set extended address
+	MOVEM T3,PKIQHD(T2)	;Update queue head
+	DECR PKICNT,(T2)	;Decrement input packet count
+	AOS (P)			;Prepare skip return
+PKIDE1:	SKIPE T4		;Was PION?
+	 PION			;Reallow interrupts
+	RET			;Return +1 or +2 to caller
+
+	XSWAPCD
+SUBTTL PKOPR% support routines
+
+;PKOINI - initialize PKOPR% database
+;Returns +1 always
+
+IFE REL6,<PKOINI::>
+IFN REL6,<XNENT PKOINI,G>
+	SETZM PKSTGB		;Clear first word of resident storage
+	MOVE T1,[XWD PKSTGB,PKSTGB+1]	;Form BLT pointer
+	BLT T1,PKSTGE-1		;Clear all PKOPR% resident storage
+	SETOM PKTRPL
+	MOVE T1,[XWD PKTRPL,PKTRPL+1]
+	BLT T1,PKTRPL+NPKCON-1	;Set network entries to -1 (free)
+	SETOM PKOWNR
+	MOVE T1,[XWD PKOWNR,PKOWNR+1]
+	BLT T1,PKOWNR+NPKIQS-1	;Set input queue entries to -1 (free)
+	RET			;Return to caller
+
+;PKOCHK - periodic timeout of unused input packets
+;Called from 100 ms clock in scheduler
+;Returns +1 always
+
+PKOTMO==^D60000			;Timeout is 60 seconds.
+
+	XRESCD
+
+IFE REL6,<PKOCHK::>
+IFN REL6,<XRENT PKOCHK,G>
+	MOVSI T4,-NPKIQS	;Set up loop count through input queues
+PKOCH0:	SKIPGE PKOWNR(T4)	;Skip if queue is assigned
+	 JRST PKOCH3		;Else go examine the next one
+	PIOFF			;Shut off PI to protect queues
+PKOCH1: SKIPN T1,PKIQHD(T4)	;Get queue head
+	 JRST PKOCH2		;Done if head is nil
+	MOVE T2,PKOTAD(T1)	;Get time packet was received
+	ADDI T2,PKOTMO		;Add a timeout interval (in ms)
+	CAMLE T2,TODCLK		;Packet is old?
+	 JRST PKOCH2		;No, this and remaining packets are fresh
+	PUSH P,T4		;Save our loop index
+	MOVEI T2,(T4)		;Get input queue index
+	CALL PKIDEQ		;Dequeue the timed out packet
+	IFNSK.
+	  POP P,T4		;No more packets.  Restore loop index
+	  JRST PKOCH2		;No packets, so quit now
+	ENDIF.
+	CALL RETBUF		;Give it back to Internet
+	POP P,T4		;Restore loop index for input queues
+	JRST PKOCH1		;Loop over this queue (examine new head)
+
+PKOCH2: PION			;Reallow PI
+PKOCH3:	AOBJN T4,PKOCH0		;Try next input queue
+	MOVEI T1,PKOTMO		;Check again after another PKOTMO ms.
+	MOVEM T1,PKOTIM		;Reset timer
+	RET			;Return to caller
+
+	XSWAPCD
+
+;PKOKFK - release PKOPR% resources when a fork goes away
+;Returns +1 always
+;Clobbers T1-T4
+
+IFE REL6,<PKOKFK::>
+IFN REL6,<XNENT PKOKFK,G>
+	MOVE T1,FORKX		;Get our fork number
+	CALL PKIQLK		;Look up our input queue
+	 JRST PKOKF2		;None, can quit now
+	MOVSI T4,-NPKCON	;Loop over all triples
+PKOKF0:	SKIPGE PKTRPL(T4)	;Skip if slot in use
+	 JRST PKOKF1		;Free, go check next one
+	CAME T1,PKINPQ(T4)	;Does input queue index match?
+	IFSKP.
+	  PUSH P,T4		;Save loop index
+	  PUSH P,T1		;Save input queue index
+	  MOVEI T1,(T4)		;Database index
+	  CALL RELPKO		;Release PKOPR% resources
+	  POP P,T1		;Restore input queue index
+	  POP P,T4		;Restore loop index
+	ENDIF.
+PKOKF1:	AOBJN T4,PKOKF0		;Loop over all entries
+PKOKF2: MOVE T1,FORKX		;See if we are clobbering the WAIF fork
+	CAME T1,WAIFRK		;are we?
+	 RET			;nope - return now
+	SETZM WAIFRK		;clear the WAIF fork number
+	SETOM WAIFOF		;clear the waif database offset
+	RET			;All done, return to caller
+SUBTTL MEIS-based Ethernet support
+
+;OPNMEI - set network dependent data for the MEIS-based Ethernet
+;We set the data mode if the user requested it, else we default to .PM32
+;Takes	T1/ database index
+;	Q2/ pointer to argument block in user context
+;Returns +1 always
+
+OPNMEI:	MOVX T4,.PM32		;Assume 32-bit data mode
+	UMOVE T2,.PKLEN(Q2)	;Get length of argument block
+	CAIGE T2,.PKNTD+1	;Must be at least this long
+	IFSKP.
+	  UMOVE T2,.PKFLG(Q2)	;Get flags
+	  TXNE T2,PK%MOD	;Want special data mode?
+	   UMOVE T4,.PKNTD(Q2)	;Yes, get it from user
+	  ANDI T4,7		;Flush any other bits 
+	ENDIF.
+	CAIL T4,.PM16		;Range check data mode
+	 CAILE T4,.PM9		; ...
+	  MOVX T4,.PM32		;Bad value, force 32-bit mode (should reterr)
+	STOR T4,NETMOD,(T1)	;Set our data mode
+	RET			;Return to caller
+
+;SND3MB - send a packet out over the 3MB Ethernet
+;SNDETH - send a packet on the 10MB Ethernet
+;Call from process context, NOINT
+;Note that there is an (unimportant) timing race wrt to the PKDBLK call.
+;Takes	MONBUF/ address of monitor buffer
+;	NETPRT/ interface/network,,protocol triple
+;	Q2/ pointer to user argument block in user context
+;	P1/ NCT pointer
+;Returns +1 failure, T1/ error code
+;	 +2 success, packet queued to PHYSIO for transmission
+
+SND3MB:	UMOVE T3,.PKBUF(Q2)	;Get pointer to user buffer
+	UMOVE T3,0(T3)		;Get first word of buffer (encaps. word)
+	MOVX T2,.PK3MB		;3MB Ethernet transport medium code
+	JRST SNDET0		;Join common code
+
+SNDETH:	UMOVE T3,.PKBUF(Q2)	;Get pointer to user buffer
+	UMOVE T3,3(T3)		;Get word of buffer containing type code
+	MOVX T2,.PK10E		;10MB Ethernet transport medium code
+SNDET0:	STKVAR <SNDCNT,SNDMOD>	;Local storage
+	LDB T1,[POINT 16,T3,31]	;Get Ethernet type code
+	STOR T2,NETWRK,T1	;Set hardware type
+	LOAD T2,INTRFC,NETPRT	;Get selected interface
+	STOR T2,INTRFC,T1	;Set it
+	CALL MEIMOD		;See if we have a listener, get data mode in T3
+	 RETBAD(FILX01)		;No. "File is not open"
+	MOVEM T3,SNDMOD		;Remember that data mode
+	UMOVE T1,.PKBYT(Q2)	;Fetch byte or word count of buffer
+	MOVEM T1,SNDCNT		;Remember it
+	CAIN T3,.PM36		;36-bit mode?
+	IFSKP.
+	  SUB T1,NTCAPB(P1)	;No, discount encapsulation bytes
+	  MOVE T2,T3		;Copy data mode
+	  MOVE T3,NTCAPC(P1)	;16-bit words of encapsulation
+	  CALL WRDCNV		;Compute total number of words
+	ENDIF.
+	SKIPLE T1		;Disallow garbage word count
+	 CAMLE T1,INTXPW	;Packet must fit within an Internet buffer
+	  RETBAD(ATSX11)	;"Byte count is too large"
+	UMOVE T2,.PKBUF(Q2)	;Source address in user space
+	MOVE T3,MONBUF		;Get address of monitor buffer
+	ADD T3,NTOFF(P1)	;Correct with offset of encapsulation data
+	CALL BLTUM1		;Copy from user to monitor
+	MOVE T1,SNDCNT		;Get back byte or word count
+	MOVE T3,SNDMOD		;Get back data mode
+	CAIE T3,.PM36		;36-bit data mode?
+	IFSKP.
+	  MOVE T2,NTCAPC(P1)	;Yes, get 16-bit words of encapsulation
+	  LSH T2,-1		;Convert to words
+	  SUBI T1,(T2)		;Discount words of header bytes
+	  CALL FRM36		;Turn word count into byte count
+	ELSE.
+	  SUB T1,NTCAPB(P1)	;Some other mode, just discount header bytes
+	ENDIF.
+	MOVE T2,MONBUF		;T2/ buffer address
+	MOVEI T4,RETBUF		;T4/ buffer disposal routine
+	CALL BLDIOW		;Construct and queue up a transmission
+	RETSKP			;Give good return to caller
+
+;RCVETH - copy Ethernet packet from input queue to user
+;Takes	MONBUF/ address of monitor buffer
+;Returns +1 failure, T1/ error code
+;	 +2 success
+
+RCVETH:	MOVE T2,MONBUF		;Get monitor buffer address
+	MOVE T1,PKONET(T2)	;Fetch key for database lookup
+	CALL MEIMOD		;Look up our data mode, return it in T3
+	 RETBAD(RCDIX4)		;Vanished, call it "Monitor internal error"
+	MOVE T4,MONBUF		;Get buffer address
+	MOVE T1,PKOBYT(T4)	;T1/ byte count
+	SUB T1,NTCAPB(P1)	;Discount encapsulation bytes
+	MOVE T2,T3		;T2/ data mode for this triple
+	MOVE T3,NTCAPC(P1)	;T3/ Count of 16-bit header words
+	PUSH P,T2		;Save copy of data mode
+	CALL WRDCNV		;T1/ Compute count of 36-bit words
+	POP P,T2		;Restore data mode
+	CAIN T2,.PM36		;Was it 36-bit mode? 
+	 MOVEM T1,PKOBYT(T4)	;Yes, fudge PKOBYT for user update
+	MOVE T2,T4		;Copy buffer address
+	ADD T2,NTOFF(P1)	;T2/ Offset to start of encapsulation data
+	UMOVE T3,.PKBUF(Q2)	;T3/ Get user address
+	CALL BLTMU1		;Transfer to monitor to user
+	RETSKP			;All done, return to caller
+
+;MEIMOD - find a packet's data mode by doing a database lookup
+;Takes	T1/ interface/network,,protocol specification
+;Returns +1 failure, no such port
+;	 +2 success, T3/ MEIS data mode
+;Clobbers T1-T4
+
+MEIMOD:	NOSKED			;No deletions please
+	CALL PKDBLK		;Is someone here listening for this protocol?
+	IFNSK.
+	  MOVE T2,FORKX		;Get fork of caller
+	  CAME T2,WAIFRK	;Is it the waif fork?
+	   RETBAD(,<OKSKED>)	;No, take single return
+	  MOVE T2,WAIFOF	;Yes, so get the index for this connection
+	ENDIF.
+	LOAD T3,NETMOD,(T2)	;Get data mode for this connection 
+	OKSKED			;Reallow scheduling
+	RETSKP			;Good return
+
+;PKORCI - receive an arbitrary datagram
+;Entry point PKORC2 if from PKOWAI
+;Called at interrupt level, assumes environment set up by ETHRCI
+;Takes	P1/ NCT pointer
+;	T1/ byte count (including encapsulation)
+;Returns +1 flush datagram
+;	 +2 read datagram, T1/ iorb pointer
+;Beware that we are using P2 and P3 as scratch storage!
+
+	XRESCD
+
+PKORCI::AOS STAERC		;Count total "random" packets
+	CAMLE T1,NTCAPB(P1)	;There must be at least one data byte
+	 CAMLE T1,INTXPB	;Packet must fit within an Internet buffer
+	  RET			;Bad length, flush the packet
+	MOVX T3,.PK3MB		;Assume 3MB Ethernet
+	SKIPE NTETHR(P1)	;Skip if assumption correct
+	MOVX T3,.PK10E		;Type is 10MB Ethernet
+	STOR T3,NETWRK,T2	;Set up network part of triple
+	LOAD T3,NTNUM,(P1)	;Get interface number
+	STOR T3,INTRFC,T2	;Set interface number
+	MOVEM T2,P2		;Stash triple in a safe place
+	MOVE T1,T2		;PKDBLK wants its argument in T1
+	CALL PKDBLK		;Look up that combination in PKOPR% database
+	 JRST PKOWAI		;Random packet, go see if waif watcher wants it
+
+;We can get here with T2 being the triple offset, usually from PKOWAI
+; P2 also contains the triple itself
+PKORC2:	MOVE T1,PKINPQ(T2)	;Get index into input queues
+	LOAD T1,PKICNT,(T1)	;Get count of packets already queued
+	CAIL T1,MAXPKQ		;More allowed?
+	 RET			;No, flush packet for now
+	MOVEM T2,P3		;Save index into triple table 
+	CALL GETBFF		;Get a packet buffer
+	 RET			;Failed, return to caller
+	MOVE T2,T1		;T2/ buffer pointer (for BLDIOR)
+	MOVE T1,P3		;Restore triple index
+	LOAD T3,NETMOD,(T1)	;T3/ Get data mode (for BLDIOR)
+	MOVE T1,PKINPQ(T1)	;Get index into input queues
+	MOVEM T1,PKOINP(T2)	;Stash input queue index
+	MOVEM P2,PKONET(T2)	;Stash interface/network,,protocol
+	MOVE T1,RCILEN		;Get back hardware length
+	MOVEM T1,PKOBYT(T2)	;Stash hardware byte count
+	MOVE T1,TODCLK		;Get present TAD
+	MOVEM T1,PKOTAD(T2)	;Set time of reception
+	MOVE T1,RCILEN		;T1/ byte count
+	SUB T1,NTCAPB(P1)	;Discount Ethernet encapsulation bytes
+	MOVE T4,[XWD RETBUF, ETHAPP]	;T4/ done processing routines
+	CALL BLDIOR		;Construct read iorb
+	 RET			;Can't, must flush packet
+	RETSKP			;Go queue up the read
+
+	XSWAPCD
+
+;ETHAPP - append an Ethernet packet to a PKOPR% input queue
+;Call at interrupt level
+;Takes	T1/ buffer pointer
+;Returns +1 always
+
+	XRESCD
+
+ETHAPP:	MOVE T2,T1		;Copy buffer pointer (calling convent. change)
+	MOVE T3,PKOINP(T2)	;Get input queue index
+	SKIPGE PKOWNR(T3)	;Queue still exists?
+	 JRST RETBUF		;No, discard packet
+	INCR PKICNT,(T3)	;Count another packet in the queue
+	MOVE T1,PKIQTL(T3)	;Get input queue tail pointer
+	JUMPN T1,ETHAP0		;Queue not empty, go append packet
+	MOVEM T2,PKIQHD(T3)	;Was empty.  This is only item now.
+	SKIPA			;Make head and tail be same packet
+ETHAP0:	 STOR T2,NBQUE,(T1)	;Make old packet point to newest packet
+	MOVEM T2,PKIQTL(T3)	;Set new tail pointer
+	RET			;Return to caller
+
+;Here at process level to invoke ETHAPP.
+
+ETHAP1:	PIOFF			;Turn off PI system
+	CALL ETHAPP		;Append the packet
+	PION			;Reallow PI's
+	RET			;Return to caller
+
+	XSWAPCD
+
+;PKOWAI - handle "waif" packets.  Currently a waif is a datagram that:
+;   - Is a reasonable PUP packet, but no process claimed it, or
+;   - An IP packet with broadcast encapsulation, or
+;   - Something else that no PKOPR% listener claimed.
+;
+;Called at interrupt level, assumes environment set up by ETHRCI
+; P registers have already been preserved, Q registers must be preserved.
+;
+;This routine is called throughout the monitor at interrupt level whenever
+; a datagram is determined to be a waif.
+;
+;Takes	P1/ NCT pointer
+;	RCITYP - datagram type code
+;	RCILEN - datagram length in bytes
+;Returns +1 flush datagram
+;	 +2 read datagram, T1/ iorb pointer
+
+	XRESCD
+
+PKOWAI::SKIPE WAIFRK		;Must have a waif listener
+	 SKIPGE T2,WAIFOF	;Load up index into waif triple storage
+	  RET			;No waif listener or no index
+	MOVE T1,WAIFLG		;Get flag word
+	TXNN T1,WA%INT		;Want interrupt level waifs?
+	 RET			;No, ignore these waifs
+	LOAD T1,INTRFC,PKTRPL(T2) ;Get NCT number of waif listner
+	LOAD T3,NTNUM,(P1)	;Get NCT number of current interface
+	CAME T1,T3		;Match?
+	 RET			;No, flush the datagram
+	MOVE P2,PKTRPL(T2)	;Yes, now set up P2 before joining common code
+	MOVE T1,RCITYP		;Get back protocol type
+	STOR T1,PRTOCL,P2	;Set up protocol type for common code
+	CALL PKORC2		;Invoke common reception code
+	 RET			;Flush this packet
+	RETSKP			;T1/ iorb pointer
+
+	XSWAPCD
+
+;PKOWAF - copy a packet onto the waif input queue
+;Called from process level
+;Takes	T1/ pointer to buffer (offset zero is start of MAXLDR region)
+;	T2/ protocol type code
+;	T3/ byte count
+;Returns +1 always
+;Clobbers T1-T4
+
+PKOWAF::SKIPN WAIFRK		;Is there a waif process?
+	 RET			;No, return having done nothing
+	ASUBR <PKTPTR,PKTPRO,PKTBYT,PKTRES> ;Local storage
+	MOVE T2,WAIFOF		;Get database index
+	MOVE T3,PKINPQ(T2)	;Get index to input queue
+	LOAD T2,PKICNT,(T3)	;Get count of queued packets
+	CAIGE T2,MAXPKQ		;More allowed?
+	 CALL GETBFF		;Get a resident buffer
+	  RET			;No more can be queued or no buffers
+	MOVEM T1,PKTRES		;Store pointer to resident buffer
+	MOVE T3,T1		;T3/ destination address
+	MOVE T2,PKTPTR		;T2/ source address
+	MOVE T1,PKTBYT		;Get byte count
+	ADDI T1,3		;Round up before shifting
+	LSH T1,-2		;T1/ 36-bit word count of packet
+	CALL XBLTA		;Copy swappable buffer to a resident buffer
+	MOVE T1,PKTRES		;Get back pointer to resident buffer
+	MOVE T2,WAIFOF		;Get database index of waif process
+	MOVE T2,PKINPQ(T2)	;Get input queue index
+	MOVEM T2,PKOINP(T1)	;Stash input queue
+	HRRO T2,PKTPRO		;-1 for unknown interface
+	MOVEM T2,PKONET(T1)	;Stash triple
+	MOVE T2,PKTBYT		;Get byte count
+	MOVEM T2,PKOBYT(T1)	;Stash it
+	MOVE T2,TODCLK		;Get present TAD
+	MOVEM T2,PKOTAD(T1)	;Set time of reception
+	CALL ETHAP1		;Append packet in input queue
+	RET			;Return to caller
+
+	ENDAS.
+
+SUBTTL AN20-based 1822 Support
+
+;SNDANA - send a datagram to the AN20
+;Returns +1 always (NYI)
+
+SNDANA:	RET			;Not yet implemented
+
+;RCVANA - receive a datagram from the AN20
+;Returns +1 always (NYI)
+
+RCVANA:	RET			;Not yet implemented
+
+
+	TNXEND
+	END

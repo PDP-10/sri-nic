@@ -1,0 +1,143 @@
+;<SU-UTILITIES>LK.MAC.3, 31-May-84 21:07:27, Edit by FMF
+; Comment the code
+;<SU-UTILITIES>LK.MAC.2, 31-May-84 20:53:20, Edit by FMF
+;<SU-UTILITIES>LK.MAC.1, 31-May-84 20:46:30, Edit by FMF
+; Port from NIC (with CTY as CTY, and more informative msgs)
+; Converto to macro and clean up
+;SX:<B.BOMBADIL>LK.FAI.2,  6-Apr-80 23:17:33, Edit by B.BOMBADIL
+;remove references to Andrew's macro library
+
+TITLE LK - Detect all terminal links
+SUBTTL Andrew Knutsen, April 1978
+
+SEARCH MONSYM,MACSYM
+.REQUIRE SYS:MACREL
+.TEXT "LK/SAVE"
+ASUPPRESS
+SALL
+
+A=1				;Standard ACs
+B=2
+C=3
+D=4
+LKTTY=5				;TTY being linked to
+LINKS=6				;Link word
+MSG=7				;What kind of link this is
+CT=10				;Loop counter
+P=17				;Push-down pointer
+
+PDLEN==10			;Length of push-down stack
+
+;Impure storage
+
+PDLIST:	BLOCK PDLEN		;Push-down stack
+CTY:	BLOCK 1			;TTY number of the CTY
+
+START:	RESET%			;Reset the world
+	MOVE P,[IOWD PDLEN,PDLIST] ;Set up push-down pointer
+	HRROI A,[ASCIZ \CTY:\]	;Find where the CTY is
+	STDEV%			;Able to get it?
+	 TDZA B,B		;If failed, then flag no CTY
+	  TLZ B,-1		;Otherwise clear the left half
+	MOVEM B,CTY		;Save it away
+	MOVE A,[SIXBIT \TTYJOB\] ;Find out how many terminals we have
+	SYSGT%			;Try to get it
+	IFJER.
+	  HRLI B,-200		;If don't know how many ttys, make a good guess
+	ENDIF.
+	HLLZM B,CT		;Save the count away
+LOOP:	HRLOI A,(TL%WHO)	;Want to find out to whom this tty is linked
+	HRRZI B,.TTDES(CT)	;Get tty number as designator
+	TLINK%			;Find it
+	 ERJMP TERR		;Didn't work, crash and burn
+	MOVEM B,LINKS		;Save the link word
+LOOP1:	JUMPL LINKS,ELOOP1	;If no more links, go out of loop
+	SETZ LKTTY,		;Clear for the LSHC
+	LSHC LKTTY,^D9		;Get a tty number
+	MOVEI MSG,[ASCIZ \ is peeking at \] ;Assume this is the way it goes
+	HRLOI A,(TL%WHO)	;Again, find link word
+	MOVEI B,.TTDES(LKTTY)	;Get other tty's link word
+	TLINK%			;Get it
+	 ERJMP TERR		;Didn't work
+	MOVEM B,C		;Save the link word away
+	HRRZ A,CT		;Get this terminal number
+	DO.			;Loop through to see if it's a two-way link
+	  SETZ B,		;Set up for LSHC
+	  LSHC B,^D9		;Get the next tty number
+	  CAMN A,B		;Do they match?  (Two way link?)
+	   JRST DOUBLE		;Yes, go say so
+	  JUMPN C,TOP.		;If not, loop until all 4 ttys done
+	ENDDO.
+PRNTIT:	MOVEI A,.TTDES(LKTTY)	;Get the tty designator
+	CALL DOINF		;And display info about that tty
+	HRRO A,MSG		;Get what kind of link this is
+	PSOUT%			;Output it
+	MOVEI A,.TTDES(CT)	;Get the current tty designator
+	CALL DOINF		;Output it
+	HRROI A,[BYTE (7) .CHCRT,.CHLFD,0] ;Tie it off with a crlf
+	PSOUT%
+	CAIA
+ELOOP1:	 LSH LINKS,^D9		;Here if failed before, clear unneeded tty
+ELOOP:	JUMPN LINKS,LOOP1	;Loop through the whole tty link word
+TERR:	AOBJN CT,LOOP		;Loop through all our ttys
+	HALTF%			;Shut down
+	JRST START		;Start again on continue
+
+;Here if two-way link detected
+DOUBLE:	CAML A,LKTTY		;Have we already reported this link?
+	 JRST ELOOP		;Yes, don't do it
+	MOVEI MSG,[ASCIZ \ is talking to \] ;This will be our message
+	JRST PRNTIT		;Go do it
+
+;Here to output information about a tty (as USER (tty n))
+;Takes A/ tty designator
+DOINF:	HRROI B,D		;Want info to go to D
+	MOVEI C,.JIUNO		;Want the user number
+	SETZ D,			;Zero the destination word
+	GETJI%			;Get the info
+	 ERCAL WARN		;Couldn't get it, let user know
+	MOVEI C,-.TTDES(A)	;Get tty number but not designator
+	JUMPE D,NOBODY		;If not logged in, say so
+	MOVEI A,.PRIOU		;To tty
+	MOVE B,D		;Get the user number
+	DIRST%			;Output it
+	 ERCAL WARN		;Didn't work...
+	JRST SHOTTY		;Go display tty number
+
+NOBODY:	CAME C,CTY		;Is this the CTY?
+	IFSKP.			;If so, just say so
+	  HRROI A,[ASCIZ \the CTY\]
+	  PSOUT%
+	  RET
+	ENDIF.
+	HRROI A,[ASCIZ \an empty terminal\] ;A not logged in tty
+	PSOUT%
+SHOTTY:	CAME C,CTY		;Is this a user on the CTY?
+	IFSKP.
+	  HRROI A,[asciz \ (on the CTY)\] ;Yes, say that's where s/he is
+	  PSOUT%
+	  RET
+	ENDIF.
+	HRROI A,[ASCIZ \ (tty\]	;Otherwise output the tty number
+	PSOUT%			;Set up for tty description
+	MOVEI A,.PRIOU		;To the tty
+	MOVE B,C		;Want to show the tty number
+	MOVEI C,^D8		;Radix octal
+	NOUT%			;Do it
+	 ERCAL WARN
+	MOVEI A,")"		;Close off the output
+	PBOUT%
+	RET
+
+;Here on a jsys error
+WARN:	HRROI A,[ASCIZ \JSYS Error - \]
+	ESOUT%			;Start our error message
+	MOVEI A,.PRIOU		;To the tty
+	HRLOI B,.FHSLF		;This process
+	SETZ C,			;No limit on output
+	ERSTR%			;Output the error message
+	 JFCL
+	  JFCL
+	RET
+
+END START

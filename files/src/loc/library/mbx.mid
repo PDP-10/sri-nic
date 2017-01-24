@@ -1,0 +1,315 @@
+;;  Library for handling a MAILBOX fork.
+;;  Requires P to be the stack pointer.
+;;  All routines clobber AC's 1-3 (except when they contain return values
+;;  of course) and touch no other AC's.
+;;  All impure storage is allocated with .SCALAR.
+
+;;MBX"FORK: 1/flags,,page number.
+;;   Creates a mailbox fork.  AC1 specifies the first page to use for temporary
+;;   storage.  With $$EXPD==0, 3 pages are used, with $$EXPD==1, 4 pages,
+;;   starting at this page number.
+;;   The only flag defined now is MX%NEW, which means allow the mailbox fork
+;;   to compile a new mailing lists file if needed.  This may take a
+;;   few minutes, so it's off by default.  If it's on, a new list may get
+;;   compiled during any call to VERIFY or EXPAND.
+;;   Returns: +1: JSYS error
+;;	      +2: Won
+
+;;MBX"VERIFY: 1/name string BP (or just address or -1,,address)
+;;   Checks the specified name.
+;;   Returns: +1: JSYS error
+;;	      +2: 1/ Status code (MX.xxx, see below) or -1,,emsg from mbx fork.
+;;		     The error message resides in temporary storage, and will
+;;		     get overwritten by the next call to any MBX routine, so
+;;		     copy or PSOUT it first...
+
+;;MBX"KILL:
+;;  Kills the mailbox fork.
+;;  Returns: +1: JSYS error
+;;	     +2: Won
+
+;;Routines conditional on $$EXPD==1 (default 0):
+
+;;MBX"EXPAND: 1/name string BP (or just address or -1,,address)
+;;   Checks the specified name, and sets up for expanding it if appropriate.
+;;   Returns: +1: JSYS error
+;;	      +2: 1/ Status code or error message as for VERIFY.
+;;		     If status is MX.FWD, there is an expansion which you may
+;;		     access by repeatedly calling NEXT.
+
+;;MBX"NEXT: 1/ user name buffer BP (or just address or -1,,address)
+;;	    2/ 0 or host name buffer BP (or just address or -1,,address)
+;;  Gets the next expansion.  An expansion consists of a user name and possibly
+;;  a host name. The user name is written in location specified by AC1.
+;;  If the user is not local then:  if AC2 is 0, then the user name is followed
+;;  by "@" and the host name, otherwise the host name is written separately in
+;;  the location give by AC2.  ** No calls to MBX"VERIFY or MBX"EXPAND may
+;;  occur between successive calls to MBX"NEXT for a given expansion **.
+;;
+;;  Returns: +1: JSYS error
+;;	     +2: no more expansions (or no expansion in progress, e.g. last
+;;		  EXPAND didn't return MX.FWD, or you didn't call EXPAND first)
+;;	     +3: Expansion returned as described above.  AC1 points to the
+;;		 end of the user name (ildb 1, will fetch the terminating null
+;;		 or @).  If there was no host name, AC2 is unchanged,
+;;		 otherwise it points to the end of the host name (ildb 2, will
+;;		 fetch the terminating null)
+
+;;Flags (for FORK)
+MX%NEW==:400000,,0		;Allow compilation of mailing list file.
+
+;;Possible return status values from VERIFY and EXPAND:
+
+;-1,,emsg			;failure, emsg is error from mailbox program
+MX.NOM==:0			;No such mailbox
+MX.USR==:1			;Given name is a local user
+MX.FIL==:2			;Given name is a local file ( *file ).
+MX.FWD==:3			;Given name requires forwarding (can be
+				;due to INQUIR, mailing lists or simply the
+				;fact that the name is a foreign address).
+				;If EXPAND returns this status, NEXT can be
+				;used to obtain the names to forward to.
+
+	.BEGIN MBX
+
+IFNDEF $$EXPD,$$EXPD==0
+
+	.scalar mbxfrk
+	.scalar mbxpag
+	.scalar mapped		;-1 = nothing mapped, else
+				;l,,k = page 0 is mapped at (mbxpag) and
+				;  if k#0, page k-1:k mapped at (mbxpag)+1 and
+				;  if l#0, page l mapped at (mbxpag)+3 [$$EXPD]
+
+ifn $$expd,.scalar nxtexp
+
+;;Mailbox fork locations
+status==:177
+addres==:200
+explst==:300
+
+g.nexp==:3			;Expand entry point, allow compilation
+g.exp==:5			;Expand entry point, disallow compilation
+g.nvfy==:4			;Verify entry point, allow compilation
+g.vfy==:6			;Verify entry point, disallow compilation
+
+;;Start fork.  1/2 clobbered.
+FORK:	movem 1,mbxpag
+	setzm mbxfrk
+	setom mapped
+ifn $$EXPD,setzm nxtexp
+	movsi 1,(gj%old\gj%sht)
+	hrroi 2,[asciz/SYS:MMAILBOX.EXE/]
+	GTJFN
+	  popj p,
+	push p,1
+	movsi 1,(cr%cap)
+	CFORK
+	   jrst [pop p,1
+		 RLJFN
+		   nop
+		 popj p,]
+	movem 1,mbxfrk
+	pop p,1
+	hrl 1,mbxfrk
+	GET
+	  erjmp [move 1,mbxfrk
+		 KFORK
+		 setzm mbxfrk
+		 popj p,]
+	aos (p)
+	popj p,
+
+ifn $$EXPD,[
+EXPAND:	movei 2,g.exp
+	move 3,mbxpag
+	tlne 3,(MX%NEW)
+	  movei 2,g.nexp
+	pushj p,runfk
+	  popj p,
+	movei 2,explst
+	cain 1,mx.fwd
+	  movem 2,nxtexp
+	aos (p)
+	popj p,
+];$$EXPD
+
+VERIFY:	movei 2,g.vfy
+	move 3,mbxpag
+	tlne 3,(MX%NEW)
+	  movei 2,g.nvfy
+runfk:	push p,2
+	tlce 1,-1		;Standardize the BP
+	  tlcn 1,-1
+	    hrli 1,440700
+	push p,1
+ifn $$EXPD,setzm nxtexp		;Clear old val in case of error or verify-only
+	skipl mapped		;Make sure we have 0 page
+	  jrst runfk0
+	hrlz 1,mbxfrk		;mbx fork,,page 0
+	move 2,mbxpag		;our fork,,shared page
+	hrli 2,.fhslf
+	movsi 3,(pm%rd\pm%wr)
+	PMAP
+	  erjmp [pop p,1
+		 popj p,]
+	setzm mapped
+runfk0:	pop p,1			;Copy string to inferior
+	hrrz 2,mbxpag
+	lsh 2,9
+	addi 2,addres
+	hrli 2,440700
+	ildb 3,1
+	idpb 3,2
+	jumpn 3,.-2
+	move 1,mbxfrk		;Run fork
+	pop p,2
+	SFRKV
+	  erjmp runfkx
+	WFORK
+	  erjmp runfkx
+	RFSTS
+	ldb 1,[.bp rf%sts,1]
+	caie 1,.RFHLT
+	  popj p,		;Not really a jsys error, but...
+	hrrz 1,mbxpag
+	lsh 1,9
+	move 1,status(1)
+	jumpge 1,runfk2
+	pushj p,mbxstr		;Error msg, get real address of error string
+	   popj p,
+	tlo 1,-1
+runfk2:	aos (p)
+runfkx:	popj p,
+
+
+ifn $$EXPD,[
+NEXT:	tlce 1,-1
+	 tlcn 1,-1
+	   hrli 1,440700
+	jumpe 2,next0
+	tlce 2,-1
+	  tlcn 2,-1
+	    hrli 2,440700
+next0:
+hstbp==-2 ? push p,2
+usrbp==-1 ? push p,1
+expadr==0 ? push p,		;Reserve spot on stack for expansion
+	setz 1,			;Zero out host in case local user
+	skipe 2
+	  idpb 1,2
+	skipn 1,nxtexp		;See if expansion entry page mapped
+	  jrst next4		;Oops, no expansion
+	lsh 1,-9
+	hrrz 2,mbxpag
+	jumpe 1,next1		;page 0 always mapped at mbxpag
+	aoj 2,
+	hrrz 3,mapped		;One of the two string pages?
+	cain 1,-1(3)
+	  jrst next1
+	aoj 2,
+	camn 1,3
+	  jrst next1
+	aoj 2,
+	hlrz 3,mapped		;The special expansion page?
+	camn 1,3
+	  jrst next1
+	hrrzs mapped		;Nope, gotta map it
+	hrl 1,mbxfrk
+	hrli 2,.fhslf
+	movsi 3,(pm%rd\pm%cpy)
+	PMAP
+	  erjmp nextx
+	move 1,nxtexp
+	lsh 1,-9
+	hrlm 1,mapped
+	hrrz 2,mbxpag
+	addi 2,3
+next1:	lsh 2,9
+	move 1,nxtexp
+	andi 1,777
+	add 1,2
+	move 1,(1)		;Get the expansion
+	jumpe 1,[setzm nxtexp ? jrst next4]	;Oops, no expansion
+	movem 1,expadr(p)	;Save it
+	pushj p,mbxstr		;Get user string
+	  jrst nextx
+	hrli 1,440700
+	move 2,usrbp(p)		;Copy it
+	ildb 3,1
+	jumpn 3,[idpb 3,2 ? jrst .-1]
+	movem 2,usrbp(p)	;Save advanced ptr
+	idpb 3,2		;Tie off just in case
+	hlrz 1,expadr(p)	;Get host string
+	jumpe 1,next3		;No host, done
+	pushj p,mbxstr
+	  jrst nextx
+	hrli 1,440700
+	skipe 2,hstbp(p)	;Copy it
+	  jrst next2
+	move 2,usrbp(p)
+	movei 3,"@
+	idpb 3,2
+next2:	ildb 3,1
+	jumpn 3,.-2
+	movem 2,hstbp(p)	;Save advanced pointer
+	idpb 3,2
+next3:	aos nxtexp		;Come here if won
+	aos -3(p)
+next4:	aos -3(p)		;Come here if no expansion
+nextx:	adjsp p,-1
+	pop p,1
+	pop p,2
+	popj p,
+
+];$$EXPD
+
+;;1/ address in inferior
+;;Convert to physical address, mapping (at (mbxpag)+1) if needed.
+mbxstr:	tlz 1,-1
+	push p,1
+	lsh 1,-9
+	move 2,mapped		;Get # of currently mapped pages
+	movei 2,-1(2)
+	camn 1,2
+	  jrst mbxst1		;Required page already mapped, ok
+	hllzs mapped		;Else map it
+	hrl 1,mbxfrk
+	hrrz 2,mbxpag
+	aoj 2,
+	hrli 2,.fhslf
+	move 3,[pm%cnt\pm%rd\pm%cpy+2]
+	PMAP
+	  erjmp mbxstx
+	move 1,(p)		;Remember that mapped
+	lsh 1,-9
+	aoj 1,
+	hrrm 1,mapped
+mbxst1:	aos -1(p)		;Won, skip return
+	move 1,(p)		;Compute physical address
+	andi 1,777
+	hrrz 2,mbxpag
+	aoj 2,
+	lsh 2,9
+	add 1,2
+mbxstx:	adjsp p,-1
+	popj p,
+
+KILL:	seto 1,
+	move 2,mbxpag
+	jumpe 2,kill1
+	setzm mbxpag
+	hrli 2,.fhslf
+IFN $$EXPD,move 3,[pm%cnt+4]
+.ELSE	   move 3,[pm%cnt+3]
+	PMAP
+	  erjmp killx
+kill1:	move 1,mbxfrk
+	jumpe 1,kill2
+	setzm mbxfrk
+	KFORK
+	  erjmp killx
+kill2:	aos (p)
+killx:	popj p,
+
+	.END MBX

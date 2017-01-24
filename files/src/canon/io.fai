@@ -1,0 +1,330 @@
+
+; ************************************************
+;	Raw I/O package for TOPS-20 tty linkage
+;	With CNTR-C trap added by Jan Stoeckenius
+;	4-April-82
+; ************************************************
+;
+;	Bsize call added Feb 3, 1983 by Michael E. Fryd
+;	changes for sri: no accounting file, no control-c trap
+;		- Dwight Hare, 11-jun-83
+	Title 	IO
+	Search  Monsym
+	Entry	OpenRe, CloseR, GetRem, PutRem, WaitRe, FluRem, Repacc, BSize
+
+P==17
+ascii==70000	; 7-bit ascii mode
+binary==100000	; 8-bit open
+chn0==0 	; Channel 0
+chnl0==400000	; 1B0, used to activate interrupt channel 0.
+
+OPDEF	ret	[popj	P,]
+
+; ********************************************************
+;	tty number and device name for remote tty	 *
+;	[should be change to suit site]			 *
+;							 *
+ttyno==25;	 controlling terminal			 *
+ttynam:	asciz	/tty25:/;				 *
+;							 *
+;							 *
+;	File to hold page counts, should be set		 *    
+;	as appropriate for site.			 *
+;							 *
+acflnm: asciz 	/nul:
+/;			 				 *
+;							 *
+;							 *
+; ********************************************************
+
+device:	0		; device designator
+jfn:	0		; jfn for device
+accjfn: 0		; jfn for accounting file
+tbuf:	block	200	; 800 byte output buffer
+tptr:	point 8,tbuf	; pointer to tbuf
+tcnt:	0		; count of bytes
+
+ChnTbl: 3,,CTCTRP	; Channel table, channel 0 is used to
+	block 35	; handle CTRL-C traps.
+LevTbl: 0		; Level table for software interrupts,
+	0		; only level 3 is used;
+	PC2
+PC2:	block 1		; Location for storing program counter in case
+			; of interrupt.
+
+; ******************************************************
+;	Routine for trapping CTRL-C
+; ******************************************************
+;
+CTCTRP:	pushj 	17,CloseR	; Close tty line (assuming it has been opened) 
+	push	17,logfd	; Close log file
+	pushj	17,fclose
+	push	17,pcount	; Report number of pages printed
+	pushj	17,Report
+	reset%			; Close all other files
+	haltf			; Stop
+	jrst .-1		; Not restartable
+
+
+; ******************************************************
+;	assign and open remote tty for input and output
+; ******************************************************
+;
+OpenRe:	jrst noctc		; no control-c trap at sri
+	hrrzi   1,.FHSLF	; Current process identifier
+	rpcap%			; Get our capabilities
+	ior	3,[SC%CTC]	; Enable control-C capability
+	epcap%
+	  erjmp	noctc		;allow no control C at unilogic
+	move	2,[LevTbl,,ChnTbl]
+	sir%			; Set interrupt tables
+	  erjmp	noctc		;allow no control C at unilogic
+	eir%			; Enable interrupts
+	  erjmp	noctc		;allow no control C at unilogic
+	hrlzi	2,chnl0		
+	aic%			; Activate channel 0
+	  erjmp	noctc		;allow no control C at unilogic
+	move	1,[.TICCC,,chn0] ; Assign CTRL-C to channel 0
+	ati%
+	  erjmp	noctc		;allow no control C at unilogic
+noctc:				;no control C
+; next we must make sure we can open the accounting file
+	jrst 	noaccf		; no accounting file at sri
+	move	1,[GJ%old + GJ%del + GJ%sht] ; Accounting file must be old but may be deleted
+	hrroi	2,acflnm 	; Accounting file name
+	Gtjfn
+	erjmp	[
+		  hrroi	   1,acger
+		  jrst	   errtn
+		]
+
+	hrri	2,OF%app!OF%rd ; allow read and append access
+	hrli	2,ascii	       ; open in 7-bit byte mode
+	Openf
+	erjmp	[
+		  hrroi	   1,acoer
+		  jrst	   errtn
+		]
+
+	movem	1,accjfn       ; store jfn
+noaccf:
+	setz	2,
+
+	hrrzi	1,400000
+	iori	1,ttyno		; form device designator for terminal
+	movem	1,device
+	asnd%			; assign tty
+	erjmp	fryd		;allow error since we now open current tty:
+fryd:
+;	erjmp	[
+;		  hrroi	   1,asnder
+;		  jrst	   errtn
+;		]
+
+	movsi	1,(gj%sht)
+	hrroi	2,ttynam
+	gtjfn%			; get jfn for tty
+	erjmp	[
+		  hrroi	   1,jfner
+		  jrst	   errtn
+		]
+
+	hrrzm	1,jfn
+	hrri	2,of%rd!of%wr
+	hrli	2,binary
+	openf%
+	erjmp	[
+		  hrroi	   1,opener
+		  jrst	   errtn
+		]
+
+ttyini:	move 	1,jfn
+	rfmod%				; get tty mode word
+	trz 	2,tt%dam		; set tty to binary mode
+	sfmod%
+	trz 	2,tt%pgm		; terminal no page
+	stpar%
+	move 	2,[525252,,525252]	; send all characters
+	move	3,2
+	sfcoc%
+
+	setzm	0,tcnt
+	movei	0,1
+	ret
+
+errtn:	psout%			; output error message and return
+	setz	0,
+	ret
+
+; ****************************************
+;	release and close remote tty
+; ****************************************
+;
+CloseR:	move	1,jfn
+	closf%
+	erjmp	[
+		  hrroi	   1,closr
+		  jrst	   errtn
+		]
+	move	1,device
+	reld%
+	erjmp	[
+		  hrroi	   1,relder
+		  jrst	   errtn
+		]
+	movei	0,1
+	ret
+
+; *************************************************
+;	return true if a character is waiting 
+; *************************************************
+;
+WaitRe:	move	1,device
+	sibe%
+	jrst	[
+		  movei	   0,1	; character there
+		  ret
+		]  
+	setz	0,	
+	ret
+
+; **************************************************
+;	get a character from the remote terminal
+; **************************************************
+;
+GetRem:	move	1,device
+	bin%
+	move	0,2		; move byte to function return value
+	ret
+
+; ****************************************************
+;	output a byte to remote terminal
+;	(deferred output, pending a FluRem call)
+; ****************************************************
+;
+PutRem:	move	2,-1(P)		; byte to ship
+	idpb	2,tptr		; save in buffer
+	aos	,tcnt
+	ret
+
+; *********************************************
+;	flush buffer to remote terminal
+; *********************************************
+;
+FluRem: movn	3,tcnt
+	jumpe	3,[ret]			; nothing in buffer, return
+	move	2,[point 8,tbuf]	; address of buffer
+	move	1,device		; remote tty device
+	sout%
+	setzm	0,tcnt			; reset count to zero
+	move	2,[point 8,tbuf]	; reset pointer to start of string
+	movem	2,tptr
+	ret
+
+; ********************************************* 
+;	Report page count to ACJ
+; *********************************************
+;
+word:	Block 2
+Repc==401000	; Code for reporting page counts
+
+; no accounting file, just return
+
+Repacc:	ret
+	move 	1,accjfn	; output CR-LF to accounting file 
+	hrroi	2,[asciz /
+/]
+	movni	3,2		; write two bytes
+	setz	4,
+	Sout%
+
+	movni	2,1
+	move	3,[OT%spa + OT%12h + OT%tmz]
+	Odtim%
+
+	hrroi	2,[asciz /  /]
+	movni	3,2
+	setz	4,
+	Sout%
+
+	Gjinf%			; Get user number
+	move	2,1		; Set up for translating
+	move	1,accjfn
+	Dirst%			; Output user name
+	erjmp	[
+		  hrroi	   1,trsler
+		  jrst	   errtn
+		]
+	hrroi	2,[asciz /          /]
+	movni	3,12
+	Sout%			; Output tabs
+	move	2,pcount
+	move 	3,[NO%mag + NO%lfl + 5000000 + 12]
+	Nout%			; Output page count
+	erjmp	[
+		  hrroi	   1,nouter
+		  jrst	   errtn
+		]
+	
+	Closf%			; Close file
+	erjmp	[
+		  hrroi	   1,clser
+		  jrst	   errtn
+		]
+	ret
+
+
+
+; ****************************************
+;	Returns byte size of a file (or -1 on failure)
+; ****************************************
+;
+BSIZE:
+
+	SETO	2,		; adjust byte pointer
+	ADJBP	2,-1(P)	; to point at previous char
+	movsi	1,(gj%old+gj%sht)
+	gtjfn%
+	  erjmp	bad
+	move	2,[1,,.fbbyv]	;read the byte size word.
+	movei	3,3		;put word in ac3
+	gtfdb%
+	  erjmp	bad
+	lsh	3,-^d24		;shift in byte size
+	andi	3,77		;and out extra bits
+
+	rljfn%
+	  erjmp	.+1		;ignore errors
+	move	0,3		;put byte size in 0
+	skipa			;skip the err routine
+bad:	seto	0,
+	ret
+
+; ****************************************
+;	error messages
+; ****************************************
+;
+acger:	asciz	/Cannot get JFN for page count file.
+/
+acoer:	asciz	/Cannot open page count file.
+/
+asnder:	asciz	/Cannot assign remote tty.
+/
+closr:	asciz	/Cannot close remote tty.
+/
+clser:	asciz	/Cannot close page count file.
+/
+jfner:	asciz	/Cannot get JFN for remote tty.
+/
+nouter:	asciz	/Cannot output page count.
+/
+opener:	asciz	/Cannot open remote tty.
+/
+relder:	asciz	/Cannot release remote tty.
+/
+trsler:	asciz	/Cannot translate user number.
+/
+
+	Extern	logfd,fclose,pcount,report
+
+	end

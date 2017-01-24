@@ -1,0 +1,80 @@
+22-Apr-88 23:36:27-PDT,2065;000000000011
+Return-Path: <SRA@XX.LCS.MIT.EDU>
+Received: from XX.LCS.MIT.EDU by SRI-NIC.ARPA with TCP; Fri 22 Apr 88 23:36:23-PDT
+Date: Sat, 23 Apr 1988  02:38 EDT
+Message-ID: <SRA.12392668083.BABYL@XX.LCS.MIT.EDU>
+From: Rob Austein <SRA@XX.LCS.MIT.EDU>
+To:   klh@SRI-NIC.ARPA
+cc:   sra@XX.LCS.MIT.EDU
+Subject: I know you said no more KCC for a while, but...
+
+Here's some more thoughts on extended addressing, PSECTs, etc.
+They make use of a LINK switch I never thought I'd have a good use
+for.  The following builds a reasonable looking HELLO.EXE from a
+HELLO.REL produced with KCC-5 right out of the box:
+
+; [XX.LCS.MIT.EDU]XX:<SRA>HELLO.CCL.1, 23-Apr-88 00:57:50, Edit by SRA
+; -*- CMD -*- mode for EMACS.
+; This is a test file to see how loading HELLO.C works with
+; various PSECT and extended addressing frobs.
+;
+; Here's where CC.EXE invents interesting parameters (Z$foo should not
+; be confused with the E$foo symbols in CENDPS.C)
+/define:b$data:#1001000/define:z$data:#1377777
+/define:b$code:#1400000/define:z$code:#1777777
+;
+; Boiler plate
+/set:data:b$data/limit:data:z$data
+/set:code:b$code/limit:code:z$code
+/redirect:data:code/symseg:psect:data
+;
+; Files to read and write.
+hello/save
+c:libckx,hello
+;
+; Show relocations counters (after hello.rel, before libc.rel) and finish up
+/count/go
+
+Features of this approach:
+
+- You could dispose of LIBCKX.REL, do /DEFINE:$$SECT:1, etc, instead.
+- You can get rid of the hardwired assumption that the code PSECT
+  starts at location 400000 (gag me with a...).
+- You could even define the location of things like the PDL this way,
+  on the fly (well, in section zero you couldn't but that's ok, we
+  already know the right way to define PDL and malloc space in section
+  zero).
+
+I was pleasantly surprised to find that (1) the CRT code correctly
+handled the case where it discovered that it was already in section
+one, and (2) that the END <n,,entvec> in the main module actually did
+the right thing (LINK is cleverly fixing up the entry vector address
+as a 30 bit value).
+23-Apr-88 00:21:40-PDT,868;000000000001
+Return-Path: <SRA@XX.LCS.MIT.EDU>
+Received: from XX.LCS.MIT.EDU by SRI-NIC.ARPA with TCP; Sat 23 Apr 88 00:21:38-PDT
+Date: Sat 23 Apr 88 03:24:20-EDT
+From: Rob Austein <SRA@XX.LCS.MIT.EDU>
+Subject: Addendum
+To: KLH@SRI-NIC.ARPA
+cc: sra@XX.LCS.MIT.EDU
+Message-ID: <12392676343.53.SRA@XX.LCS.MIT.EDU>
+
+One more thought and I have to sign off for the night.  If you are interested
+in the idea of using /DEFINE to flush LIBCKX, here's a technique
+that might be useful.
+
+Have KCC emit, to LINK:
+
+/DEFINE:$$$KLX:n
+
+where n is zero or one (might not want to use $$SECT for this), then
+in the file that defines all the byte pointers and such, do
+
+$BPxxxx==:<sect_zero_value+<<extended_value - sect_zero_value>*$$$KLX>
+
+and let LINK sort it all out as a Polish expression.  Voila, no more
+need for LIBCKX.  Ain't arithmetic wonderful.
+
+--Rob
+-------

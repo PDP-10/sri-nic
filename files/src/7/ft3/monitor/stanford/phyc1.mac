@@ -1,0 +1,1474 @@
+;[MACBETH.STANFORD.EDU]SRC:<7.FT1.MONITOR.STANFORD>PHYC1.MAC.3, 29-Feb-88 16:30:01, Edit by A.ALDERSON
+; Put MOVRCA and STORCA here too, so that they don't appear in the rest of the
+; monitor.
+; Make MOVRCA, STORCA, PHYMOV, and PHYSTO local symbols rather than global.
+;[MACBETH.STANFORD.EDU]SRC:<7.FT1.MONITOR.STANFORD>PHYC1.MAC.2, 27-Feb-88 09:36:43, Edit by A.ALDERSON
+; Put PHYMOV and PHYSTO here since they were removed from the version 7
+; monitor by Digital
+;<5-1-MONITOR>PHYC1.MAC.5112, 21-Oct-84 15:50:40, Edit by MRC
+;[2] If this SA10 is SMTSCN channel, ignore it!
+;<SA10>PHYC1.MAC.5111, 21-Sep-84 11:23:49, Edit by MRC
+;[1] Change BUG invocations to BUG.
+;<5.ISI.MONITOR>PHYC1.MAC.5110	29-Nov-82 08:08:07	Edit by SMITH
+;#511 Do not give CC1HRE BUGCHK unless short IORB (Paging failure)
+;<5.ISI.MONITOR>PHYC1.MAC.5000	22-Oct-82 08:44:14	Edit by SMITH
+;#500 Adapt to release 5
+;<ISI.MONITOR>PHYC1.MAC.4620	28-Aug-82 09:02:25	Edit by SMITH
+;#462 Add consistancy check on sense bytes for data checks and env. data.
+;#431 <ISI.MONITOR>PHYC1.MAC.4310	16-Jun-82 11:48:46	Edit by SMITH
+;#431 Generate CC1SRE BUGCHKs for ECC errors too.
+;#431  Change CC1SRE,CC1SWE to every 32'd error.
+;#232 BUGCHK on hard disk errors, BUGINF every ^D16 soft disk errors
+;#232	Removed CC1CUE & CC1BS1 BUGINFs
+;<4.ISI-MONITOR>PHYC1.MAC.250	31-Mar-81 13:07:37	Edit by SMITH
+;#25 Support IBM-3330 compatable disks on SA10 channel.
+;#25 Entire module supports disks on SA10
+;#[T] collecting timing data
+;#[P] Positioning separated from transfer
+
+	SEARCH PROLOG,SERCOD	;system parameters
+	TTITLE (PHYC1,,< - Device dependent code for CalComp/IBM 3330 disks>)
+
+	SUBTTL Dennis R. Smith  5-Dec-79
+
+	SEARCH PHYPAR		;parameters
+	ENTRY CC1DSP		;dispatch vector
+
+
+
+;*****************************************************************************
+;******                                                                  *****
+;******                              Notes                               *****
+;******                                                                  *****
+;*****************************************************************************
+
+COMMENT	~
+
+	
+	In order to  use the  Calcomp 3330 disks  efficently, it  is
+	necessary to block the 'sectors' of 128 words which  Tops-20
+	uses as its  logical records into  larger physical  records.
+	For various reasons, in  particular, the fact that  probably
+	99 percent of the transfers  are for one 'page', a  blocking
+	factor of  4 was  chosen.   This means  that there  are  512
+	words, or 1152  bytes per  physical record.   This allows  5
+	pages per track, which is the same density that is  achieved
+	on RP06s.   Since  almost  all  I/O is  for  one  page,  the
+	standard command program is set  up to transfer a full  page
+	(or record) with one Device Command Word (DCW) and one  Data
+	Chaining Word (sometimes called an  IOW).  In the rare  case
+	where less than a  page is read,  incorrect length error  is
+	suppressed, any quarter pages  not desired are skipped  with
+	an IOW having an address field of zero, and the desired data
+	is read into the user's buffer.   In the case of a write  of
+	less than one  page, a command  program is set  up to  first
+	read the page into a buffer, and then to write out the page,
+	writing out the data  just read in  except for that  portion
+	supplied by the user.
+	
+
+	~
+
+COMMENT	~  Nomenclature used in this module
+
+ Name		 Abrev.	   Meaning 
+Cylinder 	C, CYL	- Cylinder of disk or tracks thereron 
+Track	 	Trk	- Track of disk: data of 1 cylinder under 1 head
+Head	 	H, Hd	- R/W head of disk, or any track under that head
+Surface	 	Srf	- Same as Head
+Record	 	R, Rec	- Hardware record (=1 page)
+Sector	 	Sec	- Hardware sector (not same as 'sector', q.v.)
+'Sector' 		- Software 'sector' = Logical record (1/4 page)
+Logical
+  Record 	LRC	- Logical record (referred to as 'sector' by PHYSIO)
+
+	~
+
+	SUBTTL PARAMETERS
+
+; Retry Counts
+
+DEVCNT==3			;Retries on device error before recalibrate
+RCLCNT==3			;Recalibrates after DEVCNT tries
+DSKNTR==^D16			;Number of tries on unknown errors
+
+;Status bits in LH(UDBERR)
+
+ES.HRD==1B0			;hard error
+ES.ECC==1B1			;ECC-corrected error
+ES.DAT==1B2			;data error
+ES.DEV==1B4			;device error
+
+; UDB Extensions
+
+	DOPC(C1,UDBDDD)		;#500 define UDB Device Dependent Part
+
+SC1 CC1STS,1			;extra status bits
+SC1 CC1SCP,1			;BMX pointer to standard channel program
+ MSKSTR(CC1SPA,CC1SCP(P3),BMX%AD) ;address of standard channel program
+SC1 CC1CCP,1			;BMX pointer to current channel program
+SC1 CC1DVL,1			;addr of device list entry for device
+SC1 CC1CYL,1			;number of cylinders per unit
+SC1 CC1SCL,1			;'sectors' per cylinder (logical records)
+SC1 CC1SSF,1			;'sectors' per surface
+SC1 CC1UHS,1			;number of microseconds per (HW) sector
+SC1 CC1USF,1			;number of microseconds per surface
+SC1 CC1IOW,1			;IOW for current operation
+SC1 CC1RMW,1			;count of times Read/Modify/Write needed
+SC1 CC1ES1,1			;error status word 1 (copy of SSACS1)
+SC1 CC1ES2,1			;error status word 2 (copy of SSACS2)
+SC1 CC1SNB,6			;sense bytes (6 words)
+SC1 CC1ESB,6			;error sense bytes (6 words)
+SC1 CC1PSF,1			;pages per surface
+SC1 CC1TIM,4			;#[T] timing data (start, elapsed, #, average)
+SC1 CC1PTM,4			;#[P] timing data on positioning (as CC1TIM)
+SC1 CC1TST,10			;statistics gathering time storage
+
+SC1 L.CC1,0			;length of UDB for CC1
+
+; CC1STS bits
+
+C1.TNK==1B0			;Type of drive Not Known
+C1.SNS==1B1			;sense in progress
+C1.RCL==1B2			;recalibrate in progress
+C1.RBW==1B3			;read before write (read/modify/write cycle)
+C1.WAR==1B4			;write after read - only used if the RBW
+				; got a CDC that broke the chaining
+C1.RMW==C1.RBW!C1.WAR		;read/modify/write cycle includes both
+C1.TIM==1B5			;#[T] do timing statistics
+
+; Pointers
+
+DEFSTR(DP%CYL,DPOSEK,31,16)	;Cylinder. 16 bits in 1st word of seek buffer
+DEFSTR(DP%SRF,DPOSEK+1,15,16)	;Surface. 16 bits in 2nd word of seek buffer
+DEFSTR(DP%REC,DPOSEK+1,23,8)	;Record. 8 bits in 2nd word of seek buffer
+;DEFSTR(DP%LRC,DPOSEK+1,25,2)	;Logical Record within physical record (SW) - 2
+				; bits in 2nd word of seek buffer
+DEFSTR(DP%SEC,DPOSEK+2,7,8)	;Sector. 8 bits (HW: 1/128 of track) - in
+				; 3rd word of seek buffer (for convenience) 
+
+MSKSTR(DP%CMD,DPOOPC,SC%CMD)	;Channel command
+MSKSTR(DP%CCF,DPOOPC,SC%CCF)	;Channel command flags
+MSKSTR(DP%DEV,DPOOPC,SC%DEV)	;Device address
+
+	SUBTTL DISPATCH VECTOR
+
+CC1DSP:	JRST CC1INI		;0 - Initialization
+	JRST CC1SIO		;1 - Start I/O
+	JRST CC1INT		;2 - Handle interrupt
+	JRST CC1ERR		;3 - Error recovery
+	JRST CC1HNG		;4 - Hung device
+	JRST CC1CNV		;5 - Convert blk # to cylinder/surf-sec
+	JRST CC1LTM		;6 - Latency computation
+	JRST CC1POS		;7 - Start positioning
+	JRST CC1ATN		;10- Attention interrupt
+	JRST CC1PRQ		;11- Skip if positioning required
+	JRST CC1STK		;12- Stack second transfer command
+	RET			;#500 13- check existance of unit (not called)
+	RET			;#500 14- check for halted controller (not called)
+	RET			;15- Release port
+
+;DUMMIES
+
+CC1HNG:	RET
+
+CC1ATN:	RET			;no attention interrupts generated by drives
+
+CC1PRQ:	RET			;if asked, say no positioning required
+
+CC1STK:	RET			;say unable to stack
+
+	SUBTTL CONSTANTS
+
+CC1FCN:				;table to translate internal to external
+				; functions
+	XWD 0,0			;0- no such function
+	XWD .ICRDD,0		;1- read
+	XWD 0,0			;2- read format
+	XWD .ICWRD,0		;3- write
+	XWD 0,0			;4- write format
+MXEXFN==.-CC1FCN-1		;maximum external function
+MXCC1F==.-CC1FCN-1		;maximum legal function
+
+; prototype channel program
+
+	CC1CP CC1PCP
+; Table of data to copy at initial error recovery time
+
+CC1DAT:	SEBPTR 0,SBTEVC,SEC%SD	;block type (SA10 disk error)
+	SEBPTR MB%CNI,SBTWD,CDBCNI(P1) ;Initial CONI
+	SEBPTR MB%CS0,SBTWD,CDBCS0(P1) ; (Currently unused)
+	SEBPTR MB%CS1,SBTWD,CDBCS1(P1) ;Status word 1 (Base+1)
+	SEBPTR MB%CS2,SBTWD,CDBCS2(P1) ;Status word 2 (Base+2)
+	SEBPTR SD%IOW,SBTWD,CC1IOW(P3) ;IOW from transfer
+	SEBPTR SD%STS,SBTWD,CC1STS(P3) ;Device specific status
+	SEBPTR SD%ES1,SBTWD,CC1ES1(P3) ;Error status (Base+1)
+	SEBPTR SD%ES2,SBTWD,CC1ES2(P3) ;More error status (Base+2)
+	SEBPTR SD%SEN+0,SBTWD,CC1ESB+0(P3) ;Sense bytes (24 bytes = 6 words)
+	SEBPTR SD%SEN+1,SBTWD,CC1ESB+1(P3)
+	SEBPTR SD%SEN+2,SBTWD,CC1ESB+2(P3)
+	SEBPTR SD%SEN+3,SBTWD,CC1ESB+3(P3)
+	SEBPTR SD%SEN+4,SBTWD,CC1ESB+4(P3)
+	SEBPTR SD%SEN+5,SBTWD,CC1ESB+5(P3)
+	SEBPTR SD%CCP,SBTWD,CC1CCP(P3) ;Current Channel Program address
+CC1NDA==.-CC1DAT
+
+	SUBTTL INITIALIZATION
+
+;CC1INI - Initialize disk unit on given channel
+; [Note: this differs from device "INI" routines on RH20's]
+; P1/ CDB
+; P3/ 0
+; Q2/ unit number (0,1,...)
+;	CALL UDSINI(ac)		;where ac/ CC1DSP
+; RETURNS +1: Always
+;  P3/ UDB if device found on this channel, else 0
+;  P1, Q1-Q4 preserved; other AC's destroyed
+
+CC1INI:	S0.ENT			; Put us in section 0 for now
+	SAVEQ
+	MOVEI T1,CC1PGA/PGSIZ	;page used for Read/Modify/Write
+	CALL NOCASH		;turn off caching on that page
+	SETZM CC1XCP		;show RMW page not in use
+	SETZ P3,		;say we don't have this unit
+	MOVE T1,SSASCI(P1)	;get subchannel number
+	CAMN T1,SMTSCN		;is it the tape channel?
+	 RET			;yes, don't do any disk crud then!
+
+; We will begin by attempting a 'Read count' command on Cylinder 800.
+; What happens to this command should tell us whether the device
+; is on this channel, and if so, whether it is a mod I or a mod II.
+; Possible outcomes:
+;	(1) No response, or 'Select error' status: Device is not there
+;		(this will be indicated by a +1 return from SAINGO).
+;	(2) Unit check, with sense showing 'command reject': Unit was
+;		there, but had no Cyl 800 (Mod I drive).
+;	(3) Normal status (Channel end + Device end): Device was there and
+;		has a Cyl 800 (Mod II drive).
+
+	MOVE T1,SAXFRE		;get -length,,next free space
+	CAML T1,[XWD -DPOLEN-6,0] ;room for CP and sense buffer?
+	 JRST CC1INF		;failed
+	CALL CC1MCP		;put channel program in space
+	 JFCL			;will always skip
+	HRRZM T1,P6		;save CP address
+	CALL CC1SRC		;set up Read Count program
+	SETZ Q1,		;show device type uncertain
+	SETZ T2,		;reset desired on channel
+	CALL SAINGO		;try the operation
+	 JRST CC1INX		;unit not there
+	MOVE T1,CDBCS1(P1)	;get status word
+	TXNE T1,FLD(.S1ATN!.S1SMD!.S1CUE!.S1BSY!.S1UEX,S1%DVS) ;unusual err?
+	JRST CC1INE		;yes
+	TXNN T1,FLD(.S1UCK,S1%DVS) ;unit check?
+	MOVEI Q1,.UTCC2		;no, this must be a mod II
+	MOVEI T1,DPOSNP(P6)	;get address of sense program
+	SETO T2,		;do not want reset (would clear sense)
+	CALL SAINGO		;do the sense
+	 JRST CC1INX		;give up if sense fails
+	MOVE T1,@DPOSNP+1(P6)	;get 1st word of sense buffer
+	TXNE T1,SN%CRJ		;command reject?
+	MOVEI Q1,.UTCC1		;yes, must be mod I
+	JUMPE Q1,CC1INX		;ignore if model not determined
+	CALL CC1IUN		;initialize unit
+	 JRST CC1INX		;failed, P3/0
+	RET			;successful initialization
+
+CC1INE:	BUG.(CHK,CC1UEI,PHYC1,HARD,<PHYC1 - Unusual error on 1st I/O>,<<T1,SW1>,<Q2,UNIT>,<SSASCI(P1),SUBCHN>>)
+	JRST CC1INX		;treat as not there
+CC1INF:	BUG.(CHK,CC1AL1,PHYC1,HARD,<PHYC1 - No space for channel program>)
+CC1INX:	RET			;return (unsuccessful)
+	SUBTTL CC1IUN, CC1SUN
+
+; CC1IUN - initialize unit	; CC1SUN - set up UDB for unit
+; P1/ CDB
+; P3/ UDB (If call is to CC1SUN)
+; Q1/ unit type code
+; Q2/ unit number
+;	CALL CC1IUN (CC1SUN)
+; RETURNS +1: couldn't get necessary resources (UDB or uncached space)
+; RETURNS +2: success 
+;  P3/ UDB address
+;  T1-T4 destroyed
+
+CC1IUN:	MOVE T3,[CC1DSP,,L.CC1]	;dispatch,,length
+	CALL PHYUDB		;set up UDB
+	 RETBAD			;give up if no space
+CC1SUN:	MOVSI T2,-NDSKUT	;search to find physical param table
+CC1SU2:	CAMN Q1,DSKUTP(T2)	;match?
+	JRST CC1SU3		;yes
+	AOBJN T2,CC1SU2		;no, loop
+	BUG.(CHK,CC1PNF,PHYC1,HARD,<PHYC1 - Disk physical parameters not found>,<<Q1,TYPE>,<Q2,UNIT>,<SSASCI(P1),SUBCHN>>)
+CC1SU3:	MOVE T2,DSKSIZ(T2)	;get pointer to physical parameters table
+	MOVEM T2,UDBSIZ(P3)	;save in UDB
+	MOVE T3,CYLUNT(T2)	;;get number of cylinders
+	MOVEM T3,CC1CYL(P3)	;save cylinders
+	MOVE T3,SECCYL(T2)	;get 'sectors' (records) per cylinder
+	MOVEM T3,CC1SCL(P3)	;save records/cyl
+	MOVE T3,SECSRF(T2)	;get 'sectors' (records) per surface
+	MOVEM T3,CC1SSF(P3)	;save records/surface
+	IDIV T3,SECPAG(T2)	;get pages per surface
+	MOVEM T3,CC1PSF(P3)	;save pages/surface
+	MOVE T3,SECSRF(T2)	;get back 'sectors' per surface
+	MOVE T1,USSECU(T2)	;get number of microseconds per "latency unit"
+	LSH T1,6		;number of microseconds per RP04 'sector'
+	IMULI T3,(T1)		;compute number of microseconds per surface
+	MOVEM T3,CC1USF(P3)	;save microseconds per surface
+	IDIVI T3,DPKSPT		;compute microseconds per HW sector
+	MOVEM T3,CC1UHS(P3)	;store microseconds per HW sector
+	MOVX T4,US.PRQ!US.DSK	;#500 disk, positioning required
+	IORM T4,UDBSTS(P3)	;set status
+	MOVX T4,C1.TIM		;#[T] collect timing data
+	IORM T4,CC1STS(P3)	;#[T] .
+	STOR Q1,USTYP,(P3)	;store device type
+	CALL CC1GDL		;Get device list for channel
+	 JRST CC1ALF		;allocation failure
+	ADDI T1,(Q2)		;entry for this unit
+	HRRZM T1,CC1DVL(P3)	;save address in UDB
+	CALL CC1GSB		;get a sense buffer if none yet
+	 JRST CC1ALF		;allocation failure
+	SETZ T1,		;signal CC1MCP to allocate CP space
+	CALL CC1MCP		;make a channel program
+	 JRST CC1ALF		;allocation failure
+	IORX T1,FLD(.BMXS,BMX%CM) ;block mux start program
+	MOVEI T2,.IDDSK(Q2)	;get device address of unit
+	STOR T2,BMX%DV,T1	;store device address in Mux pointer
+	MOVEM T1,CC1SCP(P3)	;save for later insertion in DVL
+	LOAD T1,SC%ADR,DPOSNP+1(T1) ;get address of sense buffer
+	LOAD T1,BYTE0,1(T1)	;get sense byte 4
+	MOVE T2,T1		;copy physical unit designator
+	ANDI T1,7		;isolate drive index (0="A", 7="G")
+	LSH T2,-6		;isolate controller bits
+	IMULI T2,^D100		;multiply controller by 100
+	ADDI T1,(T2)		;make <controller*100+drive>
+	MOVEM T1,UDBDSN(P3)	;store in serial number word
+	MOVX T1,CS.MUX		;show this is a multiplexor channel
+	IORM T1,CDBSTS(P1)	; .
+	RETSKP			;now return UDB to caller
+
+CC1ALF:	BUG.(CHK,CC1AL2,PHYC1,HARD,<PHYC1 - insufficient uncached core for new disk unit>)
+	RETBAD			;show failure
+
+	SUBTTL CC1SRC - Set up Read Count program
+
+;CC1SRC - set up "Read Count" program: C800, H1, R1 
+; T1/ channel program address
+;	CALL CC1SRC 
+; RETURNS +1: Always 
+;  T2, T3 destroyed
+
+CC1SRC:				;set up read count program
+	MOVEI T3,^D800		;Cylinder 800.
+	STOR T3,DP%CYL,(T1)	;store in seek buffer
+	MOVEI T3,^D1		;Surface 1
+	STOR T3,DP%SRF,(T1)	;store in seek buffer
+	STOR T3,DP%REC,(T1)	;Record 1: to seek buffer
+	MOVEI T3,^D1248/^D224	;get sector for this record
+	STOR T3,DP%SEC,(T1)	;store in seek buffer
+	MOVEI T3,.ICRDC		;read count command
+	STOR T3,DP%CMD,(T1)	;store in command program
+	MOVEI T3,.SCXCT!.SCILE!.SCBYT ;eXiCuTe, Ignore Length Error, BYTe mode
+	STOR T3,DP%CCF,(T1)	;store flags
+	LOAD T2,SC%ADR,DPOSNP+1(T1) ;address of sense buffer
+	IORX T2,<IOW 8,.-.>	;8 byte read, no chaining
+ 	MOVEM T2,DPOADR(T1)	;store in program
+	MOVX T2,<HLT.H>		;halt
+	MOVEM T2,DPOADR+1(T1)	;end of program marker
+	RET
+
+	SUBTTL CC1LTM - compute best latency
+
+;CC1LTM - Compute best latency 
+; P1/ CDB 
+; P3/ UDB 
+; T1/ Minimum latency in microsecseconds (0 for command stacking computation)
+;	CALL UDSLTM(ac)		;where ac/ CC1DSP 
+; RETURNS +1: no requests available (always if T1 was 0) 
+;  destroys P4-P5, T1-T4 
+; RETURNS +2: request found 
+;  T1/ Latency of closest request greater than specified minimum (uSEC) 
+;  T2/ Predicessor of IORB corresponding to time in T1 
+;  T3/ IORB corresponding to time in T1 
+; 
+; NOTE: This routine does not function exactly as its parallel for RP04/6's,
+; 	because we do not separate positioning and transfers.  This code
+;	is therefore not going to help if a seek is still needed, but only
+;	if we are really already on cylinder.  
+;
+;	This routine procedes as follows:
+;	The IORB with the smallest latency greater than the
+;	minimum is returned, along with its latency (same as for
+;	RP04's), except that the code assumes we are on cylinder.
+;	The positions used are HW sector numbers.  
+; 
+; AC usage: 
+;  Q1/ current cylinder 
+;  Q2/ minimum latency,,current position
+;  Q3/ best latency so far,,predecessor IORB 
+;  P4/ current IORB 
+;  P5/ predecessor to best IORB,,best IORB so far
+
+; Length of a record on an IBM 3380 disk.  The data area of each record
+; holds 512. 36. bit words.  The formula is basically:
+;    recsiz=key_length+data_length+overhead
+; Key_length and data_length both have twelve bytes of overhead, and are
+; rounded up to a multiple of 32.
+
+; Fundamental constants for the 3380 disk drive.  This drive is only capable
+; of writing data in 32 byte hunks, so therefore all areas that can be
+; written seperately (such as the count and data fields of a record) must
+; have lengths that are multiples of 32 bytes.
+
+DPKSPT==^D222			;Number of sectors per track
+NUMRPS==^D60			;Number of revolutions per second
+HNKSIZ==^D32			;Size of a hunk in bytes
+NUM32==^D1499			;Number of 32 byte hunks in a track
+RECOVH==^D12			;Amount of overhead (in bytes) that is
+				; appended to the end of the data
+				; portion of a record.
+CNTLEN==^D15			;Number of 32 byte hunks occupied by the count
+				; field and inter-record gap
+
+; Now we generate derived constants that depend upon the record size.
+; Currently, the record size is large enough to hold one page.  The data is
+; stored as densely as possible with 2 PDP-10 words occupying 9 eight bit
+; bytes.  This results in a fundamental record size of 512*4.5 or 2304 bytes
+; to hold one page.
+
+; Define handy macro for rounding up to a multiple of 32
+
+DEFINE XX(number)<<<<number>+^D31>/^D32>*^D32>
+
+;Now, generate the number of bytes per 3380 record
+
+RECSIZ==XX(<PGSIZ*9>/2+RECOVH)+CNTLEN*HNKSIZ
+
+NRECS==<NUM32*HNKSIZ>/RECSIZ	;Number of records/track
+
+USREV==<^D1000000/NUMRPS>	;Number of usecs per revolution
+
+USREC==USREV/NRECS		;Number of usecs per record
+				;Note that this number may need adjustment to
+				; account for track overhead (Home Address and
+				; record 0).
+
+CC1LTM:	JUMPE T1,R		;if command stacking, quit
+	S0.ENT			; Do this in section 0
+	SAVEQ			;save Q registers
+	DMOVE Q1,UDBPS1(P3)	;get current cylinder, sector within
+	IDIV Q2,CC1PSF(P3)	;find out what page of surface we are on
+	MOVEI Q2,1(Q3)		;get next sector (record-1) within track
+	CAIL Q2,NRECS		;wrap around?
+	SUBI Q2,NRECS		;yes, position on next time around
+	HRL Q2,T1		;minimum latency,,current pos
+	HRROI Q3,UDBTWQ(P3)	;initialize best latency,,predecessor
+	SETZB P4,P5		;initialize current and best IORBs
+CC1LT3:	HRRZ P4,IRBLNK(Q3)	;set current from predecessor
+	JUMPE P4,CC1LT5		;end of list?
+	CALL CC1CNV		;no - get address. T2/ cyl, T3/ relative LRC
+	MOVE T1,T3		;copy LRC relative to cyl
+	IDIV T1,CC1PSF(P3)	;get T2/ page on the track
+	MOVE T1,T2		;get sector (record-1) number
+	SUBI T1,(Q2)		;compute distance to this request
+	SKIPGE T1		;if negative,
+	ADDI T1,NRECS		;get absolute distance
+	IMULI T1,USREC		;compute latency to this request
+	HLRZ T2,Q2		;get minimum latency specified
+	CAMGE T1,T2		;is this request greater?
+	ADDI T1,USREV		;no - must do it one revolution later
+	HLRZ T2,Q3		;compare to best latency so far
+	CAML T1,T2		;less?
+	JRST CC1LT4		;no - do next request
+	HRL Q3,T1		;yes - save as current best LAT
+	MOVE P5,P4		;copy current IORB
+	HRL P5,Q3		;copy predecessor IORB
+CC1LT4:	HRR Q3,P4		;current IORB becomes predecessor 
+	JRST CC1LT3		;look at next IORB
+CC1LT5:	JUMPE P5,CC1LTE		;if none found, error
+	HLRZ T1,Q3		;get best latency found
+	HLRZ T2,P5		;get predecessor to best IORB
+	HRRZ T3,P5		;get best IORB
+	RETSKP
+
+CC1LTE:	BUG.(CHK,CC1LTF,PHYC1,HARD,<PHYC1 - Failed to find TWQ entry at CC1LTM>)
+	RET
+	SUBTTL CC1POS  - Position disk
+
+;#[P] CC1POS - Positon for transfer (Seek)
+;#[P]  P1/ CDB
+;#[P]  P3/ UDB
+;#[P]  P4/ IORB
+;#[P] 	CALL UDBPOS(ac)		;where ac/ CC1DSP
+;#[P]  RETURNS +1: failure (never)
+;#[P]  RETURNS +2: success (always)
+
+
+CC1POS:	SAVEQ			;#[P] save ACs
+	CALL GETMST		;#[P] get time
+	MOVEM T1,CC1PTM(P3)	;#[P] store time positioning started
+	MOVEI Q1,0		;#[P] indicate positioning (no command)
+	CALL CC1SET		;#[P] setup
+	 RETBAD			;#[P] failure
+	MOVE T1,CC1SCP(P3)	;#[P] get pointer to standard program	
+	HRRI T1,DPOPSK(T1)	;#[P] point to the seek-only program
+	CALL CC1GOM		;#[P] start I/O
+	RETSKP			;#[P] return
+	SUBTTL CC1SIO - Start I/O
+
+;CC1SIO - Start I/O operation
+; P1/ CDB
+; P3/ UDB
+; P4/ IORB
+;	CALL UDBSIO(ac)		;where ac/ CC1DSP
+; RETURNS +1: failure
+; RETURNS +2: success
+
+CC1SIO:	S0.ENT			;Must run section 0 for now
+	SAVEQ
+	SKIPE UDBERC(P3)	;in error recovery?
+	JRST [	CALL CC1GCP	;yes, get address of channel program
+		JRST CC1SI1]	;and restart it
+	CALL GETMST		;get time
+	MOVEM T1,CC1TIM(P3)	;store time I/O started
+	LDB T3,IRYFCN		;get function
+	CAIG T3,MXCC1F		;check maximum legal
+	SKIPN CC1FCN(T3)	;and one we can handle
+	 BUG.(CHK,CC1FEX,PHYC1,HARD,<PHYC1 - Illegal function>,<<T3,FUNCTION>,<UDBAKA(P3),UNIT>,<SSASCI(P1),SUBCHN>>)
+	HLRZ Q1,CC1FCN(T3)	;translate function to hardware function
+	CALL CC1SET		;setup
+	 RETBAD			;failure
+CC1SI1:	CALL CC1GOM		;start the I/O (Multiplexor mode)
+	setz t1,		;I/O is starting
+	call logtim		;log time that I/O started
+	RETSKP			;give good return
+
+logtim:	move t2,timptr		;get pointer to time buffer
+	andi t2,timbln-1	;mask it down
+	movem t1,timbuf(t2)	;save starting/ending indicator
+	datai 20,1+timbuf(t2)	;read high prec time
+	addi t2,3		;point to next entry
+	movem t2,timptr		;update the pointer
+	ret			;all done!
+
+	timbln==100
+	.psect rsdat
+timptr:	0
+timbuf:	block	103
+	.endps
+
+	SUBTTL CC1INT - Interrupt handler
+
+;CC1INT - handle interrupts
+; P1/ CDB
+; P3/ UDB
+;	CALL UDSINT(ac)		;where ac/ CC1DSP
+; RETURNS +1: Error detected
+;  P4/ 0 : request PHYSIO to dismiss interrupt
+;      negative : Request Schedule cycle
+;      IORB : I/O completed on this IORB
+;  P1,P3 only preserved
+; RETURNS +2: success
+;  P4/ 0 : request PHYSIO to dismiss interrupt
+;      negative : Request Schedule cycle
+;      IORB : I/O completed on this IORB
+;  P1,P3 only preserved
+
+CC1INT:	JUMPE P3,CC1ONL		;new device coming online
+	MOVX T2,US.POS		;#[P] positioning?
+	TDNE T2,UDBSTS(P3)	;#[P] ?
+	JRST CC1INP		;#[P] yes
+	MOVX T1,C1.TNK		;looking for device type?
+	MOVX T2,US.ACT		;or not active?
+	TDNE T2,UDBSTS(P3)	; not active?
+	TDNE T1,CC1STS(P3)	; looking for type?
+	TDZA P4,P4		;yes, show no IORB
+	CALL SETIRB		;set up IORB in P4
+	MOVE T3,CDBCS1(P1)	;get 1st word of channel status
+	LOAD T4,S1%DVS,T3	;get device status
+	CAIE T4,.S1CHE+.S1DVE	;check for normal case first
+	JRST CC1UCI		;no, unusual contdition
+CC1NRM:				;normal completion (CE+DE)
+	MOVX T1,C1.SNS		;was this on a sense?
+	TDNE T1,CC1STS(P3)	; ?
+	JRST CC1SND		;yes, check sense info
+	JUMPE P4,CC1INR		;handle completion if no IORB
+	seto t1,		;I/O is ending
+	call logtim		;log time that I/O ended
+	CALLRET CC1DUN		;finished.
+
+CC1INP:				;#[P] interrupt when positioning
+	SETZ P4,		;#[P] default case is "not done"
+	MOVE T3,CDBCS1(P1)	;#[P] get channel status word 1
+	LOAD T4,S1%DVS,T3	;#[P] get device status
+	CAIE T4,.S1DVE		;#[P] normal case for seek completed?
+	CAIN T4,.S1CHE+.S1DVE	;#[P] norm. case for seek completed immediately?
+	JRST CC1PDN		;#[T] yes, positioning done
+	CAIN T4,.S1CHE		;#[P] normal case for seek started?
+	 RETSKP			;#[P] yes, return to PHYINT, not done
+	JRST CC1UCI		;#[P] unusual case, try to handle
+
+CC1PDN:	CALL PHYPDN		;#[P] say positioning done
+	SETO P4,		;#[P] show scheduling wanted
+	MOVX T2,C1.TIM		;#[T] ;#[P] timing?
+	TDNN T2,CC1STS(P3)	;#[T] ;#[P] ?
+	RETSKP			;#[T] ;#[P] no, return to PHYINT
+	CALL GETMST		;#[T] ;#[P] get time
+	SUB T1,CC1PTM(P3)	;#[T] ;#[P] subtract time positioning started
+	ADDB T1,CC1PTM+1(P3)	;#[T] ;#[P] add to sum
+	AOS T2,CC1PTM+2(P3)	;#[T] ;#[P] count times
+	IDIV T1,T2		;#[T] ;#[P] compute average
+	MOVEM T1,CC1PTM+3(P3)	;#[T] ;#[P] store average
+	RETSKP			;#[P] return to PHYINT
+
+	SUBTTL CC1INT - Interrupt handler: CC1UCI - unusual condition int.
+
+
+CC1UCI:				;Unusual Condition Interrupt
+	TRNE T4,.S1UCK		;is it a unit check?
+	JRST CC1XER		;yes
+	TRNE T4,.S1BSY		;rejected because of busy?
+	JRST CC1BSY		;yes
+	TRNE T4,.S1CUE		;control unit end?
+	JRST CC1CUI		;yes
+	TXNN T3,FLD(.S1SER!.S1BIP!.S1CSE!.S1PIF!.S1LNE,S1%CHS) ;Funny channel bits?
+	TRNE T4,.S1ATN!.S1UEX	; or funny device bits?
+	JRST CC1GBS		;funny bits, try to restart it
+	TRNE T4,.S1DVE		;device end alone?
+	JRST CC1DVE		;yes, Asynchronous, probably
+				;channel end or nothing at all, ignore
+	BUG.(CHK,CC1FSB,PHYC1,HARD,<PHYC1 - Unusual status from disk>,<<T3,SW1>,<UDBAKA(P3),UNIT>,<SSASCI(P1),SUBCHN>>)
+CC1XND:	SETZ P4,		;show not done
+	RETSKP			;do not indicate error
+
+CC1GBS:	BUG.(CHK,CC1BSB,PHYC1,HARD,<PHYC1 - Bad status bits>,<<T3,SW1>,<UDBAKA(P3),UNIT>,<SSASCI(P1),SUBCHN>>)
+CC1RDV:	MOVX T1,US.ACT		;see if device was active
+	TDNN T1,UDBSTS(P3)	;was it active?
+	JRST CC1XND		;no, just dismiss
+CC1AGN:	MOVE T1,CC1CCP(P3)	;get current program pointer for unit
+	CALL CC1GOM		;go restart operation
+	JRST CC1XND		;dismiss interrupt
+
+CC1DVE:				;here on device end alone
+	MOVX T1,US.OFS		;see if it was offline
+	TDNN T1,UDBSTS(P3)	;offline?
+	 BUG.(CHK,CC1UDE,PHYC1,HARD,<PHYC1 - Unexpected Device End>,<<CDBCS1(P1),SW1>,<CDBCS2(P1),SW2>,<UDBAKA(P3),UNIT>,<SSASCI(P1),SUBCHN>>) ;no
+CC1DV1:				;Device end 
+	MOVX T1,C1.TNK		;is type undetermined yet?
+	MOVX T2,US.ACT		;or is unit active?
+	TDNN T2,UDBSTS(P3)	; active?
+	TDNE T1,CC1STS(P3)	; type known?
+	JRST CC1AGN		;unit active, or type unknown, try again
+	CALL CC1DUP		;DE out of the blue, drive up now
+
+CC1XER:				;exit, error detected
+	JUMPE P4,CC1IER		;handle differently if initialization
+	MOVX T1,IS.ERR		;error bit
+	IORM T1,IRBSTS(P4)	;set error in IORB
+	RETBAD			;indicate error to PHYSIO
+
+	SUBTTL CC1INT - Interrupt handler: CC1BSY - Busy status
+
+CC1BSY:				;busy seen
+	MOVX T1,C1.SNS		;sense in progress?
+	TDNE T1,CC1STS(P3)	; ?
+	JRST CC1BSS		;yes, handle differently
+;;#232	BUG.(CHK,CC1BS1,PHYC1,HARD,<PHYC1 - Busy status from disk>,<<CDBCS1(P1),SW1>,<CDBXFR(P1),OWNER>,<UDBAKA(P3),UNIT>,<SSASCI(P1),SUBCHN>>)
+	MOVE T1,CC1CCP(P3)	;get pointer to current Channel Program
+	MOVEM T1,@CC1DVL(P3)	;reset device list for whenever in mux mode
+	JRST CC1XND		;exit, not done yet
+
+CC1BSS:	BUG.(CHK,CC1BS2,PHYC1,HARD,<PHYC1 - Busy status on Sense read>,<<CDBCS1(P1),SW1>,<CDBXFR(P1),OWNER>,<UDBAKA(P3),UNIT>,<SSASCI(P1),SUBCHN>>)
+	LOAD T1,CC1SPA		;get standard channel program address
+	MOVEI T1,DPOSNP(T1)	;get address of sense program
+	CALL CC1GOS		;(re)start in selector mode
+	JRST CC1XND		;exit, not done yet
+
+	SUBTTL CC1INT - Interrupt handler: CC1CUI - Control Unit end Int
+
+CC1CUI:				;Control Unit End seen
+; Any unit that got BSY should be ready to restart the next time I/O is
+; started in MUX mode.  One would expect that this would be at the end of a
+; sense, due to some Unit Check that caused the problem. Therefore we ignore
+; the CUE.  Only time will tell if this was the correct procedure. -DRS
+;;#232	BUG.(CHK,CC1CUE,PHYC1,HARD,<PHYC1 - Control Unit End seen>,<<CDBCS1(P1),SW1>,<UDBAKA(P3),UNIT>,<SSASCI(P1),SUBCHN>>)
+	JRST CC1XND		;exit, not done yet
+
+	SUBTTL CC1INT - Interrupt handler: CC1INR - Initialization Normal sts.
+
+CC1INR:	MOVX T2,C1.TNK		;were we trying to find out unit type?
+	TDNN T2,CC1STS(P3)	; ?
+	JRST CC1UST		;no, that's funny
+	MOVEI Q1,.UTCC2		;good status on access to C800, must be Mod II
+	HRRZ Q2,UDBAKA(P3)	;get unit number
+	CALL CC1SUN		;reset unit for correct type
+	 RET			;just return if no core
+	CALLRET CC1DUP		;Device UP (online)
+
+CC1UST:	BUG.(CHK,CC1UES,PHYC1,HARD,<PHYC1 - unexpected ending status>,<<CDBCS1(P1),SW1>,<UDBAKA(P3),UNIT>,<SSASCI(P1),SUBCHN>>)
+	CALLRET CC1DUP		;force reread of home blocks
+
+	SUBTTL CC1INT - Interrupt handler: CC1IER - Initialization Error sts.
+
+CC1IER:				;error doing read count on Cyl 800
+	MOVX T1,C1.SNS		;sense in progress bit
+	TDZN T1,CC1STS(P3)	;already in progress?
+	JRST CC1SEN		;no, do a sense
+	BUG.(CHK,CC1UCO,PHYC1,HARD,<PHYC1 - Unit check on Sense: offline device>,<<CDBCS1(P1),SW1>,<UDBAKA(P3),UNIT>,<SSASCI(P1),SUBCHN>>)
+	RET
+
+	SUBTTL CC1INT - Interrupt handler: Sense operation completed
+
+CC1SND:				;Sense done
+	JUMPN P4,R		;ret if not new device, CC1ERR will handle
+CC1ISN:				;Sense done for unit coming online
+	ANDCAM T1,CC1STS(P3)	;clear sense in progress bit
+	MOVE T1,@SSASBA(P1)	;get 1st word of sense buffer
+	TXNN T1,SN%CRJ		;command reject?
+	JRST CC1BPK		;no, ingore funny business
+	CALLRET CC1DUP		;yes, must be MOD I, like we assumed
+
+CC1BPK:				;seems to be a bad pack
+	MOVX T1,CS.AC1		;clear bit saying channel is tied up
+	ANDCAM T1,CDBSTS(P1)	; .
+	RET			;but leave US.OFS & C1.TNK
+
+	SUBTTL CC1INT - Interrupt handler: CC1DUP - Device UP subroutine
+
+CC1DUP:				;device up
+	MOVX T1,C1.TNK		;Type is now known
+	ANDCAM T1,CC1STS(P3)	; ..
+;#500 	MOVX T1,US.CHB!US.PSI	;#500 need to check home blocks
+;#500 	SKIPL UDBSTR(P3)	;... if in a structure ...
+;#500 	IORM T1,UDBSTS(P3)	;check home blocks
+	CALLRET PHYONL		;inform PHYSIO
+
+
+	SUBTTL CC1ONL - Interrupt from new device coming online
+
+;CC1ONL - Interrupt from new device coming on line
+; P1/ CDB
+;	entered from CC1INT
+; RETURNS +1: failed to initialize unit (resource problem)
+;  T1-T4, Q1-Q4 destroyed
+; RETURNS +2: success
+;  P3/ UDB
+;  T1-T4, Q1-Q4 destroyed
+
+CC1ONL:	LOAD Q2,S1%DEV,CDBCS1(P1) ;get device code
+	ANDI Q2,MAXSAU-1	;unit on SA10
+	MOVEI Q1,.UTCC1		;assume MOD I for now
+	CALL CC1IUN		;initialize unit
+	 JRST [	SETZ P3,	;failed, no UDB
+		RETBAD]		;failure return
+	MOVX T1,C1.TNK		;show unit's type not known
+	IORM T1,CC1STS(P3)	; ...
+	MOVX T1,US.OFS		;show unit still not online
+	IORM T1,UDBSTS(P3)	; ...
+	LOAD T1,CC1SPA		;get address of channel program for unit
+	CALL CC1SRC		;set up Read Count program
+	CALL CC1GOM		;start I/O
+	RETSKP			;return to SSAINT
+
+	SUBTTL CC1ERR - Error handler
+
+;CC1ERR - handle errors
+; P1/ CDB
+; P3/ UDB
+; P4/ IORB
+;	CALL UDSERR(ac)		;where ac/ CC1DSP
+; RETURNS +1: not done yet
+; RETURNS +2: finished (hard eror or recovered)
+
+CC1ERR:	SAVEQ			;save accumulators
+	MOVX T1,IS.ERR		;is error bit still on?
+	TDNN T1,IRBSTS(P4)	; ??
+	JRST [	LDB T1,IRYFCN	;no, get function
+		CAIN T1,IRFRED	;read?
+		 CALL CC1ESR	;#431 ;#232 yes. count and BUGCHK if many
+ 		CAIN T1,IRFWRT	;write?
+		 CALL CC1ESW	;#431 yes
+		CALLRET CC1DUN]	;show that we are done
+				;error bit still on.
+	MOVX T1,C1.SNS		;test for sense in progress
+	TDNN T1,CC1STS(P3)	;sense in progress?
+	JRST CC1SEN		;no, do a sense
+	ANDCAM T1,CC1STS(P3)	;clear sense in progress bit
+	HRLZ T1,SSASBA(P1)	;get address of sense buffer read into
+	HRRI T1,CC1SNB(P3)	;get address of sense buffer for device
+	BLT T1,CC1SNB+5(P3)	;move sense bytes
+	CALL CC1GO		;start it up again in multiplexor mode
+	AOS Q3,UDBERC(P3)	;retry count
+	SOJE Q3,CC1ER1		;if this was 1st error, save info
+	MOVE T1,CC1ESB(P3)	;get 1st word of original sense bytes
+	CAIE T1,SN%EDP		;was 1st error just statistics?
+	JRST CC1ER2		;no, retain info about 1st error
+	; ..
+	; ..
+
+; here on the first error, or 2nd if 1st was "statistics"
+
+CC1ER1:	HRLZI T1,CC1SNB(P3)	;move from sense bytes
+	HRRI T1,CC1ESB(P3)	; to error sense bytes
+	BLT T1,CC1ESB+5(P3)	;move sense info
+
+	HRRZ Q1,UDBERP(P3)	;get error block
+	JUMPE Q1,CC1ER2		;none, no report
+	MOVE T1,Q1		;copy error block address
+	MOVE T2,[-CC1NDA,,CC1DAT] ;size & address of SEBCPY parms
+	CALL SEBCPY		;copy some things to error block
+	 JFCL
+	CALL PHYBLK		;get block number
+	MOVEM T2,SEBDAT+MB%LOC(Q1) ;save in report
+
+	LOAD T2,CC1SPA		;get channel program address
+	MOVEI T2,DPORCL(T2)	;point to 1st command
+	HRLZI T1,0(T2)		;point to 1st command
+	HRRI T1,SEBDAT+SD%CP1(Q1) ;point into error block
+	BLT T1,SEBDAT+SD%CP2-1(Q1) ;copy program
+	HRLI T2,SD%CP1-SD%CP2	;negative length
+	MOVEM T2,SEBDAT+SD%SCP(Q1) ;store pointer
+	HRLI T1,CC1XCP+DPORCL	;point to eXtra channel program
+	BLT T1,SEBDAT+SD%CPE-1(Q1) ;copy that program too
+	MOVE T2,[SD%CP2-SD%CPE,,CC1XCP+DPORCL] ;neg count, loc of XCP
+	MOVEM T2,SEBDAT+SD%XCP(Q1) ;store for SYSERR
+	; ..
+	; ..
+CC1ER2:				;not the first entry to error routine
+	MOVE T1,CC1SNB(P3)	;get 1st word of sense bytes
+	AOJE T1,CC1HRD		;still -1, no sense info read
+	MOVX T1,IS.IER		;error recovery inhibited?
+	TDNE T1,IRBSTS(P4)	; ??
+	JRST CC1HRD		;yes, all errors are hard
+	MOVE T4,CC1SNB(P3)	;get 1st 4 sense bytes
+	CAMN T4,[SN%DC!SN%COR]	;correctable data check?
+	JRST CC1CDC		;yes
+	CAIN T4,SN%EDP		;statistics?
+	JRST CC1EDP		;#462 yes, ignore, restart operation
+	TXNE T4,SN%IRQ		;intervention required?
+	JRST CC1IRQ		;yes
+	TXNE T4,SN%WIN		;write inhibit?
+	JRST CC1WLK		;yes
+	TXNE T4,SN%DC		;data error?
+	JRST CC1DAE		;yes
+	MOVX T1,ES.DEV		;no, device error
+	IORM T1,UDBERR(P3)	;indicate device error on unit
+	MOVX T1,IS.DVE		;indicate device error ...
+	IORM T1,IRBSTS(P4)	; ... on request too
+	MOVE T1,Q3		;get retry count
+	IDIVI T1,DEVCNT		;retry count/# of times to retry
+	MOVE Q3,T1		;get dividend
+	JUMPN T2,CC1TRY		;Simple retry unless MOD(retry count,DEVCNT)=0
+	CAIG Q3,RCLCNT		;recalibrated enough?
+	JRST CC1RCL		;no, recalibrate and try again
+;;	CALLRET CC1HRD		;yes, call it a Hard Error
+
+CC1HRD:	MOVX T1,ES.HRD		;indicate hard error
+	IORM T1,UDBERR(P3)	; ... on unit
+	MOVX T1,IS.NRT!IS.DVE	;indicate hard error
+	IORB T1,IRBSTS(P4)	;#511  ... on request
+	LDB T3,IRYFCN		;#511 get the function
+	CAIN T3,IRFRED		;#511 read?
+	 JRST [	AOS T2,UDBHRE(P3) ;#232 yes, one more hard read error
+		TXNE T1,IS.SHT	;#511 No bugchk if not a short (PAGEM) IORB
+		BUG.(CHK,CC1HRE,PHYC1,HARD,<PHYC1 - Hard read error>,<<UDBAKA(P3),UNIT>,<SSASCI(P1),SUBCHN>,<T2,NUMERR>>) ;#232 .
+		CALLRET CC1DUN]	;#232 .
+;;;#232 CAIN T3,IRFWRT		;#511 write?
+	AOS T2,UDBHWE(P3)	;yes, one more hard write error
+	BUG.(CHK,CC1HWE,PHYC1,HARD,<PHYC1 - Hard write error>,<<UDBAKA(P3),UNIT>,<SSASCI(P1),SUBCHN>,<T2,NUMERR>>) ;#232 .
+	CALLRET CC1DUN		;return, saying we give up
+
+HEX.60==6*^D16                  ;hex 60
+CC1EDP:	LOAD T1,BYTE3,+CC1SNB+1(P3) ;#462 env. data: check format code
+	CAIE T1,HEX.60          ;#462 is it format 6?
+	 BUG.(HLT,CC1IS6,PHYC1,HARD,<PHYC1 - Format code not 6>,<<UDBAKA(P3),UNIT>,<SSASCI(P1),SUBCHN>>) ;#462 no, bad
+	CAIL Q3,DSKNTR		;#462 too many retrys?
+	JRST CC1HRD		;#462 yes, very strange, give up
+	JRST CC1TRY             ;#462 retry
+
+CC1WLK:	MOVX T1,IS.WLK		;set write lock in IORB
+	IORM T1,IRBSTS(P4)	; .
+	TXCA T1,<US.WLK^!IS.WLK> ;and mark only write lock in UDB
+CC1IRQ:	MOVX T1,US.OFS!US.CHB	;mark offline, homeblock check needed
+	IORM T1,UDBSTS(P3)	;mark in status
+	JRST CC1HRD		;quit, indicating no more we can do
+
+CC1DAE:	MOVX T1,ES.DAT		;data errors
+	IORM T1,UDBERR(P3)	;mark in UDB
+	MOVX T1,IS.DTE		;indicate data error
+	IORM T1,IRBSTS(P4)	; ... on request also
+HEX.40==4*^D16                  ;hex 40
+HEX.4F==4*^D16+^D15             ;hex 4F
+	LOAD T1,BYTE3,+CC1SNB+1(P3) ;#462 check format code
+	CAIL T1,HEX.40          ;#462 is it format 4 (ECC correctable)?
+	 CAILE T1,HEX.4F         ;#462 is it format 4 (ECC correctable)?
+	  BUG.(HLT,CC1IS4,PHYC1,HARD,<PHYC1 - Data error not ECC correctable>,<<UDBAKA(P3),UNIT>,<SSASCI(P1),SUBCHN>,<T1,FMT>>) ;#462 no, bad
+	CAIL Q3,DSKNTR		;too many retrys?
+	 JRST CC1HRD		;yes, give up
+	JRST CC1TRY		;no, retry
+
+CC1CDC:	MOVX T1,ES.ECC		;correctable data check
+	IORM T1,UDBERR(P3)	; ... flag in UDB
+HEX.50==5*^D16                  ;hex 50
+HEX.5F==5*^D16+^D15             ;hex 5F
+	LOAD T1,BYTE3,+CC1SNB+1(P3) ;#462 check format code
+	CAIL T1,HEX.50          ;#462 is it format 5 (ECC correctable)?
+	 CAILE T1,HEX.5F         ;#462 is it format 5 (ECC correctable)?
+	  BUG.(HLT,CC1IS5,PHYC1,HARD,<PHYC1 - Data check not ECC correctable>,<<UDBAKA(P3),UNIT>,<SSASCI(P1),SUBCHN>,<T1,FMT>>) ;#462 no, bad
+	CALL CC1ESR		;#431 count as a soft read error
+	MOVE T3,CC1SNB+5(P3)	;get error pattern
+	TXZ T3,^-<BYTE(8)-1,-1,-1> ;3 bytes only
+	MOVEI T4,0		;make word pair in T3,T4
+	LDB T1,[POINT 16,CC1SNB+4(P3),31] ;get position from end
+	MOVNS T1		;negative count
+	ADDI T1,NBREC		;number of bytes per record - count
+	IDIVI T1,^D9		;T1/ word pairs, T2/ bytes to err
+	ADDI T1,(T1)		;convert # of double words to # of words
+	IMULI T2,-^D8		;convert # of bytes to negative # of bits
+	ROTC T3,(T2)		;move the error bits around
+	ROT T4,4		;odd word= bytes 5,6,7,8, last 4 bits of 4
+	CAML T2,[7*<0,,-^D8>]	;byte 7 or 8?
+	AOJA T1,[EXCH T3,T4	;yes, 1st byte is odd, exchange patterns
+		JRST .+1]	;and continue
+	SKIPE T3		;don't bother if no need
+	CALL CC1XOR		;XOR into buffer if bytes are in buffer
+	ADDI T1,1		;next word
+	SKIPE T3,T4		;next pattern, skip if nothing to do
+	CALL CC1XOR		;XOR into buffer if bytes are in buffer
+	MOVX T1,IS.ERR		;error bit
+	ANDCAM T1,IRBSTS(P4)	;turn off
+	MOVX T1,C1.RMW		;read/modify/write cycle?
+	TDNE T1,CC1STS(P3)	; ??
+	JRST [	XORM T1,CC1STS(P3) ;yes, change from RBW to WAR
+		MOVE T1,CC1SCP(P3) ;get pointer to rest of CP 
+		CALLRET CC1GOM]	;make transfer resume
+	SOS UDBERC(P3)		;not a retry
+	CALLRET CC1DUN		;say we are done
+
+CC1ESR:	AOS T2,UDBSRE(P3)	;#431 ;#232 count soft read errors
+	TRNN T2,<^D32-1>	;#232 multiple of 32?
+	 BUG.(CHK,CC1SRE,PHYC1,HARD,<PHYC1 - Soft read error>,<<UDBAKA(P3),UNIT>,<SSASCI(P1),SUBCHN>,<T2,NUMERR>>) ;#232 .
+	RET			;#431 return
+
+CC1ESW:	AOS T2,UDBSWE(P3)	;#431 count soft write errors
+	TRNN T2,<^D32-1>	;#431 ;#232 multiple of 32?
+	 BUG.(CHK,CC1SWE,PHYC1,HARD,<PHYC1 - Soft write error>,<<UDBAKA(P3),UNIT>,<SSASCI(P1),SUBCHN>,<T2,NUMERR>>) ;#232 .
+	RET			;#431 return
+
+	SUBTTL CC1SEN - Do a Sense operation
+
+;CC1SEN - Do a Sense on device
+; T1/ C1.SNS
+; P1/ CDB
+; P3/ UDB
+;	CALL CC1SEN
+; Returns +1: always
+; T1,T2 destroyed
+
+CC1SEN:	IORM T1,CC1STS(P3)	;turn on "sense in progress" bit
+	DMOVE T1,CDBCS1(P1)	;get status words
+	DMOVEM T1,CC1ES1(P3)	;save them for later
+	LOAD T1,CC1SPA		;get standard channel program address
+	MOVEI T1,DPOSNP(T1)	;get address of sense program
+	HRRZ T2,1(T1)		;get address of sense buffer
+	SETOM 0(T2)		;set invalid sense
+	CALL CC1GOS		;start the I/O, selector channel mode
+	RET			;not done yet
+
+	SUBTTL I/O Start Routines CC1GOS,CC1GOM,CC1GO
+
+;CC1GOS - Start I/O in selector channel mode
+; T1/ address of channel program (CP)
+; P1/ CDB
+; P3/ UDB
+;	CALL CC1GOS
+; RETURNS +1: always
+;  T1,T2 destroyed
+
+CC1GOS:	HRLI T1,(TCH)		;add transfer command to CP address
+	MOVX T2,CS.AC1		;set channel active, if not already, so ...
+	IORM T2,CDBSTS(P1)	; ... that no other things will start on it
+	HRRZ T2,UDBAKA(P1)	;get unit
+	MOVEM T2,CDBXFR(P1)	;show who owns the channel now
+	JRST CC1GO1		;store in base and start I/O
+
+;CC1GOM - Start I/O in multiplexor channel mode
+; T1/ address of channel program
+; P1/ CDB
+; P3/ UDB
+;	CALL CC1GOM
+; RETURNS +1: always
+;  T1,T2 destroyed
+
+CC1GOM:	MOVE T2,T1		;copy address
+	MOVE T1,CC1SCP(P3)	;get standard channel program
+	STOR T2,BMX%AD,T1	;put in current address
+	MOVEM T1,@CC1DVL(P3)	;store entry for this unit
+	MOVEM T1,CC1CCP(P3)	;remember current entry
+	HRROS CDBXFR(P1)	;nobody owns channel, but recall who was last
+;;	CALLRET CC1GO
+
+;CC1GO - (Re)Start I/O in multiplexor channel mode
+; P1/ CDB
+; P3/ UDB
+;	CALL CC1GO
+; RETURNS +1: always
+;  T1,T2 destroyed
+
+CC1GO:	MOVX T1,CS.ACT		;set channel not active, so ...
+	ANDCAM T1,CDBSTS(P1)	; ... that other units can be started
+	MOVE T1,SSADVL(P1)	;get pointer to device list
+CC1GO1:	CALLRET SSAGO		;start the I/O
+
+	SUBTTL CC1XOR - XOR ECC bits into buffer
+
+;CC1XOR - XOR ECC bits in T3 into user buffer at position T1
+; T1/ Displacement into block of 1st byte of correction
+; T3/ Correction bits
+; P1/ CDB
+; P3/ UDB
+;	CALL CC1XOR
+; All AC's preserved
+
+CC1XOR:	SAVET			;save temp AC'S
+	LOAD T4,CC1SPA		;get channel program address
+	MOVX T2,C1.RMW		;test for Read-Modify-Write cycle
+	TDNE T2,CC1STS(P3)	;RMW in progress?
+	MOVEI T4,CC1XCP		;yes, use CP of the Read
+CC1XO1:	LOAD T2,SC%CNT,DPOADR(T4) ;get count
+	JUMPE T2,CC1XO3		;zero count is end of CP
+	ORCMI T2,.RTJST(SC%CNT,SC%CNT) ;extend sign
+	ADD T1,T2		;sub count from displacement
+	JUMPL T1,CC1XO2		;jump if word was in this buffer
+	MOVX T2,SC%LST		;see if data chaining
+	TDNN T2,DPOADR(T4)	;test for data chaining
+	AOJA T4,CC1XO1		;yes, process next IOW
+	RET			;no, done 
+
+CC1XO2:	SUB T1,T2		;compute displacement into buffer
+	LOAD T2,SC%ADR,DPOADR(T4) ;get buffer address
+	JUMPE T2,CC1XO3		;zero address means no data transfer
+	ADD T1,T2		;compute address of word to change
+	CALL PHYMOV		;get the word
+	XOR T2,T3		;correct it
+	CALL PHYSTO		;put the word back
+CC1XO3:	RET			;return
+
+	SUBTTL CC1DUN - Finish up completed request
+
+;CC1DUN - I/O done - finish up 
+; P1/ CDB
+; P3/ UDB
+; P4/ IORB
+;	CALL CC1DUN		;(actually called with CALLRET CC1DUN
+;				; so a skip return, meaning DONE, is
+;				; given to PHYSIO from CC1INT or CC1ERR)
+; RETURNS +2: Always
+;  T1-T3 destroyed
+
+CC1DUN:				;I/O done (success or failure)
+	LDB T3,IRYFCN		;get function code
+	CALL PHYCNT		;get length of transfer
+	LSH T1,-7		;as blocks
+	MOVX T2,C1.RMW		;read/modify/write cycle?
+	TDNE T2,CC1STS(P3)	; ??
+	 JRST [	ANDCAM T2,CC1STS(P3) ;yes, clear bits
+		SETZM CC1XCP	;clear flag saying CC1PG in use
+		AOS CC1RMW(P3)	;count occurrances
+		JRST .+1]
+	CAIN T3,IRFRED		;read?
+	ADDM T1,UDBRED(P3)	;yes, count it
+	CAIN T3,IRFWRT		;write?
+	ADDM T1,UDBWRT(P3)	;yes, count it
+	MOVX T2,C1.RCL		;clear bits related to this I/O
+	ANDCAB T2,CC1STS(P3)	; .
+	TXNN T2,C1.TIM		;#[T] doing timing statistics?
+	RETSKP			;#[T] no
+	CALL GETMST		;#[T] get time
+	SUB T1,CC1TIM(P3)	;#[T] subtract time I/O started
+	ADDB T1,CC1TIM+1(P3)	;#[T] add to sum
+	AOS T2,CC1TIM+2(P3)	;#[T] count times
+	IDIV T1,T2		;#[T] compute average
+	MOVEM T1,CC1TIM+3(P3)	;#[T] store average
+	RETSKP			;I/O op done, return IORB
+
+	SUBTTL CC1SET - SETUP FOR I/O
+
+;CC1SET - setup for I/O operation
+; Q1/ Command code (IBM)
+; P1/ CDB
+; P3/ UDB
+; P4/ IORB
+;	CALL CC1SET
+; RETURNS +1: unable to start partial page write because CC1PG is busy
+; RETURNS +2: success
+;  T1/ Device list entry
+
+CC1SET:	MOVX T1,US.WLK!US.OFS	;clear write locked and offline
+	ANDCAM T1,UDBSTS(P3)	; ...
+	CALL CC1CNV		;get HW address
+	CAME T2,UDBPS1(P3)	;same cylinder as last time?
+	AOS UDBSEK(P3)		;no, count it as another seek
+	DMOVEM T2,UDBPS1(P3)	;save cylinder, remainder
+	CALL CC1GHA		;get HW fmt address
+	LOAD Q3,CC1SPA		;get address of standard CP
+	DMOVEM T2,DPOSEK(Q3)	;store seek arguments
+	JUMPE Q1,RSKP		;#[P] quit now if just postioning
+	LOAD T1,DP%REC,(Q3)	;get physical record number
+	SUBI T1,1		;number of records before this one
+	IMULI T1,RECSIZ		;number of bytes before this record
+	ADDI T1,^D1248		;overhead for track
+	IDIVI T1,^D224		;compute sector number
+	JFCL			;room to patch in modifying instruction
+	STOR T1,DP%SEC,(Q3)	;store for set-sector command
+	STOR Q1,DP%CMD,(Q3)	;store command code
+	MOVEI T1,.SCXCT		;normal flags: eXeCuTe
+	STOR T1,DP%CCF,(Q3)	;store flags
+	CALL PHYCNT		;get word count
+repeat 0,<
+	CAIE T1,PGSIZ		;is it one page?
+	JRST CC1SE1		;no, it's a hard one
+	TXNN T3,DP%LRC		;make sure it is on page boundary
+	JRST CC1SE9		;it is
+	BUG.(CHK,CC1IRN,PHYC1,HARD,<PHYC1 - Illegal record number for page I/O>,<<T3,UDBPS2>,<UDBAKA(P3),UNIT>,<SSASCI(P1),SUBCHN>>)
+	RETBAD			;fail (hope it was bad DSKOP)
+>; End of repeat 0
+CC1SE9:	CALL CC1GIW		;get IOW for user data in T1
+CC1SE6:	MOVEM T1,DPOADR(Q3)	;store last IOW in CP
+	MOVX T1,<HLT.C>		;end of CP command, do not hang when done
+	MOVEM T1,DPOADR+1(Q3)	;terminate CP
+	CALL CC1GCP		;get starting address of appropriate CP
+	RETSKP			;setup done
+
+CC1SE1:				;here when transfer not a page
+	CAIL T1,PGSIZ		;is it less than a page?
+	 BUG.(CHK,CC1ISZ,PHYC1,HARD,<PHYC1 - Illegal size for disk I/O>,<<T1,SIZE>,<UDBAKA(P3),UNIT>,<SSASCI(P1),SUBCHN>>)
+;	CAIN Q1,.ICWRD		;is it a write?
+;	JRST CC1SE3		;yes, that's harder still
+	MOVX T1,FLD(.SCILE,SC%CCF) ;ignore length error bit
+	IORM T1,DPOOPC(Q3)	;turn bit on (want to ignore length error)
+repeat 0,<
+	LOAD T1,DP%LRC,(Q3)	;get logical record number (0,1,2, or 3)
+	JUMPE T1,CC1SE9		;1st logical record: nothing to skip
+	HLLZ T1,CC1IO1-1(T1)	;Get IOW to skip 1/4, 1/2 or 3/4 pg
+	MOVEM T1,DPOADR(Q3)	;store in CP
+	AOJA Q3,CC1SE9		;adjust CP pointer and finish CP
+> ; End of repeat 0
+	jrst cc1se9
+
+repeat 0,<
+CC1SE3:				;partial page write.
+	SKIPE CC1XCP		;see if blocking page is in use
+	RETBAD			;yes, cannot do the write now
+	MOVE T4,T1		;save count for later
+	MOVX T1,C1.RBW		;read/modify/write sequence needed
+	IORM T1,CC1STS(P3)	;remember special sequence
+	HRLZ T1,Q3		;get address of CP for this device
+	MOVEI T2,CC1XCP		;destination CP
+	ADD T1,[DPORCL,,CC1XCP+DPORCL] ;from recal of dev CP to recal of xtra
+	BLT T1,DPOOPC-1(T2)	;move it, devadrs and all
+	MOVEI T1,DPOOPC-3(T2)	;address of seek
+	HRRM T1,DPOOPC-1(T2)	;put it in the 'TCH'
+	LOAD T3,DP%DEV,(Q3)	;get device address
+	STOR T3,DP%DEV,(T2)	;store device address for read
+	HRRM Q3,DPOADR+1(T2)	;store addr of normal CP in TCH in xtra prog.
+	MOVEI T3,.ICRDD		;want to read in the page
+	STOR T3,DP%CMD,(T2)	;store the read command
+	LOAD T3,DP%LRC,(Q3)	;get logical record to write
+	JUMPE T3,CC1SE5		;first one, that is special
+	MOVE T2,CC1IO1-1(T3)	;get 1/4, 2/4 or 3/4 page IOW from CC1PGA
+	MOVEM T2,DPOADR(Q3)	;store
+	AOJ Q3,			;bump pointer
+CC1SE5:	LSH T3,^D35-POS(PGSIZ/4) ;# records times length of each
+	ADDB T3,T4		;add counts together
+	SUBI T3,PGSIZ		;subtract page size to get neg. remainder
+	JUMPE T3,CC1SE9		;no remainder, finish CP
+	CALL CC1GIW		;get IOW for user data in T1
+	TXZ T1,SC%LST		;show this is not last IOW
+	MOVEM T1,DPOADR(Q3)	;store in CP
+	MOVEI T1,CC1PGA(T4)	;address of remainder of page
+	STOR T3,SC%CNT,T1	;store count, making IOW
+	TXO T1,SC%LST		;set as last IOW
+	AOJA Q3,CC1SE6		;store IOW and terminate CP
+
+; partial page IOW's - use full word for to/from CC1PGA, use LH,0 for skips
+
+CC1IO1:	IOW PGSIZ*1/4,CC1PGA,C	; 1/4 pg 
+CC1IO2:	IOW PGSIZ*2/4,CC1PGA,C	; 1/2 pg 
+CC1IO3:	IOW PGSIZ*3/4,CC1PGA,C	; 3/4 pg 
+> ; End of repeat 0
+
+	SUBTTL CC1GCP - Get Channel program address
+				
+;CC1GCP - Get address of approptiate channel program
+; P1/ CDB
+; P2/ UDB
+; P4/ IORB
+;	CALL CC1GCP
+; Returns +1: always
+;  T1/ pointing to beginning of appropriate CP
+
+CC1GCP:	MOVE T1,CC1SCP(P3)	;get beginning of standard CP
+	MOVE T2,CC1STS(P3)	;get status
+	TXNE T2,C1.RBW		;is this Read Before Write?
+	HRRI T1,CC1XCP		;yes, start CP elsewhere
+	TXNE T2,C1.RCL		;recalibrate needed?
+	HRRI T1,DPORCL(T1)	;yes, start at recalibrate command
+	MOVEM T1,CC1CCP(P3)	;save current channel program pointer
+	RET			;return
+	SUBTTL CC1GDL - Get Device List for channel
+
+;CC1GDL - Get Device List
+; P1/ CDB
+; P3/ UDB
+;	CALL CC1GDL
+; Returns +1: failed - no device list yet and no space available
+; Returns +2: success - device list is set up, pointed to by SSADVL(P1)
+;  T1/ address of device list 
+
+CC1GDL:	SKIPE T1,SSADVL(P1)	;got one already?
+	 RETSKP			;yes
+	MOVEI T1,MAXSAU+1	;length needed
+	CALL SSAALC		;get the space
+	 RETBAD			;failure
+	HRLI T1,(BMX.LP)	;set for multiplexor channel
+	MOVEM T1,SSADVL(P1)	;save pointer to device list for SSABAS
+	PUSH P,T2		;save AC
+	MOVX T2,<FLD(.BMXT,BMX%CM)+FLD(.IDDSK,BMX%DV)> ;terminated cmd
+	HRLI T1,-MAXSAU		;put count of devices in LH for AOBJN
+	MOVEM T2,0(T1)		;initialize 1
+	AOBJN T1,.-1		;initialize them all
+	SETZM 0(T1)		;end of list indicator
+	HRRZ T1,SSADVL(P1)	;get back pointer
+	POP P,T2		;restore AC
+	RETSKP			;give good return
+	SUBTTL CC1MCP - Make Channel Program 
+
+;CC1MCP - Make Channel Program
+; P1/ CDB
+; T1/ Where to move channel program, or 0 to allocate space
+; Q2/ Unit number
+;	CALL CC1MCP
+; Returns +1: failure to allocate space (only if T1 was 0)
+; Returns +2: success
+;  T1/ address of channel program
+;  T2,T3,T4 destroyed
+
+CC1MCP:	JUMPN T1,CC1MC1		;jump if destination specified
+	MOVEI T1,DPOLEN		;how much space is needed
+	CALL SSAALC		;allocate space in un-cached page
+	 RETBAD			;failure if no space
+CC1MC1:	PUSH P,T1		;save address
+	ADDI Q2,.IDDSK		;make device address
+	MOVE T2,[-DPOLEN,,CC1PCP+DPORCL] ;AOBJN pointer for move
+CC1MC2:	MOVE T3,0(T2)		;get 1 word
+	LOAD T4,SC%CCF,T3	;get channel flags
+	CAIN T4,.RTJST(TCH,SC%CCF) ;is it a transfer-in-channel?
+	JRST CC1MC4		;yes, fixup address
+	CAIE T4,.RTJST(HLT.C,SC%CCF) ;is it a halt (continue)
+	CAIN T4,.RTJST(HLT.H,SC%CCF) ;is it a halt (hang)
+	JRST CC1MC5		;halt - no fixup needed
+	STOR Q2,SC%DEV,T3	;store device address in command
+	TXNE T4,.SCNMX		;memory transfer?
+	JRST CC1MC5		;no, store and go on to next command
+	MOVEM T3,0(T1)		;yes, store the command
+	ADDI T1,1		;point to where the IOW goes
+	AOBJN T2,.+1		;point to source IOW
+	MOVE T3,0(T2)		;get the IOW
+CC1MC4:	TRNN T3,-1		;is there an address here?
+	JRST CC1MC5		;no, leave it zero
+	SUBI T3,0(T2)		;compute displacement from source
+	ADDI T3,0(T1)		;make address in destination
+CC1MC5:	MOVEM T3,0(T1)		;store the fixed-up cmd word
+	ADDI T1,1		;next cmd stg location
+	AOBJN T2,CC1MC2		;next word to move, if any more
+	POP P,T1		;restore destination address
+	MOVEI T1,-DPORCL(T1)	;point to normal starting cmd
+	SKIPN T2,SSASBA(P1)	;get address of sense buffer for this channel
+	MOVEI T2,CC1PGA		;not set up yet, use our special page
+	STOR T2,SC%ADR,DPOSNP+1(T1) ;store in sense program
+	SUBI Q2,.IDDSK		;make unit number again
+	RETSKP			;return with T1/ CP
+	SUBTTL CC1GSB - Get a Sense Buffer for channel
+
+;CC1GSB - Get Sense Buffer for channel
+; P1/ CDB
+;	CALL CC1GSB
+; Returns +1: failure - no space
+; Returns +2: success - address of sense buffer stored in SSASBA(P1)
+;  T1/ Address of sense buffer
+
+CC1GSB:	SKIPE T1,SSASBA(P1)	;get address of sense buffer if exists
+	 RETSKP			;return with Sense buffer address
+	MOVEI T1,6		;need 24 bytes for sense buffer
+	CALL SSAALC		;allocate core
+	 RETBAD			;no space
+	MOVEM T1,SSASBA(P1)	;save address for later
+	RETSKP			;return successfully
+
+	SUBTTL CC1GIW - get I/O word for transfer
+
+;CC1GIW - Get I/O word for this transfer (and flush XFR page from cache)
+; P1/ CDB
+; P3/ UDB
+; P4/ IORB
+; Q1/ IBM command code (either .ICWRD or command is a "read")
+;	CALL CC1GIW
+; RETURNS +1: always
+;  T1/ IOW for transfer
+;  T2 destroyed
+
+CC1GIW:				;get I/O word
+	PUSH P,T3		;save T3
+	PUSH P,T4		;save T4
+	CALL PHYXFL		;get I/O list
+	CAIE T1,-1(T2)		;one word list?
+	 BUG.(CHK,CC1LTL,PHYC1,HARD,<PHYC1 - I/O list too long>,<<T1,FIRST>,<T2,LAST>,<UDBAKA(P3),UNIT>,<SSASCI(P1),SUBCHN>>)
+	MOVE T1,-1(T2)		;get the IOW
+	MOVEM T1,CC1IOW(P3)	;save in case of error
+	POP P,T4		;restore AC
+	POP P,T3		;restore AC
+	RET
+
+	SUBTTL CC1CNV - CONVERT IORB TO CYLINDER, 'SECTOR'
+
+;CC1CNV - convert to cylinder, 'sector' within cylinder, given IORB
+; P3/ UDB
+; P4/ IORB
+;	CALL UDSCNV(ac)		;where ac/ CC1DSP
+; RETURNS +1: always
+;  T2/ Cylinder (for UDBPS1)
+;  T3/ 'Sector' within cylinder (for UDBPS2)
+
+CC1CNV:	CALL PHYBLK		;get unit relative block number
+	TXZ T2,IRBPAD		;remove physical addressing bit
+	HRRZ T3,CC1SCL(P3)	;get 'sectors' per cylinder
+	IDIVI T2,(T3)		;convert
+	RET
+
+;CC1GHA - get HWFMT cylinder/surface/record address
+; T2/ Cylinder
+; T3/ 'sector' within cylinder
+; P3/ UDB
+;	CALL CC1GHA
+; RETURNS +1: always
+;  T2/ HWFMT 1st word of seek: search address containing cylinder
+;  T3/ HWFMT 2nd word of seek: search address containing surface, record,
+;			quarter page within physical record
+;  T4 destroyed
+
+CC1GHA:	HRRZ T4,CC1SSF(P3)	;get records per surface
+	IDIVI T3,(T4)		;get surface, record
+	LSH T2,<^D35-POS(DP%CYL)> ;position cylinder for hardware
+	LSH T3,<^D35-POS(DP%SRF)> ;position surface
+	DPB T4,[POINTR(T3,DP%REC)] ;insert record
+	ADDI T3,FLD(1,DP%REC)	;record numbers start with 1
+; note that T3 will work as the 2nd word of seek/search arguments, and
+; if this is not a normal 1 page transfer, byte 3 contains which quarter
+;  of the page to start with.
+	RET
+
+	SUBTTL Retry routines CC1RCL, CC1TRY
+
+;CC1RCL, CC1TRY - retry a transfer after an error, W/ or W/O recalibrate
+; P1/ CDB
+; P3/ UDB
+; P4/ IORB
+;	CALL CC1RCL / CALL CC1TRY
+; RETURNS +1: transfer restarted
+;  P4/ 0
+; Returns +2: failure, hard error recorded
+
+
+CC1RCL:	MOVX T1,C1.RCL		;retry with recalibrate
+	IORM T1,CC1STS(P3)	;set recalibrate bit
+	JRST CC1TR0
+
+CC1TRY:	MOVX T1,C1.RCL		;retry without recalibrate
+	ANDCAM T1,CC1STS(P3)	;turn off recalibrate bit
+;	JRST CC1TR0
+
+CC1TR0:	CALL SETIO		;clear error bits in IORB, CDBDSP to T1
+	CALL CDSSIO(T1)		;start I/O
+	 JRST CC1HRD		;very strange
+	SETZ P4,		;tell PHYSIO to dismiss the interrupt
+	RET			;and wait for next one
+
+
+;HERE TO FETCH A WORD FROM A SPECIFIED PHYSICAL ADDRESS
+
+;T1/ PHYSICAL ADDRESS
+;CALL PHYMOV
+;RETURNS+1(ALWAYS):
+;T1/ UNCHANGED
+;T2/ CONTENTS OF ((T1))
+
+PHYMOV:	PUSH P,T1		;SAVE ADDRESS OVER CALL
+	IDIVI T1,PGSIZ		;ISOLATE CPN AND RELATIVE WORD
+	EXCH T1,T2		;PLACE IN CORRECT ACCUMULATORS
+	CALL MOVRCA		;CALL KERNEL ROUTINE
+	MOVE T2,T1		;COPY RESULT
+	JRST PA1		;POP T1 AND RETURN
+
+
+;HERE TO STORE A WORD IN A SPECIFIED PHYSICAL ADDRESS
+
+;T1/ PHYSICAL ADDRESS
+;T2/ DATA TO STORE
+;	CALL PHYSTO
+;T1/ UNCHANGED
+
+PHYSTO:	PUSH P,T1		;SAVE ARGUMENT OVER CALL
+	MOVE T3,T2		;MOVE DATA TO WHERE LOWER LEVEL WANTS IT
+	IDIVI T1,PGSIZ		;ISOLATE CPN AND RELATIVE WORD
+	EXCH T1,T2		;MOVE TO CORRECT PLACE
+	CALL STORCA		;CALL KERNEL ROUTINE
+	JRST PA1		;POP T1 AND RETURN
+
+	SUBTTL Pager control routines
+
+;MOVE FROM REAL CORE ADDRESS
+; T1/ WORD NUMBER
+; T2/ PHYSICAL CORE PAGE NUMBER
+;	CALL MOVRCA
+; RETURN +1 ALWAYS, T1/ WORD FROM PAGE
+;MAY BE CALLED AT ANY PI LEVEL
+
+MOVRCA:	MOVE T4,[MOVE T1,PIPGA(T1)] ;INSTR TO EXECUTE
+	CALLRET XCTRCA		;DO INSTR WITH ADDR MAPPED
+
+;STORE TO REAL CORE ADDRESS
+;T1/ WORD NUMBER
+;T2/ PHYSICAL CORE PAGE NUMBER
+;T3/ WORD TO STORE
+;	CALL STORCA
+;RETURNS+1(ALWAYS)
+
+STORCA:	EA.ENT			;RUN IN SECTION 1
+	MOVX T4,CORMB
+	IORM T4,@CST0X+T2	;NOTE PAGE MODIFIED
+	MOVE T4,[MOVEM T3,PIPGA(T1)] ;INSTR TO EXECUTE
+;	CALLRET XCTRCA		;DO INSTR WITH ADDR MAPPED
+
+;LOCAL ROUTINE TO EXECUTE AN INSTRUCTION WITH PIPGA SETUP
+;T2/ CORE PAGE NUMBER
+;T4/ INSTR TO EXECUTE
+;T1 & T3 MAY BE USED BY THE INSTRUCTION.
+;THE USUAL CASE IS TO HAVE T1 CONTAIN THE RELATIVE WORD ADDRESS.
+
+XCTRCA:	EA.ENT			;RUN IN SECTION 1
+	PIOFF
+	PUSH P,@CST0X+T2	;SAVE OLD CST ENTRY
+	SETOM @CST0X+T2		;FORCE NO AGE FAULT
+	HLL T2,IMMPTR		;CONSTRUCT POINTER
+	MOVEM T2,MMAP+PIPG	;PUT IN MON MAP TEMP SLOT
+	CLRPT PIPGA		;CLEAR HDWR
+	XCT T4			;DO INSTR FOR CALER
+	SETZM MMAP+PIPG		;CLEAR TEMP MAPPING
+	HRRZS T2		;CLEAR BACK TO ADDRESS ONLY
+	POP P,@CST0X+T2		;RESTORE CST
+	CLRPT PIPGA		;CLEAR HARDWARE
+	PION
+	RET
+
+	TNXEND
+	END

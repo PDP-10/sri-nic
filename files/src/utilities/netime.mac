@@ -1,0 +1,512 @@
+
+	Title NETIME - TOPS-20AN NCP Fork Performance Utility - KWPaetzold 
+
+	comment \
+
+	This program written by:
+
+			Kevin W. Paetzold
+			Digital Equipment Corporation
+
+	This program will display the system performance figures for the
+NCP fork.  The NCP fork is used by the TOPS-20AN arpanet code to process
+asynchronous tasks such as the handling of NVT's and packing/unpacking 
+buffers.  The arpanet driver code actually just handles the H2I and I2H
+level functions.  The use and output from this program is more or less
+like the watch or friday programs.
+
+	The following is a description of data items:
+
+Where	Name		Description
+----------------------------------------------------------
+Header	Period		Time interval data was collected over.  In 
+			HHH:MM:SS:MSEcs.  On first report data is from
+			system reload.
+
+Header	Runtime		Total runtime of NCPFRK during interval in 
+			format of HHH.MM.SS.MSEcs.
+
+Header	Percent		Percent of system NCPFRK used during interval.
+
+Body	Clock Desc.	Description of what clock represents.
+
+Body	CPUtime		CPU time spent doing work for specified clock
+			during last interval.  HHH:MM:SS:MSEcs.
+
+Body	Frequency	Frequency of clock ruuning during last interval.
+
+Body	CPUtime/count	Average amount of CPU time used by clock each
+			time it runs.
+
+Body	Percent		Percent of the time the NCPFRK is using this clock.
+
+\
+
+	subttl acs and flags
+
+	define sym(a,b),<a=b>
+	define syms(a,b),<a==b>
+	define dsym(a,b),<ifndef a,<a=b>>
+	define dsyms(a,b),<ifndef a,<a==b>>
+
+	dsyms debug,<0>		; debug mode listing if on
+
+	search monsym,macsym
+	.require sys:macrel.rel
+	ife debug,<sall>
+	ife debug,<asuppress>
+
+				; version information
+	dsyms vwho,1		; who last hacked
+	dsyms vmajor,2		; major version number
+	dsyms vminor,0		; minor version number
+	dsyms vedit,0		; edit number
+
+				; ac names
+	sym f,0			; flags
+	sym t1,1		; \
+	sym t2,2		;  \
+	sym t3,3		;   > temporaries
+	sym t4,4		;  /
+	sym t5,5		; /
+	sym bp,6		; buffer pointer ac
+	sym cx,16		; Macsym's ac
+	sym p,17		; pdl stack pointer
+
+				; flag names
+	syms f%init,1b0		; init done flag
+	syms f%tty,1b1		; tty mode
+
+	dsyms assume,-1		; assume item in correct place
+	dsyms bufsiz,^d10000	; output buffer size 
+
+	define jsysf,<ercal .jsysf>
+	define noerr,<erjmp .+1>
+
+	subttl macros for io to tty
+
+	define type(str),<
+	hrroi t1,[asciz\
+str\]
+	psout>
+
+	define typen(str),<
+	hrroi t1,[asciz\str\]
+	psout>
+
+	define numo(adr,rdx,siz),<
+	move t2,adr
+	movei t1,.priou
+	movx t3,<<siz>b17!<rdx>b35>
+	nout
+	 jsysf>
+
+	subttl macro for io to buffer
+
+	define ftype(str),<
+	hrroi t2,[asciz\
+str\]
+	setzb t3,t4
+	move t1,bp
+	sout
+	 jsysf
+	move bp,t1>
+
+	define ftypen(str),<
+	hrroi t2,[asciz\str\]
+	move t1,bp
+	setzb t3,t4
+	sout
+	 jsysf
+	move bp,t1>
+
+	define ftypec(chr),<
+	movx t2,chr
+	move t1,bp
+	bout
+	 jsysf
+	move bp,t1>
+
+	define ftypea(adr),<
+	hrro t2,adr
+	move t1,bp
+	setzb t3,t4
+	sout
+	 jsysf
+	move bp,t1>
+
+	define fnumo(adr,rdx,siz),<
+	move t2,adr
+	move t1,bp
+	movx t3,<no%lfl!<siz>b17!<rdx>b35>
+	nout
+	 jsysf
+	move bp,t1>
+
+	define fnumo2(adr,rdx,siz),<
+	move t2,adr
+	move t1,bp
+	movx t3,<no%lfl!no%zro!<siz>b17!<rdx>b35>
+	nout
+	 jsysf
+	move bp,t1>
+
+	define fnumo3(adr,rdx,siz),<
+	move t2,adr
+	move t1,bp
+	movx t3,<<siz>b17!<rdx>b35>
+	nout
+	 jsysf
+	move bp,t1>
+
+	define fnumof(adr,fst,snd),<
+	move t2,adr
+	move t1,bp
+	movx t3,<fl%one!fl%pnt!<fst>b23!<snd>b29>
+	flout
+	 jsysf
+	move bp,t1>
+
+	subttl mainline
+
+evec:				; entry vector
+	jrst netime		; startint address
+	jrst netim2		; reenter address
+	<vwho>b2!<vmajor>b11!<vminor>b17!<vedit>b35
+	evecl==.-evec		; length of entry vector
+
+netime:				; this is where it all begins
+	reset			; reset the world
+	move p,[iowd pdlsiz,pdl] ; get stack pointer
+	setz f,			; reset all flags
+	movei t1,.fhslf		; this fork
+	rpcap			; get our privs
+	 jsysf
+	txnn t3,<sc%whl!sc%opr!sc%mnt> ; are we holy?
+	 jrst nopriv		; no
+	type < NETIME - TOPS-20AN NCPFRK Time Accumlators>
+	setzm uptime		; reset the uptime 
+	setzm syword		; reset first word of data area
+	movx t1,<syword,,syword+1> ; get blt ac
+	blt t1,syword+<<tblsiz*2>-1> ; zero the entire data area
+	call symlok		; go get values for all symbols
+	txo f,f%init		; set init done flag
+netim2:				; reenter address
+	txnn f,f%init		; init done?
+	 jrst netime		; no so do it now
+netim3:				; here to get the time interval
+	type <>
+	type < Enter time interval in seconds:  >
+	movei t1,.priin		; input from tty
+	movei t3,12		; in base 10
+	nin			; input the number
+	 jsysf
+	movem t2,snooze		; get snooze time
+	jumpge t2,netim4	; trap illegals
+	typen <?Invalid time interval>
+	jrst netim3		; try again
+netim4:				; now get the output file
+	skipn snooze		; is time zero
+	 txo f,f%tty		; yes so set flag
+	typen < Enter output file name:         >
+	movx t1,<gj%sht!gj%fns>	; get flags for gtjfn
+	movx t2,<.priin,,.priou> ; get io stuff for gtjfn
+	gtjfn			; get the jfn
+	 jsysf			; handle errors
+	movem t1,jfno		; save the jfn
+	call opnfil		; open up the file for io
+	call clsfil		; since it opened now close it
+netim5:				; here we are
+	call lookup		; get symbol values
+	hrroi bp,buffer		; get a pointer to the bbffer
+	call tblprt		; print the report
+	setz t1,		; get a null byte
+	idpb t1,bp		; append it
+	call opnfil		; open up the file
+	move t1,jfno		; get the jfn
+	hrroi t2,buffer		; get buffer pointer
+	setzb t3,t4		; nothing special
+	sout			; empty the buffer
+	 jsysf
+	call clsfil		; close the file
+	move t1,snooze		; get snooze time
+	txne f,f%tty		; tty mode?
+	 jrst netim6		; yes
+	imuli t1,^d1000		; make it msecs
+	disms			; go to sleep
+	jrst netim5		; and loop forever
+netim6:				; here for tty mode
+	movei t1,.priin		; input from tty
+	hrroi t2,buffer		; put it into buffer for now
+	movei t3,bufsiz		; max is bufsiz
+	movei t4,"J"-100	; terminate on a line feed
+	sin			; read from tty
+	 jsysf
+	jrst netim5		; and loop it
+
+	subttl misc subroutines
+
+nopriv:				; here when not holy
+	type <?NETIME needs Wheel, Operator, or Maintenance capabilities>
+	type <>
+	haltf			; stop
+	jrst netime		; try again on continues
+
+.jsysf:				; jsys error handler
+	movem 17,erracs+17	; save ac 17
+	hrrzi 17,erracs		; get blt ac
+	blt 17,erracs+16	; save acs 0-16
+	move 17,erracs+17	; get ac 17 back again
+	type <?JSYS error at user PC >
+	numo 0(p),10,0		; output pc
+	type <?Error - >
+	movei t1,.priou		; output to tty
+	movx t2,<.fhslf,,-1>	; my last error
+	setzb t3,t4
+	erstr			; output error string
+	 noerr
+	 noerr
+	type <>
+	haltf			; stop
+	jrst .-1		; no continues
+
+	subttl file access routines
+
+opnfil:				; routine to openf output file
+	move t1,jfno		; get the jfn
+	movx t2,<7b5!of%thw!of%app> ; append mode
+	openf			; open up the file
+	 jsysf
+	ret			; return to caller
+
+clsfil:				; routine to close the file
+	move t1,jfno		; get the jfn
+	txo t1,co%nrj		; dont release the jfn
+	closf			; close the file
+	 jsysf
+	ret			; return to caller
+
+	subttl symbol lookup routines
+
+symlok:				; routine to lookup values for symbols
+	ifn assume,<		; if we assuming
+	movei t1,.snpsy		; snoop symbol lookup fnc
+	move t2,sytime		; get first symbol name
+	movx t3,<squoze 0,stg>	; symbol is in stg
+	snoop			; get symbol value
+	 jsysf
+	movem t2,syval		; save symbol value
+	ret			; return to caller
+>				; end of ifn assume
+	ife assume,<		; if we dont assume
+	setz t5,		; reset index
+symlop:				; this is the loop
+	movei t1,.snpsy		; snoop symbol lookup functions
+	move t2,sytime(t5)	; get symbol name
+	movx t3,<squoze 0,stg>	; symbol is in stg
+	snoop			; lookup symbol value
+	 jsysf
+	movem t2,syval(t5)	; save symbol value
+	movei t1,.snpsy		; symbol lookup function
+	move t2,sycont(t5)	; get symbol name
+	movx t3,<squoze 0,stg>	; symbol is in stg
+	snoop			; lookup the symbol
+	 jsysf			; trap errors
+	movem t2,syval+tblsiz(t5) ; save the symbol value
+	caige t5,tblmax		; all entries looked up?
+	 aoja t5,symlop		; no so keep looping
+	ret			; yes so return to caller
+>				; end of ife assume
+
+	subttl peek routine to get data from tops-20
+
+lookup:				; routine to lookup symbol contents
+	move t1,uptime		; get the old uptime
+	movem t1,uptimo		; and save it
+	time			; get the current uptime
+	movem t1,uptime		; and save it
+	movx t1,<syword,,syoldw> ; get blt ac
+	blt t1,syoldw+<<2*tblsiz>-1> ; save the old values
+	ifn assume,<		; only if we are assuming
+	move t1,syval		; get symbol address
+	hrli t1,<tblsiz*2>	; number of words we want
+	movei t2,syword		; destination address
+	peek			; get symbol from tops20
+	 jsysf
+	ret			; return to caller
+>				; end of ifn assume
+	ife assume,<		; only if we are not asuuming
+	setz t5,		; initialize index
+looklp:				; symbol peek loop
+	move t1,syval(t5)	; get symbol value
+	hrli t1,1		; we want one word
+	movei t2,syword(t5)	; get destination address
+	peek			; get symbol contents
+	 jsysf			; trap errors
+	move t1,syval+tblsiz(t5) ; get symbol value
+	hrli t1,1		; we want one word
+	movei t2,syword+tblsiz(t5) ; get dest. address
+	peek			; get symbol value
+	 jsysf			; trap errors
+	caige t5,tblmax		; all words looked up?
+	 aoja t5,looklp		; no so keep going
+	type <>
+	ret			; yes so return to caller
+>				; end of ife assume
+
+	subttl routine to print report
+
+tblprt:				; routine to type report
+	stkvar <timttl>
+	setzm timttl		; reset total time count
+	setz t5,		; reset the index
+tblpr2:				; loop address
+	move t1,syword(t5)	; get the time 
+	sub t1,syoldw(t5)	; subtract the old value
+	addm t1,timttl		; add it to the total
+	caige t5,tblmax		; all items added?
+	 aoja t5,tblpr2		; no so continue
+	ftype <>
+	ftype < Period >
+	move t1,uptime		; get the uptime
+	sub t1,uptimo		; subtract the old uptime
+	call timeo		; output the elapsed time
+	ftypen <, Runtime >
+	move t1,timttl		; get the runtime
+	call timeo		; output it
+	ftypen < , Percent >
+	fltr t2,timttl		; get total runtime
+	move t3,uptime		; get the uptime
+	sub t3,uptimo		; get incremental uptime
+	fltr t3,t3		; make it real
+	fdvr t2,t3		; divide runtime by elapsed
+	fmpr t2,[100.]		; multiply by 100
+	fnumof t2,3,2		; output percent
+	ftype <>		; extra crlf
+ftype < Clock Description                    CPUtime   Freq.   CPUtime  Percent>
+ftype <                                hhh:mm:ss:msc            /Count  CPUtime>
+ftype < ----------------------------------------------------------------------->
+	setz t5,		; initialize index
+tbloop:				; table loop
+	ftype < >		; do crlf
+	ftypea sytext(t5)	; type out descriptor
+	ftypec " "		; do a space
+	move t1,syword(t5)	; get the clock value
+	sub t1,syoldw(t5)	; subtract the old value
+	call timeo		; output it in time format
+	ftypec " "		; delimit
+	move t2,syword+tblsiz(t5) ; get the count
+	sub t2,syoldw+tblsiz(t5) ; subtract the old value
+	fltr t2,t2		; make it a floating point number
+	move t3,uptime		; get the uptime
+	sub t3,uptimo		; subtract the old uptime
+	fltr t3,t3		; make it floating point
+	fdvr t3,[1000.]		; convert uptime to seconds
+	fdvr t2,t3		; get count/seconds
+	fnumof t2,3,3		; output counts/sec (freq)
+	ftypec " "		; do a space
+	move t2,syword(t5)	; get time in msecs
+	sub t2,syoldw(t5)	; subtract the old value
+	fltr t2,t2		; make it floating point
+	move t3,syword+tblsiz(t5) ; get the count
+	sub t3,syoldw+tblsiz(t5) ; subtract the old count
+	fltr t3,t3		; make it floting point
+	fdvr t2,t3		; get runtime/count
+	fnumof t2,5,3		; output the runtime/count
+	ftypen <   >		; separate
+	move t2,syword(t5)	; get the runtime
+	sub t2,syoldw(t5)	; subtract old runtime
+	fltr t2,t2		; make it real
+	fltr t3,timttl		; get total time used
+	fdvr t2,t3		; get percent of runtime
+	fmpr t2,[100.]		; multiply by 100
+	fnumof t2,3,2		; output percent of runtime
+	caige t5,tblmax		; all entries done?
+	 aoja t5,tbloop		; no so keep going
+	ftype <>
+	ret			; yes so return
+
+	subttl routine to type out the time
+
+timeo:				; routine to output time in hhhh:mm:ss.mm
+	stkvar <timusr,timehh,timemm,timess,timems>
+	movem t1,timusr		; save the time the user gave us
+	idivi t1,^d1000		; get number of seconds
+	movem t2,timems		; save number of milleseconds
+	idivi t1,^d60		; get number of minutes
+	movem t2,timess		; save number of seconds
+	idivi t1,^d60		; get number of hours
+	movem t2,timemm		; save number of minutes
+	movem t1,timehh		; save number of hours
+	fnumo timehh,12,3	; output number of hours
+	ftypec ":"		; do a space
+	fnumo2 timemm,12,2	; output number of mins
+	ftypec ":"
+	fnumo2 timess,12,2	; output number of seconds
+	ftypec "."		; do a dot
+	fnumo3 timems,12,3	; output number of msecs
+	ret			; return to caller
+
+	subttl data storage
+
+buffer:	block <bufsiz/5>+1	; output buffer
+	dsyms pdlsiz,100	; pdl stack size
+pdl:	block pdlsiz		; pdl stack 
+snooze:	z			; snooze time in seconds
+jfno:	z			; output jfn storage
+uptime:	z			; system uptime
+uptimo:	z			; old uptime value
+erracs:	block 20		; error ac storage
+
+	dsyms tblsiz,^d13	; number of entries
+	tblmax==tblsiz-1
+
+sytext:	block tblsiz		; text to go with symbols
+sytime:	block tblsiz		; symbol for time word
+sycont:	block tblsiz		; symbol for count word
+	syval==.
+	block 2*tblsiz		; leave room for symbol values and contents
+	syword=.
+	block 2*tblsiz		; leave room for symbol contents
+	syoldw=.
+	block 2*tblsiz		; leave room for old values
+tblend:
+
+	subttl table descriptions
+
+	tblnum==0		; initialize table index
+
+	define deftbl(time,count,text),<
+	reloc sytime+tblnum
+	squoze 0,time
+	reloc sycont+tblnum
+	squoze 0,count
+	reloc sytext+tblnum
+	-1,,[asciz\text\]
+	reloc syval+tblnum
+	time=.
+	reloc syval+tblsiz+tblnum
+	count=.
+	tblnum==tblnum+1
+	reloc tblend>
+
+	deftbl imcidl,imnidl,<idling                        >
+	deftbl imcnrb,imnnrb,<releasing buffers             >
+	deftbl imcgc ,imngc ,<garbage collecting link tables>
+	deftbl imcgib,imngib,<assigning input buffers       >
+	deftbl imccnp,imncnp,<processing control messages   >
+	deftbl imcp1 ,imnp1 ,<dispatching input messages    >
+	deftbl imc8xm,imn8xm,<processing irregular messages >
+	deftbl imcts ,imnts ,<scanning for NVT output       >
+	deftbl imcnvi,imnnvi,<unpacking NVT input           >
+	deftbl imcos ,imnos ,<scanning for output to do     >
+	deftbl imcnck,imnnck,<probing network               >
+	deftbl imcrfn,imnrfn,<checking for overdue RFNM's   >
+	deftbl imcncc,imnncc,<ncp checks                    >
+
+	ife debug,<xlist>	; lit follows
+	lit
+	ife debug,<list>	; end of lit
+
+	end <evecl,,evec>	; thats all folks
+

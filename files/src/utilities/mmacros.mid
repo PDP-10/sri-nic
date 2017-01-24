@@ -1,0 +1,147 @@
+; MMACROS - Commonly used MIDAS macros			-*-MIDAS-*-
+
+
+if2 .ineof			; only assemble on pass 1
+
+define tellversion
+if1 {
+.tyo6 .ifnm1
+printx " "
+.tyo6 .ifnm2
+printx "  Included in this assembly
+"}
+termin
+
+tellversion
+
+
+subttl	Definitions
+
+; Register definitions
+Z=:0				; Flags.  This is always register zero.
+A=:1				; A-F are used for subroutine arguments
+B=:2				; and results.  The ACs not so used are
+C=:3				; saved and restored by the subroutine.
+D=:4				; A-E are also used for JSYS calls and
+E=:5				; so must be 1-5.
+F=:6
+T=:7				; T, T1, and T2 are used as temporaries.
+T1=:10				; They may be used freely and not saved
+T2=:11				; by macros, uuos, or subroutines.
+
+P=:17				; PDL pointer register is always 17
+
+; Define registers for .I and .F
+A0==:T
+A1==:T1
+A2==:T2
+
+; Macro to define additional registers.
+define	register name
+if1 {
+ife .reg.-17,	.err Too many register definitions
+name=:.reg.
+.reg.==.reg.+1
+}
+termin
+
+.reg.==12			; first unused register
+
+
+
+; Common byte-pointer LH's
+$opcod==:331100			; Instruction op-code
+$acfld==:270400			; Instruction AC field
+
+
+; Rename poorly named pseudos.
+equals begin,.begin		; BEGIN looks better than .BEGIN
+equals var,.scalar		; Use VAR for vectors and scalars
+
+
+; Define CALL and RETURN for convenience.
+call=:pushj p,
+return=:popj p,
+
+
+; Macro to print on tty during assembly
+define	inform a,b,c,d,e,f,g
+printx a!b!c!d!e!f!g
+
+termin
+
+
+; Macro to define bit names for use with ac Z.
+define flag x
+if1 {
+ife f%.&777777,	.err Too many flags declared
+f%!x==f%.
+.c"f%.==f%._1
+}
+termin
+
+f%.==1			; for defining flags in RH of Z
+f%==525252		; for DDT's bit typeout mode
+
+
+; Macro to define channel no.s.
+define	channel name
+if1 {
+name==:.chnl.
+.chnl.==.chnl.+1
+}
+termin
+
+.chnl.==1
+
+
+; Macro to produce string constant.
+define	string &x&
+440700,,[ascii x] ? .length x termin
+
+
+; Macro to simulate KL10's ADJSP instruction.
+define	adjsp sp,amt
+ifl amt, sub sp,[-amt,,-amt]
+.else [	 add sp,[amt,,amt]
+	 jumpl sp,.+2
+	  .suset [.sipirq,,[%pipdl]]
+	]
+termin
+
+
+; Macro to output a string.
+ifn its,{
+define	sout ch,ctrl,&s&
+	move t1,[440700,,[ascii s]]
+	movei t2,.length s
+	$call siot,[ch,t1,t2][][ctrl]
+	 .lose %lssys
+termin
+}
+
+
+; Macro to query user at assemble time.
+define	setf &message&,flag
+ifndef flag,[
+.tag retry
+	printx message
+	.ttymac f
+	  ife <.type f>-17,{	printx |"f" is undefined, try again:
+|
+				.go retry }
+	  flag==f
+	termin
+]
+termin
+
+ifn tnx,{
+define	poutsc &s&
+	move a,[asciz s]
+	call psout
+termin
+
+define	.lose
+	haltf
+termin
+}

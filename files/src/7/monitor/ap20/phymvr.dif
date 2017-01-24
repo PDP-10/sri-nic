@@ -1,0 +1,287 @@
+
+
+; PHYMVR.NEW.1 & <MONITOR>PHYMVR.MAC.1 31-Mar-89 2348	PAGE 1
+
+
+
+LINE 1, PAGE 1
+1)	; Edit= 8913 to PHYMVR.MAC on 17-Aug-88 by GSCOTT
+1)	;Update BUG. documentation. 
+1)	; UPD ID= 8590, RIP:<7.MONITOR>PHYMVR.MAC.6,  11-Feb-88 16:56:16 by GSCOTT
+LINE 1, PAGE 1
+2)	; UPD ID= 8590, RIP:<7.MONITOR>PHYMVR.MAC.6,  11-Feb-88 16:56:16 by GSCOTT
+
+
+LINE 15, PAGE 2
+1)	;    8. MSCP Commands  . . . . . . . . . . . . . . . . . . . .  26
+1)	;    9. IORB Interrupt Service . . . . . . . . . . . . . . . .  37
+1)	;   10. Subroutines  . . . . . . . . . . . . . . . . . . . . .  40
+1)	;   11. CFS Interface  . . . . . . . . . . . . . . . . . . . .  65
+1)	;   12. End of PHYMVR  . . . . . . . . . . . . . . . . . . . .  67
+1)	^L	SUBTTL Comments
+1)	REPEAT 0,<
+1)	
+1)	 PHYMVR is the TOPS-20 MSCP server.  It emulates an HSC-50 for MASSBUS disks.
+1)	
+1)	 The server makes certain assumptions which are necessarily true for its 
+1)	 operation they are:
+1)	
+1)	 1. All SCA callbacks happen at interrupt level and therefore 2 callbacks 
+1)	    cannot happen at the same time.
+1)	
+1)	 2. The interrupt level for CI interrupts is the same as the interrupt level 
+1)	    for MASSBUS (PHYSIO) interrupts.
+1)	
+1)	 3. Scheduler calls (periodic check) is not at interrupt level and code
+1)	    must be protected from interrupts during periodic check.
+1)	
+1)	 4. (Actually an aspect of 3) No scheduler calls will happen during interrupt
+1)	    processing.
+1)	
+1)	 5. The RPLQ is not protected at all interrupt levels (if this changes it would
+1)	    simplify things somewhat) but is protected at scheduler calls into the 
+1)	    server and when the system is not either nosked or insked.  It also assumes
+1)	    that the RPLQ is race free when running the null job (NULJBF<>0).
+1)	
+1)	 6. Disk drives which are offline (US.OFS set in UDBSTS) but which haven't gone
+1)	    through the MSCOFL code (from PHYOFL in PHYSIO) are "transiently offline"
+1)	    and are not treated as offline to the drivers.  This eliminates much
+1)	    overhead and is a tremendous performance win when dual ported drives are
+1)	    present.
+1)	
+1)	 Register conventions used herein:
+1)	
+1)	 Q1 - Address of command being processed
+1)	 Q2 - Address of end packet buffer
+
+; PHYMVR.NEW.1 & <MONITOR>PHYMVR.MAC.1 31-Mar-89 2348	PAGE 2
+
+
+1)	 Q3 - Address of SCDB for the connection
+1)	
+1)	 P1-P4 - PHYSIO register conventions
+1)	
+1)	>
+LINE 15, PAGE 2
+2)	;    8. MSCP Commands  . . . . . . . . . . . . . . . . . . . .  24
+2)	;    9. IORB Interrupt Service . . . . . . . . . . . . . . . .  34
+2)	;   10. Subroutines  . . . . . . . . . . . . . . . . . . . . .  37
+2)	;   11. CFS Interface  . . . . . . . . . . . . . . . . . . . .  59
+2)	;   12. End of PHYMVR  . . . . . . . . . . . . . . . . . . . .  61
+2)	^L	SUBTTL Comments
+2)	REPEAT 0,<
+2)	
+2)	 PHYMVR IS THE TOPS-20 MSCP SERVER. IT EMULATES AN HSC-50 FOR MASSBUS DISKS.
+2)	
+2)	 THE SERVER MAKES CERTAIN ASSUMPTIONS WHICH ARE NECESSARILY TRUE FOR ITS 
+2)	 OPERATION THEY ARE.
+2)	
+2)	 1. ALL SCA CALLBACKS HAPPEN AT INTERRUPT LEVEL AND THEREFORE 2 CALLBACKS 
+2)	    CANNOT HAPPEN AT THE SAME TIME.
+2)	
+2)	 2. THE INTERRUPT LEVEL FOR CI INTERRUPTS IS THE SAME AS THE INTERRUPT LEVEL 
+2)	    FOR MASSBUS (PHYSIO) INTERRUPTS
+2)	
+2)	 3. SCHEDULER CALLS (PERIODIC CHECK) IS NOT AT INTERRUPT LEVEL AND CODE
+2)	    MUST BE PROTECTED FROM INTERRUPTS DURING PERIODIC CHECK.
+2)	
+2)	 4. ACTUALLY AN ASPECT OF 3. NO SCHEDULER CALLS WILL HAPPEN DURING INTERRUPT
+2)	    PROCESSING.
+2)	
+2)	 5. THE RPLQ IS NOT PROTECTED AT ALL INTERRUPT LEVELS (IF THIS CHANGES IT WOULD
+2)	    SIMPLIFY THINGS SOMEWHAT) BUT IS PROTECTED AT SCHEDULER CALLS INTO THE 
+2)	    SERVER AND WHEN THE SYSTEM IS NOT EITHER NOSKED OR INSKED. IT ALSO ASSUMES
+2)	    THAT THE RPLQ IS RACE FREE WHEN RUNNING THE NULL JOB (NULJBF<>0)
+2)	
+2)	 6. DISK DRIVES WHICH ARE OFFLINE (US.OFS SET IN UDBSTS) BUT WHICH HAVEN'T GONE
+2)	    THROUGH THE MSCOFL CODE (FROM PHYOFL IN PHYSIO) ARE "TRANSIENTLY OFFLINE"
+2)	    AND ARE NOT TREATED AS OFFLINE TO THE DRIVERS. THIS ELIMINATES MUCH
+2)	    OVERHEAD AND IS A TREMENDOUS PERFORMANCE WIN WHEN DUAL PORTED DRIVES ARE
+2)	    PRESENT.
+2)	
+2)	 REGISTER CONVENTIONS USED HEREIN:
+2)	
+2)	 Q1 - ADDRESS OF COMMAND BEING PROCESSED
+2)	 Q2 - ADDRESS OF END PACKET BUFFER
+2)	 Q3 - ADDRESS OF SCDB FOR THE CONNECTION
+2)	
+2)	 P1-P4 - PHYSIO REGISTER CONVENTIONS
+2)	
+2)	>
+
+; PHYMVR.NEW.1 & <MONITOR>PHYMVR.MAC.1 31-Mar-89 2348	PAGE 3
+
+
+
+
+LINE 12, PAGE 15
+1)	Action:	If this bug occurs often or is reproducible, set it dumpable and
+1)		submit an SPR along with a dump and instructions on reproducing it.
+1)	
+1)	Data:	ERROR - Error code returned by SC.LIS
+LINE 46, PAGE 14
+2)	Data:	ERROR - Error code returned by SC.LIS
+
+
+LINE 8, PAGE 17
+1)	Cause:	The MSCP server is rejecting a connection because the connector cannot
+1)		be identified due to an SCA failure or because the connector is not on
+1)		a KL10 processor.
+1)	
+1)	Action:	No action required, this bug is for information only.
+1)	
+1)	Data:	NODE - Node number
+LINE 8, PAGE 16
+2)	Cause:	The MSCP server is rejecting a connection because the connector
+2)		cannot be identified due to an SCA failure or because the connector
+2)		is not on a KL10 processor.
+2)	
+2)	Data:	NODE - Node number
+
+
+LINE 34, PAGE 17
+1)	Action:	If this bug occurs often or is reproducible, set it dumpable and
+1)		submit an SPR along with a dump and instructions on reproducing it.
+1)	
+1)	Data:	NODE - node number
+LINE 32, PAGE 16
+2)	Data:	NODE - node number
+
+
+LINE 11, PAGE 19
+1)	Action:	No action required, this bug is for information only.
+1)	
+1)	Data:	NODE - node number
+1)		CID - connect ID
+LINE 42, PAGE 17
+2)	DATA:	NODE - node number
+2)		CID - connect ID
+
+
+; PHYMVR.NEW.1 & <MONITOR>PHYMVR.MAC.1 31-Mar-89 2348	PAGE 4
+
+
+
+LINE 16, PAGE 21
+1)	Cause:	The MSCP server received notification of OK to send from a node.  The
+1)		node in question was not flagged as waiting for an OK to send.
+1)	
+1)	Data:	CID - connect ID
+LINE 16, PAGE 19
+2)	Cause:	The MSCP server received notification of OK to send from a node.
+2)		The node in question was not flagged as waiting for an OK to send.
+2)	
+2)	Data:	CID - connect ID
+
+
+LINE 13, PAGE 23
+1)	Action:	If this bug occurs often or is reproducible, set it dumpable and
+1)		submit an SPR along with a dump and instructions on reproducing it.
+1)	
+1)	Data:	NODE - node number
+LINE 13, PAGE 21
+2)	Data:	NODE - node number
+
+
+LINE 20, PAGE 24
+1)	Cause:	A DMA complete interrupt occurred and no commands were found which had
+1)		a matching buffer name. This indicates a software inconsistency.
+1)	
+1)	Data:	CID - connect ID
+LINE 20, PAGE 22
+2)	Cause:	A DMA complete interrupt occurred and no commands were found which
+2)		had a matching buffer name. This indicates a software inconsistency.
+2)	
+2)	Data:	CID - connect ID
+
+
+LINE 31, PAGE 27
+1)	Cause:	The MSCP server received a command with an illegal or unsupported
+1)		operation specified.
+1)	
+1)	Action:	If this bug occurs often or is reproducible, set it dumpable and
+1)		submit an SPR along with a dump and instructions on reproducing it.
+1)	
+1)	Data:	NODE   - node number
+LINE 31, PAGE 25
+2)	Cause:	The MSCP server received a command with an illegal or 
+2)		unsupported operation specified.
+2)	
+2)	Data:	NODE   - node number
+
+
+; PHYMVR.NEW.1 & <MONITOR>PHYMVR.MAC.1 31-Mar-89 2348	PAGE 5
+
+
+
+LINE 15, PAGE 38
+1)		IFE. T1			;[8913] Any error bits set?
+1)		  BUG.(CHK,MSSER0,PHYMVR,SOFT,<IORB done error and error bits 0>,<<T2,IRBERR>>,<
+1)	
+1)	Cause:	An IORB completed with bit IS.ERR set indicating an error. The MSCP
+1)		server could not find any relevent error.
+1)	
+1)	Action:	If this bug occurs often or is reproducible, set it dumpable and
+1)		submit an SPR along with a dump and instructions on reproducing it.
+1)	
+1)	Data:	IRBERR - IORB status word
+1)	>)
+1)		  MOVX T1,ST.CNT	;[8913] Controller error
+1)		ENDIF.			;[8913]
+1)		CALL REVFUL
+LINE 15, PAGE 35
+2)		SKIPN T1		;ANY ERROR BITS SET?
+2)		JRST [BUG.(CHK,MSSER0,PHYMVR,SOFT,<IORB done error and error bits 0>,<<T2,IRBERR>>,<
+2)	
+2)	Cause:	An IORB completed with bit IS.ERR set indicating an error. The MSCP
+2)		server could not find any relevent error.
+2)	
+2)	Data:	IRBERR - IORB status word
+2)	>)
+2)		     MOVX T1,ST.CNT	;CONTROLLER ERROR
+2)		     JRST .+1]
+2)		CALL REVFUL
+
+
+LINE 10, PAGE 48
+1)	Cause:	A send of a message failed for an unexpected reason.  The connection
+1)		will be shut down.
+1)	
+1)	Action:	If this bug occurs often or is reproducible, set it dumpable and
+1)		submit an SPR along with a dump and instructions on reproducing it.
+1)	
+1)	Data:	NODE - node number
+LINE 70, PAGE 43
+2)	Cause:	A send of a message failed for an unexpected reason. The 
+2)		connection will be shut down.
+2)	
+2)	Data:	NODE - node number
+
+
+; PHYMVR.NEW.1 & <MONITOR>PHYMVR.MAC.1 31-Mar-89 2348	PAGE 6
+
+
+
+LINE 7, PAGE 51
+1)	Cause:	A routine was called to unmap a buffer and failed when it should not
+1)		have.
+1)	
+1)	Action:	If this bug occurs often or is reproducible, set it dumpable and
+1)		submit an SPR along with a dump and instructions on reproducing it.
+1)	
+1)	Data:	REASON - error code
+LINE 34, PAGE 45
+2)	Cause:	A routine was called to unmap a buffer and failed when it should 
+2)		not have.
+2)	
+2)	Data:	REASON - error code
+
+
+LINE 10, PAGE 53
+1)	Action:	If this bug occurs often or is reproducible, set it dumpable and
+1)		submit an SPR along with a dump and instructions on reproducing it.
+1)	
+1)	Data:	NODE - node number
+LINE 10, PAGE 47
+2)	Data:	NODE - node number
+

@@ -1,0 +1,30 @@
+REDIT 1(104) COMPARE by user CLYNN, 10-Feb-86 18:59:30
+File 1: CWL:<DEC-6-1-BASE>PHYKNI.MAC.1
+File 2: CWL:<5-4-NET>PHYKNI.MAC.1
+***** CHANGE #1; PAGE 1, LINE 1; PAGE 1, LINE 1
+ ---------------------------------
+;[BBNF.ARPA]REL5:<BBN-5-4-MONITOR>PHYKNI.MAC.3, 19-Nov-84 11:58:43, Edit by RBASCH
+; Don't use KNIN to allocate TIMCNT
+
+***** CHANGE #2; PAGE 18, LINE 4; PAGE 18, LINE 4
+	CHNLGO==KIEPT+KNIRH2*4	;ADDRESS OF FIRST WORD OF KLNI CHANNEL LOGOUT
+
+	SUBTTL	LOCAL STORAGE
+
+RSI	(CHNBAS,0)		;BASE OF CHANNEL BLOCK LIST
+RS	(TIMCNT,KNIN)		;COUNT FOR BROKEN KLIPA
+RS	(PRTSTG,PS.LST)		;PORT STORAGE
+ ---------------------------------
+	CHNLGO==KIEPT+KNIRH2*4	;ADDRESS OF FIRST WORD OF KLNI CHANNEL LOGOUT
+
+	SUBTTL	LOCAL STORAGE
+
+RSI	(CHNBAS,0)		;BASE OF CHANNEL BLOCK LIST
+;;[BBN] Don't use KNIN here, since it shouldn't be defined in PROLOG
+;;	For now, just allocate one word for TIMCNT (code assumes that anyway!)
+;;	Note that TIMCNT can't be moved into STG and added to GLOBS, because
+;;	TIMCNT is also a mask defined in PROLOG
+;;RS	(TIMCNT,KNIN)		;COUNT FOR BROKEN KLIPA
+RS	(TIMCNT,1)		;COUNT FOR BROKEN KLIPA
+RS	(PRTSTG,PS.LST)		;PORT STORAGE
+

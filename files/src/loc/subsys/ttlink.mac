@@ -1,0 +1,1192 @@
+;CU:<SY.BILL>TTLINK.MAC.39, 19-Oct-83 17:16:54, EMACSed by Sy.Bill
+;[16]	Allow BREAKS to be passed over connected line.
+;PS:<KERMIT>TTLINK.MAC.16, 19-Sep-83 14:00:19, Frank
+;[15] Allow TTLINK to run under batch by not trying to STIW on ^C.
+;CU:<SY.BILL>TTLINK.MAC.6, 14-Mar-83 07:32:31, EMACSed by Sy.Bill
+;[14] Fix status of logging information.  Always print filename even
+;    if toggled off, and print the value of toggle in parens.
+;PS:<KERMIT>TTLINK.MAC.14,  9-Feb-83 09:40:26, Frank
+; Shut a couple small timing windows.
+;PS:<KERMIT>TTLINK.MAC.13,  8-Feb-83 17:08:38, Frank
+; Small fix to parity routine.  Don't set ASSFLG until after ASND.
+;PS:<KERMIT>TTLINK.MAC.12,  7-Feb-83 19:01:51, Frank
+; Don't assign line if already assigned.  Don't deassign if we didn't
+; assign it ourselves.  This keeps the dialer daemon happy -- it will
+; hang up the line if we deassign it.
+;PS:<KERMIT>TTLINK.MAC.11,  7-Feb-83 11:35:00, Frank
+; Add SPACE parity, change INFO command to STATUS, clean up JFNs better.  
+;PS:<KERMIT>TTLINK.MAC.10,  4-Feb-83 17:42:16, Frank
+; Remove timeout, it was slowing things down too much.  Just use more SIBEs.
+;PS:<KERMIT>TTLINK.MAC.9,  3-Feb-83 18:41:39, Frank
+; Add timout so you don't hang if TTLINK'd to an inactive line.
+;PS:<KERMIT>TTLINK.MAC.8,  3-Feb-83 12:46:39, Frank
+; Version 2: switchify CONNECT command, add logging capability.
+;
+	title TTLINK
+$ver=2
+$ed=^d15
+;
+; Connect to another computer over a TTY line.  Inspired by TTY function
+; of MRC's TELNET.  Differs from TELNET in that all parameters and settings
+; can be specified on a single command line (making it easy for another
+; program -- like an autodialer controller -- to run this program in an
+; inferior fork with any desired parameters), and it runs in a single fork
+; rather than 2.  Also, it does SINs and SOUTs whenever it can.
+;
+; F. da Cruz, CUCCA, Jan 83
+
+	search monsym,macsym,cmd
+	.require sys:macrel,mac:cmd
+
+	subttl symbol and macro definitions
+
+e=<d=<c=<b=<a=1>+1>+1>+1>+1	; ACs
+p=17				; Stack pointer.
+xx=10				; Typein flag/counter.
+q=11				; Miscellanous usage...
+defesc==31			; Default escape character is CTRL-Y.
+defbrk==3			;[16] default nulls to send on break
+define erret <
+	erjmp [	jserr
+		ret ]
+>
+
+    	subttl Data
+
+CMDSTG				; CMD package expands this for itself
+pdlsiz==100			; Stack
+pdl:	block pdlsiz		;  ...
+noctlc:	0			;[15] -1 = no ^C capa, 0 = ^C capa enabled ok.
+port:	0			; TTY number for link.
+ports:	block 2			; String version of TTY number.
+xport:	0			; Parsed, but not confirmed, port.
+duplex:	0			; Duplicity (full or half)
+dupstr:	block 2			; String representation of above.
+xdupl:	0			; Parsed, but not confirmed, duplicity.
+escape:	0			; Escape character.
+escs:	block 2			; String version of above for comnd.
+xesc:	0			; Esc char parsed but not confirmed.
+parity:	0			; Parity
+parstr:	block 2			; String representation of parity.
+xpar:	0			; Parsed but not cfm'd parity.
+logjfn:	0			; Log file JFN.
+xlogj:	0			; Parsed, but not cfm'd, log file jfn.
+xspd:	0			;[16] parsed, but not cfm'd SPEED:
+spd:	0			;[16] setting from SPEED:
+xbrk:	0			;[16] parsed, but not cfm'd BREAK:
+brk:	0			;[16] nulls to send on BREAK key
+savjfn:	0			; Place to save log JFN.
+timout:	0			; Timeout flag.
+forkh:	0			; Handle for inferior fork.
+pname:	block 2			; Program name
+capas:	0			; Enabled process capabilities.
+tiword:	0			; Terminal interrupt word.
+ttymod:	0			; TTY mode word.
+lnkjfn:	0			; JFN for link TTY line.
+lnkstr: block 3			; Area to construct "TTYnn:" string.
+ttyjfn:	0			; JFN for controlling terminal.
+cclflg:	0			; Flag for entered with command line args.
+assflg:	0			; Flag for whether we did an ASND.
+xitflg:	0			; Exit flag.
+job:	0			; Job number of who has line assigned.
+count:	0			; Character count for...
+bufptr:	0			;  Pointer to...
+bufsiz=^d100			;  Size of...
+buf:	block bufsiz		; String buffer.
+	0
+
+; Interrupt data area
+
+levtab:	pc1
+	pc2
+	pc3
+pc1:	0
+pc2:	0
+pc3:	0
+	
+chntab: phase 0			; Channel table
+typchn:	1,,typint
+timchn:	2,,timint
+brkchn:	1,,brkint
+	repeat <^d36>,<0>
+	dephase
+
+	subttl	Main Code
+
+entvec:	jrst start		; Start address
+	jrst start		; Reenter address
+versio:	byte(3)0(9)$ver(6)0(18)$ed ; Version number
+evlen=.-entvec
+
+; Initialization
+
+start:	RESET%			; Reset...
+	move p, [pdlsiz,,pdl]	; Set up stack.
+
+; Get current job & tty settings.
+
+	movx a, .fhslf		; Get my fork capas
+	RPCAP
+	movem c, capas		; and save them
+	hrrzi a, .fhjob		; OK, now get TTY interrupt word for this job.
+	RTIW			; 
+	movem b, tiword		; Save it.
+	movei a, .priou		; Get TTY mode word.
+	RFMOD
+	movem b, ttymod		; Save it.
+
+; Initialize interrupt system
+
+	movei a, .fhslf		; For this fork & all inferiors
+	move b, [levtab,,chntab] ; here is where interrupt tables are.
+	SIR
+	EIR			; Enable interrupts.
+
+; Set defaults for TTLINK.
+
+	movei a, defesc		; Set up the 
+	movem a, escape		;  default escape character.
+	setzm xitflg		; Not exiting (exciting?) yet.
+	setzm forkh		; No Exec fork yet.
+	setzm port		; No default link port at first
+	setzm ports		; and no string for it.
+	setom lnkjfn		; Link JFN not yet open.
+	setom logjfn		; Log file not yet open.
+	setom savjfn		;  ...
+	setom ttyjfn		; Nor controlling tty.
+	setzm parity		; No parity.
+	setzm duplex		; Full duplex.
+
+; See if we have any command line arguments (ccl).
+
+ccl:	setzm cclflg		; Assume no command arguments.
+	movx a, .rsini		; Check to see.
+	RSCAN%
+	 erjmp ask		; On any error...
+	movx a, .rscnt
+	RSCAN%
+	 erjmp ask		;  ...
+	jumpe a, ask		;  or nothing in buffer, go into dialog.
+
+; We have a rescan argument.  Eat our name and look for arguments.
+
+	setom cclflg		; Set the rescan (ccl) flag.
+	call cmdini		; Initialize the command parser.
+	prompt <>		; Issue the null prompt.
+	movei a, [flddb. (.CMKEY,,<[exp <1,,1>,<[asciz/TTLINK/],,0>]>)]		
+	call rflde		; Parse the field, let me handle the error.
+	 jrst [ setzm cclflg
+		jrst ask ]	; If any error, assume no rescan.
+	movei a, [flddb. .cmcfm] ; See what follows; look for CRLF.
+	call rflde		;  ...
+	 jrst  parse1		; Not at end, go parse the actual argument.
+	setzm cclflg		; We parsed a CRLF, so no rescan.
+
+; No command line args.  Do dialog.
+
+ask:	call cmdini		; Init command parser.
+parse:	prompt (TTLINK>)	; Give prompt.
+parse1:	movei a, [flddb. .cmkey,,cmdtab] ; Get keyword.
+	skipe cclflg		; If entered with command line args,
+	 jrst [	call rflde	;  handle errors by typing
+		 jrst [	tmsg <?Eh> ;  what the Exec would type,
+			jrst halt ] ; and halting.
+		jrst parse2 ]
+	call rfield		; Otherwise, let CMD package handle errors.
+
+parse2:	hrrz a, (b)		; Find out which command was typed,
+	call (a)		; and go where it says.
+	skipn xitflg		; Exit?
+	 skipe cclflg		;  No, but entered by ccl?
+	 jrst halt		;  One of those, so halt.
+	jrst parse		; Neither, so go prompt again.
+
+halt:	call deass		; Clean up JFNs & deassign link tty.
+	HALTF%			; Halt.
+	setzm cclflg		; If continued, turn these off
+	setzm xitflg		;  ...,
+	jrst ask		;  and go start again.
+
+cmdtab:	4,,4
+	[asciz/CONNECT/],,.conn
+	[asciz/EXIT/],,.exit
+	[asciz/HELP/],,.help
+	[asciz/STATUS/],,.stat
+
+
+; EXIT command...
+
+.exit:	noise (from TTLINK)	; Issue noise.
+	confrm			; Get confirmation.
+	setom xitflg		; Turn on the exit flag.
+	ret			; And return.
+
+; STATUS command...
+
+.stat:	noise (of tty link)	; Issue noise.
+	confrm			; Get confirmation.
+
+.stat2:	tmsg <
+Line:	>
+	movei a, .priou		; Tell port number.
+	skipg b, port
+	 jrst [	tmsg <None>
+		jrst .stat3 ]
+	movei c, 8
+	NOUT%
+	 nop
+.stat3:	tmsg <
+Duplex:	>
+	hrroi a, [asciz\Half\]	; Duplex.
+	skipn duplex
+	 hrroi a, [asciz\Full\]
+	PSOUT
+	tmsg <
+Escape:	CTRL->
+	move a, escape		; Escape character
+	addi a, "A"-1
+	PBOUT
+	tmsg <
+Parity:	>
+	move d, parity		; Parity
+	hrroi a, @[[asciz\None\]
+		   [asciz\Mark\]
+		   [asciz\Even\]
+		   [asciz\Odd\]
+		   [asciz\Space\]](d)
+	PSOUT
+	tmsg <
+Log:	>
+	skipg b,logjfn		;[14] are we logging?
+	 skipl b,savjfn		;[14] or toggled off?
+	IFSKP.			;[14] No,
+	 tmsg <None>		;[14] so print that...
+	ELSE.			;[14] otherwise, logging
+	 movei a, .priou	;[14] so print the Log file
+	 setzb c,d		;[14] default format, no prefix
+	 JFNS			;[14] output it
+	  IFJER.		;[14] invalid JFN?
+	   tmsg <None>		;[14] yes, print this
+	  ELSE.			;[14] otherwise proceed with toggle status
+	   hrroi a,[asciz/ (on)/] ;[14] assume toggled on
+	   skipg logjfn		;[14] is that correct?
+	    hrroi a,[asciz/ (off)/] ;[14] no, use other message
+	   PSOUT		;[14] output it
+	 ENDIF.			;[14] 
+	ENDIF.			;[14]
+;[16] Begin addition
+	tmsg <
+Speed:	>
+	skipg b,spd
+	jrst [	tmsg <None specified>
+		jrst .stat4 ]
+	movx a,.priou		; tell speed
+	movx c,^D10
+	NOUT%
+	 nop
+	tmsg <
+Break-nulls:	>
+	skipg b,brk
+	 movx b,defbrk
+	movx a,.priou
+	movx c,^D10
+	NOUT%
+	 nop
+.stat4:	tmsg <
+>
+;[16] End addition
+
+	ret
+
+; HELP command...
+
+;[16] Redo help messgae, storing as literals makes it very hard to
+;[16] add something.
+
+hlpms0:	ascii\
+TTLINK -- Connect to a remote host over a TTY line.  Commands:
+
+CONNECT (TO TTY) <octal-line-number> <optional-switches>
+  Switches:
+
+  /DUPLEX: FULL or HALF.  If FULL, remote host echoes; if HALF, local host.
+  /PARITY: NONE, MARK, SPACE, EVEN, or ODD.
+  /LOGFILE: Name of file for logging transcript of remote session.
+  /ESCAPE:n Octal value of an ASCII control character to be used as
+             the escape character.  Examples: 1=CTRL-A, 32=CTRL-Z.
+     ESCAPE character arguments are:
+       (blank) - Nothing (null command)
+          C - Close Connection
+          S - Show Status of Connection
+          P - PUSH to new Exec
+          Q - Quit logging
+          R - Resume logging
+          ? - Help
+	 \
+
+hlpms1:	ascii \ to host
+ /SPEED:num  The argument is a decimal number which is the current
+	      speed of the line, usually 300 or 1200.  This switch is
+	      used to enable the transfer of a BREAK, and must be
+	      specified in order for BREAK simulation to work.  See
+	      the help file for more information.
+ /BREAK-NULLS:num The argument to this switch indicates how many NULL (ASCII
+	      code 0) characters are to be sent over the line during a break
+	      sequence. See the help file for more information.
+
+    Initial defaults for CONNECT are FULL DUPLEX, escape character = CTRL-Y,
+    and PARITY NONE.  No initial default for line or logfile.  Defaults for
+    subsequent CONNECT commands become whatever was specified in the most
+    recent CONNECT command. 
+
+STATUS	Display current line number, duplex, log file, and escape character.
+HELP    Print this message.
+EXIT    If you continue, previous defaults are preserved.
+
+Command line arguments are accepted.
+
+\
+
+.help:	noise (about TTLINK)
+	confrm
+	hrroi a,hlpms0
+	PSOUT
+	move b, escape
+	call echo
+	hrroi a, [asciz\ - Send \]
+	PSOUT
+	move b, escape
+	call echo
+	hrroi a,hlpms1
+	PSOUT
+	ret
+
+; CONNECT command...
+;
+; Defaults for each setting are set dynamically each time.
+
+
+.conn:	setzm xpar		; Initialize things we might parse...
+	setzm xdupl
+	setzm xesc
+	setom xlogj
+
+	noise (to TTY number)	; Get TTY line to connect thru.
+	skipn port		; Do we already have a port?
+	 jrst .conn1		;  No, user must specify one.
+	hrroi a, ports		; Yes, so make it the default.
+	move b, port
+	movei c, 8
+	NOUT
+	 erjmp .conn1
+	setz c,
+	idpb c, a
+	movei a, [flddb. .cmnum,,8,,<x>] ; Stuff dynamic default into fdb.
+	hrroi b, ports
+	movem b, .cmdef(a)
+	skipa
+.conn1:  movei a, [flddb. .cmnum,,8] ; Get TTY number to use, no default.
+	call rfield		; Parse octal line number.
+	movem b, xport		; Save in temporary place, till confirmation.
+
+.conn2:	noise (switches)	; Ask for any switches, or confirmation.
+.conn3:	movei a, [flddb. .cmcfm,,,,,[
+		flddb. .cmswi,,switab]]
+	call rfield
+	ldb c, [pointr (.cmfnp(c),cm%fnc)] ; Get function code.
+	cain c, .cmcfm		; Confirmation?
+	 jrst doconn		;  Yes, go do the command.
+	move a, (b)		; Switch, see which one.
+	call (a)		; Go handle it.
+	jrst .conn3		; Go back for more.
+
+switab:	6,,6			; Switch table.
+	[asciz/BREAK-NULLS:/],,.brk ;[16] set count of null seq on break
+	[asciz/DUPLEX:/],,.dup
+	[asciz/ESCAPE:/],,.esc
+	[asciz/LOGFILE:/],,.log
+	[asciz/PARITY:/],,.par
+	[asciz/SPEED:/],,.spd	;[16] set speed for break
+
+;... CONNECT switch parsing.
+
+;[16] Begin addition
+
+.brk:	movei a, [flddb. .cmnum,cm%sdh,^D10,
+		   <count of nulls to send on BREAK>,<3>]
+	call rfield
+	movem b,xbrk		; save the value
+	ret
+
+.spd:	movei a, [flddb. .cmnum,cm%sdh,^D10,
+		   <speed of line>,<300>]
+	call rfield
+	movem b,xspd
+	ret
+
+;[16] end addition
+
+; /DUPLEX:
+
+.dup:	move a, [asciz/FULL/]	; Set up current default.
+	skipe duplex
+	 move a, [asciz/HALF/]
+	movem a, dupstr
+	movei a, [flddb. .cmkey,,dpxtab,,<FULL>]
+	hrroi b, dupstr
+	movem b, .cmdef(a)	; Stuff default into function desc block.
+	call rfield
+	hrrz a, (b)
+	movem a, xdupl		; Save temporarily.
+	ret
+
+
+; /ESCAPE:
+
+.esc:	movei b, [flddb. (.cmnum,cm%sdh,8,<Octal ASCII code>,<0>)]
+	move d, b		; Save this for a sec...
+	move a, [point 7, escs]	; Make default string from current value.
+	movem a, .cmdef(b)	; Stuff pointer to it into fdb...
+	move b, escape
+	movei c, 8
+	NOUT
+	 nop
+	setz c,			; Terminate the string.
+	idpb c, a
+	move a, d		; Get fdb back.
+	call rfield		; Now parse.
+	cail b, 1		; They typed an octal number,
+	 caile b, 37		;  but is it in range?
+	 jrst [	tmsg <
+?Escape character must be an ASCII value between 1 and 37 (octal)> ; No.
+		jrst cmder1 ]	; This lets them type ^H for command retry.
+	movem b, xesc		; In range, stash it away and go on.
+	ret
+
+; CONNECT switch parsing, cont'd
+
+
+; /PARITY:
+
+.par:	move a, parity		; Set dynamic default.
+	move a, [asciz/NONE/
+		asciz/MARK/
+		asciz/EVEN/
+		asciz/ODD/
+		asciz/SPACE/](a)
+	movem a, parstr
+	setzm parstr+1
+	movei a, [flddb. .cmkey,,partab,,<NONE>]
+	hrroi b, parstr
+	movem b, .cmdef(a)	; Stuff default into fdb.
+	call rfield		; Parse.
+	hrrz a, (b)
+	movem a, xpar		; Save temporarily.
+	ret
+
+
+; /LOGFILE:
+
+.log:	move a, xlogj		; Release any accumulated JFNs
+	RLJFN
+	 nop
+	movei a, [flddb. .cmofi] ; Parse an output filespec.
+	call rfield
+	move q, b		; Save it for a sec while we check it.
+	move a, b		; What device?
+	DVCHR			; Make sure it's a disk.
+	and b, [dv%typ]		; We don't want them logging to, say...
+	jumpn b, [tmsg <
+?Invalid device for logging>
+		jrst cmder1 ]	; ...the link tty!
+	movem q, xlogj		; OK, it's on a disk.
+	ret
+
+; Command all parsed, now make the connection.
+
+doconn:	GJINF			; Make these real...
+	camn d, xport		; Check for valid port.
+	 jrst [ tmsg <
+?Can't CONNECT to your own line!>
+		ret ]
+	skipg a, xport
+	 jrst [	tmsg <
+?TTY number must be greater than 0>
+		ret ]
+	movem a, port
+
+	skiple a,xbrk		;[16] count of nulls to send on BREAK
+	 movem a,brk		;[16] save it
+	skiple a,xspd		;[16] speed to restore line to after BREAK
+	 movem a,spd		;[16] save it also
+	skiple a, xpar		; Parity
+	 movem a, parity
+	skiple a, xdupl		; Duplex.
+	 movem a, duplex
+	skiple a, xesc		; Escape character.
+	 movem a, escape
+	skipg b, xlogj		; Log file jfn.
+	 jrst docon2		;  They didn't give one, so do nothing.
+	skipg a, logjfn		; They did, but did we already have one?
+	 jrst docon1		; 
+	cain a, (b) 		; Would you believe the monitor sometimes
+	 jrst docon1		;  gives you the SAME JFN!!!???
+	RLJFN			; We had one already!  Release its handle
+	 ejserr			;  before going on to open new one.
+docon1:	movem b, logjfn		; Save new JFN.
+
+docon2:	call assign		; Now assign new line
+	 ret			;  Oops, failed, give up.
+	call conn		; OK, connect to it.
+	ret			; Get back when they escape & close.
+
+dpxtab:	2,,2			; DUPLEX keywords.
+	[asciz/FULL/],,0
+	[asciz/HALF/],,1
+
+partab:	5,,5			; PARITY keywords.
+	[asciz/EVEN/],,2
+	[asciz/MARK/],,1
+	[asciz/NONE/],,0
+	[asciz/ODD/],,3
+	[asciz/SPACE/],,4
+
+	subttl TTY assign and deassign
+
+assign:	setom job		; Assume nobody has the device.
+	move a, port		; Form device designator.
+	movei a, .ttdes(a)	; 
+	DVCHR			; Check to see if it's already assigned.
+	 erjmp asser1
+	hlre a, c		; Who has it?
+	movem a, job		; Job number of who has it, or -1 (or -2).
+	GJINF			; Get my own job number.
+	setzm assflg		; Assume I don't have to assign it.
+	camn c, job		; If I had it assigned already,
+	 jrst assig2		;  just go get a JFN on it.
+	move a, port		; Form device designator again,
+	movei a, .ttdes(a)	;  and...
+	ASND			;  give it a try.
+	 erjmp asser1		; Uh oh, can't assign it.
+	setom assflg		; Assigned it.  Set this flag to remember.
+
+assig2:	skiple lnkjfn		; It's mine.  Now get a JFN on it
+	 jrst assig3		;  (unless I already have one).
+	move a, [point 7, lnkstr] ; Init pointer for tty filespec string.
+	move b, [asciz/TTY/]	; Construct TTYn: string.
+	movem b, lnkstr		; First the TTY part.
+	movei b, 3		; Point past it.
+	adjbp b, a	
+	move a, b
+	move b, port		; Convert TTY number to
+	movei c, 8		; octal string,
+	NOUT			; and append it.
+	 erret
+	movei b, ":"		; Append colon,
+	idpb b, a
+	setz b,			; terminate with null.
+	idpb b, a
+	movx a, gj%sht		; Get a JFN on it.
+	hrroi b, lnkstr
+	GTJFN
+	 erret
+	movem a, lnkjfn		; Save the JFN.
+	movx b, fld(^d8,of%bsz)!of%rd!of%wr
+	OPENF			; Open it in 8-bit mode.
+	 erjmp asserr		;  Give nice message if can't.
+
+assig3:	skiple ttyjfn		; Already got one?
+	 jrst assigx		;  Yes, don't need another.
+	movx a, GJ%SHT		; Also, get a JFN on controlling TTY.
+	move b, [point 7, [asciz /TTY:/]]
+	GTJFN
+	 erret
+	movem a, ttyjfn		; Save it.
+	movx b, fld(^d8,of%bsz)!of%rd!of%wr
+	OPENF			; Open it in 8-bit mode too.
+	 erret
+assigx:	retskp			; All OK.
+
+; Get here if error assigning link tty.
+
+
+asserr:	movei a, .fhslf		; Got error trying to open link tty.
+	GETER%
+	hrrzs b
+	caie b, opnx7		; Somebody else has it?
+	 jrst [	jserr		;  No, give standard message.
+		jrst asserx ]
+
+asser1:	tmsg <
+?Line >
+	movei a, .priou		; Tell who has it.
+	move b, port		; Port number...
+	movei c, 8
+	NOUT
+	 erjmp asserx
+	tmsg < in use by job >
+	movei a, .priou		; Job number...
+	move b, job
+	movei c, ^d10
+	NOUT
+	 erjmp asserx
+	tmsg <, user >
+	move a, b
+	hrroi b, c
+	movei c, .jiuno
+	GETJI
+ 	 erjmp asserx
+	movei a, .priou
+	move b, c		; User...
+	DIRST
+ 	 erjmp asserx
+	ret
+
+asserx:	tmsg <???
+>
+	ret
+
+	subttl TTY setup and restore
+
+
+; Restore TTY parameters, turn off interrupts, and close any log file.
+
+fixtty:	move a, ttyjfn		; Restore mode word.
+	move b, ttymod
+	SFMOD			; Better do both of these...
+	STPAR
+	movx a, .fhjob		; Put tty back the way it was.
+	move b, tiword		; put the terminal interrupt word
+	skipn noctlc		;[15] (not if we don't have ^C capa)
+	 STIW			; back the way it was
+	 ejserr
+	CIS			; Clear any pending interrupts.
+	movei a, .ticti		; Deassign terminal interrupt code.
+	DTI
+	movei a, .fhslf		; Deactivate interrupt channels.
+	movx b, <1b<typchn>+1b<timchn>>
+	DIC
+	movx a, .fhslf		; Put the process capabilities
+	move c, capas		; back the way they were.
+	EPCAP
+	 ejserr
+
+; Take care of the log file, too.  We want to close it, but leave the JFN
+; around in case the logging is resumed, the program continued, etc.
+
+	skipg a, logjfn		; Is a log file open?
+	 ret			;  No, done.
+	hrli a, (co%nrj)	; Yes, close it but don't release JFN.
+	CLOSF%			;  ...
+	 erjmp [hrrzs a		; If error, check what it was.
+		cain a, clsx1	; Already closed?
+		 ret		;  Yes, ignore.
+		jserr		; No, give message, but continue.
+		ret ]
+	ret
+
+
+; Deassign and close the TTY link.
+
+deass:	skiple a, lnkjfn	; If nothing there,
+	 CLOSF			; Close the JFN.
+	 ejserr			; Complain on errors, but continue.
+	setom lnkjfn		; Remember it's closed.
+	skipn assflg		; Did we assign it ourselves?
+	 jrst deass2		;  No, so don't deassign it either.
+	move a, port		; Yes, deassign the device.
+	movei a, .ttdes(a)
+	RELD
+	 ejserr
+
+deass2:	skiple a, ttyjfn	; Close JFN on TTY: too.
+	 CLOSF
+	 ejserr
+	setom ttyjfn
+
+	ret
+
+; Set up TTY for linking, and open any logging file.
+
+
+ttyini:	move a, ttyjfn		; Turn off terminal page mode and data mode.
+	move b, ttymod
+	txz b, tt%pgm+tt%dam
+	SFMOD%
+	 erret
+	STPAR%
+	 erret
+	movx a, .fhjob		; Turn off ^C, ^O, ^T interrupts for whole job.
+	move b, tiword
+	tdz b, [1b<.ticcc>+1b<.ticco>+1b<.ticct>]
+	skipn noctlc		;[15] But do we have ^C capability?
+	 STIW			;[15] Can't do STIW if we don't...
+	 erret
+	move a, [.ticti,,0]	; Interrupt on channel 0 for any typein.
+	ATI
+	move a,[.ticbk,,brkchn]	;[16] break character and channel
+	ATI
+	movei a, .fhslf
+	movx b,1b<typchn>+1B<brkchn> ;[16] type-in and break chans
+	AIC
+
+	skipg a, logjfn		; Logging?
+	 ret			;  No.
+	movx b, <fld(7,of%bsz)+of%app> ; Yes, open for appending.
+	OPENF
+	 erjmp [hrrzs a		; Got an error, get code.
+		cain a, opnx1	; Already open?
+		 ret		;  Ignore the error.
+		setzm logjfn	; Real error, disable logging.
+		tmsg <
+?Error opening log file>
+		jserr
+		ret ]
+	ret
+
+	subttl Connect
+
+
+conn:	movx a, .fhslf		; Turn on CTRL-C capability.
+	move c, capas
+	txo c, sc%ctc
+	setzm noctlc		;[15] (Assume we can)
+	EPCAP
+	RPCAP			;[15] Read them back.
+	tlnn c, (sc%ctc)	;[15] Did we?
+	 jrst [	tmsg <
+%Can't set CTRL-C capability, continuing...
+>				;[15] Can't, must be running
+		setom noctlc	;[15] in batch or something, remember, but
+		jrst .+1 ]	; forge ahead anyway...
+
+	call ttyini		; OK to go on, set up the tty.
+
+	tmsg <[TTLINK: Connecting to remote host over > ; Type message.
+	hrroi a, lnkstr		; String for link tty device name.
+	PSOUT
+	tmsg <, type >
+	movei a, 74		; Left pointy bracket...
+	PBOUT
+	tmsg <CTRL->
+	move a, escape		; (tell escape character)
+	addi a, "A"-1
+	PBOUT
+	movei a, 76		; ...Right pointy bracket
+	PBOUT
+	tmsg <C to return.]
+>
+	seto xx,		; Start out assuming some typeahead.
+	move a, lnkjfn		; Send a CR down the line to get things started
+	movei b, .chcrt
+	call setpar		;  (use desired parity)
+	BOUT
+	 erret			; Catch any errors here!
+
+	;... fall thru to main loop.
+
+	subttl Main I/O Loop
+
+more:	jumpn xx, more1		; Any typein?
+	move a, lnkjfn		; No, just wait for a character from the link.
+	BIN			; This is the only place we hang...
+morex:	txz b, 200		; Strip any parity.
+	move a, ttyjfn		; Type it out on the tty
+	BOUT			;  ...
+	skiple a, logjfn	; If logging,
+	 BOUT			;  put in the log too.
+	jrst more		; And go do it again.
+
+more1:	setz xx,		; Clear the typein flag.
+	move a, ttyjfn		; Allegedly some typein -- check to be sure.
+	SIBE			; Anything there?
+	 skipg c, b		; Yes, how many chars?
+	 jrst more		;  None, oh well...
+	move q, c		; Something there, save how many.
+	move b, [point 8, buf]	; Read them into this buffer.
+	move d, escape		; Terminate on the escape character, or
+	SIN			;  the count provided by SIBE.
+	sub q, c		; Subtract the number SIN didn't get.
+	movem q, count		; Remember how many characters we got.
+	setzb c, e		; Make a zero, and assume esc not typed.
+	ldb d, b		; Check the last character in the string.
+	trz d, 200		; Strip any parity.
+	camn d, escape		; Escape character?
+	 jrst [	seto e,		;  It was, flag that we saw it.
+		sos count	;  Account for it.
+		jrst .+2 ]
+	 ibp b			;  No, point after it.
+	dpb c, b		; Terminate string, zeroing out esc char.
+
+more2:	move b, [point 8, buf]	; Point to what was typed.
+	move a, lnkjfn		; Now send user's input to remote.
+	skipn parity		; Or doing parity?
+	 skipe duplex		; Local echo?
+	 jrst more3		;  One of those.
+	setzb c, d		; No, just send the string.
+	SOUT
+	jrst more5
+	
+more3:	move c, [point 8, buf]	; Must do one character at a time.
+	move q, count		; Loop counter.
+more4:	sojl q, more5		; Any characters left?
+	ildb b, c		; Yes, get next one.
+	skipe duplex		; Echoing locally?
+	 call echo		;  Yes, do that.
+	call setpar		; Set the parity bit.
+	BOUT			; Send it.
+	jrst more4		; Go back for next.
+
+more5:	jumpe e, more1		; If esc char not typed, continue main loop.
+
+	;... (fall thru to escape char handler)
+
+; Escape character was typed -- Get argument.
+
+doesc:	move a, ttyjfn
+	BIN			; Escape char was typed, get argument.
+	trz b, 200		; Strip any parity bit.
+	cail b, "a"		; Uppercase any letter.
+	 caile b, "z"
+	 skipa	
+	 subi b, 40
+	cain b, " "		; The null command.
+	 jrst more1		;  ...
+	cain b, "S"		; Status query
+	 jrst [	call .stat2
+		jrst more1 ]
+	cain b, "C"		; Close connection.
+	 jrst [	call fixtty	; Put tty back the way it was...
+		tmsg <
+[TTLINK: Connection Closed.  Back at DEC-20.]
+
+>
+		ret ]
+	cain b,"B"		;[16] is it a break?
+	 jrst [ call brkin0	;[16] yes, handle it
+		jrst more1 ]	;[16] then continue
+	cain b, "Q"		; Quit logging
+	 jrst [	call qlog
+		jrst more1 ]
+	cain b, "R"		; Resume logging
+	 jrst [ call rlog
+		jrst more1 ]
+	cain b, "?"		; Help
+	 jrst [	hrroi a, [asciz\
+B - Send break
+C - Close connection
+S - Status
+P - Push to Exec
+Q - Quit logging
+R - Resume logging
+? - This message
+Type the escape character twice to send one copy of it to the remote host.
+
+Escape character is \]
+		PSOUT
+		move b, escape	; Type the escape character.
+		call echo
+		tmsg <
+>
+		jrst more1 ]
+	camn b, escape		; Send escape character
+	 jrst [	skipe duplex	; If local echo
+		 call echo	;  take care of that.
+		call setpar	; Add desired parity to it.
+		move a, lnkjfn	; Send it out the link.
+		BOUT		; 
+		jrst more1 ]
+	cain b, "P"		; PUSH to Exec
+	 jrst [ call push
+		jrst more1 ]
+	movei a, 7		; Anything else, just beep
+	PBOUT
+	jrst more1
+
+	subttl Echo a character.
+
+; Need to do this because having tty open in binary mode overrides ccoc
+; settings.  b contains character to echo.
+
+echo:	saveac<a,b,c>		; Must save all ACs.
+
+	trz b, 200		; Strip any parity.
+	move c, b		; Make a copy of the character.
+	caig c, 6		; Control char, null thru ^F.
+	 jrst echo1
+	cain c, 13		; ^K
+	 jrst echo1
+	cail c, 16		; ^N-^Z
+	 caile c, 32
+	 skipa
+	 jrst echo1
+	cail c, 34		; ^\-^_
+	 caile c, 37
+	 skipa
+	 jrst echo1
+	cain c, 33		; ESC
+	 jrst [	movei b, "$"	; Echo as dollar sign
+		jrst echo2 ]
+	cain c, 177		; DEL
+	 jrst [	seto c,		; So it echoes as ^? (100-1=77="?")
+		jrst echo1 ]
+	move b, c		; Anything else, just type it.
+	jrst echo2
+
+echo1:	skipg a, ttyjfn		; Echo it on the tty.
+	 movei a, .priou
+	movei b, "^"		; Print an uparrow
+	BOUT
+	skiple a, logjfn	; Logging?
+	 BOUT			;  Yes, put uparrow there, too.
+	movei b, 100(c)		; Convert to char to uncontrollified version.
+echo2:	skipg a, ttyjfn		; Back to TTY.
+	 movei a, .priou
+	BOUT			; Print the character itself.
+	skiple a, logjfn	; Logging?
+	 BOUT			;  Yes, print it in log, too.
+	ret
+
+	subttl PUSH Command
+
+
+push:	call fixtty		; Put in normal mode.
+	seto a,			; Save subsystem & program names...
+	move b, [-2,,pname]
+	movei c, .jisnm
+	GETJI
+	 nop
+	tmsg <
+[TTLINK: PUSHing to new EXEC.]
+[POP from Exec to return to remote connection.]
+>
+	skipe a, forkh		; Have one already?
+	 jrst [	txo a, sf%con	;  Yes, just continue it.
+		SFORK
+		 erjmp .+1	;  Unless it disappeared...
+		jrst push3 ]
+	movx a, cr%cap		; No, create a fork.
+	CFORK
+	 ejserr
+	movem a, forkh
+	move b, capas		; Mask capas with this fork's enabled ones.
+	txz b, sc%log		; Turn off logout capability.
+	txo b, sc%gtb		; Turn on GETAB capability (must have it...)
+	move c, b
+	EPCAP
+	 nop
+	movx a, gj%old+gj%sht	; Get JFN on the Exec.
+	hrroi b, [asciz/SYSTEM:EXEC.EXE.0/]
+	GTJFN
+	 ejserr
+	move d, a		; Save the JFN for a sec.
+
+	hrl a, forkh		; Get the Exec into the fork.
+	GET
+	 ejserr
+	move a, d		; Release the Exec's JFN, don't need it.
+	RLJFN
+	 nop
+	move a, forkh
+push2:	setz b,			; Start up the fork.
+	SFRKV
+	 ejserr
+push3:	WFORK			; Wait for it to halt.
+tmsg <
+[TTLINK: Back at remote host]
+>
+	dmove a, pname		; Put program/subsys name back.
+	SETSN
+	 nop
+	call ttyini		; Put back in talk mode.
+	ret
+
+	subttl Interrupt handlers
+
+
+typint:	push p, a		; Get a work AC.
+	seto xx,		; Set flag saying we have typein.
+	hrrz a, pc1		; See what we were up to.
+	cail a, more		; Setting up
+	 caile a, morex		;  or executing BIN from link tty?
+ 	 jrst [	pop p, a	; No,
+		 DEBRK ]	;  just continue whatever we were doing.
+	hrri a, more1		; Yes, so we want to go back here.
+	hll a, pc1		; Get the PC flags.
+	txo a, 1b5		; Set user mode bit to escape from JSYS.
+	movem a, pc1		; Replace the PC.
+	pop p, a		; Restore the AC.
+	DEBRK			; And resume.
+
+
+;[16] Begin addition
+
+; BRKINT - Terminal interrupt reached when a BREAK is typed.  This
+;	routine will cause a framing error over the TTY line -- a
+;	framing error is often equivalent to a BREAK (which is actually
+;	a framing error consisting only of nulls). The framing error is
+;	induced by setting the line speed to a low value and sending a 
+;	number of nulls.  Because the line speed cannot be properly read
+;	by TOPS-20 the user must first specify their speed with the SPEED
+;	switch.  The BREAK-NULLS switch can also be used to say how many 
+;	nulls are to be sent down the line.  The BREAK-NULLS switch is 
+;	useful because different SPEEDs will require a different number 
+;	of NULLs to be sent -- in some cases a large setting for this switch
+;	will cause multiple breaks to be sent.  Since this value, and indeed
+;	this whole mechanism, is dependant on the connected machine type,
+;	this paramter is left to the user.
+
+brkint:	call brkin0		; call the work routine
+	DEBRK			; and continue
+
+brkin0:	saveac <a,b,c,d>	; save all used registers
+	skipg spd		; do we know about a speed?
+	 jrst brkin2		; no, give a message
+	move a,lnkjfn		; get the output terminal jfn
+	movx b,.mospd		; set the speed
+	hrlz c,spd		; same input speed
+	hrri c,^D50		; but output is lower (input,,output speeds)
+	MTOPR
+	 ejshlt
+	skipg c,brk		; get count of nulls to send
+	 movei c,defbrk		; use the default
+	caile c,maxnul		; greater than we support?
+	 movei c,maxnul		; yes, use that
+	movns c			; make negative
+	move b,[point 7,nulls]	; point to them
+	setzm d			; no stop char
+	SOUT
+	 ejshlt
+	movx b,.mospd		; now reset speed
+	move c,spd
+	hrls c			; make input same as output
+	MTOPR
+	 ejshlt
+	ret
+
+brkin2:	tmsg <
+[BREAKs are not enabled, use the SPEED: switch first]
+>
+	ret
+
+maxnul==100
+nulls:	repeat <maxnul/5>+1,<0>
+
+;[16] End addition
+
+;;; TIMER facilities (currently not used...)
+
+timron:	Remark - Turn on TIMER% interrupt.
+
+; Call with time after which to interrupt in b, in milliseconds.
+
+	saveac <a,c>		; Save work ACs.
+	call timrof		; Release any pending timers.
+	move a, [.fhslf,,.timel] ; Set a timer
+	movei c, timchn		;   on the timer channel.
+	setzm timout		; Init the timeout flag.
+	TIMER%			; Set the timer.
+	 ejserr
+	ret
+
+timrof:	Remark - Turn off TIMER% interrupt.
+
+	saveac <a>		; Save work AC.
+	setzm timout		; Turn off the timout flag.
+	move a, [.fhslf,,.timal] ; Remove all pending timer requests.
+	TIMER%
+	 ejserr
+	ret
+
+; Timer interrupt handler
+
+timint:	push p, a
+	setom timout		; Set flag saying an operation timed out.
+	move a, ttyjfn		; Flush buffers that may have caused it.
+	CFIBF
+	move a, lnkjfn
+	CFOBF
+	movsi a, (1b5)		; Magic bit for user mode PC.
+	iorm a, pc2		; Escape from the JSYS.
+	pop p, a
+	DEBRK%
+
+	subttl Quit and Resume Logging
+
+; Quit logging.
+
+qlog:	skipg a, logjfn		; Do we have one?
+	 jrst [	tmsg <
+%TTLINK wasn't logging...
+>
+		 ret ]
+	movem a, savjfn		; Yes, save the JFN elsewhere.
+	hrli a, (co%nrj)	; Close the log, but don't release JFN.
+	CLOSF
+	 nop
+	tmsg <
+[TTLINK: Quit logging]
+>
+	setom logjfn		; Signal that we're not logging.
+	ret
+
+
+; Resume logging after a hiatus.
+
+rlog:	skiple logjfn		; Check for this...
+	 jrst [ tmsg <
+%TTLINK already logging...
+>
+		ret ]
+	skipg a, savjfn		; Get the saved log JFN back.
+	 jrst [	tmsg <
+%TTLINK wasn't logging...
+>
+		ret ]
+	movem a, logjfn		; Put it back as the log JFN.
+	setom savjfn
+	movx b, <fld(7,of%bsz)+of%app> ; Yes, open log for appending.
+	OPENF
+	 erjmp [setom logjfn
+		tmsg <
+?Error opening log file>
+		jserr
+		ret ]
+	tmsg <
+[TTLINK: Resume logging]
+>
+	ret
+
+	subttl Parity routines.
+
+
+; Set parity bit of character in b.  Destroys d.
+
+setpar:	move d, parity		; Get desired parity and compute it:
+	xct [	nop		; None,
+		tro b, 200	; Mark,
+		jrst even	; Even,
+		jrst odd	; Odd,
+		trz b, 200 ](d)	; Space.
+	ret			; Done.
+
+even:	saveac<c>		; Even parity
+	trz b, 200		; Start off with bit 8=0.
+	movei c, (b)		; Make a copy to work on.
+	jrst both		; Join shared code.
+
+odd:	saveac<c>		; Odd parity.
+	tro b, 200		; Start off with bit 8=1.
+	movei c, (b)		; Make a copy.
+
+both:	lsh c, -4		; Get high order 4 bits of character
+	xori c, (b)		; Fold into 4 bits.
+	trce c, 14		; Left two bits both 0 or 1?
+	 trnn c, 14		;  or both 1?
+	 xori b, 200		; Yes, set parity
+	trce c, 3		; Right two bits both 0?
+	 trnn c, 3		;  or both 1?
+	 xori b, 200		; Yes, set parity.
+	ret
+
+.end:	end <evlen,,entvec>	; entry-vector length,,address

@@ -1,0 +1,69 @@
+;;================================================================
+;;   JULFIX:  Canonicalize Julian day.
+;;
+;;	Requires:  AC2:  year,,Julian-day
+;;		   P: stack pointer
+;;	Returns:   +1 always, legal values in AC2
+;;	Bashes:	   AC2.  ACs 1,3-6 are restored before returning.
+;;	Symbols:   JulFix, JulFxP, JulFxN, JulFxd, IsLeap.
+;;	Assumes:   MID:PRARG.MID also .INSRTed (for Return, Retskp)
+;;
+;;	NOTE:  Leap years are only compounded up to the 400-year
+;;	       ones - the 1000-year cycle doesn't seem necessary,
+;;	       so I won't look up the rules for it.
+;;
+;;	Bugs, etc. to ZZZ@SRI-NIC.ARPA
+;;
+JulFix:	Push P,1
+	Push P,3
+	Push P,4
+	Push P,5
+	Push P,6
+
+	Hrre 1,2		;isolate Julian day
+	Jumple 1,JulFxN		;deal with negative day
+JulFxP:	Movei 3,365.		;standard year
+	Call IsLeap		;is it a leap year?
+	  Aos 3			;yes, they have 366 days
+	Camg 1,3		;is our day too big?
+	  Jrst JulFxd		;no, date is fixed
+	Sub 1,3			;go past this year
+	Add 2,[1,,0]		;bump year counter
+	Jrst JulFxP		;and loop
+JulFxN:	Sub 2,[1,,0]		;decrement year counter
+	Movei 3,365.		;standard year
+	Call IsLeap		;is previous year a leaper?
+	  Aos 3			;yes, they have 366 days
+	Add 1,3			;go past that year
+	Jumple 1,JulFxN		;loop until date is fixed
+JulFxd:	Hrr 2,1			;put new Julian value in place
+	Pop P,6
+	Pop P,5
+	Pop P,4
+	Pop P,3
+	Pop P,1
+	Return
+;;
+;; ISLEAP - Decide whether the given year is a leap year.
+;;	Requires: LH(AC2) contains year
+;;	Returns:  +1: leap year, +2: not a leap year
+;;	Bashes:   ACs 5 and 6
+;;
+;;  Rules:  Every   4 years IS     a leap year, but
+;;	    every 100 years IS NOT a leap year, but
+;;	    every 400 years IS     a leap year
+;;
+IsLeap:	Setz 6,			;not a leap year yet!
+	Hlrz 5,2		;isolate year
+	Trz 5,777774		;modulo 4
+	Skipe 5			;skip if even multiple of 4
+	  Retskp		;not a leap year
+	Seto 6,			;maybe a leaper
+	Hlrz 5,2		;get a fresh copy to work with
+	IDivi 5,100.		;divide year by 100, rem. into AC6
+	Skipe 6			;skip if even multiple of 100
+	  Return		;was a leap year
+	IDivi 5,4		;divide result by 4, rem. into AC6
+	Skipe 6			;skip if even multiple of 400
+	  Aos (P)		;not a leap year
+	Return

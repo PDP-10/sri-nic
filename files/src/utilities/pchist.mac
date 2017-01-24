@@ -1,0 +1,653 @@
+;<BEEBE.UTILITY>PCHIST.MAC.23, 25-Sep-83 01:29:16, Edit by BEEBE
+;Inserted many comments, increased histogram table size,
+;made output more informative, pretabbed operand fields for
+;better readability, changed interactive input, added status report,
+;fixed Monitor flag use (it was flipped), allow repeated output of 
+;histogram to different files or with different formats.
+;<BEEBE.UTILITIES>PCHIST.MAC.10 10-Oct-80 18:21 EDIT BY BEEBE
+;added linear histogram scale option -- logarithmic is usually uninformative
+;<PERF-TOOLS>PCHIST.MAC.10,  7-Jun-78 17:12:29, EDIT BY MURPHY
+;CPU CONDITIONALS
+;<PERF-TOOLS>PCHIST.MAC.9, 21-Sep-77 15:01:36, EDIT BY MURPHY
+;<PERF-TOOLS>PCHIST.MAC.7, 30-Aug-77 17:31:03, EDIT BY HURLEY
+;<PERF-TOOLS>PCHIST.MAC.6, 30-Aug-77 17:01:18, EDIT BY HURLEY
+;<PERF-TOOLS>PCHIST.MAC.5, 26-Aug-77 16:26:53, EDIT BY HURLEY
+;<PERF-TOOLS>PCHIST.MAC.4, 26-Aug-77 15:10:52, EDIT BY HURLEY
+;<PERF-TOOLS>PCHIST.MAC.3, 26-Aug-77 11:14:31, EDIT BY HURLEY
+;<PERF-TOOLS>PCHIST.MAC.2, 26-Aug-77 11:07:16, EDIT BY HURLEY
+;<HURLEY>PCHIST.MAC.8,  4-Mar-77 09:11:04, EDIT BY HURLEY
+;<HURLEY>PCHIST.MAC.6, 27-Jan-77 14:14:36, EDIT BY MURPHY
+;<HURLEY>PCHIST.MAC.5, 20-Jul-76 18:29:32, EDIT BY HURLEY
+
+	TITLE	PCHIST - Histogram Gatherer
+	SEARCH	MONSYM,MACSYM
+	SALL
+	.REQUIRE	SYS:MACREL
+	.REQUEST	SYS:FORLIB
+
+	EXTERN	ALOG10
+
+IFNDEF KLFLG,<KLFLG==1>
+IFNDEF KSFLG,<KSFLG==0>
+
+DEFINE SELCPU (KLCOD,KSCOD)<
+   IFN KLFLG,<KLCOD>
+   IFN KSFLG,<KSCOD>>
+
+; Ac symbols...
+	V=0			;Value reg for FORLIB subroutine
+	T1=1			;Monitor call Ac
+	T2=2			; "  "
+	T3=3			; "  "
+	T4=4			; "  "
+	Q1=5			;scratch
+	Q2=6			;scratch
+	Q3=7			;unused
+	I=15			;Base register for breakpoint routine region
+	CX=16			;unused
+	P=17			;stack pointer
+
+	BPRPAG==100		;breakpoint routine page start (region
+				;includes histogram buckets)
+	BPRCOD==BPRPAG_11	;breakpoint routine address
+
+PCHIST:	RESET%			;clear to begin
+	MOVE	P,[IOWD PDLEN,PDL]	;initialize stack
+	MOVEI	I,BPRCOD	;setup base register for breakpoint
+				;routine and table access
+	JRST	5,[10000,,0
+		 REL3]
+	ERJMP	.+1
+	TDZA	T1,T1
+REL3:	SETO	T1,		
+	MOVEM	T1,MONTYP(I)	;Set MONITOR PC recording flag
+
+	TMSG	<
+PCHIST: Fork/Job Run-Time Program Counter Histogram Utility
+	Version of [24-Sep-83]
+	You must have WHEEL capability to run this program because it 
+	SNOOPs into the running Monitor to insert a timer breakpoint routine!
+>
+
+
+	TMSG	<
+Name of the program being observed: >
+	HRROI	T1,PRGNAM
+	MOVE	T2,[RD%BEL+5*PRGNML]
+	SETZ	T3,
+	RDTTY%			;Read program name (used on output listing)
+	 JRST	ERROR
+
+	TMSG	<
+Include time spent in MONITOR mode? (Y or N) >
+	CALL	YESNO
+	 TDZA	T1,T1		;NO
+	SETO	T1,		;YES
+	MOVEM	T1,MONFLG(I)	;save MONITOR PC recording flag
+
+	TMSG	<
+Starting address of region to be observed (octal): >
+	CALL	GETADR
+	 JSP	ERROR
+	HRRZM	T2,SADR(I)	;save starting address
+
+	TMSG	<
+Bucket size (octal): >
+	CALL	GETADR
+	 JSP	ERROR
+	JUMPLE	T2,PCHIST	;restart if bucket size illegal
+	MOVEM	T2,BLKSIZ(I)	;save bucket size
+
+	TMSG	<
+Job number (or non-digit to look at a fork): >
+	CALL	GETDEC
+	 JRST	NOTJBN		;was not number, try fork id
+	MOVNM	T2,FORKN(I)	;save -(job number)
+	JRST	NOTJB1
+
+NOTJBN: TMSG	<
+Fork number of FORK being watched: >
+	CALL	GETADR		;expect octal fork number
+	 JSP	ERROR
+	HRRZM	T2,FORKN(I)	;save +(fork number)
+
+NOTJB1:	TMSG	<
+[PCHIST - Clearing tables and inserting Monitor traps] >
+ SETZM	INDEX(I)
+	SETZM	TOTAL(I)	;clear total of PC counts in range
+	SETZM	TABLE(I)	;clear first word of table
+	HRLI	T1,TABLE(I)	;set up BLT word
+	HRRI	T1,TABLE+1(I)
+	BLT	T1,TABLE+TABLEN-1(I)	;clear PC buckets
+	SETZM	OVRFLO(I)	;clear MONITOR PC count
+	SETZM	PILVL(I)	;clear interrupt PC count
+
+; Now insert the Monitor breakpoint trap using SNOOP
+
+	MOVEI	T1,.SNPLC	;flag to lock breakpoint routine in
+				;memory -- cannot have page faults
+				;during PC counting
+	MOVEI	T2,<BPRLEN+777>/1000	;count of pages to lock
+	MOVEI	T3,BPRPAG	;first page to lock
+	SNOOP%
+	 JRST	ERROR
+	LSH	T2,11		;Monitor page number corresponding to
+				;our BPRPAG
+	MOVEM	T2,INDEX(I)	;save Monitor's page number
+	MOVSI	Q1,-INSTBL	;instruction table
+TIMER1: HLRZ	T1,INSTAB(Q1)
+	HRRZ	T2,INSTAB(Q1)
+	ADD	T2,INDEX(I)
+	HRRM	T2,BPRCOD(T1)
+	AOBJN	Q1,TIMER1
+	MOVSI	Q1,-SYMTBL
+	JUMPE	Q1,TIMER4
+
+; Get absolute addresses of the Monitor symbols we need
+
+TIMER2: MOVEI	T1,.SNPSY	;code to get address of Monitor symbol
+	MOVE	T2,SYMTAB(Q1)	;radix-50 symbol
+	MOVE	T3,SYMTAB+1(Q1)	;radix-50 program name containing previous
+	SNOOP%
+	 JRST	ERROR
+	MOVE	T3,SYMTAB+2(Q1)	;offset of returned symbol
+	HRRM	T2,BPRCOD(T3)	;symbol value
+	ADD	Q1,[2,,2]
+	AOBJN	Q1,TIMER2	;continue scan of Monitor symbol table
+
+TIMER4: MOVE	T1,SY3(I)
+	AOS	T1		;put BP at TIMIN0+1
+	MOVEM	T1,BP1ADR	;address in Monitor space to patch
+	HRRZ	T1,SY5(I)
+	SKIPE	MONTYP(I)
+	 AOS	T1
+	HRRM	T1,SY5(I)
+	MOVEI	T1,.SNPDB	;code to define a breakpoint
+	MOVEI	T2,1		;number of breakpoint
+	MOVE	T3,BP1ADR	;address in Monitor space to patch
+	MOVE	T4,[XPCW BP1R]	;instruction to execute before patched
+				;instruction is executed
+	SKIPN	MONTYP(I)
+	 MOVE	T4,[JSR BP2R]
+	ADD	T4,INDEX(I)
+	TLZ	T4,37
+	SNOOP%			;define breakpoint
+	 JRST	ERROR
+	MOVEI	T1,.SNPIB	;insert breakpoints and start analyzing
+	SNOOP%
+	 JRST	ERROR
+
+; The trap is now under way and the breakpoint routine  is busy
+; collecting PC counts.  We just sit here waiting for the user to request
+; us to stop the histogramming.
+
+	TMSG	<
+[PCHIST - Traps installed]
+
+Type <CTL-B> to break, <CTL-Y> for status report >
+
+TIMER3: PBIN%			;get a byte
+	CAIN	T1,.CHCNB	;CTL-B?
+	 JRST	TIMER7		;Yes
+	CAIN	T1,.CHCNY	;CTL-Y?
+	 CALL	STATUS		;Yes
+	JRST	TIMER3		;Get next input byte.
+
+TIMER7:	TMSG	<
+[PCHIST breaking]
+
+Confirm with <CR> to print PC histogram,
+or type <CTL-P> to resume collection as if CTL-B had not been typed >
+
+TIMER5: PBIN%			;get a byte
+	CAIN	T1,.CHCNP	;CTL-P?
+	 JRST	TIMER6		;Yes, proceed with collection.
+	CAIE	T1,.CHCUN	;CTL-_
+	 CAIN	T1,.CHLFD	;Linefeed
+	  JRST	TYPANS		;was CTL-_ or Linefeed, all done
+	JRST	TIMER5		;ignore, get next byte
+
+TIMER6: TMSG	<
+[PCHIST proceeding]
+>
+	JRST	TIMER3
+
+TYPANS: MOVEI	T1,.SNPUL	;code to unlock and release storage and
+				;remove all breakpoints
+	SNOOP%			;undo the patches
+	 JRST	ERROR
+	TMSG	<
+PC histogram collection terminated and Monitor unpatched.>
+
+;
+; The PC histogramming is complete.  Now just output the results.
+;
+TYPAN0: TMSG	<
+
+Output histogram and timing results to file: >
+	MOVSI	T1,(GJ%FOU!GJ%MSG!GJ%CFM!GJ%FNS!GJ%SHT)	;460003	
+	MOVE	T2,[.PRIIN,,.PRIOU]			;[100,,101]
+	GTJFN%			;get output file JFN
+	 JRST	[ MOVEI T1,.PRIOU
+		HRLOI	T2,.FHSLF
+		SETZ	T3,
+		ERSTR%		;print most recent error message
+		 JFCL		;ignore error
+		 JFCL		;ignore error
+		JRST	TYPAN0]	;try again
+
+	MOVEM	T1,JFN
+	MOVE	T2,[FLD(7,OF%BSZ)!OF%WR]	;[70000,,100000]
+	OPENF%			;open the output file
+	 JRST	[ MOVEI T1,.PRIOU
+		HRLOI	T2,.FHSLF
+		SETZ	T3,
+		ERSTR%		;print most recent error message
+		 JFCL		;ignore error
+		 JFCL		;ignore error
+		HRRZ	T1,JFN
+		RLJFN%		;release the JFN
+		 JFCL		;ignore errors
+		JRST	TYPAN0]	;try again
+
+	TMSG	<
+Logarithmic histogram scale? (Y or N) >
+	SETOM	LOGFLG		;default is logarithmic scale
+	CALL	YESNO
+	 SETZM	LOGFLG		;NO, use linear scale
+
+;
+; We have an output file, now format and print the histogram data
+;
+	MOVE	T1,JFN
+	FMSG	<
+PCHIST: Fork/Job Run-Time Program Counter Histogram Utility
+	Version of [24-Sep-83]
+
+PC Histogram of Program >
+	HRROI	T2,PRGNAM
+	SOUT%
+	SETO	T2,
+	SETZ	T3,
+	ODTIM%			;print dd-mon-yy hh:mm:ss
+	 JFCL
+
+	FMSG	<
+
+Total samples taken = >
+	MOVE	T2,NSAMP(I)
+	MOVEI	T3,^D10
+	NOUT%
+	 JFCL
+
+	FMSG	< (number of traps to PCHIST)>
+
+	FMSG	<
+Total samples used = >
+	MOVE	T2,TOTAL(I)
+	MOVEI	T3,12
+	NOUT%
+	 JFCL
+
+	SKIPN	TOTAL(I)
+	 JRST	TYPDON		;quit if no samples collected
+	FMSG	< (>
+	FLTR	T2,TOTAL(I)
+	FLTR	T3,NSAMP(I)
+	FDVR	T2,T3
+	CALL	PCTOUT
+	FMSG	<%)>
+	FMSG	< (difference from total is Scheduler)
+
+PC values outside selected range are accumulated in nearest endpoint bucket.>
+	SKIPN	LOGFLG
+	 JRST	FIXMSG		;jump if LINEAR scale
+	FMSG	<
+
+Hits	Bucket  Percent		0.1		1.0		10.		100
+>
+	JRST	PASTHD
+FIXMSG:	FMSG	<
+
+Hits	Bucket  Percent		000000000.111111111.222222222.333333333.444444444.555555555.666666666.777777777.888888888.999999999
+				123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789
+>
+PASTHD:	MOVE	T2,TOTAL(I)	;compute 0.1% of total
+	IDIVI	T2,^D1000
+	SKIPG	T2
+	 MOVEI	T2,1		;cutoff at 1 if total < 1000
+	MOVEM	T2,MINCNT	;this is cutoff for histogram
+	MOVE	Q1,SADR(I)	;start address
+	MOVSI	Q2,-TABLEN
+	HRR	Q2,I		;[-TABLEN,,breakpoint routine base address]
+TYPLOP: MOVE	T2,TABLE(Q2)	;PC count for this bucket
+	CAMGE	T2,MINCNT	;above cutoff?
+	 JRST	TYPLP1		;NO, do not print this bucket
+
+	MOVEI	T3,12		;decimal
+	NOUT%			;print count
+	 JFCL
+
+	MOVEI	T2,.CHTAB
+	BOUT%			;then a TAB
+
+	MOVE	T2,Q1
+	MOVEI	T3,10		;octal
+	NOUT%			;print bucket address
+	 JFCL
+
+	MOVEI	T2,.CHTAB
+	BOUT%			;then another TAB
+
+	FLTR	T3,TOTAL(I)
+	FLTR	T2,TABLE(Q2)
+	FDVR	T2,T3
+	CALL	PCTOUT		;then percent of total
+	CALL	TYPGRA		;and finally histogram bar
+
+TYPLP1: ADD	Q1,BLKSIZ(I)	;next bucket address
+	AOBJN	Q2,TYPLOP	;loop until table printed
+
+	SKIPN	T2,OVRFLO(I)	;Monitor count = 0?
+	 JRST	TYPPIL		;Yes
+	MOVEI	T3,12		;No, print decimal
+	NOUT%			;count
+	 JFCL
+
+	MOVEI	T2,.CHTAB
+	BOUT%			;then TAB
+
+	FMSG	<MONITR>	;then name
+
+	MOVEI	T2,.CHTAB	;then TAB
+	BOUT%
+
+	FLTR	T2,OVRFLO(I)
+	FLTR	T3,TOTAL(I)
+	FDVR	T2,T3
+	CALL	PCTOUT		;then percent
+	CALL	TYPGRA		;and finally histogram bar
+
+TYPPIL: SKIPN	T2,PILVL(I)	;Interrupt level count = 0?
+	 JRST	TYPDON		;Yes
+
+	MOVEI	T3,12		;No, print decimal
+	NOUT%			;count
+	 JFCL
+
+	MOVEI	T2,.CHTAB
+	BOUT%			;then a TAB
+
+	FMSG	<PILEVL	>	;then name
+	FLTR	T2,PILVL(I)
+	FLTR	T3,TOTAL(I)
+	FDVR	T2,T3
+	CALL	PCTOUT		;then percent
+	CALL	TYPGRA		;and finally histogram bar
+
+TYPDON: HRRZ	T1,JFN		;all done
+	CLOSF%			;close the output file
+	 JFCL			;ignore errors
+	TMSG	<
+[PCHIST exit - type CONTINUE to print histogram again]>
+	HALTF%			;quit
+	 JRST	TYPAN0		;CONTINUE with printing
+
+
+;Miscellaneous subroutines
+
+PCTOUT: FMPR	T2,[100.0]	;type a percent of value in T2
+	MOVE	T3,[1B4!1B6!37B17!2B23!2B29]
+	FLOUT%
+	 JFCL
+	RET
+
+STATUS:	TMSG	<
+Total PC samples: >
+	MOVEI	T1,.PRIOU
+	MOVE	T2,NSAMP(I)
+	MOVEI	T3,12		;print decimal
+	NOUT%			;count
+	 JFCL
+
+	TMSG	<	In program: >
+	MOVEI	T1,.PRIOU
+	MOVE	T2,TOTAL(I)
+	MOVEI	T3,12		;print decimal
+	NOUT%			;count
+	 JFCL
+
+	TMSG	<	In Monitor: >
+	MOVEI	T1,.PRIOU
+	MOVE	T2,OVRFLO(I)
+	MOVEI	T3,12		;print decimal
+	NOUT%			;count
+	 JFCL
+
+	TMSG	<	In interrupt handlers: >
+	MOVEI	T1,.PRIOU
+	MOVE	T2,PILVL(I)
+	MOVEI	T3,12		;print decimal
+	NOUT%			;count
+	 JFCL
+
+	TMSG	<
+>
+	RET
+
+TYPGRA: PUSH	P,T2		;type histogram graph
+	MOVEI	T2,.CHTAB
+	BOUT%			;TAB
+	BOUT%			;TAB
+	MOVEI	T2,0(P)		;get address of value
+	MOVE	V,0(T2)		;get value
+	PUSH	P,T2		;construct 1-word arg list
+	SKIPN	LOGFLG
+	 JRST	FIXVAL		;jump if linear scale
+	MOVEI	16,0(P)		;point to arg list
+	CALL	ALOG10		;take LOG10 of value
+	FADRI	V,(1.0)		;select range
+	FMPRI	V,(16.0)	;scale value
+FIXVAL:	FIXR	T3,V
+	SUB	P,[2,,2]	;flush stack
+	MOVE	T1,JFN
+	MOVEI	T2,"*"		;marker symbol for histogram bar
+	JUMPLE	T3,SPALP2	;flush if too small
+
+SPALOP: SOJLE	T3,SPALP1
+	BOUT%
+	JRST	SPALOP		;output histogram bar
+
+SPALP1: MOVEI	T2,"*"
+	BOUT%			;final star on bar
+
+SPALP2: MOVEI	T2,.CHCRT
+	BOUT%
+	MOVEI	T2,.CHLFD	;end-of-line
+	BOUT%
+	RET
+
+
+GETDEC: SKIPA	T4,[^D10]	;get decimal value from terminal
+GETADR: MOVEI	T4,^D8		;get octal (address) value from terminal
+	MOVE	T1,[100,,101]
+	HRROI	T2,STRING
+	MOVE	T3,[RD%BRK!RD%TOP!RD%JFN+STRNGL]
+	RDTXT%			;obsolete JSYS, oh well...
+	 JRST	ERROR
+	HRROI	T1,STRING
+	MOVE	T3,T4
+	NIN%
+	 RET
+	AOS	0(P)
+	RET
+	RET
+
+YESNO:  MOVE	T1,[100,,101]	;Get Y or N answer from terminal
+	HRROI	T2,STRING
+	MOVE	T3,[RD%BRK!RD%RAI!RD%TOP!RD%JFN+STRNGL]
+	RDTXT%			;obsolete JSYS, oh well...
+	 JRST	ERROR
+	LDB	T1,[POINT 7,STRING,6]
+	CAIN	T1,"Y"
+	 RETSKP			;YES
+	CAIN	T1,"N"
+	 RET			;NO
+	TMSG	< you must type Y or N! >
+	JRST	YESNO		;keep trying
+
+ERROR:  MOVEI	T1,.PRIOU	;fatal error - print message and quit
+	HRLOI	T2,.FHSLF
+	SETZ	T3,
+	ERSTR%			;print most recent error message
+	 JFCL
+	 JFCL
+	HALTF%
+	 JRST	PCHIST		;start over if CONTINUEd
+
+INSTAB: RL1,,SAV1I		;instruction table
+	RL2,,INDEX
+	RL3,,BP1R
+	RL4,,RL1
+	RL5,,BP2R
+	RL6,,MONTYP
+INSTBL==.-INSTAB
+
+SYMTAB:				;Monitor symbol table request area
+	RADIX50	0,FORKX
+	0
+FORKX:  SY1
+	RADIX50	0,FKJOB
+	0
+FKJOB:  SYA1
+   SELCPU <
+	RADIX50	0,TIMINT
+	0
+TIMINT: SY2
+	RADIX50	0,TIMINT
+	0
+	SY5>,<
+	RADIX50	0,PIAPRX
+	0
+PIAPRX: SY2
+	RADIX50	0,PIAPRX
+	0
+	SY5>
+	RADIX50	0,TIMIN0
+	0
+TIMIN0: SY3
+	RADIX50	0,UPDL
+	0
+UPDL:	SY4
+	RADIX50	0,INSKED
+	0
+INSKED: SY6
+SYMTBL==.-SYMTAB
+
+JFN:	0
+MINCNT: 0
+BP1ADR: 0			;breakpoint routine address
+
+	STRNGL==20
+STRING: BLOCK STRNGL		;buffer for RDTTY input text 
+
+	PRGNML==40
+PRGNAM: BLOCK PRGNML		;buffer for program name
+
+	PDLEN==40
+PDL:	BLOCK	PDLEN		;push-down stack
+
+;Breakpoint routine and PC histogram bucket tables
+
+LOC BPRPAG_11			;start in memory at absolute page boundary
+PHASE 0
+
+BPR:				;Breakpoint routine entered at each
+				;timer tick
+BP1R:	0
+	0
+	0
+RL4:	RL1
+BP2R:	0
+RL1:	MOVEM	I,SAV1I
+RL2:	MOVE	I,INDEX
+	MOVEM	T1,SAV1T1(I)
+	MOVEM	T2,SAV1T2(I)
+	MOVEM	T3,SAV1T3(I)
+	MOVEM	T4,SAV1T4(I)
+	AOS	NSAMP(I)	;count total samples (times this routine
+				;entered) 
+	SKIPGE	T2,FORKN(I)	;+(value) means fork
+	 MOVN	T2,FORKN(I)	;-(value), so have job number
+SY1:	HRRZ	T1,FORKX
+	SKIPGE	FORKN(I)	;+(value) means fork
+SYA1:	 HLRZ	T1,FKJOB(T1)	;-(value), so have job number
+SY6:	SKIPG	INSKED
+	 CAME	T1,T2
+	  JRST	BP1A(I)
+	CONSZ	PI,67400	;PI level?
+	 JRST	BP1PI(I)	;yes
+SY2:	MOVE	T2,.-.		;flags
+	TLNN	T2,10000
+	 SKIPN	MONFLG(I)	;skip if Monitor PC's being counted
+	  SKIPA			;no Monitor counting
+	   JRST	BP1B(I)
+SY5:	HRRZ	T1,.-.		;PC
+	TLNN	T2,10000
+SY4:	MOVE	T1,UPDL
+	HRRZS	T1
+	SUB	T1,SADR(I)	;offset from counting region start 
+	SKIPGE	T1		;positive
+	 MOVEI	T1,0		;negative, make offset 0
+	IDIV	T1,BLKSIZ(I)	;bucket number = offset/(bucketsize)
+	CAIL	T1,TABLEN	;past end of table?
+	 MOVEI	T1,TABLEN-1	;yes, put in last bucket
+	JRST	BP1C(I)		;go increment bucket count
+
+BP1PI:  MOVEI	T1,PILVL-TABLE	;bucket number for interrupt level counting
+	JRST	BP1C(I)		;go increment bucket count
+BP1B:	MOVEI	T1,OVRFLO-TABLE	;bucket number for Monitor level counting
+BP1C:	ADDI	T1,TABLE(I)	;bucket address
+	AOS	0(T1)		;increment bucket count
+	AOS	TOTAL(I)	;increment total count
+BP1A:	MOVE	T1,SAV1T1(I)	;restore registers
+	MOVE	T2,SAV1T2(I)
+	MOVE	T3,SAV1T3(I)
+	MOVE	T4,SAV1T4(I)
+	MOVE	I,SAV1I(I)
+RL6:	SKIPE	MONTYP
+RL3:	 XJRSTF	BP1R		;return from breakpoint to Monitor
+RL5:	JRSTF	@BP2R
+
+SAV1T1: 0
+SAV1T2: 0
+SAV1T3: 0
+SAV1T4: 0
+SAV1I:  0
+SY3:	0
+
+LOGFLG:	-1			;default value is logarithmic scale
+SADR:	0			;starting address of region 
+BLKSIZ: 0			;histogram bucket size -- each counter
+				;is covers this many words in program
+INDEX:  0
+TOTAL:  0			;count of PC's in range
+NSAMP:  0			;total number of PC's trapped
+
+TABLEN==10000			;PC histogram table -- this cannot be
+				;too big, or Monitor will refuse to lock
+				;it in memory
+TABLE:  BLOCK TABLEN
+OVRFLO: 0			;Monitor PC count word
+PILVL:  0			;Interrupt level count word
+FORKN:  0			;fork number (+) or job number (-)
+MONFLG: 0			;Non-zero means recording PC's in
+				;Monitor 
+MONTYP: 0
+
+BPRLEN==.-BPR			;size of breakpoint routine
+
+DEPHASE
+RELOC
+
+	END	PCHIST

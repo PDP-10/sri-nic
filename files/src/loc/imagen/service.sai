@@ -1,0 +1,265 @@
+!	Some global variables, ResetOut, CloseImp;
+
+define Emptymark = -1,
+	  NAmark = -1;
+
+External simp procedure GetRasterInfo(integer font, pointer, space, dest);
+
+Internal Integer OutPtr, 	! Pointer to output buffer area;
+	     	 ImpPageCnt, 	! number of bytes in output file;
+	    	 NextImpPage; 	! File in which to write next output;
+
+IFTOPS20
+! for use in AC3 when using PMAP; 
+define  RepetiCnt = {'500000000000 lor (LastImpPage - FirstImpPage + 1)},
+	   EndCnt = '500000000000; 	
+
+define FBIZ = '12; ! Index to EOF pointer in file descriptor block;
+ENDTOPS20
+
+!	R E S E T   O U T P U T
+!
+! *******************************************************************
+! Unmaps the output buffer when it has filled.
+! *******************************************************************;
+Internal simp procedure ResetOut;
+	begin "-- reset output --"
+
+	printo1(<nl,"ResetOut, Pointer = ",cvos(OutPtr),", lastword = ",cvos(lastword),
+		", Impress Page Count = ",ImpPageCnt,", NextImpPage = ",NextImpPage>)
+	OutPtr_Point(OutBpB,memory[FirstImpPage*512],-1);
+	Pmap((curfork lsh 18) lor FirstImpPage,
+	     (ImpJfn lsh 18) lor NextImpPage, RepetiCnt);
+	ImpPageCnt_ImpPageCnt + lastImpPage - FirstImpPage + 1;
+	NextImpPage_NextImpPage + LastImpPage - FirstImpPage + 1
+	end   "-- reset output --";
+
+
+!	C L O S E   I M P
+!
+! *******************************************************************
+! Unmaps filled portion of output buffer and sets EOF pointer in FDB.
+! *******************************************************************;
+simp procedure CloseImp;
+	begin "-- close imp file --"
+	integer pages;
+
+	printo0(nl,"ResetOut, OutPtr = ",OutPtr,", ImpPageCnt = ",ImpPageCnt)
+	pages_((OutPtr land AddrMask) div 512) - FirstImpPage + 1;
+		! number of pages that still need to be mapped out;
+	Pmap((curfork lsh 18) lor FirstImpPage,
+	     (Impjfn lsh 18) lor NextImpPage, EndCnt lor pages);
+	OutPtr_OutPtr + (ImpPageCnt - FirstImpPage)*512;
+		! Correct byte pointer in preparation for setting EOF mark;
+	chfdb(ImpChan, FBIZ, -1,ByteCount(OutPtr));
+	chfdb(ImpChan,'11,'77 lsh 24,OutBpB lsh 24);
+  COMMENT   SET file class as IMPRESS (.FBIMP=7);
+	chfdb(ImpChan, '1, '17 lsh 18, '7 lsh 18);
+	if not cfile(ImpChan) then Error("Can't close "&outfname)
+	end   "-- close imp file --";
+
+
+!	B L O C K   T R A N S F E R
+!
+! ********************************************************************
+! Transfers blocks of data from input to output.
+! ********************************************************************;
+Internal simp procedure BlkTrnsfr(reference integer source; integer count;
+						reference integer dest);
+	if dest = -1 then while count>0 do
+		begin "-- output block transfer --"
+		integer i,total;
+
+		print6(<nl,"In BlkTrnsfr, source = ",cvos(source),
+			    ", count = ", count,", OutPtr = ",cvos(OutPtr)>)
+		total_(lastword + 1)*OutBpW - ByteCount(OutPtr);
+		for i_1 step 1 until (count min total) do 
+			idpb(ildb(source),OutPtr);
+		if totalcount then ResetOut;
+		count_count - i + 1
+		end   "-- output block transfer --"
+	else
+		begin "-- other block transfer --"
+		integer i;
+
+		print6(<nl,"In BlkTrnsfr, source = ",cvos(source),
+			  ", count = ",count,", destination = ",cvos(dest)>)
+		for i_1 step 1 until count do idpb(ildb(source),dest);
+		end   "-- other block transfer --";
+
+!	ShrinkGlyst;
+
+
+!	S H R I N K   G L Y S T
+!
+! **********************************************************************
+! Removes updated entries in glyst.
+! **********************************************************************;
+simp procedure ShrinkGlyst;
+	begin "-- shrink glyst --"
+	define  en = "glyst[newend]",
+	       nex = "glyst[next]";
+
+	integer newend, next;
+
+	simp procedure move;
+		begin "-- move down --"
+		print6(<nl,"next:",next,", newend:",newend>)
+		en_nex;
+		glyph[(en lsh -7) land '77, en land '177,0] _ newend;
+			! Tell glyph of the move;
+		newend_newend+1
+		end   "-- move down --";
+
+	newend_0; next_-1;
+	print2(<nl,"shrinkglyst, next deletion queue record = ",nexglyrec,
+					       ", page pointer = ",pageptr>)
+	
+	while ((next_next+1) < pageptr) do if nex  -1 then move;
+	next_next-1; pageptr_newend;
+	while ((next_next+1) < nexglyrec) do move;
+	nexglyrec_newend;
+	print2(<nl,"glyst shrunk, next deletion queue record = ",nexglyrec,
+					       ", page pointer = ",pageptr>)
+	end   "-- shrink glyst --";
+
+!	Compact;
+
+
+!	C O M P A C T
+!
+! ***********************************************************************
+! If the glyst has become full, get rid of unused entries and, if
+! necessary, delete 10 glyphs.
+! ***********************************************************************;
+simp boolean procedure Compact;
+	begin "-- compact --"
+	print2(<nl,"Compacting, page pointer = ",pageptr>)
+	ShrinkGlyst;
+	if nexglyrec  MAXR then return(TRUE) 
+	else if pageptr = 0 then return(FALSE)
+	else 
+		begin "-- delete 10 glyphs --"
+		integer i;
+		for i_0 step 1 until (9 min pageptr) do
+			begin "-- delete a char --"
+			glydata_glydata-glyph[(glyst[i] lsh -7) land '77,
+						glyst[i] land '177,3];	    
+						! record gain of space;
+			DlGlyph(glyst[i]);	! delete glyph;
+			glyph[(glyst[i] lsh -7) land '77,
+						glyst[i] land '177,0] _ -1;
+						! tell firstglyph;
+			glyst[i]_-1
+			end   "-- delete a char --";                    
+
+		ShrinkGlyst;
+		if nexglyrec > MAXR then return(FALSE)
+		else return(TRUE)
+		end   "-- delete 10 glyphs --"
+	end   "-- compact --";
+
+!	InitPage;
+
+
+!	I N I T   P A G E 
+!
+! **********************************************************************
+! Initializes some typsetting and book keeping variables before each 
+! page.
+! **********************************************************************;
+Internal simp procedure initpage;
+	begin "-- initialize page --"
+	chrpnt_glypage_0; pageptr_nexglyrec; 	 ! book keeping;
+	marg_curx_cury_0; 			 ! typsetting;
+	end   "-- initialize page --";
+
+!   	Delete!Pack;
+
+
+! 	D E L E T E  !  P A C K
+!
+! ***********************************************************************
+! if there is not enough space in memory, delete the least number of 
+! unused glyphs necessary to free up enough space
+! ***********************************************************************;
+simp procedure delete!pack;
+	begin "-- delete pack --"
+	define nex = "glyst[next]";
+	integer next;
+
+	next_-1; print2(<nl,"delete!pack ng = ",nexglyrec>) 
+
+	while ((next_next+1) < pageptr) and (glydata  MAXD) do 
+	    if nex  -1 then
+		begin "-- delete a char --"
+       		glydata_glydata - glyph[(nex lsh -7) land '77,
+				nex land '177,3]; ! record gain of space;
+		DlGlyph(nex); ! delete glyph;
+		glyph[(nex lsh -7) land '77, nex land '177,0] _ -1; ! Tell glyph;
+		nex_-1
+		end   "-- delete a char --";                    
+	end   "-- delete pack --";
+
+!	OGlyMsk;
+
+
+!	O U T P U T   G L Y P H   M A S K S
+!
+! *********************************************************************
+! Outputs the glyph masks needed for this page.
+! *********************************************************************;
+Internal simp procedure OGlyMsk(integer curpage);
+	begin "-- output masks --"
+	integer pntr;
+
+	print3(<nl,"Outputting glyphs.  Total glyph space used ", glydata,
+		  ", On current page ", glypage>)
+
+	if glypage > maxd then
+		Error("Glyph table overflow on page "&cvs(curpage)&
+		      ".  Space used "&cvs(glypage)&", maximum allowed "
+		      &cvs(maxd));
+
+		!  P A C K  if necessary;
+	if (glydata)>maxd then 
+		begin "-- delete pack --"
+		print2(<nl,"Before Delete!Pack glyph space = ",glydata>)
+		delete!pack;  
+		print2(<nl,"After Delete!Pack glyph space = ",glydata>)
+		end   "-- delete pack --";
+
+	pntr_0;
+	while pntr < chrpnt do
+		begin "-- ship a mask --"
+		integer fontno,charno,advw,width,height,x,y;
+
+		define space = {chars[pntr+6]},
+		       pointr = {chars[pntr+7]};
+
+		fontno_chars[pntr]; charno_chars[pntr + 1];
+		x_chars[pntr + 2]; y_chars[pntr + 3];
+		height_chars[pntr + 4]; width_chars[pntr + 5];
+		advw_glyph[fontno,charno,1];
+
+		print6(<nl,"OGlyMsk, Fontno ",fontno,", charno ",charno,
+			", pntr = ",pntr,", space = ",space,
+						     ", pointr = ",pointr>)
+
+! The following statement (handling the case of the invisible glyph) is
+  entered so as to suppress undefined glyph errors in RELEASE 1 and more
+  recent IMAGENs;
+                if space = 0 then 
+		        begin "-- empty mask --"
+			declareGlyph(fontno,charno,advw,1,1,1,1);
+			OutByte(0);
+			end   "-- empty mask --"
+		else
+		        begin "-- normal mask --"
+		        declareGlyph(fontno,charno,advw,width,x,height,y);
+		        GetRasterInfo(fontno,pointr,space,-1);
+			end   "-- normal mask --";
+	        pntr_pntr+8
+		end "-- ship a mask --";
+	end   "-- output masks --";
+

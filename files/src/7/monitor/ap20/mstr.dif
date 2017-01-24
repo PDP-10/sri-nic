@@ -1,0 +1,422 @@
+
+
+; MSTR.NEW.1 & <MONITOR>MSTR.MAC.1 31-Mar-89 2341	PAGE 1
+
+
+
+LINE 1, PAGE 1
+1)	; Edit= 8976 to MSTR.MAC on 4-Oct-88 by GSCOTT
+1)	;MSTR function .MSRNU/.MSRUS should return null string for structure name
+1)	;(.MSRSN) and alias name (.MSRSA) if structure is offline (usually because of
+1)	;U1.OFS).
+1)	; Edit= 8890 to MSTR.MAC on 12-Aug-88 by GSCOTT, for SPR #21932
+1)	;Attempt to increment mount count for job exclusive structure should return
+1)	;DEVX2 not STRX01. 
+1)	; Edit= 8861 to MSTR.MAC on 13-Jul-88 by GSCOTT, for SPR #21933
+1)	;Do only 1 TTMSG instead of 3 to each user who has a structure mounted when a
+1)	;dismount is forced. 
+1)	; UPD ID= 8556, RIP:<7.MONITOR>MSTR.MAC.14,  11-Feb-88 11:03:34 by GSCOTT
+LINE 1, PAGE 1
+2)	; UPD ID= 8556, RIP:<7.MONITOR>MSTR.MAC.14,  11-Feb-88 11:03:34 by GSCOTT
+
+
+LINE 39, PAGE 6
+1)		IFNSK.			;[8976] Yes, new file system or new home blocks
+1)		  CALL MAKHOM		;Yes, go create a pair of new home blocks
+1)		   JRST MNTR4		;[7464] Failed, return error
+1)		  MOVEM T1,NEWMID	;Success, save new media ID of new home blocks
+1)		ENDIF.			;[8976] Now check the new home blocks
+   {Skipped 1 page and 1 line}
+1)	MSTM30:	CALL HOMCHK		;GO READ THE HOME BLOCKS, FIX UP IF NEEDED
+LINE 39, PAGE 6
+2)		JRST [	CALL MAKHOM	;YES, GO CREATE A PAIR OF NEW HOME BLOCKS
+2)			 JRST MNTR4 	;[7464] Failed, return error
+2)			MOVEM T1,NEWMID	;Success, save new media ID of new home blocks
+2)			JRST .+1 ]	;NOW CHECK THE NEW HOME BLOCKS
+2)	MSTM30:	CALL HOMCHK		;GO READ THE HOME BLOCKS, FIX UP IF NEEDED
+
+
+LINE 7, PAGE 25
+1)	; MSTDME - TEMPORARILY HOLDS ERROR CODE
+1)	; MSTDMU - STRUCTURE UNIQUE CODE
+1)	; MSTDMT - Text to TTMSG to users who have structure mounted [8861]
+1)	
+1)	MSTDIS:	STKVAR <MSTDMS,MSTDMB,MSTDME,MSTDMU,<MSTDMT,11>> ;[8861]
+1)	
+1)	; VERIFY THAT THE USER HAS THE REQUIRED CAPABILITIES TO DISMOUNT THE STRUCTURE
+LINE 7, PAGE 24
+2)	; MSTDMN - ASCIZ STRUCTURE NAME STRING FOR USE IN MESSAGES
+2)	; MSTDME - TEMPORARILY HOLDS ERROR CODE
+2)	; MSTDMU - STRUCTURE UNIQUE CODE
+2)	
+2)	MSTDIS:	STKVAR <MSTDMS,MSTDMB,MSTDME,<MSTDMN,2>,MSTDMU>
+2)	
+2)	; VERIFY THAT THE USER HAS THE REQUIRED CAPABILITIES TO DISMOUNT THE STRUCTURE
+
+
+; MSTR.NEW.1 & <MONITOR>MSTR.MAC.1 31-Mar-89 2341	PAGE 2
+
+
+
+LINE 34, PAGE 25
+1)		ERRJMP(MSTX24,MSDER1)	;[8861] Yes, "Illegal to dismount system str"
+1)		MOVE T2,T1		;use T2 instead of T1
+LINE 34, PAGE 24
+2)		IFNSK.			;[7.1112]If yes to either...
+2)		  MOVX T1,MSTX24	;[7.1112]Return "Illegal to dismount system structure"
+2)		  JRST MSDER1		;[7.1112]Unlock the structure and return error
+2)		ENDIF.			;[7.1112]
+2)		MOVE T2,T1		;use T2 instead of T1
+
+
+LINE 39, PAGE 25
+1)		ERRJMP (MSTX43,MSDER1)	;[8861] Yes, "Ill to dismount while initing"
+1)		MOVE T2,STRTAB(T1)	;GET ADDRESS OF SDB FOR THIS STRUCTURE
+LINE 42, PAGE 24
+2)		 JRST [	MOVX T2,MSTX43	;yes, get "illegal to dismount while INITing"
+2)			JRST MSDER1]	;go unlock the structure and return error
+2)		MOVE T2,STRTAB(T1)	;GET ADDRESS OF SDB FOR THIS STRUCTURE
+
+
+LINE 46, PAGE 25
+1)		; ..
+1)	^L	; ..
+1)	
+1)	;[8861] Create advisory message to TTMSG to users
+1)	
+1)		MOVEI T1,MSTDMT		;[8861] Point to place to construct message
+1)		HRLI T1,(POINT 7)	;[8861] Make a byte pointer to it
+1)		MOVE T2,[POINT 7,[ASCIZ/[Structure /]] ;[8861] Point to initial string
+1)		CALL MSTASC		;[8861] (T1,T2/T1) Copy that first
+1)		MOVE T2,MSTDMS		;[8861] Load structure number
+1)		CALL MSTOUT		;[8861] (T1,T2/T1) Append that to the string
+1)		MOVE T2,[POINT 7,[ASCIZ/ has been dismounted]
+1)	/]]				;[8861] Finish up the message
+1)		CALL MSTASC		;[8861] (T1,T2/T1) Copy that to finish up
+1)	
+1)	;[8861] Call routine to purge structure from all jobs and notify users.
+1)	
+1)		MOVE T1,MSTDMU		;GET STRUCTURE UNIQUE CODE
+1)		MOVEI T2,MSTDMT		;[8861] Point to notification message
+1)		CALL FIXJOB		;(T1,T2/) Go fix JSBs of all jobs on system
+1)		; ..
+LINE 51, PAGE 24
+2)	; SAVE THE STRUCTURE NAME FOR LATER USE IN ADVISORY MESSAGE
+2)	
+2)		MOVE T2,T1		;GET STRUCTURE UNIQUE CODE
+2)		HRLI T2,.DVDES+.DVDSK	;GET DEVICE TYPE
+2)		HRROI T1,MSTDMN		;GET POINTER TO WHERE NAME WILL GO
+2)		DEVST			;GET STRUCTURE NAME
+
+; MSTR.NEW.1 & <MONITOR>MSTR.MAC.1 31-Mar-89 2341	PAGE 3
+
+
+2)		 JRST [	MOVX T1,MSTX21	;FAILED, GET "STRUCTURE NOT MOUNTED" ERROR
+2)			JRST MSDER1 ]	;GO UNLOCK STRUCTURE AND RETURN
+2)		MOVE T1,MSTDMU		;GET STRUCTURE UNIQUE CODE
+2)		MOVEI T2,MSTDMN		;GET ADDRESS OF STRUCTURE NAME
+2)		CALL FIXJOB		;GO FIX JSB'S OF ALL JOBS ON SYSTEM
+2)		; ..
+
+
+LINE 29, PAGE 27
+1)		; ..
+1)	^L	; ..
+1)	
+1)	; HERE WHEN WE CAN'T GET BOTH THE DEVICE AND STRUCTURE LOCKS
+LINE 30, PAGE 25
+2)	; HERE WHEN WE CAN'T GET BOTH THE DEVICE AND STRUCTURE LOCKS
+
+
+LINE 8, PAGE 31
+1)	;[8861]	    T2/	Address of ASCIZ "[Structure NAME dismounted]" message
+1)	;		CALL FIXJOB
+LINE 8, PAGE 27
+2)	;	    T2/	ADDRESS OF ASCIZ STRUCTURE NAME
+2)	;		CALL FIXJOB
+
+
+LINE 15, PAGE 31
+1)		MOVEM T2,FXJOBN		;[8861] Save address of notification string
+1)		MOVSI P1,-NJOBS		;SET UP TO LOOP OVER ALL JOBS IN SYSTEM
+LINE 15, PAGE 27
+2)		MOVEM T2,FXJOBN		;SAVE ADDRESS OF STRUCTURE NAME STRING
+2)		MOVSI P1,-NJOBS		;SET UP TO LOOP OVER ALL JOBS IN SYSTEM
+
+
+LINE 32, PAGE 31
+1)		; ..
+1)	^L	; ..
+1)	
+1)	; HERE TO SEE IF A MESSAGE IS NEEDED DUE TO A MOUNT OR ACCESS COMMAND
+LINE 33, PAGE 27
+2)	; HERE TO SEE IF A MESSAGE IS NEEDED DUE TO A MOUNT OR ACCESS COMMAND
+
+
+LINE 21, PAGE 32
+1)	; CHECK IF ANY FORKS HAD STRUCTURE MOUNTED
+LINE 1, PAGE 28
+2)	^L	;..
+2)	
+2)	; CHECK IF ANY FORKS HAD STRUCTURE MOUNTED
+
+
+; MSTR.NEW.1 & <MONITOR>MSTR.MAC.1 31-Mar-89 2341	PAGE 4
+
+
+
+LINE 33, PAGE 32
+1)		; ..
+1)	^L	; ..
+1)	
+1)	; SEE IF MESSAGE NEEDED BECAUSE JOB CONNECTED TO STRUCTURE
+LINE 16, PAGE 29
+2)	; SEE IF MESSAGE NEEDED BECAUSE JOB CONNECTED TO STRUCTURE
+
+
+LINE 19, PAGE 33
+1)		HRRO T2,FXJOBN		;[8861] Get pointer to ASCIZ message
+1)		TTMSG%			;[8861] Output structure name
+1)		 ERJMP .+1		;[8861] Ignore error for now
+1)	
+1)	FXJB60:	AOBJN P1,FXJB10		;LOOP OVER ALL JOBS
+LINE 32, PAGE 29
+2)		HRROI T2,[ASCIZ/[Structure /]
+2)		TTMSG%			;[7190] OUTPUT FIRST PART OF MESSAGE
+2)		 ERJMP .+1		;[7190] 
+2)		HRRO T2,FXJOBN		;[7190] GET POINTER TO ASCIZ STRUCTURE NAME
+2)		TTMSG%			;[7190] OUTPUT STRUCTURE NAME
+2)		 ERJMP .+1		;[7190] 
+2)		HRROI T2,[ASCIZ/ has been dismounted]
+2)	/]				;[7190] GET REMAINDER OF MESSAGE
+2)		TTMSG%			;[7190] OUTPUT FINAL PART OF MESSAGE
+2)		 ERJMP .+1		;[7190] 
+2)	
+2)	FXJB60:	AOBJN P1,FXJB10		;LOOP OVER ALL JOBS
+
+
+LINE 23, PAGE 35
+1)	; P4/ Size of user's argument block [8976]
+1)	
+1)	; VERIFY THAT THE USER HAS THE REQUIRED CAPABILITIES ENABLED
+1)	
+1)		MOVE T1,CAPENB		;GET ENABLED CAPABILITIES
+1)		TXNN T1,SC%WHL!SC%OPR!SC%MNT ;Is user a WHEEL or OPERATOR or MAINT?
+1)		RETBAD (CAPX2)		;NO, RETURN ERROR CODE
+1)	
+1)	; CHECK SIZE OF ARGUMENT BLOCK
+1)	
+1)		XCTU [ HLRZ P4,1 ]	;[8976] Get size of block from user
+1)		SKIPG P4		;[8976] At least one word specified?
+1)		RETBAD (MSTRX3)		;[8976] No, return "arg block too small" error
+1)		UMOVE P1,2		;[8976] Get adr of argument block in user space
+1)		MOVEI P2,MSTRSB		;[8976] Get addr of arg block in monitor space
+1)	
+1)		;..
+1)	^L	;..
+
+; MSTR.NEW.1 & <MONITOR>MSTR.MAC.1 31-Mar-89 2341	PAGE 5
+
+
+1)	
+1)	; INITIALIZE THE ARGUMENT BLOCK TO BE RETURNED
+LINE 24, PAGE 31
+2)	; VERIFY THAT THE USER HAS THE REQUIRED CAPABILITIES ENABLED
+2)	
+2)		MOVE T1,CAPENB		;GET ENABLED CAPABILITIES
+2)		TXNN T1,SC%WHL!SC%OPR!SC%MNT	;IS USER CURRENTLY A WHEEL, OR OPERATOR OR MAINT?
+2)		RETBAD (CAPX2)		;NO, RETURN ERROR CODE
+2)	
+2)	; CHECK SIZE OF ARGUMENT BLOCK
+2)	
+2)		XCTU [ HLRZ T1,1 ]	;GET SIZE OF BLOCK FROM USER
+2)		SKIPG T1		;AT LEAST ONE ITEM REQUESTED ?
+2)		RETBAD (MSTRX3)		;NO, RETURN "ARG BLOCK TOO SMALL" ERROR
+2)	
+2)	; INITIALIZE THE ARGUMENT BLOCK TO BE RETURNED
+
+
+LINE 11, PAGE 36
+1)	;[8976] Initialize returned structure name and alias name to null strings.
+1)	
+1)		MOVEI T1,.MSRSN(P1)	;[8976] Get addr in user space of ptr dest
+1)		MOVEI T2,BHC		;[8976] Get address of null string
+1)		CAIL P4,.MSRSN+1	;[8976] Is he block big enough?
+1)		CALL STOSTR		;[8976] (T1,T2/T1) Store null string
+1)	
+1)		MOVEI T1,.MSRSA(P1)	;[8976] Get addr in user space of ptr dest
+1)		MOVEI T2,BHC		;[8976] Get address of null string
+1)		CAIL P4,.MSRSA+1	;[8976] Is he block big enough?
+1)		CALL STOSTR		;[8976] (T1,T2/T1) Store null string
+1)	
+1)	; SET UP CHANNEL, CONTROLLER, AND UNIT NUMBERS IN ARG BLOCK TO BE RETURNED
+1)	
+1)		UMOVE T1,.MSRCH(P1)	;GET CHANNEL NUMBER FROM USER
+LINE 44, PAGE 31
+2)	; SET UP CHANNEL, CONTROLLER, AND UNIT NUMBERS IN ARG BLOCK TO BE RETURNED
+2)	
+2)		UMOVE P1,2		;GET ADDRESS OF ARGUMENT BLOCK IN USER SPACE
+2)		MOVEI P2,MSTRSB		;GET ADDRESS OF ARGUMENT BLOCK IN MONITOR SPACE
+2)		UMOVE T1,.MSRCH(P1)	;GET CHANNEL NUMBER FROM USER
+
+
+LINE 10, PAGE 39
+1)		CAIGE P4,.MSRSN+1	;[8976] Does arg blk have .MSRSN word?
+1)		JRST MSTRS7		;NO! SKIP STR NAME STRING XFER
+LINE 10, PAGE 34
+2)		XCTU [HLRZ T1,1]	; GET ARG BLK LENGTH
+2)		CAIGE T1,.MSRSN+1	; DOES ARG BLK HAVE .MSRSN WORD?
+2)		  JRST MSTRS7		; NO! SKIP STR NAME STRING XFER
+
+
+; MSTR.NEW.1 & <MONITOR>MSTR.MAC.1 31-Mar-89 2341	PAGE 6
+
+
+
+LINE 14, PAGE 40
+1)		CAIGE P4,.MSRSA+1	;[8976] Does arg block have .MSRSA word?
+1)		JRST MSTRS6		;No, skip alias string copy
+1)		HRRZ T1,MSTRSS		;GET STRUCTURE NUMBER
+LINE 14, PAGE 35
+2)		XCTU [HLRZ T1,1]	; GET ARG BLK SIZE
+2)		CAIGE T1,.MSRSA+1	; DOES IT HAVE .MSRSA WORD
+2)		  JRST MSTRS6		; NO- SKIP ALIAS STRING XFER
+2)		HRRZ T1,MSTRSS		;GET STRUCTURE NUMBER
+
+
+LINE 30, PAGE 40
+1)		MOVE T1,P4		;[8976] Get size of user argument block
+1)		CAILE T1,.MSRLN		;BIGGER THAN MAX ALLOWED ?
+LINE 31, PAGE 35
+2)		XCTU [ HLRZ T1,1 ]	;GET SIZE OF USER ARGUMENT BLOCK
+2)		CAILE T1,.MSRLN		;BIGGER THAN MAX ALLOWED ?
+
+
+LINE 18, PAGE 44
+1)		STKVAR <<MSTDMT,11>>	;[8861] Place to construct notification string
+1)	
+1)	; CHECK SIZE OF USER ARGUMENT BLOCK
+LINE 19, PAGE 39
+2)	; CHECK SIZE OF USER ARGUMENT BLOCK
+
+
+LINE 1, PAGE 46
+1)	;[8861] Construct notification message to send to user whose work was done.
+1)	
+1)		MOVEI T1,MSTDMT		;[8861] Point to place on stack to construct 
+1)		HRLI T1,(POINT 7)	;[8861]  the message we send to user
+1)		MOVE T2,[POINT 7,[ASCIZ/
+1)	[/]]				;[8861] Start message with CRLF and bracket
+1)		CALL MSTASC		;[8861] (T1,T2/T1) Call quick string copy rtn
+1)		MOVE T2,P2		;[8861] Get structure number
+1)		CALL MSTOUT		;[8861] (T1,T1/T1) Insert structure name 
+1)		SKIPE MSTMCF		;[8861] Structure being mounted or dismounted?
+1)		SKIPA T2,[POINT 7,[ASCIZ / Dismounted]
+1)	/]]				;[8861] It was just dismounted
+1)		MOVE T2,[POINT 7,[ASCIZ / Mounted]
+1)	/]]				;[8861] It was just mounted
+1)		CALL MSTASC		;[8861] (T1,T2/T1) Finish up the string
+1)	
+1)	;[8861] Send notification message to user for which this function was done.
+1)	
+1)		HLRE T1,JOBPT(P4)	;GET TTY OF OBJECT JOB
+1)		JUMPL T1,RSKP		;[8861] Skip return if it was detached
+1)		TXO T1,.TTDES		;[7190] MAKE LINE NUMBER INTO DESIGNATOR
+
+; MSTR.NEW.1 & <MONITOR>MSTR.MAC.1 31-Mar-89 2341	PAGE 7
+
+
+1)		HRROI T2,MSTDMT		;[8861] Point to the text string we just built
+1)		TTMSG%			;[8861] Send that to the user's terminal
+1)		 ERJMP .+1		;[7190] 
+LINE 28, PAGE 40
+2)		HLRE T1,JOBPT(P4)	;GET TTY OF OBJECT JOB
+2)		SKIPGE T1		;IS IT DETACHED?
+2)		RETSKP			;YES, FORGET MESSAGE
+2)	
+2)	;SEND MESSAGE OF STRUCTURE MOUNT TO TTY, IF DONE TO ANOTHER JOB
+2)	
+2)		TXO T1,.TTDES		;[7190] MAKE LINE NUMBER INTO DESIGNATOR
+2)		HRROI T2,[ASCIZ /
+2)	[/]				;[7190] 
+2)		TTMSG%			;[7190] 
+2)		 ERJMP .+1		;[7190] 
+2)		MOVE T2,P2		;GET STRUCTURE NUMBER
+2)		CALL MSTOUT		;OUTPUT STRUCTURE NAME
+2)		HRROI T2,[ASCIZ / Mounted]
+2)	/]
+2)		SKIPE MSTMCF		;IF STRUCTURE IS BEING DISMOUNTED,
+2)		HRROI T2,[ASCIZ / Dismounted]
+2)	/]				; SAY SO
+2)		TTMSG%			;[7190] 
+2)		 ERJMP .+1		;[7190] 
+
+
+LINE 38, PAGE 46
+1)		ENDSV.			;[8861] End of STKVAR
+   {Skipped 1 page and 1 line}
+1)	;Set structure mount attribute .MSCSM
+LINE 1, PAGE 41
+2)	;Set structure mount attribute .MSCSM
+
+
+LINE 39, PAGE 62
+1)		 JRST [	CAIE T1,DEVX2	;[8890] Device already assigned to another job?
+1)			MOVX T1,STRX01	;[8890] No, get "Structure is not mounted"
+1)			MOVEM T1,FSTERR	;SAVE ERROR CODE
+LINE 39, PAGE 56
+2)		 JRST [	MOVX T1,STRX01	;GET ERROR CODE
+2)			MOVEM T1,FSTERR	;SAVE ERROR CODE
+
+
+; MSTR.NEW.1 & <MONITOR>MSTR.MAC.1 31-Mar-89 2341	PAGE 8
+
+
+
+LINE 8, PAGE 64
+1)	MSTOUT:	MOVE T2,STRTAB(T2)	;GET STRUCTURE BLOCK ADDRESS
+1)		MOVEI T2,SDBNAM(T2)	;GET ADDRESS OF STRUCTURE NAME
+1)		HRLI T2,(POINT 6)	;[8861] Set up 6-bit pointer
+1)		MOVEI T4,6		;THERE IS A MAXIMUM OF 6 BYTES
+1)	MSTOU1:	ILDB T3,T2		;[8861] Get 6-bit character
+1)		JUMPE T3,MSTOU2		;[8861] Get out of loop if zero (space) byte
+1)		ADDI T3,"A"-'A'		;[8861] Convert it to printable 7-bit byte
+1)		IDPB T3,T1		;[8861] Store that in the destination string
+1)		SOJG T4,MSTOU1		;LOOP IF MORE CHARACTERS
+1)	MSTOU2:	RET			;[8861] Return now if done
+1)	
+1)	;[8861] Routine to quickly append one ASCIZ string to another.
+1)	;
+1)	;Accepts: T1/ destination byte pointer
+1)	;	  T2/ source byte pointer
+1)	;Returns +1 always, T1/ updated byte pointer, null at pointer for ASCIZ string
+1)	
+1)	MSTASC:	ILDB T3,T2		;Load a character
+1)		IDPB T3,T1		;Store one character
+1)		JUMPN T3,MSTASC		;Loop for all characters
+1)		MOVNI T3,1		;Load a -1
+1)		ADJBP T3,T1		;Backup over the null
+1)		MOVEM T3,T1		; and store the pointer back
+1)		RET			;Return
+   {Skipped 1 page and 1 line}
+1)	;SNDUSG - ROUTINE TO SEND USAGE ACCOUNTING INFORMATION FOR STR MOUNTS
+LINE 8, PAGE 58
+2)	MSTOUT: SAVEQ
+2)		MOVE T2,STRTAB(T2)	;GET STRUCTURE BLOCK ADDRESS
+2)		MOVEI T2,SDBNAM(T2)	;GET ADDRESS OF STRUCTURE NAME
+2)		HRLI T2,440600		;SET UP 6-BIT POINTER
+2)		MOVE T3,[440700,,Q1]	;SET UP BYTE PTR TO Q REGISTERS
+2)		MOVEI T4,6		;THERE IS A MAXIMUM OF 6 BYTES
+2)		SETZB Q1,Q2		;ZERO THE STRING AREA
+2)	MSTOU1:	ILDB Q3,T2		;GET 6-BIT CHARACTER
+2)		JUMPE Q3,MSTOU2		;GET OUT OF LOOP IF ZERO BYTE
+2)		ADDI Q3,40		;CONVERT IT TO 7-BIT
+2)		IDPB Q3,T3		;PUT IT IN TEMPORARY LOCATION
+2)		SOJG T4,MSTOU1		;LOOP IF MORE CHARACTERS
+2)	MSTOU2:	HRROI T2,Q1		;GET POINTER TO TEMP LOC
+2)		TTMSG%			;[7190] OUTPUT IT
+2)		 ERJMP .+1		;[7190]
+2)		RET
+   {Skipped 1 page and 1 line}
+2)	;SNDUSG - ROUTINE TO SEND USAGE ACCOUNTING INFORMATION FOR STR MOUNTS
+

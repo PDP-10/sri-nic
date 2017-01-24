@@ -1,0 +1,11 @@
+! <6-1-EXEC>MKSUEX.CTL.2, 12-May-85 01:16:26, Edit by WHP4!
+!  .CTL file to compile Stanford command-editing EXEC under batch!
+@ENABLE
+@DEF DSK: DSK:,PS:<6-1-EXEC>
+@DEF BLI: SRA:<BLISS>
+@DEF SYS: DSK:,PS:<6-1-MONITOR>,SYS:,BLI:
+@COMPILE @MKSUEX.CMD
+@LINK
+*@LNSUEX.CCL
+@RUN EXEC
+*YES

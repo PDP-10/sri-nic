@@ -1,0 +1,202 @@
+;-*-Midas-*-
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	MLIST - Routines to wander through the mailing list file
+;;	and find entries.
+;;
+;;	To map in the database, call MMAPIN with T containing the
+;;	starting page in your address space;  it will return +1 if
+;;	failed, with A containing the address of an error string,
+;;	else +2.
+;;
+;;	MUNMAP, taking no arguments, will unmap the file.
+;;
+;;	To look up a string, call MLOOK with AC-T containing either
+;;	the address of the string, or a BP to it.  It will return +1
+;;	if not found, else +2 with T containing the address of the
+;;	start of the expansion list:  (T) is a word ADDR1,,ADDR where
+;;	ADDR2 is the address of the name (as in NAME@SITE), and ADDR2
+;;	is 0 if the name is for the local site, else the address of
+;;	the hostname.  Since the binary file is assembled with all
+;;	addresses relative to page 100, if you mape the file in anywhere
+;;	but there you will have to adjust all addresses you get by
+;;	MLIST"BINOFF.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+.BEGIN MLIST
+
+  Call=<PUSHJ P,>
+Return=<POPJ P,>
+
+Define TYPE &string
+	Hrroi 1,[Asciz string]
+	PSOUT
+Termin
+
+MBoxNm:	Asciz "MAIL:MAILING-LISTS.BIN"
+
+.SCALAR BINJFN		;JFN on file
+.SCALAR BINSIZ		;Size in pages of file
+.SCALAR BINPAG		;Page# in address space of start
+.SCALAR BINADR		;Address of start
+
+.SCALAR WRTTIM
+.SCALAR HSHMOD
+.SCALAR HSHTAB
+.SCALAR BINOFF
+
+;;
+;;	MMAPIN:  T/ page# to map at
+;;
+
+MMAPIN:	Skipe BinJFN
+	  Jrst [Movei T,[Asciz "Already mapped in"]
+		Return]
+	Movem T,BINPAG		;Save page# of start.
+
+	Movsi 1,(GJ%SHT\GJ%OLD)
+	Hrroi 2,MBoxNm
+	GTJFN
+	  Jrst [Movei T,[Asciz "Can't get file"]
+		Return]
+	Movem 1,BINJFN
+	Movei 2,OF%RD		;36-bit open
+	OPENF
+	  Jrst [Move 1,BINJFN
+		RLJFN
+		  Jfcl
+		Movei T,[Asciz "Can't open file"]
+		Return]
+	Move 2,[1,,.FBBYV]	;rubbish,,#pages
+	Movei 3,T		;Return it here
+	GTFDB
+	Hrrzm T,BINSIZ		;#pages
+	Hrlz 1,BinJFN		;JFN,,0
+	Move 2,BinPag
+	Hrli 2,.FHSLF		;.FHSLF,,mempage
+	Move 3,BinSiz
+	Hrli 3,(PM%CNT\PM%RD)	;bits,,#pages  want read access
+	PMAP
+
+	Move T,BinPag
+	Imuli T,1000
+	Movem T,BINADR		;Address of start.
+	Aoj T,
+	Movem T,WRTTIM
+	Aoj T,
+	Movem T,HSHMOD
+	Aoj T,
+	Movem T,HSHTAB
+
+	Move T,BINADR		;Offset in words  Mailing list binary is
+	Subi T,<100*1000>	;assembled with address' page-100-based,
+	Movem T,BINOFF		;so we need to adjust for where in mem it goes
+
+	Move T,@BINADR		;Check first word for validity
+	Came T,[Sixbit "XMLBX"]
+	  Jrst [Movei T,[Asciz "Bad format binary file"]
+		Return]
+PopJ1:	Aos (P)
+CPopj:	Return
+
+
+MUnmap:	Skipn BINJFN
+	  Jrst [Movei A,[Asciz "File is not mapped in"]
+		Return]
+	Seto 1,
+	Move 2,BinPag
+	Hrli 2,.FHSLF
+	Hrrz 3,BinSiz
+	Hrli 3,(PM%CNT)
+	PMAP
+	Move 1,BinJFN
+	CLOSF
+	  Skipa
+	Setzm BINJFN
+	Jrst Popj1
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; Lookup string in hash table;  T/ address of string
+;; Returns +1 not found, +2 found
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+.SCALAR SAVET
+.SCALAR SAVETT
+
+MLook:	Push P,A
+	Push P,B
+	Hlrz TT,T		;Check LH
+	Skipn TT
+	  Hrli T,440700		;If gave an address, make into BP
+	Movem T,SaveT		;Save string pointer
+	CALL HASH		;Hash string into number
+	Movem TT,SaveTT		;Save first index
+	Move T,TT
+HSHLK1:	IDIV T,@HSHMOD		;Divide by modulus
+	Add TT,HSHTAB
+	SKIPN A,(TT)		;Look for entry here
+	  JRST MLookd		;Not found, return
+	Add A,BinOff		;Make into our relative address
+	HRLI A,440700
+	MOVE B,SaveT		;Given string
+	CALL CMPSTR		;Compare strings
+	  JRST HSHLKN		;Match, found
+	  JFCL			;Ahem...
+	AOS T,SaveTT		;Try next entry...
+	JRST HSHLK1
+
+HSHLKN:	Hlrz T,(TT)		;Get address of first expansion...
+	Add T,BinOff		;Make it relative.
+	Aos -2(P)
+MLookd:	Pop P,B
+	Pop P,A
+	Return
+
+;;; Hash string in T until null
+
+HASH:	PUSH P,C
+	SETZ TT,
+HASH1:	ILDB C,T
+	JUMPE C,HASH2
+	LSH TT,7
+	TRZ C,40		;Case independent
+	XORI TT,(C)
+	JRST HASH1
+
+HASH2:	TLC TT,(TT)		;Make positive (18-bits)
+	HLRZ TT,TT
+CPOPCJ:	POP P,C
+	RETURN
+
+;;; Compare strings in A and B
+;;; +1 A=B, +2 A<B, +3 A>B
+
+CMPSTR:	PUSH P,C
+	PUSH P,D
+CMPST1:	ILDB C,A
+	CAIL C,"a
+	 CAILE C,"z
+	  CAIA
+	   SUBI C,"a-"A
+	ILDB D,B
+	CAIL D,"a
+	 CAILE D,"z
+	  CAIA
+	   SUBI D,"a-"A
+	CAME C,D
+	 JRST CMPST2
+	JUMPE C,CMPST6		;Strings match
+	JRST CMPST1
+
+CMPST2:	CAML C,D
+	 AOS -2(P)		;A greater
+	AOS -2(P)
+CMPST6:	POP P,D
+	POP P,C
+	RETURN
+
+	.END MLIST

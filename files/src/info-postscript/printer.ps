@@ -1,0 +1,205 @@
+12-Apr-86 13:10:35-PST,5338;000000000001
+Mail-From: BARCKLAY created at 12-Apr-86 13:10:14
+Return-Path: <egisin%waterloo.csnet@CSNET-RELAY.ARPA>
+Received: from CSNET-RELAY.ARPA by SU-SCORE.ARPA with TCP; Thu 10 Apr 86 14:58:30-PST
+Received: from waterloo by csnet-relay.csnet id a019026; 10 Apr 86 17:29 EST
+Received: by watmath; Thu, 10 Apr 86 17:13:25 est
+Date: Thu, 10 Apr 86 17:13:25 est
+From: Eric Gisin <egisin%waterloo.csnet@CSNET-RELAY.ARPA>
+To: info-postscript@su-score.ARPA
+Subject: C program to convert text files to PostScript
+ReSent-Date: Sat 12 Apr 86 13:10:14-PST
+ReSent-From: Bob Barcklay <BARCKLAY@SU-SCORE.ARPA>
+ReSent-To: INFO-POSTSCRIPT: ;
+ReSent-Message-ID: <12198315846.15.BARCKLAY@SU-SCORE.ARPA>
+
+This program is short and very useful so I'm mailing it to info-postscript.
+
+: This is a shar archive.	Extract with sh, not csh.
+: The rest of this file will extract:
+: Read_me text_ps.1 text_ps.c prapple.com
+echo Extracting Read_me
+sed 's/^X//' > Read_me << 'e-o-f'
+Xtext_ps converts text files to PostScript on stdout.
+XIt has been tested on Unix 4.2 and VMS V4.
+X
+Xtext_ps.c: C source
+Xtext_ps.1: Unix man page
+Xprapple.com: command file for VMS to run text_ps and print the output
+X
+XOur Unix lpr/lpd is locally modified
+Xso I'm not including any printcap stuff or input filters.
+X
+X	Eric Gisin, egisin@waterloo.csnet, egisin@watarts.bitnet
+X
+e-o-f
+echo Extracting text_ps.1
+sed 's/^X//' > text_ps.1 << 'e-o-f'
+X.TH TEXT_PS 1
+X.SH NAME
+Xtext_ps \- convert text to PostScript
+X.SH SYNOPSIS
+X\fBtext_ps\fP [\fB-w\fP] [file ...]
+X.SH DESCRIPTION
+X\fIText_ps\fP converts text files to PostScript on the standard output.
+XIf no files are given, text_ps reads from the standard input.
+XThe \fB-w\fP flag rotates and compresses the page allowing 132 columns.
+X.PP
+XAt Waterloo, \fItext_ps\fP is called as a prefilter
+Xwhen using \fIlpr\fP to a PostScript printer and the default format.
+XIf you send \fItext_ps\fP output to \fIlpr\fP, use the \fB-Fl\fP flag.
+X.SH BUGS
+XOnly the final character is output when several characters are overstuck with backspace.
+X.SH SEE ALSO
+Xprinters(i)
+X.SH AUTHOR
+XEric Gisin (egisin@waterloo.csnet)
+e-o-f
+echo Extracting text_ps.c
+sed 's/^X//' > text_ps.c << 'e-o-f'
+X/*
+X * text-ps: convert text files to PostScript
+X *
+X *	Copyright (c) 1986, Eric Gisin, egisin@waterloo.CSNET
+X *
+X *	This program may be copied and redistributed, provided
+X *	no fee is charged and this copyright notice is preserved.
+X */
+X
+X#include <stdio.h>
+X#include <ctype.h>
+X
+X#define	LLen	132
+X#define	PLen	66
+X
+Xchar *	Head [] = {
+X	"%!PS-Adobe-1.0",
+X	"%%Creator: text_ps.c",
+X	"%%DocumentFonts: Courier",
+X	"/Courier findfont 12 scalefont setfont",
+X	"/S {12 mul 780 exch sub 0 exch moveto show} def",
+X	"/P+ {/Save save def M concat} def",
+X	"/P- {showpage Save restore} def",
+X	NULL};
+Xchar *	Mdef [] = {"/M [1 0 0 1 18 0] def", "/M [0 -.727 0.727 0 21 737] def"};
+X
+Xint	wflag = 0;
+Xint	page = 0;
+X
+Xmain(argc, argv)
+X	char **	argv;
+X{
+X	int	i;
+X	int	nofiles = 1;
+X
+X	for (i = 0; Head[i]!=NULL; i ++)
+X		printf("%s\n", Head[i]);
+X	for (i = 1; i < argc; i ++)
+X	    if (argv[i][0]=='-')
+X		switch (argv[i][1]) {
+X		  case 'w':
+X			wflag = !wflag;
+X			break;
+X		  default:
+X			fprintf(stderr, "Usage: %s [-w] file ...\n", argv[0]);
+X			exit(1);
+X		}
+X	    else {
+X		FILE *	f;
+X		nofiles = 0;
+X		f = fopen(argv[i], "r");
+X		if (f==NULL) {
+X			fprintf(stderr, "%s: Can't open input %s\n", argv[0], argv[i]);
+X			continue;
+X		}
+X		text_ps(f);
+X		fclose(f);
+X	    }
+X	if (nofiles)
+X		text_ps(stdin);
+X}
+X
+Xtext_ps(f)
+X	register FILE *	f;
+X{
+X	register c;
+X	int	row = 0;
+X	int	col = 0;
+X	char	line [LLen+1];
+X
+X	printf("%s\n", Mdef[wflag]);
+X	while (1) switch((c = getc(f))) {
+X	  case EOF:
+X	  case '\r':
+X	  case '\n':
+X	  case '\f':
+X		if (c==EOF && row==0)
+X			return;
+X		if (row==0) {
+X			page ++;
+X			printf("%%%%Page: ? %d\n", page);
+X			printf("P+\n");
+X		}
+X		if (col>0) {
+X			line[(col<LLen) ? col : LLen] = '\0';
+X			putstring(line);
+X			printf("%d S\n", row);
+X		}
+X		if (c=='\n')
+X			row ++;
+X		if (row==PLen || c=='\f' || c==EOF) {
+X			printf("P-\n");
+X			row = 0;
+X		}
+X		if (c==EOF)
+X			return;
+X		col = 0;
+X		break;
+X	  case '\t':
+X		while (col<LLen) {
+X			line[col++] = ' ';
+X			if (col%8 == 0) break;
+X		}
+X		break;
+X	  case '\b':
+X		if (col>0)
+X			col --;
+X		break;
+X	  default:
+X		if (col<LLen)
+X			line[col++] = (isascii(c) && isprint(c)) ? c : ' ';
+X	}
+X}
+X
+Xputstring(s)
+X	register char *s;
+X{
+X	register c;
+X
+X	putchar('(');
+X	while ((c = *s++) != '\0') {
+X		if (c=='\\' || c=='(' || c==')')
+X			putchar('\\');
+X		putchar(c);
+X	}
+X	putchar(')');
+X}
+X
+e-o-f
+echo Extracting prapple.com
+sed 's/^X//' > prapple.com << 'e-o-f'
+X$ ! Print text file on Apple LaserWriter
+X$ !     pra*pple :== @disk$root:[local.apple.cmd]prapple
+X$
+X$       if P1 .eqs. "" then goto usage
+X$       text_ps := $disk$root:[local.apple.cmd]text_ps
+X$       define /user_mode sys$output sys$scratch:prapple.lis
+X$       text_ps 'P1' 'P2' 'P3' 'P4' 'P5' 'P6' 'P7'
+X$       print /queue=apple /form=postscript sys$scratch:prapple.lis /delete
+X$       exit
+X$ usage:
+X$       write sys$error "Usage: prapple [-w] file ..."
+X$       exit
+e-o-f
+exit 0
+

@@ -1,0 +1,343 @@
+;<UTILITIES>PUPDIR.MAC.3, 26-Aug-82 22:30:46, Edit by ADMIN.LOUGHEED
+;Remove a TENEX error code
+;<UTILITIES>PUPDIR.MAC.2, 26-Aug-82 22:25:41, Edit by ADMIN.LOUGHEED
+;Look for network directory on SYSTEM: instead of <SYSTEM>
+;Set NTDSIZ to a generous value (10, was 3) 
+
+	title	pupdir - output contents of <system>pup-network.directory
+
+;	***************************************************
+;	*  Andy J. Sweer                     27 Feb 1980  *
+;	*  SUMEX Computer Project,   Stanford University  *
+;	*  Funded by NIH Biotechnology Resources Program  *
+;	*  under grant RR-00785.			  *
+;	***************************************************
+
+	search	monsym
+
+ntdsiz==10
+netdir=100000
+readb==100000
+fdbver==7
+namltp:	block	1
+adrltp:	block	1
+ntdver:	block	1
+
+f==0
+a==1
+b==2
+c==3
+d==4
+
+i==14
+j==15
+k==16
+
+p==17
+
+asceol==37
+asccr==15
+
+	opdef	call	[pushj	p,]
+	opdef	ret	[popj	p,]
+
+	define	type(string),<
+	call	[push	p,a
+		hrroi	a,[asciz/string/]
+		psout
+		pop	p,a
+		ret]
+> ;end define type
+
+lpdl==100
+start:	reset
+	move	a,[sixbit/pupdir/]
+	setnm
+	move	p,[iowd	lpdl,pdl]
+	setzm	s.zero
+	move	a,[s.zero,,s.zero+1]
+	blt	a,e.zero		;locs to clear on startup
+
+	call	ntdini			;map in <system>pup-network.directory
+	 jrst	[type	<
+? Error mapping <system>pup-network.directory>
+		jrst	exit]
+
+	move	i,namltp		; i _ aobjn ptr to name lookup table
+	hrrz	j,i			; j _ byte ptr to name lookup table 
+	lsh	j,-1
+	addi	j,netdir
+	hrli	j,442000		; 16 bit bytes
+l1:	ildb	k,j			; k _ ptr to next name block
+	lsh	k,-1
+	push	p,k			; save ptr to original name block
+l2:	push	p,k			; save ptr to current name block
+	addi	k,netdir+1		; k _ byte ptr to string
+	pushj	p,dokstr		; output BCPL string pointed to by k
+	pop	p,k			; restore ptr to current name block
+	ldb	k,[point 16,netdir(k),15] ;get ptr to next name block for
+	jumpe	k,l3			; entry, jump if none
+	type	<, >
+	lsh	k,-1
+	jrst	l2
+l3:	pop	p,k			; restore ptr to original name block
+	type	< = >
+	ldb	d,[point 16,netdir(k),31] ; d _ ptr to entry block
+	lsh	d,-1
+	ldb	d,[point 16,netdir(d),31] ; d _ ptr to address block
+	lsh	d,-1
+l4:	push	p,d			; save ptr to current address block
+	addi	d,netdir+1		; construct byte pointer to address
+	hrli	d,441000		; 8 bit bytes
+	ildb	b,d			; get net
+	movei	c,^d8			; octal
+	skipe	b			; eliminate zeros
+	 call	numout
+	type	<#>
+	ildb	b,d			; get host
+	skipe	b			; eliminate zeros
+	 call	numout
+	type	<#>
+	add	d,[001000,,0]		; convert to 16 bit byte ptr
+	ildb	b,d			; get 1st 16 bits of socket
+	lsh	b,^d16			; position
+	push	p,b			; save
+	ildb	b,d			; get 2nd 16 bits of socket
+	ior	b,0(p)			; combine
+	skipe	b			; eliminate zeros
+	 call	numout
+	pop	p,b			; readjust stack
+	pop	p,d			; restore ptr to address block
+
+	pushj	p,doattr		; process attributes if any
+
+	ldb	d,[point 16,netdir(d),15] ; get ptr to next address block
+	jumpe	d,l5			; none
+	type	<, >
+	lsh	d,-1
+	jrst	l4			; process next address block
+l5:
+	call	crlf
+	aobjn	i,l1
+	jrst	exit
+
+exit:	seto	a,
+	closf				;close and release all jfns
+	 jfcl
+	haltf
+	jrst	start			;resume at the beginning
+; d has ptr to address block
+doattr:	push	p,i			; save an index reg
+	push	p,j
+	push	p,k
+	ldb	i,[point 16,netdir+2(d),31] ;get number of attributes
+	jumpe	i,doattx		; none, exit
+	movei	j,netdir+3(d)		; construct byte ptr to 1st attribute
+	hrli	j,442000		; 16 bit pointers
+	type	<;>
+doa1:	type	< >
+	ildb	k,j
+	pushj	p,dokstr
+	type	<: >
+	ildb	k,j
+	pushj	p,dokstr
+	sojg	i,doa1
+doattx:	pop	p,k
+	pop	p,j
+	pop	p,i			; restore index reg
+	popj	p,
+dokstr:	push	p,a			; save all regs used
+	push	p,b
+	push	p,c
+	push	p,d
+	push	p,k
+	hrli	k,441000		; 8 bit bytes
+	ildb	d,k			; d _ char count a la BCPL format
+	movei	a,101
+	setz	c,
+	ildb	b,k			; b _ next char
+	bout
+	sojg	d,.-2
+	pop	p,k			; restore all regs used
+	pop	p,d
+	pop	p,c
+	pop	p,b
+	pop	p,a
+	popj	p,
+; Initialize network directory
+; Returns +1:  Unsuccessful, 1/ Error # (assuming call from OPRFN)
+;	+2:  Successful
+; Clobbers A-C and probably others
+
+NTDINI:	MOVSI A,(1B2+1B17)	; Old file, name from string
+	HRROI B,[ASCIZ /SYSTEM:PUP-NETWORK.DIRECTORY/]
+	GTJFN
+	 POPJ P,		; Failed, take fail return
+	PUSH P,A		; Ok, save JFN
+	MOVEI B,1B19+1B25	; Read, thawed
+	OPENF			; Open file
+	 JRST [	EXCH A,0(P)	; Failed, save error code
+		RLJFN		; Release JFN
+		 CAI
+		JRST NTDINZ]	; Fail return
+	SIZEF			; Get # pages in file
+	 ERJMP NTDINX
+	CAILE C,NTDSIZ		; Too big to map?
+	 JRST [	MOVEI A,MONX01	; Yes, fail
+		JRST NTDINX ]
+
+; Map in all pages of the directory file
+	MOVN A,C		; Make page counter for AOBJN
+	MOVSI A,(A)
+NTDIN2:	PUSH P,A		; Save it
+	HRL A,-1(P)		; Make JFN,,page #
+	HRRZ B,0(P)		; Recover page #
+	ADDI B,NETDIR/1000	; Make fork page number
+	hrli	b,400000	; map to this fork
+	HRLzI c,READB		; Only read access wanted
+	pmap			; Map page into monitor space
+	POP P,A			; Recover counter
+	AOBJN A,NTDIN2		; Repeat for all pages
+
+; Done mapping pages, now setup some derived constants
+	HRRZ A,0(P)		; Recover JFN
+	MOVE B,[1,,FDBVER]	; Get file version
+	MOVEI C,C
+	GTFDB
+	HLRZM C,NTDVER		; Store for return by PUPNM
+	MOVE A,NETDIR		; Get name count, pointer
+	PUSHJ P,NTDCNV		; Convert to -count,,pointer
+	MOVEM A,NAMLTP		; Store name lookup table ptr
+	MOVE A,NETDIR+1		; Get address count, pointer
+	PUSHJ P,NTDCNV		; Convert to -count,,pointer
+	MOVEM A,ADRLTP		; Store address lookup table ptr
+
+	AOS -1(P)		; Preset skip return
+
+; NTDINI (cont'd)
+
+; Here on error, with A/ Error code, 0(P)/ JFN
+NTDINX:	EXCH A,0(P)		; Save error #, recover JFN
+	CLOSF			; Close file (pages stay mapped)
+;	 BUG(CHK,<NTDINI: Unaccountable CLOSF failure>)
+	jfcl
+NTDINZ:	POP P,A			; Restore error # (if any)
+	POPJ P,			; Return
+
+
+; Convert NETDIR lookup pointer to usable form
+;	A/ BYTE(16) count, pointer
+; Returns +1:
+;	A/ -count ,, pointer
+; Clobbers B
+
+NTDCNV:	LSHC A,-^D20		; Right-justify count
+	MOVN A,A		; Negate count
+	LSH A,2			; Vacate 2 low-order bits
+	LSHC A,^D16		; Make -count,,pointer
+	POPJ P,
+crlf:	type	<
+>
+	ret
+
+tab:	type	<	>
+	ret
+
+decin:	push	p,[^d10]		;arg to numin
+	caia
+octin:	push	p,[^d8]
+numin:	push	p,a			;preserve regs
+	push	p,c
+num.1:	movei	a,101			;primary input
+	move	c,-2(p)			;pick up radix
+	nin
+	 jrst	numie			;some kind of nin error
+	push	p,b			;save the number input
+	bkjfn				;back up a char
+	 jrst	numib
+	bin				;and see what he terminated with
+	caie	b,asceol		;eol or
+	cain	b,asccr			;carriage return?
+	 jrst	num.2			;yes, adjust stack and return
+numib:	pop	p,b			;no, throw away input
+numie:	move	b,-2(p)			;get radix requested
+	cain	b,^d10
+	 type	<
+Decimal number please >
+	cain	b,^d8
+	 type	<
+Octal number please >
+	jrst	num.1
+num.2:	pop	p,b			;restore number input
+	pop	p,c			;and other regs
+	pop	p,a
+	pop	p,0(p)			;remove radix from stack
+	ret
+
+octout:	push	p,c
+	movei	c,10
+	call	numout
+	pop	p,c
+	ret
+
+decout:	push	p,c
+	movei	c,^d10
+	call	numout
+	pop	p,c
+	ret
+
+numout:	push	p,a
+	movei	a,101
+	nout
+	 jrst	[call	jsyser
+		type	<at loc >
+		hrrz	b,-2(p)
+		subi	b,1
+		movei	c,10
+		nout
+		 jfcl 			;basicall impossible
+		type	<type CONTINUE to resume>
+		haltf
+		jrst	.+1]
+	pop	p,a
+	ret
+
+;assumes sixbit arg in c
+sixout:	push	p,a
+	push	p,b
+	push	p,c
+	movei	a,101
+six.1:	movei	b,0
+	lshc	b,6
+	jumpe	b,six.2
+	addi	b,40
+	bout
+	jrst	six.1
+six.2:	pop	p,c
+	pop	p,b
+	pop	p,a
+	ret
+
+jsyser:	push	p,a			;preserve all regs
+	push	p,b
+	push	p,c
+	type	<
+JSYS error - >
+	movei	a,101
+	hrloi	b,400000		;this fork, most recent error
+	setz	c,
+	erstr
+	 jfcl
+	 jfcl
+	call	crlf
+	pop	p,c
+	pop	p,b
+	pop	p,a
+	ret
+s.zero:
+
+pdl:	block	lpdl
+
+e.zero==.-1
+
+	end	start

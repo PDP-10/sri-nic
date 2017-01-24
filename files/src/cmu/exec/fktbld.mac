@@ -1,0 +1,296 @@
+;FKTBLD builds the font keyword table used by the Exec for parsing dover
+;style names from the file FON:FONTS.WID. It makes the Exec's task much
+;faster and much simpler.
+;
+;This file is the source for both the program (RELFLG=1) and the universal
+;FKTBLD.UNV, which contains definitions useful in accessing the tables.
+;
+;The file generated has the following format:
+;
+;Page 0: TBLUK table (with all addresses 0-relative) of keywords.
+;Pages 1+: Storage space for keywords and data.
+;
+;Each TBLUK entry points to a 2-word block that contains the font family code
+;and a pointer to a linked-list of font entries.
+;Each font entry is two words. The first word points to the next entry for this
+;font family, the second word is the style value for that instantiation of the
+;font.
+;
+;Note: ALL pointers are file relative and must be indexed by the starting
+;address that the keyword file is mapped.
+
+IFNDEF RELFLG,<RELFLG==0>	;Default to universal
+DEFINE UNV,<IFE RELFLG>
+DEFINE REL,<IFN RELFLG>
+
+UNV,<	UNIVERSAL FKTBLD>
+REL,<	TITLE FKTBLD
+	SEARCH MONSYM,MACSYM
+	.REQUIR SYS:MACREL
+    >
+
+DEFINE FKTNAM <ASCIZ/FON:FONT-KEYWORD-TABLE.BIN/>
+
+FN%FAM==776000000000		;Mask for family code (8 bits)
+FN%FAC==001400000000		;Mask for face code (2 bits)
+  .FFMED==0			;Medium face
+  .FFLGT==1			;Light face
+  .FFBLD==2			;Bold face
+FN%WID==000300000000		;Mask for width code (2 bits)
+  .FWREG==0			;Regular width
+  .FWCOM==1			;Compressed width
+  .FWEXP==2			;Expanded width
+FN%ITL==000040000000		;Mask for italic flag (1 bit)
+  .FIREG==0			;Regular
+  .FIITL==1			;Italic
+FN%PRO==FN%FAC!FN%WID!FN%ITL	;Font face properties mask
+FN%SIZ==000000177777		;Mask for size (16 bits)
+
+;Define offsets in font list header (pointed to by TBLUK table)
+
+	PHASE 0
+.FHCOD:!BLOCK 1			;Font family code
+.FHLST:!BLOCK 1			;Pointer to list of entries for this code
+.FHSIZ:!BLOCK 0			;Size of header entry
+	DEPHASE
+
+;Define offsets in font list descriptor entry
+
+	PHASE 0
+.FDNXT:!BLOCK 1			;Pointer to next entry
+.FDVAL:!BLOCK 1			;Font/style value for this entry
+.FDKEY:!BLOCK 1			;Index into keyword table for family name
+.FDSIZ:!BLOCK 0			;Size of entry
+	DEPHASE
+
+UNV,<	
+	END			;End of universal file
+    >
+
+STDAC.				;Standard ACs
+NUPDL==20			;Stack size
+FONPAG==100
+FONBUF==FONPAG_^D9
+KEYPAG==600
+KEYBUF==KEYPAG_^D9
+KEYTAB==KEYBUF			;Beginning of TBLUK table
+KEYMAX==777			;Allow for this many font keywords
+KEYDAT==KEYBUF+KEYMAX+1		;Freespace area for keywords/data
+KEYDIF==KEYDAT-KEYTAB
+
+DEFINE EMSG(MSG) <
+	HRROI T1,[ASCIZ"MSG"]
+	ESOUT%>
+
+DEFINE ECMSG(MSG) <
+	HRROI T1,[ASCIZ"FKTBLD: MSG
+"]
+	ESOUT%>
+
+DEFINE ERROR(MSG) <
+	ERJMP [	EMSG <MSG>
+		TMSG < - >
+		MOVX T1,.PRIOU
+		MOVX T2,<.FHSLF,,-1>
+		SETZ T3,
+		ERSTR%
+		 TRNA
+		 TRN
+		HALTF%
+		JRST .-1]>
+
+FONJFN:	BLOCK 1
+FONSIZ:	BLOCK 1
+KEYJFN:	BLOCK 1
+PDL:	BLOCK NUPDL
+
+START::	RESET%
+	MOVE P,[IOWD NUPDL,PDL]	;Initialize the stack
+	MOVX T1,<GJ%SHT!GJ%OLD>	;File must exist
+	HRROI T2,[ASCIZ/FON:FONTS.WID/]
+	GTJFN%			;Get a jfn on it
+	 ERROR <Cannot find FON:FONTS.WID>
+	MOVX T2,OF%RD		;Need read access
+	OPENF%			;Open it
+	 ERROR <Cannot open FON:FONTS.WID>
+	MOVEM T1,FONJFN		;Save the JFN away
+	MOVX T1,<GJ%SHT!GJ%FOU>	;Short form, new gen
+	HRROI T2,[FKTNAM]
+	GTJFN%			;Get a jfn on it
+	 ERROR <Cannot obtain jfn on keyword file>
+	MOVX T2,OF%WR		;Want write access
+	OPENF%			;Get it
+	 ERROR <Cannot open keyword file>
+	MOVEM T1,KEYJFN		;Stash it
+	MOVE T1,FONJFN		;Get back jfn
+	SIZEF%			;Get size
+	 TRN			;Shouldn't fail
+	MOVEM T3,FONSIZ		;Save it
+	HRLZS T1		;Copy JFN to LH
+	MOVX T2,<.FHSLF,,FONPAG> ;This process, this page
+	TXO T3,<PM%RD!PM%CNT>	;PMAP flags
+	PMAP%			;Map in the font file
+	MOVE Q1,[POINT 8,FONBUF] ;Initialize pointer into font file
+	MOVEI Q2,KEYDAT-KEYTAB	;Make 0-relative freespace pointer
+	MOVX T1,<0,,KEYMAX>	;Initialize table header
+	MOVEM T1,KEYTAB		;...
+	DO.			;Start loop
+	  ILDB T1,Q1		;Get byte from font file
+	  ILDB T2,Q1		;Skip over length part
+	  LSH T1,-4		;Make 4-bit type code
+	  CALL @[RSKP		;Type 0 record is end
+		 TYPE1		;Type 1 record
+		 R		;Type 2 record
+		 R		;Type 3 record
+		 TYPE4		;Type 4 record
+		](T1)		;Dispatch
+	  LOOP.			;And loop back
+	ENDDO.
+	HLLZ T1,KEYTAB		;Get number of entries in keyword table
+	MOVNS T1		;Make negative
+	HRRI T1,KEYTAB+1	;Point at first entry
+	MOVSI T2,-KEYTAB	;Value to adjust by
+	DO.			;Main loop
+	  ADDM T2,(T1)		;Make entry 0-relative
+	  AOBJN T1,TOP.		;Do for all
+	ENDDO.
+	SETO T1,		;Deleting pages
+	MOVX T2,<.FHSLF,,FONPAG> ;From font file area
+	MOVE T3,FONSIZ		;This many
+	TXO T3,PM%CNT		;Flag it
+	PMAP%			;And delete 'em
+	MOVE T1,FONJFN		;Get back JFN
+	CLOSF%			;And flush it
+	 TRN
+	MOVX T1,<.FHSLF,,KEYPAG> ;This process, keyword page
+	HRLZ T2,KEYJFN		;To keyword file, page 0
+	MOVEI T3,1000(Q2)	;Get freespace end pointer
+	IDIVI T3,1000		;Make a page count
+	TXO T3,PM%CNT!PM%WR	;Flags
+	PMAP%			;Write the pages out
+	MOVE T1,KEYJFN		;Get jfn again
+	TXO T1,CO%NRJ		;Don't release...
+	CLOSF%			;And close it
+	 TRN
+	TMSG <FKTBLD: >
+	MOVX T1,.PRIOU		;To terminal
+	MOVE T2,KEYJFN		;Jfn on keyword file
+	SETZ T3,		;Use default format
+	JFNS%			;Print it
+	TMSG < written.
+>
+	HALTF%
+	JRST START
+
+;Process a type 1 (font string/code entry). Generates keyword string, table
+;entry, and font entry list header.
+
+TYPE1:	MOVE T1,[POINT 7,KEYTAB] ;Point at table
+	ADD T1,Q2		;Add on freespace pointer
+	ILDB Q3,Q1		;Get first byte
+	ILDB T3,Q1		;And second byte of numeric code
+	LSH Q3,^D8		;Make a 16-bit
+	ADD Q3,T3		; quantity
+	ILDB T3,Q1		;Get string length byte
+	MOVEI T4,^D19		;Load max length
+	DO.
+	  ILDB T2,Q1		;Get a character
+	  IDPB T2,T1		;Append onto keyword
+	  SUBI T4,1		;Decrement count in record
+	  SOJG T3,TOP.		;Loop for all characters in string
+	ENDDO.
+	ADJBP T4,Q1		;Skip to beginning of next record
+	MOVE Q1,T4		;Get back pointer
+	IDPB T3,T1		;Append a null to the keyword string
+	MOVEI T2,-<KEYTAB-1>(T1) ;Make new pointer
+	MOVEM Q3,KEYTAB+.FHCOD(T2) ;Put the font code in that location
+	SETZM KEYTAB+.FHLST(T2)	;Indicate no font entry list yet
+	HRLI T2,KEYTAB(Q2)	;Put actual pointer to string in LH
+	MOVEI T1,KEYTAB		;Point at keyword table
+	TBADD%			;Add this keyword
+	 ERROR <TBADD failed>	;Punt...
+	MOVEI Q2,.FHSIZ(T2)	;Make new freespace pointer
+	RET			;And done
+
+;Process a type 4 (font index) entry. Creates a new font list entry.
+
+TYPE4:	SETZ Q3,		;Clear out type
+	ILDB T4,Q1		;Get family code byte from index entry
+	DPB T4,[POINTR Q3,FN%FAM] ;Put appropriate place in style code
+	ILDB T2,Q1		;Get face code
+	CAILE T2,^D53		;Normal font?
+	IFSKP.			;Yes. Extract face info
+	  CAILE T2,^D36		;"Other" encoding?
+	   SUBI T2,^D36		;Nuke it
+	  CAILE T2,^D18		;"ASCII" format?
+	   SUBI T2,^D18		;Nuke bits
+	  MOVX T3,.FWREG	;Assume regular width
+	  CAIGE T2,^D12		;Expanded width?
+	  IFSKP.		;Yes
+	    MOVEI T3,.FWEXP	;Get the copde
+	    SUBI T2,^D12	;Subtract off this value
+	  ELSE.
+	    CAIGE T2,^D6	;Compressed width?
+	    IFSKP.		;Yes
+	      MOVEI T3,.FWCOM	;Get the value
+	      SUBI T2,^D6	;Subtract it off
+	    ENDIF.
+	  ENDIF.
+	  DPB T3,[POINTR Q3,FN%WID] ;Set up width property
+	  MOVEI T3,.FFMED	;Assume medium face code
+	  CAIGE T2,^D4		;Light face?
+	  IFSKP.		;Yes
+	    MOVEI T3,.FFLGT	;Use this value
+	    SUBI T2,^D4		;And subtract coding
+	  ELSE.
+	    CAIGE T2,^D2	;Bold face?
+	    IFSKP.		;Yes
+	      MOVEI T3,.FFBLD	;Get the value for it
+	      SUBI T2,^D2	;And subtract it off
+	    ENDIF.
+	  ENDIF.
+	  DPB T3,[POINTR Q3,FN%FAC] ;Save the face value
+	  SKIPE T2		;Any italic value left on?
+	   TXO Q3,FN%ITL	;Then lite the bit
+	ENDIF.
+	IBP Q1			;Skip BC byte
+	IBP Q1			;And EC byte
+	ILDB T2,Q1		;Get first byte of size
+	ILDB T3,Q1		;And second byte of size
+	LSH T2,^D8		;Shift first byte
+	ADD T2,T3		;And add second byte
+	DPB T2,[POINTR Q3,FN%SIZ] ;And save the size
+	MOVEI T1,5*2		;Want to skip over next 5 words in file
+	ADJBP T1,Q1		;Skip them
+	MOVE Q1,T1		;And get back pointer
+	HLLZ T1,KEYTAB		;Get count of keyword table entries
+	MOVNS T1		;And make negative
+	HRRI T1,KEYTAB+1	;Point at first keyword table entry
+	DO.
+	  HRRZ T2,(T1)		;Get data for keyword table entry
+	  MOVE T3,KEYTAB(T2)	;Get family code stored there
+	  CAMN T3,T4		;Same as this one?
+	   EXIT.		;Leave the loop, then
+	  AOBJN T1,TOP.		;Move on to next keyword table entry
+	  EMSG <Font code >	;Start the message
+	  MOVEI T1,.PRIOU	;To terminal
+	  MOVE T2,T4		;Get family code
+	  MOVEI T3,^D8		;In octal
+	  NOUT%			;Print it
+	   TRN
+	  TMSG < not found.
+>
+	  HALTF%		;Punt
+	  JRST .-1
+	ENDDO.			;End of loop
+	MOVEM Q3,KEYTAB+.FDVAL(Q2) ;Put font/style value into new block
+	MOVEI T1,-KEYTAB(T1)	;Make index into keyword table
+	MOVEM T1,KEYTAB+.FDKEY(Q2) ;Save the index back into the keyword table
+	MOVE T1,Q2		;Get pointer to new block
+	EXCH T1,KEYTAB+.FHLST(T2) ;Put this block at the head of this list
+	MOVEM T1,KEYTAB+.FDNXT(Q2) ;And link the previous block in
+	ADDI Q2,.FDSIZ		;Increment freespace pointer
+	RET			;Done
+
+	END START
+

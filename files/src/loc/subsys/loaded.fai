@@ -1,0 +1,250 @@
+;<SOURCES>LOADED.FAI.3, 28-Sep-79 15:05:42, Edit by MCLURE
+;Change to CERBERUS data directory
+
+	title	LoadED - Loadav gathererer (DanG)
+	search	monsym
+
+
+snozei	__ 5*=60*=1000			; Interval between data measurments
+recsiz	__ 1+10				; Date (1 wd) 1 6B byte/.5 hr (8 wd)
+nwrite	__ 1				; Force disk update every n data wrts
+sys5la	__ 15				; Index into SYSTAT table for 5min LA
+
+
+t	__ 10
+u	__ t+1				; Relative order must be for idiv
+v	__ u+1
+bp	__ v+1				; Byte pointer for la byte
+na	__ 14				; Number of averages
+la	__ 15				; Average LA byte
+n	__ 16				; Num of writes since last disk update
+p	__ 17				; Pdl pointer
+
+
+opdef	call	[pushj	p, 0]
+opdef	ret	[popj	p, 0]
+
+
+begin:	move	p, [iowd npdl, pdl]
+	movei	1, .fhslf		; Bypass disk storage limits (sigh)
+	rpcap
+	seto	3,
+	epcap
+	move	1, ['SYSTAT']		; Find out SYSTAT table number
+	sysgt
+	hrrzm	2, systat
+	movei	n, nwrite		; Initialize counter
+
+
+getf:	movsi	1, (gj%old+gj%sht)	; Get data file
+	hrroi	2, filnam
+	gtjfn
+	 jrst	makef			; If there isn't one, make one
+	move	2, [44B5+of%rd+of%wr]	; Open it
+	openf
+	 call	error
+	hrrzm	1, jfn			; Remember the jfn
+
+	setzm	filpos
+	bin
+	jumpe	2, makday		; EOF or empty file
+	push	p, 2
+getdat:	seto	2,			; Get current date
+	setz	4,
+	odcnv
+	 erjmp	[ movei	1, =500
+		  disms
+		  jrst	.-1 ]
+	hrrzm	3, today
+	hrrzi	u, (4)
+	trz	4, -1			; Fix it for midnight
+	idcnv
+	 call	error
+	hlrz	1, 2			; Care only about dates
+	pop	p, 2
+	push	p, 1			; Remember current date
+	hlrz	2, 2
+	subi	1, (2)			; Make index into file
+	imuli	1, recsiz
+	movem	1, filpos		; Remember position in file
+	movei	3, (1)
+	move	1, jfn
+	rin				; Read date
+	jumpe	2, makday		; No record here? Make one
+	movem	2, record		; Save date
+	pop	p, 1			; Restore today's date
+	hlrz	2, 2
+	caie	2, (1)			; Consistancy check
+	 call	error
+	move	1, jfn
+	move	2, [point 36,record+1]	; Read in rest of record
+	movni	3, recsiz-1
+	sin
+
+makidx:	idivi	u, =60*=60*3		; Put word in u, byte in w
+	idivi	v, =60*=30
+	movem	v, byte
+	imuli	v, 6
+	movni	bp, (v)
+	addi	bp, =30
+	lsh	bp, =35-5		; Make sixbit byte pointer in w
+	tlo	bp, (<point 6, 0, 35>)
+	addi	bp, record(u)
+	aoj	bp,
+	setz	na,
+	ldb	la, bp			; Restore LA byte
+	caie	la, 77			; If system was down, la is zero
+	 hrlz	na, record		; Restore number of iterations
+	fsc	la, 233			; Float la
+	fmp	la, na			; Make it cumulative
+	fsc	la, -1			; Divide it by two
+
+mainl:	hrlzi	1, sys5la		; Index of 5LA in SYSTAT table
+	hrr	1, systat		; SYSTAT table number
+	getab
+	 call	error
+	movem	1, loadav		; Save 5 minute load average
+	seto	2,			; Current date and time
+	setz	4,			; (screwy jsys uses AC2 and 4 only)
+	odcnv
+	 erjmp	[ movei	1, =500		; Sys doesn't know time
+		  disms
+		  jrst	.-1 ]
+	tlz	3, -1			; Day of week (0=Monday)
+	came	3, today		; Is today yesterday?
+	 jrst	newday			; Yup, start a new record
+	hrrzi	t, (4)			; Convert time in seconds
+	idivi	t, =60*=60*3		;   into a byte number in the
+	idivi	u, =60*=30		;   current word.
+	camn	u, byte			; Byte number same as last time?
+	 jrst	main0			; Yes, dandy, go ahead
+	jumpe	na, main1a
+	fdv	la, na			; Average LAs
+	fsc	la, 1			; Multiply it by 2 for .5 resolution
+	fixr	la, la			; And fix it into a 6 bit byte
+	caile	la, 76
+	 movei	la, 76
+	dpb	la, bp			; Save what we have accumulated
+main1a:	ibp	bp			; Get the next byte
+	setzb	na, la			; Zero number of LAs cumulated
+	aos	t, byte
+	cail	t, 6
+	 setzm	byte
+main0:	fad	la, loadav		; Cumulate LAs
+	fadri	na, (1.0)		; Increment count of LAs
+	sojg	n, snoze		; Wrote NWRITE times, crash protect
+
+; Crash protect data
+	hlrm	na, record		; Save num avgs
+	push	p, la
+	fdv	la, na			; Average LAs
+	fsc	la, 1			; Multiply it by 2 for .5 resolution
+	fixr	la, la			; And fix it into a 6 bit byte
+	caile	la, 76
+	 movei	la, 76
+	dpb	la, bp
+	move	1, jfn
+	move	2, filpos		; Position in file
+	sfptr
+	 call	error
+	move	2, [point 36,record]	; Update record
+	movni	3, recsiz
+	sout
+	hrli	1, .fbsiz		; Update FDB size field
+	seto	2,
+	move	3, filpos
+	addi	3, recsiz
+	chfdb
+	movsi	1, (1)			; Make sure all core pages on dsk
+	movei	2, 777
+	ufpgs
+	 call	error
+	movei	n, nwrite		; Reset counter guy
+	pop	p, la
+	hrlz	na, record		; Restore na
+
+snoze:	move	1, [snozei]		; Sleep for snoze interval
+	disms
+	jrst	mainl			; And iterate forever
+
+
+makef:	movsi	1, (gj%fou+gj%sht)
+	hrroi	2, filnam
+	gtjfn
+	 call	error
+	move	2, [44B5+of%rd+of%wr]
+	openf
+	 call	error
+	hrrzm	1, jfn
+	tlo	1, (co%nrj)		; Make file existant in case of
+	closf				;   crash by closing file (but
+	 call	error			;   keep jfn)
+	tlz	1, -1
+	move	2, [44B5+of%rd+of%wr]	; We didn't really want to close it
+	openf
+	 call	error
+	setzm	filpos			; Update file pos pointer
+	jrst	makday			; Make a new record
+
+
+newday:	fdv	la, na			; Average LAs
+	fsc	la, 1			; Multiply it by 2 for .5 resolution
+	fixr	la, la			; And fix it into a 6 bit byte
+	caile	la, 76
+	 movei	la, 76
+	dpb	la, bp			; Save it
+	hllzs	record			; Clear out rh of date word
+	move	1, jfn			; Move to good pos in file
+	move	2, filpos
+	sfptr
+	 call	error
+	addi	2, recsiz		; Update filpos
+	movem	2, filpos
+	move	2, [point 36,record]	; Write out record
+	movni	3, recsiz
+	sout
+
+makday:	setom	record
+	move	t, [record,, record+1]	; Clear out record
+	blt	t, record+recsiz-1
+	seto	2,			; Get current date
+	setz	4,
+	odcnv
+	 erjmp	[ movei	1, =500
+		  disms
+		  jrst	.-1 ]
+	hrrzm	3, today
+	hrrzi	u, (4)
+	trz	4, -1
+	idcnv
+	 call	error
+	hllzm	2, record		; Care only about dates
+	jrst	makidx			; Well, fire away
+
+
+error:	0				; For now (sure sure...)
+
+
+
+
+; Storage
+
+
+filnam:	asciz	'ps:<operator>loaded.dat'	; Data file name
+jfn:	0				; Data file jfn
+
+systat:	0				; Table number of systat table
+
+loadav:	0				; Current load average
+today:	0				; Current day of week
+
+record:	block	recsiz			; Record buffer
+filpos:	0				; File position of start of rec
+byte:	0				; Current byte number in word
+
+npdl	__ 22				; Pretty number
+pdl:	block	npdl
+
+lits:	lit
+
+finis:	end	begin

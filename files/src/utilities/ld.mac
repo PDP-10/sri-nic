@@ -1,0 +1,1993 @@
+;<2SCRATCH>LD.MAC.7, 27-Aug-81 23:34:34, Edit by G.FIGMO
+;Got rid of some useless code
+;<2SCRATCH>LD.MAC.4, 27-Aug-81 22:31:10, Edit by G.FIGMO
+;Hacked out silly lowercasing stuff
+;ISISRC:<ISI.SUBSYS>LD.MAC.164  4-Jul-81 15:49:34, Edit by JGOLDBERGER
+;#5 Fix to get detached jobs
+;ISISRC:<ISI.SUBSYS>LD.MAC.163  2-Jul-81 10:48:34, Edit by JGOLDBERGER
+;#4 Check for two TTY's as controlling terminal for one job
+;ISISRC:<ISI.SUBSYS>LD.MAC.162  1-Jul-81 19:57:45, Edit by JGOLDBERGER
+;#3 Bug fix for Hosts with no name string
+;ISISRC:<ISI.SUBSYS>LD.MAC.161 30-Jun-81 17:16:23, Edit by JGOLDBERGER
+;#2 Change to print jobs sorted by TTY # rather than job #
+;ISISRC:<ISI.UNSUPORTED>LD.MAC.160  8-Jun-81 13:09:13, Edit by JGOLDBERGER
+;#1 Bring up to date with PARC version and add PTAYLOR patches
+;   Change to use GTHST JSYS if running on TOPS-20
+;   Change to construct connection tables using GTNCP calls
+;   Removed all references to PUP & MCA
+;
+; Print Pup connections  6/20/77
+; Add TOPS20 compatibility (from OP-SEATON@USC-ISIB)  3/28/77
+; Log unnamed PUP hosts  10/19/76
+; Handle non-job ptys  9/14/76
+; Minor mods to downtime printout, do PUP hosts right  5/11/76
+; Minor mods from OP-LEE@USC-ECL  4/12/76
+; Modified for Tenex 1.34  1/11/76  P. Deutsch
+; Modified for PUP  9/26/75  P. Deutsch
+;<GEOFF>LD.MAC;86     6-SEP-75 15:21:01    EDIT BY GEOFF
+;PUT IN 'LOG' FEATURE.
+; Modified for Tenex 1.33  7/27/75
+; MODIFIED FOR TENEX 1.32  7/29/74
+; SYSTAT SUBSYSTEM  P. DEUTSCH  4/26/73
+
+	TITLE LD
+
+;
+; Description of command syntax:
+; LD<cr> or LD<formfeed> -- all non-detached jobs
+; LD<lf> -- summary lines only
+; LD<sp><decimal number> -- that job only
+; LD<sp>T<octal number> -- that tty only
+; LD<sp><directory> -- only jobs logged in or connected to
+;	that directory (<esc> will complete name)
+; LD<sp><host> -- only jobs logged in from that host
+; LD<sp>/<subsystem> -- only jobs using that subsystem
+; LD<sp>NET -- only ARPANET jobs
+; LD<sp>DET -- only detached non-SYSTEM jobs
+; LD<sp>ALL -- all jobs
+; The following may be combined with the above:
+; USED -- also print CPU time
+; *<n> -- repeat every n seconds (5 if <n> omitted)
+; Arguments following <sp> may be edited with:
+;   ^A ^H -- delete character
+;   ^Q -- delete whole arg
+;   ^R -- retype
+;   <cr> -- terminator
+;   ^X <rubout> -- abort
+; ? after <sp> lists options
+; LD, or LD<tab> equivalent to LD<sp>
+;
+
+	SEARCH MONSYM,MACSYM ;#1 
+	.REQUIRE SYS:MACREL		;#1 
+	IFNDEF PUPNM,<OPDEF PUPNM [JSYS 443]>
+	IFNDEF CPUTL,<OPDEF CPUTL [JSYS 444]>
+	IFNDEF RSCAN,<OPDEF RSCAN [JSYS 500]>
+	IFNDEF GETJI,<OPDEF GETJI [JSYS 507]>
+	IFNDEF GFUST,<OPDEF GFUST [JSYS 550]>
+	IFNDEF RCUSR,<OPDEF RCUSR [JSYS 554]>
+
+OPDEF RETSKP [JRST RSKP]	;#1 
+OPDEF RET [POPJ P,]		;#1 
+OPDEF CALL [PUSHJ P,]		;#1 
+
+	FREE=7
+	A=10
+	B=11
+	C=12
+	D=13
+	SOCKET=14
+	HOST=15
+	T=16
+	P=17
+
+	MCA0==1
+	MCA20==2
+	MCA40==3
+	ARPANET==4
+
+	NJOBS==^D125		;#1 Most jobs ever
+	NCBLK==400		;#1 Length of NCP tables
+	NNCP==NCBLK		;#1 Number of NCP connections
+
+	SPACE==20000		;#1 Well beyond new tables
+
+	STKLEN==40
+	UPQ==^D100	; hours of uptime per "!"
+
+	DEFINE V(X)<X=SPACE
+		SPACE=SPACE+1>
+	DEFINE VN(X,N)<X=SPACE
+		SPACE=SPACE+N>
+
+
+
+
+UTILF:	0	; PATCH TO NON-ZERO IF CPUTL JSYS AVAILABLE
+USEDF:	0	; Patch to non-zero to make USED the default
+BEEHIV:	0	; Patch to non-zero for Beehive displays
+COL:	21	; COLUMN FOR SUBSYS, HOST, DIRECTORY
+V(JT)
+
+START:	RESET%			; set up entry vector and clear AC's
+	MOVEI 1,.GTHHN		;#1 Get local host #
+	MOVNI 3,1		;#1 -1 is the code for that
+	GTHST			;#1 ...
+	 JSHLT			;#1 report the error and halt
+	MOVEM 3,LHOST		;#1 Save local Host #
+	MOVE P,[IOWD STKLEN,FSPACE]
+	MOVEI FREE,STKLEN(P)
+; Decide if TOPS20 or Tenex
+	SETZB 3,T
+	HRROI 1,3	; Output to AC3
+	HRLOI 2,600015	; "nothing" device
+	DEVST
+	  JFCL
+	CAMN 3,[ASCIZ /NUL/]	; TOPS20 null device?
+	  SETO T,	; yes
+	MOVEM T,TOPS20
+	SETCAM T,ESCOUT	; ESC completion iff Tenex
+	HRROI 1,SYSSTR
+	SKIPE TOPS20
+	  SKIPA 2,[POINT 7,[ASCIZ /OPERATOR/]]
+	HRROI 2,[ASCIZ /SYSTEM/]
+	MOVEI 3,0
+	SOUT	; COPY SYSTEM NAME STRING
+	HRRZI 1,-1
+	HRROI 2,SYSSTR
+	JUMPE T,G1ST
+	RCUSR
+	MOVEM 3,SYSDIR
+	JRST G1ST2
+G1ST:	STDIR
+	  JFCL
+	  JFCL
+	HRRZM 1,SYSDIR
+G1ST2:	SETOM LOGJFN
+	SETOM LOGFLG
+
+; GET TABLES
+	MOVE A,[XWD STB-ENDSTB,STB]
+	PUSHJ P,GETTAB
+
+; GET CURRENT DIRECTORY
+
+	GJINF
+	TLNE 1,-1
+	  MOVMS TOPS20	; > 0 FOR T20 W/ STRUCTURES
+	MOVEM 1,MYDIR
+	MOVE 2,1
+	MOVE 1,MYSTR
+	PUSHJ P,WDIR
+	SKIPLE TOPS20
+	  PUSHJ P,MGETJI
+
+; PARSE INPUT, IF ANY
+
+	MOVE 1,USEDF
+	MOVEM 1,USED
+	MOVE 1,COL
+	MOVEM 1,XCOL
+	SETZM RPFLAG
+	MOVE 1,DTST
+	MOVEM 1,TST
+	SETOM SUMFLG
+
+; Prepare to scan arguments and terminator
+
+	SKIPN TOPS20
+	  JRST PIBK
+	SETZ 1,
+	RSCAN
+	  JRST [HRROI 1,[ASCIZ /Input string too long!/]
+		PSOUT
+		HALTF]
+	SETZ 2,
+RSKIP:	PBIN
+	CAIGE 1,40	; terminator
+	  JRST PIBK
+	CAIE 1," "
+	  AOJA 2,RSKIP
+	JUMPE 2,RSKIP	; leading blank
+	JRST PIDO
+PIBK:	MOVEI 1,100
+	BKJFN
+	  JFCL
+PIDO:	PUSHJ P,GSTR
+	  JRST [HRROI 1,HELP1	; GSTR does PUSHJ to here
+		PSOUT
+		HRROI 1,HELP3
+		PSOUT
+		SETOM ESCOUT	; ESC completion OK now
+		POPJ P,]
+	PUSH P,1	; Save terminator
+PARSE:	MOVE T,0(P)
+PARSE1:	MOVEI 1,0
+	MOVE 3,A
+	MOVE 4,[POINT 7,1]
+GETKW:	ILDB 0,3
+	PUSHJ P,STC
+	  JRST [TRNE 1,376
+		  JRST NOTKW
+		IDPB 0,4
+		JRST GETKW]
+	JUMPE 1,[JUMPE 0,[MOVEM T,0(P)
+			JRST LDALL]
+		MOVE A,3
+		CAIL 0,40
+		  MOVEI T,12	; Leading blank, do summary
+		JRST PARSE1]
+	MOVE 2,KWTAB
+	SKIPN PARCF
+	  MOVE 2,NKWTAB
+PIKWT:	HRRZ T,0(2)
+	CAMN 1,0(T)
+	  JRST [HLRZ 1,0(2)
+		MOVE A,3
+		CAIE 1,TSTLOG
+		  JRST LDSUB
+		PUSH P,A
+		PUSHJ P,SUMM
+		POP  P,A
+		MOVEI 1,TSTLOG
+		JRST LDSUB]
+	AOBJN 2,PIKWT
+	CAMN 1,[ASCIZ /USED/]
+	  JRST [SETOM USED
+		MOVEI 1,10
+		ADDM 1,XCOL
+		JUMPE 0,LDALL
+		MOVE A,3
+		JRST PARSE]
+NOTKW:	MOVE 1,A
+	ILDB 2,1
+	CAIE 2,"*"
+	  JRST PINR
+	MOVEI 3,^D10
+	PUSHJ P,MYNIN
+	  MOVEI 2,5
+	PUSHJ P,STC
+	  JRST PINR
+	IMULI 2,^D1000
+	MOVEM 2,RPTIME
+	SETOM RPFLAG
+	JUMPE 0,LDALL
+	MOVE A,1
+	JRST PARSE
+PINR:	MOVE 1,A
+	ILDB 2,1
+	CAIE 2,"/"
+	  JRST PINS
+	MOVEI 3,0
+	MOVE 4,[POINT 6,3]
+GETSN:	ILDB 0,1
+	PUSHJ P,STC
+	   JRST [SUBI 0,40
+		TRNN 0,-100
+		  TLNN 4,770000
+		    JRST PINS
+		IDPB 0,4
+		JRST GETSN]
+	SKIPN 2,3
+	  MOVE 2,[SIXBIT /EXEC  /]
+	MOVE A,1
+	MOVEI 1,TSTSYS
+	JRST LDSUB
+PINS:	MOVE 1,A
+	MOVEI 3,^D10
+	PUSHJ P,MYNIN
+	  JRST PINN
+	PUSHJ P,STC
+	  JRST PINN
+	MOVE A,1
+	MOVEI 1,TSTJOB
+	JRST LDSUB
+PINN:	MOVE 1,A
+	ILDB 2,1
+	CAIE 2,"T"
+	  JRST PINT
+	MOVEI 3,10
+	PUSHJ P,MYNIN
+	  JRST PINT
+	PUSHJ P,STC
+	  JRST PINT
+	MOVE A,1
+	MOVEI 1,TSTTTY
+	JRST LDSUB
+PINT:	MOVE 3,A
+	PUSHJ P,TSCAN
+	MOVEI 1,0
+	MOVE 2,A
+	SKIPN TOPS20
+	  JRST PINT1
+	PUSH P,3
+	RCUSR
+	MOVE 2,3
+	POP P,3
+	TLNE 1,(1B3!1B4)	;NO MATCH OR AMBIGOUS?
+	  JRST PINU
+	JRST PINT2
+PINT1:	STDIR
+	  JRST PINU
+	  JRST PINU
+	HRRZ 2,1
+PINT2:	MOVE A,3
+	MOVEI 1,TSTDIR
+	JRST LDSUB
+PINU:	DPB 0,3
+	PUSH P,A
+	MOVE A,[XWD NTB-ENDNTB,NTB]
+	PUSHJ P,GETTAB
+	POP P,A
+	MOVEI 1,.GTHSN		;#1 Get Host # from string
+	MOVE 2,A		;#1 Byte pointer to 2
+	GTHST			;#1 ...
+	 JRST PIPE		;#1 Loser
+	MOVE 2,3		;#1 Returned Host # in 2
+	MOVEI 1,TSTHST
+	JRST LDSUB
+
+PIPE:	HRROI 1,[ASCIZ / ?
+/]
+	PSOUT
+	HALTF
+LDSUB:	MOVE 3,TST
+	CAME 3,DTST
+	  JRST PIPE
+	MOVEM 1,TST
+	MOVEM 2,PARAM
+	CAIE 1,TSK
+	  SETZM SUMFLG
+	JUMPE 0,LDALL
+	JRST PARSE
+
+; HELP STRINGS
+
+HELP1:	ASCIZ $ One of the following:
+  decimal job #		print only that job number
+  Toctal tty #		print only that tty number (octal)
+  directory name	print only that user or any job
+		 	 connected to that directory
+  host name		print only users from host name
+  /subsystem name	print only users in subsys
+  NET			print only users from ARPAnet
+  DET			print non-system detached jobs
+  ALL			print all jobs including system
+$
+HELP3:	ASCIZ $ Combine with:
+  USED		to print CPU time used
+  *interval	repeat every interval seconds
+
+ Edit with ^A ^Q ^R
+
+ Enter arguments or <return>: $
+
+; ARGUMENT KEYWORDS
+
+NKWTAB:	XWD -3,KWTAB+1
+KWTAB:	XWD -3,.+1
+	XWD TSTNET,[ASCIZ /NET/]
+	XWD TSTDET,[ASCIZ /DET/]
+	XWD TSK,[ASCIZ /ALL/]
+
+; TESTING ROUTINES
+
+DTST:	TSTLOG	; Default test
+TSTJOB:	CAMN A,PARAM
+	  AOS 0(P)
+	POPJ P,
+
+TSTTTY:	HLRZ 1,@JTTY
+	JRST TEQ
+
+TSTDIR:	SKIPLE TOPS20
+	 SKIPA 1,@JCDIR
+	  HLRZ 1,@JDIR
+	JUMPE 1,.+4
+	  MOVE 1,-1(1)
+	  CAMN 1,PARAM
+	    JRST TSK
+	SKIPLE TOPS20
+	 SKIPA 1,@JDIR
+	  HRRZ 1,@JDIR
+	JUMPE 1,TNSK
+	MOVE 1,-1(1)
+TEQ:	CAMN 1,PARAM
+TSK:	  AOS 0(P)
+TNSK:	POPJ P,
+
+TSTSYS:	PUSHJ P,GETSUB
+	MOVE 1,2
+	JRST TEQ
+
+TSTHST:	HLRE C,@JTTY
+	JUMPL C,TNSK
+	CAML C,FSTNVT		;#1 Check range of tty
+	 CAMLE C,LSTNVT		;#1 ...
+	  JRST TNSK		;#1 Fails
+	MOVEI 1,.GTNNI		;#1 Get connection # for this NVT
+	HRRZ 2,C		;#1 ...
+	MOVEI 3,5		;#1 ...
+	HRLZI 4,-1		;#1 ...
+	GTNCP			;#1 ...
+	 JRST TNSK		;#1 Failure return means NVT not active
+	MOVE 1,FHOSTT(5)	;#1 Get Host # for this connection
+	JRST TEQ
+
+TSTDET:	HLRE C,@JTTY
+	JUMPGE C,TNSK
+TDET:	SKIPLE TOPS20
+	 SKIPA 2,@JDIR
+	  HRRZ 2,@JDIR
+	MOVE 2,-1(2)
+	CAME 2,SYSDIR
+	  AOS 0(P)
+	POPJ P,
+
+TSTNET:	HLRE C,@JTTY
+	JUMPL C,TNSK
+	CAML C,FSTNVT		;#1 Check range of tty
+	 CAMLE C,LSTNVT		;#1 ...
+	  JRST TNSK		;#1 Can't be on the NET if not an NVT
+	MOVEI 1,.GTNNI		;#1 Get the connection # for this NVT
+	HRRZ 2,C		;#1 ...
+	MOVEI 3,5		;#1 ...
+	HRLZI 4,-1		;#1 ...
+	GTNCP			;#1 ...
+	 JRST TNSK		;#1 Failure return means NVT isn't active
+	JRST TSK		;#1 Success means yes!
+
+TSTLOG:	HLRE C,@JTTY
+	JUMPL C,TNSK
+	SKIPE TOPS20
+	  JRST TDET
+	JRST TSK
+
+
+; SELECT MODE -- FAST, ALL, OR TEST
+; 0(P) has terminator
+
+LDALL:	POP P,1
+	CAIE 1,12	; linefeed
+	  JRST LDSLOW
+LDFAST:	PUSHJ P,SUMM
+	PUSHJ P,PJOBX
+	JRST LDFAST
+
+LDSLOW:	SKIPE SUMFLG
+	  PUSHJ P,SUMM
+	PUSHJ P,LDFULL
+	JRST LDSLOW
+
+LDFULL:	MOVE A,[XWD TAB-ENDTAB,TAB]
+	PUSHJ P,GETTAB
+	MOVE 1,[SIXBIT /PUPBUF/]
+	SYSGT
+	MOVEM 2,PUPBUF
+
+; SET UP AUXILIARY TABLES
+
+	MOVE A,[XWD AUX-ENDAUX,AUX]
+	PUSHJ P,GETAUX
+
+; LOOK UP USER NAMES
+
+	MOVE A,JRTS
+JDL1:	SKIPLE TOPS20
+	 SKIPA 2,@JDIR
+	  HRRZ 2,@JDIR
+	JUMPE 2,[SETZM @JDIR
+		JRST JDL2]
+	PUSH P,2
+	PUSHJ P,WDX
+	HRRM 1,@JDIR
+	POP P,1
+	SKIPG TOPS20
+	 JRST PLC2
+	TLO 1,40000		;SET THIS IS A DIRECTORY BIT FOR MATCHING
+	SKIPA 2,@JCDIR
+PLC2:	  HLRZ 2,@JDIR
+	CAMN 2,1
+	  JRST [HRLS @JDIR
+		JRST JDL2]
+	PUSHJ P,WDX
+	HRLM 1,@JDIR
+JDL2:	SOJGE A,JDL1
+
+
+MKTAB:	MOVEI 1,.GTNSZ		;#1 Get number of NCP connections
+	GTNCP			;#1 ...
+	 HALTF			;#1 This means real trouble
+	MOVEM 2,NCPCNT		;#1 Save AOBJN word for connections
+	MOVEM 3,NVTCNT		;#1 and NVT's
+	MOVE 5,2		;#1 Set up to loop over all connections
+NCPLP:	MOVEI 1,.GTNIX		;#1 Get connection data by index
+	HRRZ 2,5		;#1 use the same indexes in internal tables
+	MOVEI 3,NCPBLK		;#1 Temp. block to read into
+	HRLZI 4,-20		;#1 Get all the stuff
+	GTNCP			;#1 ...
+	 JSHLT			;#1 Report error and die
+	MOVEI 1,NCPBLK		;#1 Now set up to pull out the stuff we want
+	MOVE 2,.NCFHS(1)	;#1 Foreign Host
+	MOVEM  2,FHOSTT(5)	;#1 ...
+	MOVE 2,.NCLSK(1)	;#1 Local Socket
+	MOVEM 2,LSCKT(5)	;#1 ...
+	MOVE 2,.NCFSK(1)	;#1 Foreign Socket
+	MOVEM 2,FSCKT(5)	;#1 ...
+	MOVE 2,.NCFSM(1)	;#1 State of connection
+	MOVEM 2,STATE(5)	;#1 ...
+	MOVE 2,.NCNVT(1)	;#1 NVT for this connection
+	MOVEM 2,NVTS(5)		;#1 ...
+	MOVE 2,.NCSIZ(1)	;#1 Byte Size
+	MOVEM 2,SIZE(5)		;#1 ...
+	MOVE 2,.NCBTC(1)	;#1 Bits Transferred
+	MOVEM 2,BITS(5)		;#1 ...
+	MOVE 2,.NCSTS(1)	;#1 Connection Status
+	MOVEM 2,STATUS(5)	;#1 ...
+	AOBJN 5,NCPLP		;#1 Get 'em all
+	HRRZ 1,NVTCNT		;#1 Get 1st NVT
+	MOVEM 1,FSTNVT		;#1 Save it away
+	HLRE 2,NVTCNT		;#1 And full word -(# of NVT's)
+	MOVMS 2			;#1 Get correct sign
+	ADD 2,1			;#1 Compute last NVT
+	MOVEM 2,LSTNVT		;#1 And save that as well
+
+;#1 NCP tables are now full of all useful data for all NCP connections
+;#1 Next step is to build linked list of job relative connections.
+;#1 CLST has this format:	Indexed by job LH has 1st connection #
+;#1				Then indexed by connection RH has the next
+
+	MOVE 1,[XWD CLST,CLST+1] ;#1 Setup to zero table
+	SETZM CLST		;#1 ...
+	BLT 1,CLST+NNCP-1	;#1 ...
+	MOVE 1,NCPCNT		;#1 AOBJN word for NCP connections
+CLSTLP:	SKIPLE NVTS(1)		;#1 Does this connection have an NVT ?
+	 JRST NXTCON		;#1 Yes, Then we already did it
+	SKIPN 5,STATE(1)	;#1 Check state of this connection
+	 JRST NXTCON		;#1 0 ==> "DEAD" ignore this connection
+	CAIN 5,16		;#1 16 ==> "FREE"
+	 JRST NXTCON		;#1 ignore this as well
+	MOVE 2,LSCKT(1)		;#1 No, get the local socket #
+	LSH 2,-17		;#1 Try converting to job #
+	SUBI 2,^D100000		;#1 ...
+	CAIL 2,0		;#1 Check range of computed job #
+	 CAMLE 2,JTTYS		;#1 This holds NJOBS
+	  JRST CHKFSK		;#1 Not job relative, check foreign socket
+LNK0:	HLRZ 3,CLST(2)		;#1 Find 1st connection for this job
+	SKIPN 4,3		;#1 Is there one ?
+	 JRST [	HRLM 1,CLST(2)	;#1 No, then this is that one.
+		HLLZS CLST(1)	;#1 Make sure the link is clear
+		JRST NXTCON ]	;#1 And go for next
+
+LNKLP:	HRRZ 3,CLST(4)		;#1 List is already started, follow it down
+	MOVE 5,4		;#1 Save index in case this is the end
+	SKIPN 4,3		;#1 Is this the end ?
+	 JRST [	HRRM 1,CLST(5)	;#1 Yes, put this one on the list
+		HLLZS CLST(1)	;#1   And vlaidate it.
+		JRST NXTCON ]	;#1   Try for more
+	JRST LNKLP		;#1 No, Keep following list till we find the 0.
+
+NXTCON:	AOBJN 1,CLSTLP		;#1 Loop over all NCP connections
+
+;#1 Linked List is now built of all job relative sockets and Job-Table
+;#1 contains all connection indexes for NVT's.
+
+	JRST PJOB0		;#1 Done with NCP connections; check PUP
+
+CHKFSK:	MOVE 2,FSCKT(1)		;#1 Check if foreign socket is job-relative
+	LSH 2,-17		;#1 Convert to job #
+	SUBI 2,^D100000		;#1 ...
+	CAIL 2,0		;#1 
+	 CAMLE 2,JTTYS		;#1 Check range of computed job #
+	  JRST NXTCON		;#1 No good, try next connection
+	JRST LNK0		;#1 OK, add it to the list
+
+
+; PRINT ALL JOBS
+
+PJOB0:	HRROI 1,[ASCIZ /
+Jb TTY  User
+/]
+	MOVE 2,JTTYS		;#2 Get # of jobs
+	CAIL 2,^D100		;#1 
+	 HRROI 1,[ASCIZ /
+Job TTY  User
+/]				;#1 
+	SETZ 3,			;#1 
+	SKIPE SUMFLG
+	  PSOUT
+	SETZM ANY
+	MOVE 6,TJOBS		;#2 get # of TTY's
+PJOB1:	HRRZ C,6		;#1 Get into (C) for indexing
+	HLRE A,@TJOB		;#2 
+	JUMPL A,PJOB1A		;#2 Skip this one if no job #
+	HLRE 1,@JTTY		;#3 Get controlling terminal of this job
+	CAME 1,C		;#3 Same as this TTY ?
+	 JRST PJOB1A		;#3 No, skip this TTY (till Dale fixes NCP)
+	SKIPE @JDIR		;#1 Only if they have a dir #
+	PUSHJ P,PRINT		;#1 PRINT info (does test first)
+PJOB1A:	SOJGE 6,PJOB1		;#1 Loop for all jobs
+
+	MOVE 6,JTTYS		;#5 Get # of jobs
+	HRRZ A,6		;#5 Set up for indexing
+	SKIPE @JDIR		;#5 Anyone home ?
+	PUSHJ P,PRINT		;#5 Yes, go print it
+	SOJGE 6,.-3		;#5 And loop for the rest
+
+	HRROI 1,[ASCIZ /none
+/]
+	SKIPN ANY
+	  PSOUT
+
+;#1 Print any other jobs with network connections
+
+	SKIPN SUMFLG		;#1 Check on how much wanted
+	 JRST PJOBX		;#1 0 means restricted report
+	MOVN 6,JTTYS		;#1 Get # of jobs
+	HRLZS 6			;#1 Form AOBJN word
+	SETOM ANY		;#1 Flag to check if any found
+PJOB2:	HLRZ 1,CLST(6)		;#1 Any connections for this job ?
+	JUMPE 1,PJOB2A		;#1 Go for next if none
+	HRRZ A,6		;#1 Set up (A)
+	AOSN ANY		;#1 Been here before
+	 PUSHJ P,DASH		;#1 No, print dahses
+	PUSHJ P,UPRINT		;#1 Go print this job
+PJOB2A:	AOBJN 6,PJOB2		;#1 Loop for all jobs
+
+
+;#1 Print all other connections
+
+PJOB5B:	JRST PJOBX		;#1 Skip all this for now
+
+	SETOM ANY		;#1 Set to print dashes
+	MOVE 6,NCPCNT		;#1 Get AOBJN word for all connections
+PJOB6:	SKIPN 5,STATE(6)	;#1 Has this one been printed ?
+	 JRST PJOB6A		;#1 Yes, (or it is dead) either way skip it.
+	CAIN 5,16		;#1 16 ==> "FREE"
+	 JRST PJOB6A		;#1 Skip these too
+	AOSN ANY		;#1 First time thru
+	 PUSHJ P,DASH		;#1 Yes, print dashes
+	MOVE SOCKET,LSCKT(6)	;#1 Get local socket
+	HRROI 1,NSNAME(5)	;#1 Get state string
+	PSOUT			;#1 Print it.
+	MOVEI 1," "		;#1 
+	PBOUT			;#1 
+	SKIPG HOST,FHOSTT(6)	;#1 If its a good host, use it
+	MOVE HOST,LHOST		;#1 Get local host in the right place
+	PUSHJ P,PSOCK		;#1 And print the socket info
+	PUSHJ P,CRLF		;#1 
+PJOB6A:	AOBJN 6,PJOB6		;#1 Loop over all connections
+
+PJOBX:	PUSHJ P,NOLOG
+	SETZM LOGFLG
+	SKIPE RPFLAG
+	  JRST [MOVE 1,RPTIME
+		DISMS
+		MOVEI FREE,FSPACE+STKLEN
+		MOVE A,[XWD STB-ENDSTB,STB]
+		PUSHJ P,GETTAB
+		SKIPLE TOPS20
+		  PUSHJ P,MGETJI
+		POPJ P,]
+	HALTF
+	JRST START
+
+V(NJCONN)
+V(NJPUP)
+V(MYDIR)
+
+MYSTR:	POINT 7,MYBUF
+
+VN(MYBUF,11)
+VN(SYSDIR,3)
+SYSSTR=SYSDIR+1
+
+MSGGJT:	XWD 100000,0
+	XWD 377777,377777
+	Z
+	POINT 7,MYBUF
+	Z
+	Z
+	Z
+	Z
+
+; TTY PARAMETERS
+
+V(FNTTY)
+V(LNTTY)
+V(FMTTY)
+V(LMTTY)
+V(FPTTY)
+V(LPTTY)
+
+V(TST)		; TESTING ROUTINE
+V(PARAM)	; PARAMETER FROM INPUT
+V(XCOL)
+V(USED)
+V(RPFLAG)
+V(RPTIME)
+V(ANY)
+V(PUPBUF)
+V(SUMFLG)
+V(PARCF)
+V(LOGJFN)
+V(LOGFLG)
+V(TOPS20)
+V(ESCOUT)
+
+; SUBROUTINE TO PRINT ENTRY FOR JOB (A)
+
+PRINT:	PUSHJ P,@TST	; NOSKIP RETURN MEANS DON'T PRINT
+	  POPJ P,
+	SETOM ANY
+UPRINT:	MOVE 2,A	; Print unconditionally
+	MOVE 3,[XWD 100002,12]
+	MOVE 1,JTTYS		;#1 Check for >100 jobs
+	CAIL 1,^D100		;#1 ...
+	 HRLI 3,100003		;#1 Yes, set for 3 digits
+	PUSHJ P,NUM
+	HLRE C,@JTTY
+	JUMPL C,PR2	; DETACHED
+	PUSHJ P,PTTNO
+	JRST PR1
+PR2:	HRRZ 1,@JDIR
+	CAIN 1,SYSSTR
+	  JRST [HRROI 1,[ASCIZ / (/]
+		PSOUT
+		PUSHJ P,GETSUB
+		PUSHJ P,PSIX
+		MOVEI 1,")"
+		PBOUT
+		PUSHJ P,PUSED
+		JRST PR9]
+	HRROI 1,[ASCIZ /  Det/]
+	PSOUT
+PR1:	MOVEI 1," "
+	PBOUT
+	HRRO 2,@JDIR
+	TRNN 2,-1	; SKIP IF LOGGED IN (STRING STORED BY JDL)
+	HRROI 2,[ASCIZ /not logged in/]
+	PUSHJ P,PLC
+	PUSHJ P,PUSED
+	PUSHJ P,PRSUB
+	HLRE 3,@JTTY		;#1 Get this jobs TTY
+	JUMPL 3,PR9		;#1 DETACHED doesn't have a chance
+	CAML 3,FSTNVT		;#1 In range ?
+	 CAMLE 3,LSTNVT		;#1 ...
+	JRST PR9		;#1 No, skip it
+	PUSHJ P,PRHOST
+PR9:	PUSHJ P,PRCDIR
+	HLRZ 1,CLST(A)		;#1 Any connections for this job ?
+	JUMPE 1,.+3		;#5 Return now if not
+	  PUSHJ P,PCHAIN
+	HRRZS CLST(A)		;#1 If we printed the job zero its conn. tree
+	SETZM @JDIR		;#5 Zero Dir so we can skip it
+	POPJ P,
+
+; Print TTY # (C)
+
+PTTNO:	MOVE 2,C
+	MOVE 3,[XWD 100004,10]
+	PUSHJ P,NUM
+	MOVEI 1," "
+	HRRZ T,@TJOB
+	CAIE T,-1
+	  MOVEI 1,"*"
+	PBOUT
+	POPJ P,
+
+; PRINT TIME USED
+
+PUSED:	SKIPN USED
+	  POPJ P,
+	MOVE 1,@JRT
+	IDIV 1,@TICK
+	PUSH P,1
+	MOVE T,COL
+	MOVE 2,PUTAB
+PU1:	CAMGE 1,0(2)
+	  ADDI T,1
+	AOBJN 2,PU1
+	PUSHJ P,UCOLUMN
+	MOVE 2,0(P)
+	IDIVI 2,^D3600
+	IDIVI 3,^D60
+	MOVEM 4,0(P)
+	PUSH P,3
+	JUMPE 2,PU2
+	PUSHJ P,DNUM
+	MOVEI 1,":"
+	PBOUT
+	POP P,2
+	MOVE 3,[XWD 140002,^D10]
+	PUSHJ P,NUM
+	JRST PU3
+
+PU2:	POP P,2
+	JUMPE 2,PU4
+	PUSHJ P,DNUM
+PU3:	MOVEI 1,":"
+	PBOUT
+	POP P,2
+	MOVE 3,[XWD 140002,^D10]
+	PUSHJ P,NUM
+	POPJ P,
+
+PU4:	POP P,2
+	PUSHJ P,DNUM
+	POPJ P,
+
+PUTAB:	XWD -6,.+1
+	^D3600
+	^D3600
+	^D600
+	^D60
+	^D60
+	^D10
+
+; PRINT SUBSYSTEM NAME
+
+PRSUB:	PUSHJ P,GETSUB
+	CAMN 2,[SIXBIT /EXEC  /]
+	  JRST PR3
+	PUSH P,2
+	MOVE T,XCOL
+	PUSHJ P,COLUMN
+	POP P,2
+	PUSHJ P,PSIX
+PR3:	POPJ P,
+
+; PRINT HOST NAME IF APPROPRIATE
+
+PRHOST:	HLRE 2,@JTTY		;#1 Get TTY #
+	JUMPL 2,R		;#1 Can't have host if detached
+	MOVEI 1,.GTNNI		;#1 Get index from NVT
+	MOVEI 3,5		;#1 Where to get it into
+	HRLZI 4,-1		;#1 ...
+	GTNCP			;#1 ...
+	 RET			;#1 Failure means no NVT and no host
+	SETZM STATE(5)		;#1 Set so we don't do it twice
+	MOVE 2,FHOSTT(5)	;#1 and then HOST #
+	MOVEI 1,"("		;#1 Opening character
+	CALL PRCH		;#1 Print the host name
+	MOVE SOCKET,FSCKT(5)	;#1 Get socket #
+	LDB 2,[POINT 17,SOCKET,20] ;#1 Get Foreign socket
+	HRREI 2,-^D100000(2)	;#1 Convert socket #
+	TRNE 2,777600		;#1 
+	 JRST PR5		;#1 
+	MOVEI 1,":"		;#1 
+	PBOUT			;#1 
+	PUSHJ P,PSOCKN		;#1 
+	JRST PR6		;#1 Close ")" and return
+
+PR5:	MOVEI 1,.GTHHN		;#1 Get the status word for the host
+	MOVE 3,FHOSTT(5)	;#1 Host #
+	GTHST			;#1 ...
+	 JRST PR6		;#1 Failure, don't worry
+	ANDI 4,HS%STY		;#1 Just host type
+	CAIE 4,.HSTIP		;#1 TIP ?
+	 JRST PR6		;#1 No, don't worry here either
+	LDB 2,[POINT 15,SOCKET,34] ;#1 Yes, get the relevant part
+	CAIE 2,1		;#1 
+	 JRST PR6		;#1 Not standard TIP SOCKET
+	MOVEI 1,"#"		;#1 
+	PBOUT			;#1 
+	LDB 2,[POINT 16,SOCKET,19] ;#1 
+	PUSHJ P,ONUM		;#1 Print it
+PR6:	MOVEI 1,")"		;#1 
+	PBOUT			;#1 
+	POPJ P,			;#1 
+
+; PRINT CHAR. (1) AND HOST (2)
+
+PRCH:	PUSH P,2
+	PUSH P,1
+	MOVE T,XCOL
+	ADDI T,2
+	PUSHJ P,COLUMN
+	POP P,1
+	PBOUT
+	POP P,2
+	PUSHJ P,PHOST
+	POPJ P,
+
+; PRINT CONNECTED DIRECTORY NAME
+
+PRCDIR:	HLRO 1,@JDIR
+	HRRO 2,@JDIR
+	TRNE 1,-1
+	  CAMN 1,2
+	    JRST PR8
+	MOVE T,XCOL
+	ADDI T,4
+	PUSHJ P,COLUMN
+	MOVEI 1,"<"
+	SKIPG TOPS20
+	 PBOUT
+	HLRO 2,@JDIR
+	PUSHJ P,PLC
+	MOVEI 1,">"
+	SKIPG TOPS20
+	 PBOUT
+PR8:	PUSHJ P,CRLF
+	POPJ P,
+
+; Get subsystem name of job (A) to (2)
+
+GETSUB:	HRRZ B,@JNAM
+	MOVE 2,@SNAM
+	SKIPLE JNAM2S
+	  MOVE 2,@JNAM2
+	SKIPLE JPNMS
+	  MOVE 2,@JPNM
+	POPJ P,
+
+; PUT OUT CRLF
+
+CRLF:	HRROI 1,[BYTE (7) 15,12]	; CR, LF
+	PSOUT
+	POPJ P,
+
+; PRINT SUMMARY HEADER
+
+SUMM:	SETZM TODAY
+	PUSHJ P,CLRDSP
+	PUSHJ P,LOADAV
+	HRROI 1,[ASCIZ / -- /]
+	PSOUT
+	PUSHJ P,PNJOBS
+	PUSHJ P,CRLF
+	PUSHJ P,UPSTAT
+	HRROI 1,[ASCIZ /  /]
+	PSOUT
+	PUSHJ P,PTODAY
+	PUSHJ P,CRLF
+	PUSHJ P,PSDT
+	PUSHJ P,PWMSG
+	POPJ P,
+
+; PRINT UPTIME STATISTICS
+
+UPSTAT:	HRROI 1,[ASCIZ / Up /]
+	PSOUT
+	TIME
+	IDIV 1,2
+	PUSH P,1
+	MOVE A,1
+	PUSHJ P,PHMS
+	MOVE 2,0(P)
+	IDIV 2,[UPQ*^D3600]
+	JUMPLE 2,LOAD4
+	MOVEI 1,"!"
+LOAD3:	PBOUT
+	SOJG 2,LOAD3
+LOAD4:	MOVEI C,2
+	MOVE 2,@TASKT
+	IDIV 2,@TICK
+	IMULI 2,^D100
+	POP P,1
+	SKIPGE TASKTS
+	  POPJ P,	; No TASKTB
+	IDIV 2,1
+	HRROI 1,[ASCIZ /  /]
+	PSOUT
+	PUSHJ P,DNUM
+	HRROI 1,[ASCIZ /% idle/]
+	PSOUT
+	POPJ P,
+
+; Print # of jobs
+
+PNJOBS:	SETZB 2,4
+	MOVEI 5,0
+	MOVE A,JRTS
+LOAD2:	SKIPGE @JRT
+	  JRST LOAD5
+	SKIPE TOPS20
+	  JRST [SKIPL TOPS20
+		 SKIPA 1,@JDIR
+		  HRRZ 1,@JDIR
+		CAMN 1,SYSDIR	; System job?
+		  AOJA 5,LOAD5
+		SKIPL @JTTY	; Detached?
+		  AOJA 2,LOAD5
+		AOJA 4,LOAD5]
+	SKIPL @JTTY	; DETACHED?
+	  AOJA 2,LOAD5
+	HRRZ 1,@JDIR
+	CAME 1,SYSDIR	; SYSTEM JOB?
+	  AOJA 4,LOAD5
+	ADDI 5,1
+LOAD5:	SOJGE A,LOAD2
+	PUSHJ P,DNUM
+	HRROI 1,[ASCIZ /L+/]
+	PSOUT
+	MOVE 2,4
+	PUSHJ P,DNUM
+	HRROI 1,[ASCIZ /D+/]
+	PSOUT
+	MOVE 2,5
+	PUSHJ P,DNUM
+	HRROI 1,[ASCIZ /S jobs/]
+	PSOUT
+	POPJ P,
+
+; Clear screen if Beehive display
+
+CLRDSP:	SKIPN BEEHIV
+	  POPJ P,
+	MOVEI 1,100
+	RFMOD
+	PUSH P,2
+	MOVEI 1,101
+	MOVEI 2,0
+	SFMOD	; Have to modify TTY bits to clear screen
+	HRROI 1,[BYTE (7) 5,13]
+	PSOUT
+	POP P,2
+	MOVEI 1,101
+	SFMOD
+	POPJ P,
+
+; PRINT LOAD AV.
+
+LOADAV:	HRROI 1,[ASCIZ / Load/]
+	PSOUT
+	PUSH P,C
+	MOVE C,[XWD -3,14]
+LOAD1:	MOVEI 1,101
+	MOVE 2,@SYST
+	MOVE 3,[XWD 024005,030200]
+	CAML 2,[9.995]
+	  ADDI 3,10000	; Leave 1 more space
+	FLOUT
+	  JFCL
+	AOBJN C,LOAD1
+LOAD6:	POP P,C
+	POPJ P,
+
+; Print current date and time
+
+PTODAY:	MOVEI 1,.PRIOU		; Get the date first
+	MOVNI 2,1
+	MOVX 3,OT%DAY!OT%NMN!OT%DAM!OT%SLA!OT%12H
+	ODTIM
+	POPJ P,
+
+; PRINT SCHEDULED DOWNTIME
+
+PSDT:	SETOM DAY1
+	SKIPGE DWNTS
+	 JRST PSDT6
+	MOVEI B,0
+	SKIPN 2,@DWNT
+	 POPJ P,
+	JRST PSDT7
+PSDT6:	MOVEI C,16
+	SKIPL EVTS
+	  SKIPN 2,@EVT
+	    POPJ P,
+PSDT7:	HRROI 1,[ASCIZ / Downtime: /]
+	PSOUT
+	PUSHJ P,GTODAY
+	MOVE 2,@EVT
+	PUSHJ P,DCNV
+	MOVE 2,T
+	SUB 2,TODAY
+	IMULI 2,^D86400	; seconds per day
+	ADD 2,4
+	SUB 2,NOWTIME	; seconds til downtime
+	CAIL D,^D3600
+	  JRST PSDT4
+	HRROI 1,[ASCIZ /*** in /]
+	PSOUT
+	IDIVI 2,^D60
+	PUSHJ P,DNUM
+	HRROI 1,[ASCIZ / minutes ***/]
+	PSOUT
+	JRST PSDT3
+PSDT4:	SKIPL DWNTS
+	 SKIPA 2,@DWNT
+	  MOVE 2,@EVT
+	PUSHJ P,PDATE
+PSDT3:	MOVEM T,DAY1
+	HRROI 1,[ASCIZ / til /]
+	PSOUT
+	MOVEI C,17
+	MOVEI B,1
+	SKIPL DWNTS
+	 SKIPA 2,@DWNT
+	  MOVE 2,@EVT
+	JUMPE 2,[HRROI 1,[ASCIZ /[unknown]/]
+		PSOUT
+		JRST PSDT1]
+	PUSHJ P,PDATE
+PSDT1:	MOVEI C,31
+	SKIPGE DWNTS
+	 CAMLE C,SYSTS
+	  JRST PSDT5
+	LDB 1,[POINT 4,@SYST,35]
+	SKIPN 2,DOWNS(1)
+	  JRST PSDT2
+	HRROI 1,[ASCIZ / for /]
+	PSOUT
+	HRRO 1,2
+	PSOUT
+PSDT2:	HLRZ 2,@SYST
+	JUMPE 2,PSDT5
+	HRROI 1,[ASCIZ / by /]
+	PSOUT
+	PUSHJ P,PDIR
+PSDT5:	PUSHJ P,CRLF
+	POPJ P,
+
+; Get current day and time to (T) and (4)
+
+GTODAY:	MOVE 4,NOWTIME
+	SKIPE T,TODAY
+	  POPJ P,
+	GTAD
+	MOVE 2,1
+	PUSHJ P,DCNV
+	MOVEM T,TODAY
+	MOVEM 4,NOWTIME
+	POPJ P,
+
+V(TODAY)
+V(NOWTIME)
+V(DAY1)
+
+; PRINT DATE AND TIME (2)
+
+PDATE:	PUSHJ P,DCNV
+	PUSH P,T
+	CAMN T,DAY1
+	  JRST PDATE3
+	HRROI 1,[ASCIZ /today /]
+	SUB T,TODAY
+	JUMPE T,[CAIL 4,^D17*^D3600	; Before 5PM?
+		  HRROI 1,[ASCIZ /tonight /]
+		JRST PDATE1]
+	HRROI 1,[ASCIZ /tomorrow /]
+	SOJE T,PDATE1
+	HRLZI 3,245301
+	CAIG T,5
+	  CAIG T,0
+	    JRST PDATE2
+	HRROI 1,1(P)
+	HRLZI 3,236401
+	ODTIM
+	MOVE 3,[POINT 7,1(P)]
+	ILDB 1,3
+PDATE4:	PBOUT
+	ILDB 1,3
+	CAIE 1," "
+	  JRST PDATE4
+	PBOUT
+	JRST PDATE3
+
+PDATE1:	PSOUT
+PDATE3:	HRLZI 3,400301
+PDATE2:	MOVEI 1,101
+	ODTIM
+	POP P,T
+	POPJ P,
+
+; CONVERT DATE (2) TO GET DAY INTO (T), TIME INTO (4)
+
+DCNV:	PUSH P,2
+	MOVEI 4,0
+	ODCNV
+	MOVE T,4
+	HRLI 4,500000
+	IDCNV
+	  MOVE 2,0(P)
+	HRRZ 4,T
+	HLRZ T,2
+	POP P,2
+	POPJ P,
+
+; CHECK FOR PENDING MESSAGES
+
+PWMSG:	HRRZI 1,MSGGJT
+	MOVE 2,[POINT 7,[ASCIZ /MESSAGE.TXT;1/]]
+	SKIPE TOPS20
+	  MOVE 2,[POINT 7,[ASCIZ /MAIL.TXT.1/]]
+	GTJFN
+	  JRST NOMSG
+	MOVE 2,[XWD 2,14]	; A_WRITE TIME, B_READ TIME
+	MOVEI 3,A
+	GTFDB
+	CAML B,A
+	  JRST CLSMSG	; READ MORE RECENTLY
+	PUSH P,1
+	HRROI 1,[ASCIZ / Mail waiting/]
+	PSOUT
+	GJINF
+	SKIPLE TOPS20
+	  TLO 1,40000
+	CAMN 1,2
+	  JRST MSG1	; Mail in login dir. but not connected dir.
+	HRROI 1,[ASCIZ / in </]
+	PSOUT
+	MOVE 1,MYSTR
+	PSOUT
+	MOVEI 1,">"
+	PBOUT
+MSG1:	HRROI 1,[ASCIZ / - /]
+	PSOUT
+	PUSHJ P,GTODAY
+	MOVE 2,A
+	PUSHJ P,DCNV
+	MOVSI 3,045301
+	CAMN T,TODAY
+	  MOVSI 3,400301
+	MOVEI 1,101
+	MOVE 2,A
+	ODTIM
+	MOVE 1,0(P)
+	SKIPG TOPS20
+	  JRST MSG4
+	HRLI 1,1		; LAST WRITER
+	HRRO 2,FREE
+	GFUST
+	HRROI 1,[ASCIZ / from /]
+	PSOUT
+	HRRO 2,FREE
+	PUSHJ P,PLC
+	JRST MSG2
+MSG4:	MOVE 2,[XWD 1,6]	; LAST WRITER
+	MOVEI 3,A
+	GTFDB
+	HLRZ 2,A
+	JUMPE 2,[HRROI 1,[ASCIZ /  (Netmail)/]
+		JRST MSG3]
+	CAME 2,SYSDIR
+	  JRST [HRROI 1,[ASCIZ / from /]
+		PSOUT
+		PUSHJ P,PDIR
+		JRST MSG2]
+	HRROI 1,[ASCIZ /  (System or net mail)/]
+MSG3:	PSOUT
+MSG2:	PUSHJ P,CRLF
+	POP P,1
+CLSMSG:	RLJFN
+	  JFCL
+NOMSG:	POPJ P,
+
+; PRINT SIXBIT WORD (2)
+
+PSIX:	MOVE 3,[POINT 6,2]
+	MOVNI T,6
+PSIX1:	ILDB 1,3
+	ADDI 1,40
+	CAIE 1,40
+	  PBOUT
+	AOJL T,PSIX1
+	POPJ P,
+
+; PRINT HH:MM:SS (A)
+
+PHMS:	MOVE 2,A
+	IDIVI 2,^D3600
+	MOVE 4,3
+	PUSHJ P,DNUM
+	MOVEI 1,":"
+	PBOUT
+	IDIVI 4,^D60
+	MOVE 2,4
+	MOVE 3,[XWD 140002,12]
+	PUSHJ P,NUM
+	MOVEI 1,":"
+	PBOUT
+	MOVE 2,5
+	PUSHJ P,NUM	; SAME FORMAT
+	POPJ P,
+
+; WRITE DIRECTORY NAME (2) ON (FREE), RETURN (1)=POINTER
+
+WDC:	MOVEM 2,0(FREE)
+	HRRZI 1,1(FREE)
+	HRLI 1,440700
+	PUSH P,1
+	PUSHJ P,WDIR
+	MOVEI 2,0
+	IDPB 2,1
+	HRRZI FREE,1(1)
+	POP P,1
+	POPJ P,
+
+; WDC WITH CHECK FOR SYSDIR AND MYDIR
+
+WDX:	CAMN 2,MYDIR
+	  JRST [MOVE 1,MYSTR
+		POPJ P,]
+	CAME 2,SYSDIR
+	  JRST WDC
+	MOVE 1,[POINT 7,SYSSTR]
+	POPJ P,
+
+; PRINT DIRECTORY NAME (2)
+
+PDIR:	HRRO 1,FREE
+	PUSHJ P,WDIR
+	HRRO 2,FREE
+	PUSHJ P,PLC
+	POPJ P,
+WDIR:	PUSH P,1	; Save output descriptor (TOPS20 clobbers on noskip)
+	DIRST
+	  JRST [POP P,1
+		MOVEI 3,10
+		NOUT
+		  JFCL
+		MOVEI 2,"#"
+		BOUT
+		POPJ P,]
+	SUB P,[XWD 1,1]
+	POPJ P,
+
+; DON'T PRINT ASCIZ STRING IN LOWER CASE
+
+PLC:	MOVEI 1,101
+WLC:	HLRZ 3,2
+	CAIN 3,-1
+	  HRLI 2,440700
+	MOVE 3,2
+PLC0:	ILDB 2,3
+	JUMPE 2,[POPJ P,]
+PLC1:	BOUT
+	CAIE 2,"<"
+	 CAIN 2,"."
+	  JRST PLC0
+	ILDB 2,3
+	JUMPE 2,[POPJ P,]
+	CAIGE 2,"A"
+	  JRST PLC1
+	JRST PLC1
+
+; TAB TO COLUMN (T), BUT LEAVE AT LEAST ONE SPACE
+
+COLUMN:	MOVEI 1,101
+	RFPOS
+	HRRZ 2,2
+	CAML 2,T
+	  JRST [MOVEI 1,","
+		PBOUT
+		POPJ P,]
+COL2:	SUB 2,T
+	MOVEI 1," "
+COL1:	PBOUT
+	AOJL 2,COL1
+	POPJ P,
+
+UCOL1:	PUSHJ P,CRLF
+UCOLUMN:MOVEI 1,101
+	RFPOS
+	HRRZ 2,2
+	CAML 2,T
+	  JRST UCOL1
+	JRST COL2
+
+; Print dashes
+
+DASH:	HRROI 1,[ASCIZ /------------
+/]
+	PSOUT
+	POPJ P,
+
+; Convert MCA host number (2)
+
+CMCA:	CAIGE 2,20
+	  JRST [HRLI 2,MCA0
+		POPJ P,]
+	CAIGE 2,40
+	  JRST [SUBI 2,20
+		HRLI 2,MCA20
+		POPJ P,]
+	SUBI 2,40
+	HRLI 2,MCA40
+	POPJ P,
+
+; PRINT HOST NAME (2), LEAVE STRING AT (FREE)
+
+PHOST:	MOVE 3,2		;#1 for GTHST # goes in 3
+	HRRO 2,FREE		;#1 Set up to use GTHST
+	MOVEI 1,.GTHNS		;#1 Function for Host name
+	GTHST			;#1 Get the name
+	 JRST PH1		;#1 No name, type #
+PH0:	HRRO 1,FREE
+	PSOUT
+	POPJ P,
+PH1:	HRRO 1,FREE		;#1 CVHST clobbers AC1
+	MOVE 2,3		;#3 Get Host # in the right place
+	MOVE 3,[XWD 140012,10]
+	NOUT
+	  JRST ERR
+	JRST PH0
+
+PH3:	HRRO 1,FREE		;#1 set up destination
+	CVHST			;#1 Here for TENEX
+	  JRST PH1		;#1 No string -- output #
+	JRST PH0		;#1 output the returned string
+
+; PRINT CONNECTION CHAIN for job (A)
+
+PCHAIN:	HLRZ B,CLST(A)		;#1 Get 1st connection for this job
+	PUSHJ P,PCONN		;#1 Print this connection
+	SETZM STATE(B)		;#1 And zero the state to flag it as done
+	HRRZ B,CLST(B)		;#1 Get next in chain
+	JUMPE B,R		;#1 If 0 that's the end; return
+	JRST .-4		;#1 
+
+; PRINT CONNECTION (B) FOR JOB (A)
+
+PCONN:	MOVEI 1," "
+	PBOUT
+	MOVE 1,STATE(B)		;#1 Get the state of this connection
+	HRROI 1,NSNAME(1)
+	PSOUT
+	MOVEI 1," "
+	PBOUT
+	MOVE SOCKET,LSCKT(B)	;#1 Get Local Socket
+	MOVE HOST,LHOST		;#1 Get Local Host #
+	PUSHJ P,PSOCK
+	MOVE T,STATE(B)		;#1 Get state
+	MOVE 1,NCMASK
+	ROT 1,0(T)
+	JUMPL 1,PCONN4
+	SETZM PCTWIN
+	PUSHJ P,TWIN
+	  JRST PCONN5
+	SETOM PCTWIN
+	MOVEI 1,"/"
+	PBOUT
+	MOVE SOCKET,LSCKT(B)	;#1 Get local socket
+	LDB 1,[POINT 3,SOCKET,35]
+	XORI 1,"1"
+	PBOUT
+	HRROI 1,[ASCIZ / <> /]
+	JRST PCONN6
+PCONN5:	HRROI 1,[ASCIZ / <- /]
+	TRNE 2,1
+	  HRROI 1,[ASCIZ / -> /]
+PCONN6:	PSOUT
+	MOVE SOCKET,FSCKT(B)	;#1 Get Foreign socket
+	MOVE HOST,FHOSTT(B)	;#1 Get Foreign Host
+	PUSHJ P,PSOCK
+	SKIPN PCTWIN
+	  JRST PCONN3
+	MOVEI 1,"/"
+	PBOUT
+	MOVE SOCKET,FSCKT(B)	;#1 Get foreign socket
+	LDB 1,[POINT 3,SOCKET,35]
+	XORI 1,"1"
+	PBOUT
+PCONN3:	MOVE 2,SIZE(B)		;#1 Get connection size
+	JUMPE 2,PCONN4
+	HRROI 1,[ASCIZ /, B/]
+	PSOUT
+	PUSHJ P,DNUM
+PCONN4:	PUSHJ P,CRLF
+	POPJ P,
+
+V(PCTWIN)
+V(PCFSBP)	; 15- OR 36-BIT BYTE POINTER
+
+; PRINT SOCKET/HOST PAIR
+; DON'T PRINT JOB OR DIR IF =(A)
+
+PSOCK:	PUSHJ P,HSELF
+	  PUSHJ P,[MOVE 2,HOST
+		PUSHJ P,PHOST
+		MOVEI 1,":"
+		PBOUT
+		POPJ P,]
+
+PSOCKN:	LDB 2,[POINT 17,SOCKET,20]
+	JUMPE 2,PSOCK1	; SYSTEM SOCKET
+	HRREI 3,-^D100000(2)
+	TRNE 3,777600
+	  JRST PSOCK2	; NOT JOB-LOCAL
+	MOVE 2,3	; JOB-LOCAL
+	CAMN 2,A
+	  PUSHJ P,HSELF
+	    PUSHJ P,DNUM
+	MOVEI 1,"#"
+	PBOUT
+	JRST PSOCK1
+
+PSOCK2:	PUSHJ P,HSELF
+	  JRST [MOVE 2,[POINT 36,SOCKET,35]
+		JRST PSOCK0]
+	MOVEI 1,"<"
+	PBOUT
+	HRLI 2,500000		;#1 
+	PUSHJ P,PDIR
+	MOVEI 1,">"
+	PBOUT
+PSOCK1:	MOVE 2,[POINT 15,SOCKET,35]
+PSOCK0:	MOVEM 2,PCFSBP
+	LDB 2,PCFSBP
+	PUSHJ P,ONUM
+	POPJ P,
+
+; Skip if HOST=self
+
+HSELF:	CAMN HOST,LHOST		;#1 Compare to local host
+RSKP:	  AOS 0(P)
+R:	POPJ P,
+
+; SEARCH CONNECTION CHAIN (B) FOR TWIN
+; ZAP IT AND SKIP IF FOUND
+
+TWIN:	HRRZ 1,CLST(B)		;#1 Get "next" connection in chain
+	JUMPE 1,R		;#1 Leave now if there is no next
+	HRRZ 5,B		;#1 Remember top of list
+	MOVE 2,LSCKT(B)		;#1 Get local socket
+	MOVE 3,FSCKT(B)		;#1 and foreign socket
+	XORI 2,1		;#1 remove send/receive distinction
+	XORI 3,1		;#1 ...
+	MOVE 4,STATE(B)		;#1 Get state as well
+TWIN0:	CAMN 2,LSCKT(1)		;#1 Local sockets match ?
+	 CAME 3,FSCKT(1)	;#1 Yes, do foreign sockets match ?
+	  JRST TWIN2		;#1 No, Get next one in the chain
+	CAME 4,STATE(1)		;#1 Foriegn & Local match, does STATE ?
+	 JRST TWIN2		;#1 No, move down the list
+	SETZM STATE(1)		;#1 Clear the state so we know its been done
+	HRRZ 1,CLST(1)		;#1 Get the one this entry points to
+	HRRM 1,CLST(5)		;#1 And remove it from the chain
+	RETSKP			;#1 Skip return
+
+TWIN2:	MOVE 5,1		;#1 Save this link
+	HRRZ 1,CLST(1)		;#1 Get next
+	JUMPE 1,R		;#1 If none, return now
+	JRST TWIN0		;#1 Still going, check it
+
+
+; FIND HOST IN HOSTN
+; RETURN B=INDEX AND SKIP, OR NOSKIP IF NOT FOUND
+
+FHOST:	MOVE B,HNS
+FHOST1:	LDB T,HNHOST
+	CAIN HOST,0(T)
+	  AOSA 0(P)
+	    SOJGE B,FHOST1
+	POPJ P,
+
+; PRINT NUMBER
+
+ONUM:	SKIPA 3,[10]
+DNUM:	MOVEI 3,^D10
+NUM:	MOVEI 1,101
+	NOUT
+	  JRST ERR
+	POPJ P,
+
+; GET SYSTEM TABLES BRACKETED BY (A)
+
+GETTAB:	MOVE C,0(A)
+	ADD A,[XWD 1,1]
+SYSGL:	MOVE 1,0(A)
+	SYSGT
+	HLRE B,2
+	SETCAM B,0(C)	; SIZE-1
+	HRRZ D,2
+	MOVE 3,1(A)
+	HRR 3,FREE
+	MOVEM 3,1(C)	; BASE
+	PUSHJ P,MGETAB
+	ADDI C,2
+	AOBJN A,.+1
+	AOBJN A,SYSGL
+	POPJ P,
+
+; Get system table to free space
+; (D) = [index,,table #], (B) = - # of words
+
+MGETAB:	MOVE 1,D
+	GETAB
+	  MOVEI 1,0
+	MOVEM 1,0(FREE)
+	ADDI FREE,1
+	ADD D,[XWD 1,0]
+	AOJL B,MGETAB
+	POPJ P,
+
+; SET UP AUXILIARY TABLES BRACKETED BY (A)
+
+GETAUX:	MOVE C,0(A)
+	ADD A,[XWD 1,1]
+AUXL:	HRRM FREE,0(C)
+	MOVE 1,0(A)
+	HLLM 1,0(C)
+	ADD FREE,-1(1)
+	ADDI FREE,1
+	ADDI C,1
+	AOBJN A,AUXL
+	POPJ P,
+
+;GET DIRECTORY INFORMATION NOT AVAILABLE FROM SYSTEM TABLES
+
+V(JCDIR)
+
+MGETJI:	MOVEI A,A
+	HRLM A,JCDIR
+	MOVE A,JRTS
+	HRRM FREE,JDIR
+	ADDI FREE,1(A)
+	HRRM FREE,JCDIR
+	ADDI FREE,1(A)
+MGETJ1:	SKIPGE @JRT
+	  JRST MGETJ2
+	MOVE 1,A
+	MOVE 2,[XWD -2,B]
+	MOVEI 3,2
+	GETJI
+	  SETZB B,B+1
+	MOVEM B,@JDIR
+	MOVEM B+1,@JCDIR
+MGETJ2:	SOJGE A,MGETJ1
+	POPJ P,
+
+; COLLECT STRING TO FREE AREA, RETURN PTR (A), TERMINATOR (1)
+
+GSTR:	MOVEI A,-1(FREE)
+	HRLI A,010700
+	PUSH P,A
+	MOVEI 1,101
+	RFCOC
+	TDZ 2,[XWD 140003,3]
+	TDZ 3,[XWD 600060,600000]
+	TLO 3,20	; Indicate ^X
+	SFCOC
+GSTR0:	SETZM 1(A)
+GSTR1:	MOVE 2,A
+	MOVEI 1,0
+	IDPB 1,2
+	PBIN
+	CAIN 1,15	; CR
+	  PUSHJ P,[PBIN
+		CAIE 1,12	; LF
+		  PUSHJ P,[MOVEI 1,100
+			BKJFN
+			  JFCL
+			POPJ P,]
+		MOVEI 1,37	; EOL
+		POPJ P,]
+	CAIN 1,12	; LF
+	  JRST [SKIPE TOPS20
+		  MOVEI 1,37
+		JRST GSEOL]
+	CAIN 1,14	; FF
+	  JRST GSEOL
+	CAIN 1,37	; EOL
+	  JRST GSEOL
+	CAIN 1,"A"-100
+	  JRST GSBKSP
+	CAIN 1,"H"-100
+	  JRST GSBKSP
+	CAIN 1,177
+	  JRST [SKIPE TOPS20
+		  JRST GSBKSP
+		HRROI 1,[ASCIZ / XXX/]
+		PSOUT
+		HALTF]
+	CAIN 1,"X"-100
+	  HALTF
+	CAIN 1,"Q"-100
+	  JRST GSDEL
+	CAIN 1,"R"-100
+	  JRST GSRTYP
+	CAIN 1,33	; ESC
+	  JRST GSESC
+	CAIN 1,"?"
+	  JRST GSQUES
+	CAIGE 1,"a"
+	  JRST .+3
+	    CAIG 1,"z"
+	      SUBI 1,40	; CONVERT TO UPPER CASE
+	CAIL 1,40
+	  IDPB 1,A
+	JRST GSTR1
+
+GSEOL:	HRRZI FREE,1(2)
+	POP P,A
+	AOS 0(P)
+	POPJ P,
+
+GSQUES:	MOVEI 1,100
+	CFIBF	; Flush input following "?"
+	PUSH P,A
+	MOVE A,-1(P)
+	MOVE 1,-2(P)
+	PUSHJ P,0(1)	; Call help routine
+	POP P,A
+	JRST GSRT1
+
+GSDEL:	HRROI 1,[BYTE (7) 7,7]	; Two bells
+	PSOUT
+	MOVE A,0(P)
+	JRST GSTR0
+
+GSBKSP:	CAMN A,0(P)
+	  JRST GSDEL
+	MOVEI 1,"\"
+	PBOUT
+	LDB 1,A
+	PBOUT
+	ADD A,[XWD 070000,0]
+	JUMPGE A,GSTR1
+	SUB A,[XWD 430000,1]
+	JRST GSTR1
+
+GSRTYP:	PUSHJ P,CRLF
+GSRT1:	MOVE 1,0(P)
+	PSOUT
+	JRST GSTR1
+
+GSESC:	MOVE 1,0(P)
+GSEL1:	MOVE 3,1
+GSEL:	ILDB 0,1
+	PUSHJ P,STC
+	  JRST GSEL
+	JUMPN 0,GSEL1
+	MOVE 2,3
+	SKIPN TOPS20
+	  JRST GSEL2
+	MOVEI 1,0
+	PUSH P,3
+	RCUSR
+	MOVE 2,3
+	POP P,3
+	TLNE 1,(1B3)
+	  JRST GSERR
+	TLNE 1,(1B4)
+	  JRST [MOVEI 1,"G"-100	; BELL
+		PBOUT
+		JRST GSTR1]
+	JRST GSEL3
+
+GSEL2:	HRLI 1,400000
+	STDIR
+	  JRST GSERR
+	  JRST [MOVEI 1,"G"-100	; BELL
+		PBOUT
+		JRST GSTR1]
+	HRRZ 2,1
+GSEL3:	MOVE 1,3
+	DIRST
+	  JRST GSERR
+	EXCH A,1
+	SKIPE ESCOUT
+	  PSOUT
+	MOVEI 1," "
+	SKIPE ESCOUT
+	  PBOUT
+	IDPB 1,A
+	JRST GSTR1
+
+GSERR:	HRROI 1,[ASCIZ / ? /]
+	PSOUT
+	MOVE 1,3
+	JRST GSTR1
+
+; Internal NIN from string (1), radix (3), to (2), leaves
+; terminator in (0)
+
+MYNIN:	SETZB 2,T
+NIN1:	ILDB 0,1
+	CAIG 0,"9"
+	  CAIGE 0,"0"
+	    JRST [ADDM T,0(P)
+		POPJ P,]
+	SUBI 0,"0"
+	IMUL 2,3
+	ADD 2,0
+	MOVEI T,1
+	JRST NIN1
+
+; SKIP IF (0) IS A TERMINATING CHARACTER
+
+STC:	JUMPE 0,STC2
+	CAIN 0,","
+	  JRST STC2
+	CAIN 0," "
+STC2:	  AOS 0(P)
+	POPJ P,
+
+; SCAN STRING (3) TILL TERMINATOR, REPLACE BY NULL
+
+TSCAN:	ILDB 0,3
+	PUSHJ P,STC
+	  JRST TSCAN
+	HRLZ 0,0
+	DPB 0,3
+	HLRZ 0,0
+	POPJ P,
+
+; Handle JSYS error
+
+ERR:	MOVEI 1,400000
+	GETER
+	MOVEI 1,101
+	MOVEI 3,0
+	ERSTR
+	  JFCL
+	  JFCL
+	HALTF
+
+; LOOK UP HOST NAME (A) IN HOST TABLE (B) [HSN,HN]
+; RETURN (B)=INDEX, UPDATE (A), AND
+;   SKIP RETURN IF FOUND
+
+STHST:	HRRZ C,B
+	HLRZ D,B
+	SKIPG B,-1(C)
+	  POPJ P,
+STHST1:	HRRZ 2,@0(C)
+	ADD 2,0(D)
+	MOVE 3,A
+STHST2:	ILDB 1,2
+	ILDB 0,3
+	  JUMPE 1,[PUSHJ P,STC
+		  JRST STHST3
+		MOVE A,3
+		AOS 0(P)
+		POPJ P,]
+	CAMN 1,0
+	  JRST STHST2
+STHST3:	SOJGE B,STHST1
+	POPJ P,
+
+; Open log file, return JFN in 1
+; Noskip if can't open, or if not logging
+
+LOG:	SKIPN LOGFLG
+	  POPJ P,
+	MOVE 1,LOGJFN
+	JUMPGE 1,LOG1
+	HRLZI 1,100001
+	MOVE 2,[POINT 7,[ASCIZ /<SYSTEM>LD.LOG/]]
+	GTJFN
+	  POPJ P,
+	MOVE 3,1
+	MOVE 2,[XWD 070000,020200]
+	OPENF
+	  JRST [MOVE 1,3
+		RLJFN
+		  JFCL
+		POPJ P,]
+	MOVEM 1,LOGJFN
+LOG1:	AOS 0(P)
+	POPJ P,
+
+; Close log file
+NOLOG:	SKIPGE 1,LOGJFN
+	  POPJ P,
+	CLOSF
+	SETOM LOGJFN
+	POPJ P,
+
+
+; TABLES
+	DEFINE BT(X)<
+X:	Z SPACE>
+	DEFINE T(N,X,I)<
+	SIXBIT /N/
+	XWD I,0
+	X'S=SPACE
+	X=SPACE+1
+	SPACE=SPACE+2>
+	DEFINE A(Y,X,I)<
+	XWD I,X
+	Y=SPACE
+	SPACE=SPACE+1>
+	DEFINE ET(X)<
+END'X:	>
+
+; SUMMARY TABLES
+
+BT(STB)
+	T(JOBTTY,JTTY,A)
+	T(JOBDIR,JDIR,A)
+	T(JOBRT,JRT,A)
+	T(TASKTB,TASKT,C)
+	T(LOADTB,LOADT,C)
+	T(EVENTS,EVT,C)
+	T(DWNTIM,DWNT,B)
+	T(SYSTAT,SYST,C)
+	T(TICKPS,TICK,0)
+	T(HOSTN,HN,B)
+ET(STB)
+
+; SYSTEM TABLES
+
+BT(TAB)
+	T(JOBNAM,JNAM,A)
+	T(SNAMES,SNAM,440600+B)
+	T(JOBNM2,JNAM2,A)
+	T(JOBPNM,JPNM,A)
+	T(TTYJOB,TJOB,C)
+ET(TAB)
+
+; HOST NAMING TABLES
+
+BT(NTB)
+	T(HSTNAM,HSN,440700)
+ET(NTB)
+
+; AUXILIARY TABLES
+
+BT(AUX)
+	A(THOST,TJOB,C)
+	A(JCONN,JTTY,A)
+ET(AUX)
+
+; BYTE POINTERS
+
+HNHOST:	POINT 9,@HN,17	; HOST #
+LHOST:	0			;#1 Local Host #
+
+; NETWORK STATE NAMES
+
+	DEFINE NS(X)
+	<.'X'.==.-NSNAME
+	ASCIZ /X/>
+NSNAME:	NS DEAD
+	NS CLZD
+	NS PNDG
+	NS LSNG
+	NS RFCR
+	NS CLW2
+	NS RFCS
+	NS OPND
+	NS CLSW
+	NS DATW
+	NS RFN1
+	NS CLZW
+	NS RFN2
+	NS KILD
+	NS FREE
+	NS XX17
+NSMASK:	XWD 400010,0	; UNINTERESTING STATES
+NCMASK:	XWD 440010,0	; STATES WITH NO FOREIGN SOCKET
+
+; Downtime explanations
+
+DOWNS:	0
+	0
+	0
+	0
+	0
+	[ASCIZ /P.M./]
+	[ASCIZ /hardware work/]
+	[ASCIZ /software work/]
+	[ASCIZ /emergency restart/]
+	0
+	0
+	0
+	0
+	0
+	0
+	0
+
+	FSPACE=SPACE
+
+NCPCNT:	BLOCK 1			;#1 
+NVTCNT:	BLOCK 1			;#1 
+FSTNVT:	0			;#1 First NVT
+LSTNVT:	0			;#1 Last NVT
+FHOSTT:	BLOCK NCBLK		;#1 Foreign Host
+LSCKT:	BLOCK NCBLK		;#1 Local Socket
+FSCKT:	BLOCK NCBLK		;#1 Foreign Socket
+STATE:	BLOCK NCBLK		;#1 State of Connection
+NVTS:	BLOCK NCBLK		;#1 NVT for this connection
+SIZE:	BLOCK NCBLK		;#1 Size of connection
+BITS:	BLOCK NCBLK		;#1 # of bits transferred
+STATUS:	BLOCK NCBLK		;#1 Status of Connection
+NCPBLK:	BLOCK 20		;#1 Temp holding for data
+CLST:	BLOCK NCBLK		;#1 Linked list of connections
+JTAB:	BLOCK ^D125		;#1 Job/NVT table
+NNJOBS:	BLOCK 1			;#1 # of entries in JTAB
+
+	END START

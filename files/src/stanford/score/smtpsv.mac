@@ -1,0 +1,109 @@
+	TITLE SMTPSV TOPS-20 SMTP listener
+	SUBTTL Written by Mark Crispin - January 1984
+
+; Copyright (C) 1984 Mark Crispin.  All rights reserved.
+
+; Version components
+
+SMTWHO==0			; who last edited SMTPSV (0=developers)
+SMTVER==5			; SMTPSV's release version (matches monitor's)
+SMTMIN==3			; SMTPSV's minor version
+SMTEDT==^D3			; SMTPSV's edit version
+
+;  SMTPSV is the Internet SMTP listener.  It listens for connections on the
+; SMTP port and fires up a server job running MAISER.
+;
+;  SMTPSV has been intentionally kept as simple as possible.  It is intended
+; that in an actual production environment a full Internet server/logger such
+; as NETSRV (also available from the author) will be used.
+;
+;  SMTPSV runs on TOPS-20 release 5.3 and later monitors.  SMTPSV will not
+; run on Tenex; the "Twenex" operating system is a figment of the imagination
+; of certain individuals.  There ain't no such thing as a free lunch.
+
+	SEARCH MACSYM,MONSYM	; system definitions
+	SALL			; suppress macro expansions
+	.DIRECTIVE FLBLST	; sane listings for ASCIZ, etc.
+	.TEXT "/NOINITIAL"	; suppress loading of JOBDAT
+	.TEXT "SMTPSV/SAVE"	; save as SMTPSV.EXE
+
+; AC definitions
+
+A=:1				; JSYS, temporary ACs
+B=:2
+C=:3
+D=:4
+
+; Data area
+
+CRJBLK:	BLOCK .CJSLO+1		; CRJOB% argument block
+JFN:	BLOCK 1			; listening JFN
+JOB:	BLOCK 1			; job created by CRJOB%
+	SUBTTL Main program
+; Entry vector
+
+EVEC:	JRST SMTPSV		; START address
+	JRST SMTPSV		; REENTER address
+	<FLD SMTWHO,VI%WHO>!<FLD SMTVER,VI%MAJ>!<FLD SMTMIN,VI%MIN>!<FLD SMTEDT,VI%EDN>
+EVECL==.-EVEC
+
+SMTPSV:	RESET%			; flush all I/O
+	MOVX A,.FHSLF		; this fork
+	MOVX B,1		; we want queue zero only
+	SPRIW%			; set JOBBIT priority word
+	 ERJMP .+1
+	DO.			; this is the loop of the SMTP server
+	  MOVX A,GJ%SHT		; GTJFN% flags
+	  HRROI B,[ASCIZ/TCP:25#/] ; get pointer to name
+	  GTJFN%		; get a JFN 
+	   ERJMP STOP
+	  MOVEM A,JFN		; save the JFN
+	  MOVX B,OF%RD!OF%WR!<FLD .TCMWI,OF%MOD>!<FLD ^D8,OF%BSZ>
+	  OPENF%		; open in 8-bit mode
+	   ERJMP STOP
+	  MOVE A,[CRJBLK,,CRJBLK+1] ; zero the CRJOB% argument block
+	  SETZM CRJBLK
+	  BLT A,CRJBLK+.CJSLO
+	  HRROI A,[ASCIZ/SYSTEM:MAISER.EXE/] ; program to run
+	  MOVEM A,CRJBLK+.CJFIL	; save the file name pointer
+	  MOVX A,.NULIO		; get TTY designator
+	  MOVEM A,CRJBLK+.CJTTY	; new job is detached
+	  MOVX A,CJ%FIL!CJ%WTA!CJ%CAP ; wait until attached before starting
+	  MOVEI B,CRJBLK	; get address of argument block
+	  CRJOB%		; create the job
+	   ERJMP STOP		; trap errors
+	  MOVEM A,JOB		; save the job number
+	  MOVE A,JFN		; get network JFN
+	  ATNVT%		; attach NVT
+	   ERJMP STOP
+	  MOVE D,A		; TTY number to use
+	  MOVE A,JOB		; get the job number back
+	  TXO A,AT%TRM		; attach JSYS flags
+	  SETZB B,C
+	  ATACH%		; put the job where it belongs
+	   ERJMP STOP		; handle errors
+	  LOOP.			; and loop forever
+	ENDDO.
+	SUBTTL Other randomness
+
+STOP:	HRROI A,[ASCIZ/SMTPSV: /]
+	ESOUT%
+	MOVX A,.PRIOU
+	HRLOI B,.FHSLF		; dumb ERSTR%
+	SETZ C,
+	ERSTR%
+	 NOP			; undefined error number
+	 NOP			; can't happen
+	MOVX A,^D5000		; sleep for 5 seconds
+	DISMS%
+	JRST SMTPSV		; restart
+
+; Literals
+
+...VAR:!VAR			; generate variables (there shouldn't be any)
+IFN .-...VAR,<.FATAL Variables illegal in this program>
+...LIT:	XLIST			; save trees during LIT
+	LIT			; generate literals
+	LIST
+
+	END EVECL,,EVEC		; The End

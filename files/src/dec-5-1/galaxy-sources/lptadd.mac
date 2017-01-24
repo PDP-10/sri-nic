@@ -1,0 +1,101 @@
+	Title	LPTADD - TOPS20 Various additional routines for LPTSPL
+
+	Comment	~
+
+LPTADD written by:	Robert M. Gerber
+			Academic Computing Center
+			Graduate School of Business Administration
+			New York University
+			90 Trinity Place
+			New York, NY  10006
+
+	~
+
+	SEARCH	GLXMAC		;Search GALAXY parameters
+	PROLOGUE(LPTADD)
+	SEARCH	QSRMAC		;Search QUASAR parameters
+	SEARCH	ORNMAC		;Search ORION/OPR parameters
+	SEARCH	D60UNV		;Search for DN60 symbols
+
+	SALL			;Suppress macro expansions
+	.DIRECT	FLBLST
+
+IF1,<
+	Printx	Assembling GALAXY-20 LPTADD - Additional routines for LPTSPL
+	Printx	NYU001:	Skip over certain file types.
+>				;End If1
+IF2,<	Printx	Begin assembler pass # 2.>
+	Subttl	Internal/External stuff
+
+	E==14			;Points to current file
+	J==15			;Job context pointer
+
+Internal	ChkExt		;Check to see whether or not an
+				;extension is valid for printing.
+External	LPERR		;Begging of Error line for log entry
+External	LOGCHR		;Type a character into the log file
+External	Stream		;Current stream number
+External	JOBOBA		;Table of object block addresses
+External	J$DFDA		;FD address
+External	J$LEXT		;Page pointer for a scratch page
+External	J$DIFN		;The IFN of the current file
+	Subttl	NYU001: Skip over certain file types
+
+ChkExt:	Load	S2,.FPINF(E),FP.SPL ;Check to see if spooled
+	Jumpn	S2,[$RetT]	;Spooled, ignore extension, return true
+	Skipn	J$LEXT(J)	;See if we have a temp buffer page
+	 $Call	[$Call	M%GPAG	;No, get a scratch page
+		 Movem	S1,J$LEXT(J) ;Save the address away
+		 $Ret]		;And return
+	Move	S1,J$DIFN(J)	;Get the IFN
+	Movx	S2,FI.CHN	;Say we want the JFN for the IFN
+	$Call	F%INFO		;Get the JFN of the IFN
+	 JumpF	[$RetT]		;Failed..say okay to print (LPTSPL
+				;should bomb)
+	Hrrz	S2,S1		;Get the JFN
+	Hrro	S1,J$LEXT(J)	;Get the extension into our scratch page
+	Hrlzi	T1,(1b11)	;Say we want extension only
+	Setz	T2,		;Need no format really
+	JFNS%			;Get the extension
+	Movei	S1,BadExt	;Get address of TBLUK% extension table
+	Hrro	S2,J$LEXT(J)	;Point to the extension
+	TbLuk%			;Go look it up...
+	Tlnn	S2,(TL%EXM)	;Was it an exact match
+	Jrst	[$RetT]		;No, say okay to print...
+	Move	S1,J$DIFN(J)	;Get the IFN
+	$Call	F%REL		;Release the IFN
+	$Text(LOGCHR,<^I/LPERR/Non-printable file type ^F/@J$DFDA(J)/>)
+				;Put it in the logarea
+	Move	S1,Stream	;Get the stream number
+	$WTOJ	(Error Processing Job,Non-Printable file type ^F/@J$DFDA(J)/,@JOBOBA(S1))
+				;Tell the operator what happened
+				;(permanent record)
+	Zero	.FPINF(E),FP.DEL ;Do not delete it...
+	$RetF			;Say not to print it....
+
+BadExt:	17,,17
+	[Asciz /:EJ/],,0	;Compiled EMACS librarys
+	[Asciz /APL/],,0	;APL workspaces
+	[Asciz /BIN/],,0	;Binary data files
+	[Asciz /CRF/],,0	;Into to CREF
+	[Asciz /EXE/],,0	;Programs
+	[Asciz /IDA/],,0	;ISAM Data File
+	[Asciz /IDX/],,0	;ISAM Index
+	[Asciz /OVL/],,0	;Overlay file
+	[Asciz /RAM/],,0	;LPT translation table
+	[Asciz /REL/],,0	;Object file
+	[Asciz /SAV/],,0	;Save files (TOPS-10, SPSS)
+	[Asciz /SHR/],,0	;TOPS-10 Share files
+	[Asciz /SYM/],,0	;Link symbol files
+	[Asciz /UNV/],,0	;Universal files for macro
+	[Asciz /VFU/],,0	;Vertical Format Unit
+	Subttl	End of LPTADD.Mac
+
+	End
+
+;* Local Modes: *
+;* Mode:Macro *
+;* Auto Fill Mode:1 *
+;* Fill Column:72 *
+;* Reqion Query Size:500 *
+;* End: *

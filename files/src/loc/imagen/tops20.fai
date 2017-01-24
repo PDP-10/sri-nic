@@ -1,0 +1,268 @@
+; ************************************************************
+;	C low-level Runtime Support Routines
+;		TOPS-20 Operating System
+;
+;		k. chen  Aug, 1981
+; ************************************************************
+;
+	TITLE	TOPS20
+
+	EXTERN	RUNTM
+	ENTRY	.START
+	ENTRY	.GETTY,.PUTTY,.GETCH
+	ENTRY	.OPEN,.CLOSE
+	ENTRY	.WRITE,.READ
+	ENTRY	.CPUTM,DELET
+	ENTRY	TSKP,SLEEP,DISMIS
+	ENTRY	.EXIT
+
+	SEARCH	MONSYM
+
+P==17
+ARG1==-1			; offset of first argument
+ARG2==-2			; offset of second argument
+ARG3==-3			; offset of third argument
+
+; ************************************************************
+;	Initialize stack, call high level initialization.
+; ************************************************************
+;
+;
+IFNDEF SECT0,<SECT0==1>			; by default, make nonextended vers.
+IFN SECT0,<				; stack and heap placement for sect. 0
+	.JBSA==120			; where to find beginning of stack
+	STACK==400000			; address just beyond end of stack
+>;IFN SECT0
+IFE SECT0,<
+	DDTORG==770000			; starting address for DDT
+	STACK==<20,,0>			; address just beyond end of stack
+>;IFE SECT0
+
+; Entry vector (length 2) for .START
+EV:	JRST .START			; START address
+	JRST .START			; REENTER address
+
+.START:					; entry point for DDT hackers.
+START:	RESET%
+IFN SECT0,<				; the section-0 version is simple
+	MOVE 	P,.JBSA
+	HLR 	P,P
+	SUB 	P,[STACK,,1]		; allocate stack.
+>;IFN SECT0
+IFE SECT0,<				; extended version
+	XMOVEI 1,0			; are we in a non-zero section?
+	 JUMPN 1,XSTART			; yes!  Allocate stack differently
+	MOVEI 1,0			; make a private section for the code
+	MOVE 2,[.FHSLF,,1]
+	MOVE 3,[SM%RD!SM%WR!SM%EX+1]
+	SMAP%
+	MOVE 4,[.FHSLF,,0]		; initial fork page pointer
+START0:	MOVE 1,4			; fork,,page #
+	RMAP%				; read the fork's map
+	CAMN 1,[-1]			; no access?
+	 JRST START1			; no work for no page
+	MOVE 3,2			; access bits from RMAP
+	MOVE 2,4
+	IORI 2,1000			; copy map from 0 to 1
+	PMAP%
+START1:	ADDI 4,1			; increment fork page pointer
+	TRNN 4,1000			; done yet?
+	 JRST START0			; nope
+; Make Section 0 UDDT jump to section 1.
+	MOVE	1,[.FHSLF,,770]		; Nis UDDT present?
+	RMAP%
+	MOVE	4,[JRST DDTORG+2]
+	CAME	1,[-1]			; no page at 770000
+	 CAME	4,DDTORG		;  or not JRST 770002
+	  JRST	START3			; no DDT at all.
+	MOVE	5,DDTORG+1
+	MOVE	6,DDTORG+2		; save 770000,1,2
+	SETO	1,			; unmap page 770
+	MOVE	2,[.FHSLF,,770]		; We can't write this page 770, so
+	MOVEI	3,0			;  we discard it.
+	PMAP%
+	MOVEM	4,DDTORG
+	MOVEM	5,DDTORG+1
+	MOVEM	6,DDTORG+2
+	MOVE	1,[[XJRSTF DDTORG+4	; starting instruction for UDDT
+		    0			; (at DDTORG+4) new PC flags for XJRSTF
+		    1,,DDTORG		; new PC for XJRSTF
+			],,DDTORG+3]
+	BLT	1,DDTORG+5
+START3: XJRSTF  [0			; Now, jump to section 1
+		1,,XSTART]
+XSTART:	MOVEI 1,0			; create private sections for stack
+	MOVE 2,[.FHSLF,,10]		; starts at 10,,0.  Ends at STACK
+	MOVE 3,[SM%RD!SM%WR+<STACK/1000000>-10]
+	SMAP%				; allocate 10 sections for the stack
+	MOVSI P,10			; stack runs from 10,,0 to 17,776777
+	MOVE 1,[1,,777]			; page 777 of exec probably doesn't
+	MOVE 2,[.FHSLF,,<<STACK-1>/1000000>] ; exist
+	MOVEI 3,0			; so mark end of stack no-access
+	PMAP%				;  to catch stack overflows
+	 ERJMP .+1			; (??) ignore errors
+>;IFE SECT0
+	MOVEI	1,.RSINI		; place command line back into the TTY
+	RSCAN%				;  input buffer.
+	 ERJMP	.EXIT
+	PUSH	P,1			; save char. count (AC1) as argument
+	CALL 	RUNTM			; call high level runtime routines.
+
+.EXIT:	HALTF%				; exit to monitor.
+	JRST	.-1			; don't allow reentry.
+
+; ************************************************************
+;	read a character from the tty. Return in AC0
+; ************************************************************
+;
+.GETTY:	PBIN%
+	MOVE	0,1
+	RET
+
+; ************************************************************
+;	output a character to the tty.
+; ************************************************************
+;
+.PUTTY:	MOVE	1,ARG1(P)
+	PBOUT%
+	RET
+
+; *************************************************************
+;	Get channel (JFN), return in AC0
+; *************************************************************
+
+.GETCH:	MOVS	1,ARG2(P)
+	SETO	2,		; adjust byte pointer
+	ADJBP	2,ARG1(P)	; to point at previous char
+	GTJFN%
+	 ERJMP	BRET		; error, return -1
+	MOVE	0,1		; return JFN
+	RET
+
+; *************************************************************
+;	open file, return success or failure in AC0
+;	  argument 1: JFN of file
+;		   2: byte size of open
+;		   3: mode word (OF%RD, OF%WR, etc)
+; *************************************************************
+;
+.OPEN:	MOVE	1,ARG1(P)	; JFN
+	MOVE	2,ARG3(P)	; byte size
+	LSH	2,=30		; shift into position
+	IOR	2,ARG2(P)	; accesses
+	OPENF%
+	 ERJMP	FRET
+	JRST	TRET
+
+; *************************************************************
+;	close file, returns success or failure in AC0
+;	  argument 1: JFN of file
+; *************************************************************
+;
+.CLOSE:	HRRZ	1,ARG1(P)
+	CLOSF%
+	 ERJMP	FRET
+	JRST	TRET
+
+; *************************************************************
+;	write buffer to file, returns status in AC0
+;	  argument 1: JFN of file
+;		   2: pointer to start of buffer
+;		   3: count of number of bytes
+; *************************************************************
+;
+.WRITE:	MOVE	1,ARG1(P)	; JFN.
+	SETO	2,		; point byte pointer
+	ADJBP	2,ARG2(P)	; to previous byte.
+	MOVN	3,ARG3(P)	; negate byte count.
+	SOUT%
+	 ERJMP	FRET
+	JRST	TRET
+
+; ****************************************************************
+;	read buffer, returns byte count if successful, in AC0
+;		     returns -1 if failed some way.
+;	  argument 1: JFN of file
+;		   2: byte pointer to start of buffer
+;		   3: buffer byte size
+; ****************************************************************
+;
+.READ:	MOVE	1,ARG1(P)	; JFN.
+	SETO	2,		; point byte pointer
+	ADJBP	2,ARG2(P)	; to previous byte.
+	MOVN	3,ARG3(P)	; negate count
+	SIN%
+	ADD	3,ARG3(P)
+	JUMPE	3,FRET		; return -1 if count didn't change
+	MOVE	0,3		; otherwise, return count
+	RET
+
+; *************************************************************
+;	Returns false if no character waiting on tty
+;	(check controlling keyboard if JFN is -1)
+;	  argument 1: JFN of TTY
+; *************************************************************
+;
+TSKP:	MOVE	1,ARG1(P)	; JFN of tty
+	CAIG	1,0
+	MOVEI	1,.PRIIN	; check controlling terminal
+	SIBE%
+	JRST	TRET		; character there, return true
+	JRST	FRET		; no character, return false
+
+; *************************************************************
+;	dismiss process
+;	  argument 1: number milliseconds to dismiss
+; *************************************************************
+;
+DISMIS:	MOVE	1,ARG1(P)	; ms count
+	DISMS%
+	RET
+
+; *************************************************************
+;	dismiss process
+;	  argument 1: number of seconds to dismiss
+; *************************************************************
+;
+SLEEP:	MOVE	1,ARG1(P)	; second count
+	IMULI	1,=1000		; convert to ms
+	DISMS%
+	RET
+
+; *************************************************************
+;	get CPU usage
+; *************************************************************
+;
+.CPUTM:	MOVEI	1,.FHSLF	; our process
+	RUNTM%			; go get runtime
+	MOVE	0,1		; return result in AC0
+	RET
+
+; *************************************************************
+;	DELET -- delete and expunge a file
+;	call:	arg1/ filename
+; *************************************************************
+
+DELET:	MOVSI 	1,(GJ%OLD+GJ%SHT)
+	SETO 	2,			;get file name
+	ADJBP 	2,ARG1(P)
+	GTJFN%
+	 JRST	BRET
+	HRLI	1,200000
+	DELF%
+	 JRST	BRET
+	JRST	TRET
+
+
+; *************************************************************
+;	Runtime support returns
+; *************************************************************
+;
+TRET:	MOVEI	0,1
+	RET			; normal return, AC0 = 1
+FRET:	SETZ	0,
+	RET			; error return, AC0 = 0
+BRET:	SETO	0,
+	RET			; error return, AC0 = -1
+
+	END	<2,,START>

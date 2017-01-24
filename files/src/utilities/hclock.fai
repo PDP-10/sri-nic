@@ -1,0 +1,161 @@
+	title Hclock
+	search monsym
+
+;This program works ONLY on Hazeltines.
+
+;It displays, every second :
+;the date in the upper left corner of the screen,
+;the time in the middle of the screen.
+;it can be stopped by typing <ESC>,
+;any other character will give a help message.
+
+	a1=	1
+	a2=	2
+	a3=	3
+	wait=	=1000
+	look=	=500
+
+	tilda=	176
+	dc2=	22
+	fs=	34
+	dc1=	21
+	dollar= 44
+	ell=	154
+	bar=	174
+	rquot=	140
+	lpar=	50
+	dblu=	167
+	em=	31
+	us=	37
+
+chntab:	1,,help
+	2,,stop
+levtab:	0,,pclev1
+	0,,pclev2
+pclev1:	block	1
+pclev2:	block	1
+
+start:	reset
+
+	move	a1,[0,-1]
+	gttyp			;get terminal type,
+	caie	a2,.tthaz	;test if it is a Hazeltine 1500
+	cain	a2,.ttnhz	;or a Hazeltine 1500 w/rom.
+	jrst	right
+	hrroi	a1,[asciz/		This program works only on Hazeltines.
+		If you are on a Teleray, try ICLOCK or CLOCK instead.
+		If you are on a VT52, try CLOCK instead./]
+	psout			;output help message
+	haltf
+
+right:	movei	a1,.fhslf
+	move	a2,[levtab,,chntab]
+	sir			;set up software interrupt tables.
+	eir			;enable software interrupts.
+	move	a2,[1b0]
+	aic			;activate channel 0.
+	move	a2,[1b1]
+	aic			;activate channel 1.
+	move	a1,[.ticti,,0]
+	ati			;assign any typein to channel 0.
+	move	a1,[.tices,,1]
+	ati			;assign <ESC> to channel 0.
+
+	movei	a1,.priou
+	rfmod
+	and	a2,[-1,,777477]
+	sfmod			;put terminal in binary mode.
+
+again:	movei	a1,tilda
+	pbout
+	movei	a1,fs		;clear screen
+	pbout
+  
+	movei	a1,tilda
+	pbout
+	movei	a1,us		;display foreground (=> bright display).
+	pbout
+
+time:	movei	a1,tilda
+	pbout
+	movei	a1,dc1		;address cursor;
+	pbout
+	movei	a1,bar		;put it in column 28,
+	pbout
+	movei	a1,rquot	; line 0.
+	pbout
+
+	movei	a1,.priou	;output
+	move	a2,[-1]		;the current
+	move	a3,[ot%day+ot%fdy+ot%fmn+ot%4yr+ot%spa+ot%ntm+ot%scl]
+	odtim			;date.
+
+	movei	a1,tilda
+	pbout
+	movei	a1,dc1		;address cursor;
+	pbout
+	movei	a1,dollar	;put it in column 36,
+	pbout
+	movei	a1,ell		; line 12.
+	pbout
+
+	movei	a1,.priou	;output
+	move	a2,[-1]		;the current
+	move	a3,[ot%nda+ot%12h]
+	odtim			;time.
+
+	movei	a1,tilda
+	pbout
+	movei	a1,dc1		;address cursor;
+	pbout
+	movei	a1,lpar		;put it in column 40,
+	pbout
+	movei	a1,dblu		; line 23.
+	pbout
+
+	movei	a1,wait		;go to sleep
+	disms			;for one second.
+
+	jrst	time		;and start again (forever)...
+
+	;when interrupt occurs (any character typed) :
+help:	movei	a1,.priin
+	cfibf			;clear terminal input buffer.
+  
+	movei	a1,tilda
+	pbout
+	movei	a1,fs		;clear screen.
+	pbout
+  
+	hrroi	a1,[asciz/                        type <ESC> to kill the clock.../]
+	psout			;output help message
+
+	movei	a1,tilda
+	pbout
+	movei	a1,dc2		;put cursor home.
+	pbout
+
+	cis			;clear software interrupt system.
+
+	movei	a1,look	;go to sleep
+	disms			;for one 1/2 second.
+
+	jrst	again		;and start again...
+
+	;when interrupt occurs (<ESC> typed) :
+stop:	movei	a1,.priin
+	cfibf			;clear terminal input buffer.
+
+	movei	a1,tilda
+	pbout
+	movei	a1,em		;reset display to background.
+	pbout
+
+	movei	a1,tilda
+	pbout
+	movei	a1,fs		;clear screen.
+	pbout
+  
+	haltf			;and stop...
+
+	end	start

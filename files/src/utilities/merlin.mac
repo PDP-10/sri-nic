@@ -1,0 +1,1203 @@
+;<SU-UTILITIES>MERLIN.MAC.16, 20-Apr-83 19:51:06, Edit by KRONJ
+; Confirmation is always from the terminal
+;<SU-UTILITIES>MERLIN.MAC.15, 28-Mar-83 20:16:18, Edit by KRONJ
+; Add UPDATE command
+; Add /NoFiles, rename /FilesOnly to be /NoSubdirs
+; Start edit history
+
+title Merlin - copy/rename/delete directories
+subttl David Eppstein / Stanford University / 13-Mar-83
+
+	search monsym,macsym
+	.require sys:macrel
+
+	vmajor==2		;major version number
+	vminor==0		;minor version number
+	vedit==2		;edit number
+	vwho==4			;who edited (4 = Stanford)
+
+
+f=:0				;flags -- left half global, right half switches
+	f%dlok==1,,0		;type [OK] in delete
+	f%dsub==2,,0		;delete subdirectories
+	f%renm==4,,0		;rename command (not copy)
+	f%kold==10,,0		;must kill old directory
+
+	f%nsub==1		;no subdirectories
+	f%verb==2		;verbose file listing
+	f%nprs==4		;don't preserve superior quotas
+	f%nfil==10		;don't copy contents
+
+a=:1				;scratch and jsys use
+b=:2
+c=:3
+d=:4
+
+fp=:15				;trvar frame pointer
+cx=:16				;macsym scratch
+p=:17				;stack pointer
+
+subttl Macros
+
+define fatal (msg<Fatal error>) <
+	call [	hrroi a,[asciz/msg - /]
+		jrst .fatal ]
+>
+define pmsg (msg) <		;; parse error
+	jrst [	ifb <msg>,<hrroi a,[asciz//]>
+		ifnb <msg>,<hrroi a,[asciz/msg - /]>
+		jrst .pmsg ]
+>
+define xpmsg (msg) <		;; parse error with no jsys error
+	jrst [	hrroi a,[asciz/msg/]
+		jrst .xpmsg ]
+>
+define xfatal (msg) <		;; fatal error with no jsys error
+	jrst [	hrroi a,[asciz/msg/]
+		jrst .xfatl ]
+>
+
+define noise (words) <		;; parse guidance message
+	movei b,[flddb. .cmnoi,,<-1,,[asciz\words\]>]
+	call .comnd
+	 pmsg
+>
+
+define upcase (ac) <		;; make sure a character is uppercase
+	trne ac,100
+	 trz ac,40
+>
+define mkptr (ac) <		;; make sure it is a real byte pointer
+	tlc ac,-1
+	tlcn ac,-1
+	 hrli ac,(point 7)
+>
+
+define type (loc) <
+	hrroi a,loc
+	psout%
+>
+
+subttl Impure uninitialized storage
+
+	pdlen==200
+pdl:	block pdlen		;control stack
+
+	buflen==200
+atmbuf:	block buflen		;atom buffer
+cmdbuf:	block buflen		;command buffer
+
+odirnm:	block 1			;source directory number
+ndirnm:	block 1			;new dir number - prevent infinite recursion
+olddir:	block 10		;source directory name
+newdir:	block 10		;new directory name
+savpdl:	block 1			;saved stack pointer for command processing
+temp:	block 100		;some more temporary storage
+maploc:	block 1			;return address from mapdir
+curjfn:	block 1			;what we're working on now
+curpag:	block 1			;the page of it we're doing
+
+define groups <			;; call macro for all types of groups
+	dogroup (cdugp)		;; user groups
+	dogroup (cddgp)		;; directory groups
+	dogroup (cdcug)		;; subdirectory user groups allowed
+>
+define dogroup (name) <$'name: block maxgrp>
+
+	crdlen==.cddfe+1	;size of crdir block
+crdblk:	block crdlen		;crdir block
+$cdpsw:	block 10		;password storage area
+$cddac:	block 10		;default account for login
+	maxgrp==40		;nobody's gonna have more groups than this
+	groups			;allocate storage blocks for groups
+
+	cpypag==200		;where to map files to copy them
+cpyadr=cpypag*1000
+
+ch1pc:	block 1			;interrupt pc saved location
+ch2pc:	block 1
+ch3pc:	block 1
+
+subttl Impure initialized storage
+
+csb:	0			;.cmflg -- flags ,, reparse address
+	.priin,,.priou		;.cmioj -- input ,, output jfn
+	0			;.cmrty -- prompt pointer (set in setcmd)
+	-1,,cmdbuf		;.cmbfp -- ptr to start of command buffer
+	-1,,cmdbuf		;.cmptr -- ptr to next input
+	<5*buflen>-1		;.cmcnt -- size of buffer
+	0			;.cminc -- chars left in buffer
+	-1,,atmbuf		;.cmabp -- atom buffer pointer
+	<5*buflen>-1		;.cmabc -- size of atom buffer
+	cmdgtj			;.cmgjb -- long-form gtjfn% block
+
+levtab:	ch1pc			;interrupt level table
+	ch2pc
+	ch3pc
+
+chntab:	1,,status		;channel 0: ctrl/a interrupt
+	repeat ^d35,<0>		;no other interrupts
+
+cmdgtj:	gj%old!gj%ifg!gj%flg!.gjall ;this block is for wild command parsing
+	repeat 3,<0>		;comnd% will fill in jfns
+	repeat 2,<point 7,[asciz/*/]> ;wildcard name and extension
+	repeat 8,<0>		;fill out rest of block
+
+wljblk:	gj%old!gj%ifg!gj%flg!gj%del!gj%xtn!.gjall
+	.nulio,,.nulio		;no source jfns
+	repeat 2,<0>		;no default device or directory
+	repeat 2,<point 7,[asciz/*/]> ;wildcard name and extension
+	repeat 3,<0>		;.gjpro, .gjact, .gjjfn unused
+	g1%iin			;.gjf2  -- more flags (ignore invisible)
+	repeat 5,<0>		;.gjcpp, .gjcpc, .gjrty, .gjbfp, .gjatr
+
+gtjblk:	gj%old!gj%del!gj%xtn	;this block is for normal files
+	.nulio,,.nulio		;no source jfns
+	repeat 7,<0>		;no defaults
+	g1%iin			;allow invisible files
+	repeat 5,<0>
+
+subttl Startup and main loop
+
+evec:	jrst start		;entry
+	jrst start		;re-entry
+	byte (3) vwho (9) vmajor (6) vminor (18) vedit
+
+start:	reset%			;clean up the world
+	move p,[iowd pdlen,pdl]	;make a stack pointer
+	setz f,			;clear flags
+	setzm curjfn		;no current jfn
+	setom curpag		;no current page
+
+	movx a,.fhslf		;on our own process
+	move b,[levtab,,chntab]	;with normal level and channel tables
+	sir%			;set up interrupt system
+	eir%			;and enable it
+	movx b,1b0		;get mask of channels to activate
+	aic%			;and activate them
+	movx a,<.ticca,,0>	;control-a, channel 0
+	ati%			;set up interrupt for that key
+
+	movx a,.rsini		;function to read from rscan buffer
+	rscan%			;read jcl input
+	 fatal			;can't fail
+	jumpe a,cmdini		;none, go on
+	movei a,.nulio		;get null jfn
+	hrrm a,csb+.cmioj	;save as output jfn
+	hrroi a,[asciz//]	;no prompt
+	call setcmd		;set up for command processing
+	movei b,[flddb. .cmfld]	;field (our program name)
+	call .comnd		;parse and ignore
+	 jrst norscn		;failed, give up on jcl
+	movei b,[flddb. .cmcfm]	;confirmation (if succeeds then no jcl)
+	call .comnd		;parse it
+	 jrst cparse		;failed, go process jcl
+norscn:	movei a,.priou		;normal output jfn
+	hrrm a,csb+.cmioj	;save as output jfn
+	hrroi a,[asciz//]	;get null string
+	rscan%			;clear rscan buffer with it
+	 fatal
+cmdini:	hrrz a,csb+.cmioj	;get output jfn
+	caie a,.nulio		;redirected?
+	ifskp.
+	  haltf%		;stop the program (continuable)
+	  jrst norscn		;go fix rscan buffer
+	endif.
+	hrroi a,[asciz/Merlin> /]
+	call setcmd		;initialize parser
+cparse:	setzm ndirnm		;clear new dir number once here
+	txz f,f%kold		;clear flags used in parse
+	movei b,[flddb. .cmkey,,cmdtab]
+	call .comnd		;parse a command name
+	 pmsg
+	hrrz b,(b)		;get dispatch routine
+	call (b)		;run the routine
+	jrst cmdini		;back for another
+
+subttl Table of commands
+
+define t (key,flags) <
+	[ ifnb <flags>,<cm%fw!flags>
+	  asciz\key\ ] ,, .'key
+>
+
+cmdtab:	ncmds,,ncmds
+	t COPY
+	t DELETE
+	t EXIT
+	t HELP
+	t QUIT,cm%inv
+	t RENAME
+	t UPDATE
+ncmds==.-cmdtab-1
+
+subttl Copy command
+
+.copy:	call odir		;parse source directory
+	noise <to>
+	call ndir		;and destination
+	setz d,			;all flags apply
+	call pflags		;parse them
+	call confrm		;finish command parse
+	hrroi a,newdir		;point to new dir
+	move b,odirnm		;and get old dir num
+	txz f,f%renm		;copying with no deletion
+;	jrst cpydir		;do the copy
+
+define dogroup (name) <		;; set crdir block entry for a group
+	movei b,$'name		;; point to block for that group
+	movem b,crdblk+.'name	;; set it in block
+	movem a,(b)		;; set size of the group
+	setzm 1(b)		;; no groups there yet
+>
+
+cpydir:	camn b,ndirnm		;are we copying the new directory?
+	 ret			;yes, don't recurse indefinitely
+	trvar <dest,source,<newnam,20>,newptr,savjfn,savctl,savbyv>
+	movem a,dest		;save destination directory name
+	movem b,source		;save source directory number
+	setzm savjfn		;haven't run across any files yet
+	movei a,maxgrp		;get maximum group block size
+	groups			;set the crdir block entries
+	hrroi a,$cddac		;get default account for login
+	movem a,crdblk+.cddac	;save in the block
+	move a,source		;from the old directory
+	movei b,crdblk		;into crdir block
+	hrroi c,$cdpsw		;and password string
+	gtdir%			;get directory information
+	move a,dest		;point to destination directory
+	movx b,cd%psw!cd%liq!cd%prv!cd%mod!cd%loq!cd%fpt!cd%dpt!cd%ret!cd%lld!cd%ugp!cd%dgp!cd%sdq!cd%cug!cd%dac
+	call .crdir		;make the new directory
+	ifnsk.
+	  tmsg <%Couldn't create >
+	  move a,dest		;point to original name of new directory
+	  psout%		;type it
+	  jrst erdash		;type dash and error message, then return
+	endif.
+	skipn ndirnm		;if no new directory number yet
+	 movem a,ndirnm		;then this is it
+
+; Made the new directory, now copy the contents across
+	move b,a		;get number into b
+	hrroi a,newnam		;point to new name space
+	dirst%			;translate to string
+	 fatal
+	movem a,newptr		;save pointer to new name
+
+	move b,source		;from the old directory
+	call mapdir		;map over all files and subdirs
+	 call cp1fil		;copy a file
+	 call cpysub		;copy a subdir
+	call unsave		;now make sure the last file is deleted or not
+
+	tmsg < >		;start message
+	movei a,.priou		;to terminal
+	move b,source		;from old directory name
+	dirst%			;type as a string
+	 fatal
+	tmsg ( => )
+	movei a,">"		;get a close bracket
+	dpb a,newptr		;make sure new name ends with it
+	setz a,			;get a null
+	idpb a,newptr		;drop at end of new directory name
+	type newnam		;type the new name
+	tmsg < [OK]
+>				;finish message
+	txnn f,f%renm		;renaming?
+	 ret			;no, done
+	move b,source		;from source
+	txz f,f%dlok!f%dsub	;being quiet, not deleting subdirs
+	jrst deldir		;delete the directory
+
+; Copy subroutines
+
+; Given JFN of old file in A, copy or rename into new directory
+; also given .FBCTL word in C
+cp1fil:	txne f,f%nfil		;copying files?
+	 ret			;no, don't do so
+	stkvar <oldjfn,newbyv,newctl>
+	movem a,oldjfn		;save jfn for later
+	movem c,newctl		;save flag word for later
+	move a,newptr		;with the pointer at the end of the new dir
+	movei b,">"		;get a close bracket
+	dpb b,a			;make sure directory ends with it
+	move b,oldjfn		;from the given jfn
+	movx c,fld(.jsaof,js%nam)!fld(.jsaof,js%typ)!fld(.jsaof,js%gen)!js%paf
+	jfns%			;add the file name at the end
+	movx a,gj%sht!gj%fou	;flags for an output file
+	hrroi b,newnam		;now point to the start of the string
+	gtjfn%			;and get a jfn on it
+	 fatal
+	exch a,oldjfn		;get old jfn, save new
+	movx b,<1,,.fbbyv>	;word with various random fields
+	movei c,newbyv		;into stack variable
+	gtfdb%			;get fdb word
+	move b,oldjfn		;now get new
+	txnn f,f%renm		;renaming?
+	ifskp.
+	  setzm curjfn		;yes, rename will lose the jfn
+	  call .rnamf		;do the rename
+	else.
+	  call cpyfil		;else just copy the files
+	endif.
+	move a,oldjfn		;get jfn for the file we just made
+	move c,newbyv		;get gen retention count word back
+	move d,newctl
+;	jrst unsave
+
+; Set flag words in file from previous cycle
+; call with a/jfn for next cycle, c/next .fbbyv, d/next .fbctl
+unsave:	exch a,savjfn		;get back the one we saved from last time
+	ife. a			;if zero
+	  movem c,savbyv	;save flag word
+	  movem d,savctl	;and gen-ret count
+	  ret
+	endif.
+	hrli a,.fbbyv		;into gen-ret-count word
+	movx b,fb%ret		;only the generation retention count
+	exch c,savbyv		;with oldv
+	chfdb%			;set fdb words
+	 erjmp .+1
+	hrli a,.fbctl
+	movx b,fb%tmp!fb%prm!fb%del!fb%nod!fb%inv!fb%fcf
+	move c,savctl		;get old saved bits back
+	movem d,savctl		;and save the new ones
+	chfdb%			;set them in the file
+	 erjmp .+1
+	rljfn%			;release the jfn now that we are done with it
+	 fatal
+	ret
+
+cpysub:	txne f,f%nsub		;copying subdirectories?
+	 ret			;no, don't do this one
+	hrroi a,temp		;into temporary storage
+	dirst%			;copy old directory name
+	 fatal
+	move a,[point 7,temp]	;now point to it
+	do.
+	  ildb d,a		;get the next char
+	  cain d,"."		;dot?
+	   move c,a		;yes, save this pointer
+	  jumpn d,top.		;maybe go back for more
+	enddo.
+	move a,newptr		;point to end of new directory
+	movei d,"."		;get a dot
+	dpb d,a			;drop it in in place of close bracket
+	do.
+	  ildb d,c		;get next subdir name char
+	  idpb d,a		;drop it in
+	  jumpn d,top.		;maybe go back for more
+	enddo.
+	hrroi a,newnam		;now point to start of string
+	jrst cpydir		;recursively call directory copier
+
+subttl Delete command
+
+.delete:call odir		;parse directory to be deleted
+	movx d,f%nsub!f%verb!f%nfil ;these flags don't mean anything here
+	call pflags
+	call confrm		;finish command parse
+	move a,odirnm		;with that directory number
+	txo f,f%dlok!f%dsub	;typing verbose messages, deleting subdirs
+;	jrst delcnf		;delete with confirmation
+
+
+; Delete a directory, confirming with user if not empty.
+; call with a/directory number
+; returns +1/always
+
+delcnf:	trvar <dldirn>
+	movem a,dldirn		;save directory number
+	gtdal%			;find out how much of the dir is being used
+	ifn. b			;if there are non-null files
+	  hrroi a,[asciz/is non-empty/]
+	  call doconf		;make sure user wants to go through with it
+	else.
+	  hrroi a,temp		;into temporary storage
+	  move b,dldirn		;with the old directory number
+	  dirst%		;make a string
+	   fatal
+	  movei b,"."		;now a dot
+	  dpb b,a		;in place of the close bracket
+	  movei b,"*"		;and a star
+	  idpb b,a
+	  movei b,">"		;and a close bracket
+	  idpb b,a
+	  setz c,		;and a null
+	  idpb c,a		;to make <DIR.*>
+	  movx a,rc%awl		;wildcard rcdir%
+	  hrroi b,temp		;point to string we just made
+	  call .rcdir		;check if directory exists
+	  ifskp.
+	    hrroi a,[asciz/has sub-directories/]
+	    call doconf		;get confirmation from user
+	  endif.
+	endif.
+	move b,dldirn		;with the old directory
+;	jrst deldir		;delete the directory
+
+deldir:	txnn f,f%dsub		;deleting subdirs?
+	ifskp.
+	  call mapdir		;map over everything in the directory
+	   nop			;ignoring normal files
+	   call deldir		;and calling self recursively on subdirectories
+	endif.
+	hrroi a,temp		;into temporary storage
+	dirst%			;translate dir number into a string
+	 fatal
+	txne f,f%nprs		;if keeping superior quotas
+	ifskp.
+	  setzm crdblk+.cdliq	;then we have to set quotas to zero first
+	  setzm crdblk+.cdloq	;because CD%DEL ignores CD%NSQ
+	  hrroi a,temp		;with the directory name we just made
+	  movx b,cd%liq!cd%loq	;setting both quotas
+	  call .crdir		;do the crdir
+	annsk.			;if it didn't work
+	  tmsg <%Quotas will not be preserved - >
+	  call ertemp		;type temp, dash, error
+	endif.
+	hrroi a,temp		;with name we just made
+	movx b,cd%del		;deleting, make sure quotas get seen
+	call .crdir		;do the CRDIR%
+	ifskp.
+	  txnn f,f%dlok		;are we typing messages?
+	   ret			;no, don't do so
+	  tmsg < >		;type a space
+	  type temp		;type name of directory
+	  tmsg < [OK]
+>
+	  ret
+	endif.
+	tmsg <%Couldn't delete >
+ertemp:	type temp		;type name of directory
+erdash:	tmsg < - >
+	call .erstr		;say why it couldn't be deleted
+	tmsg <
+>				;finish message
+	ret
+
+; Confirm to delete a non-empty directory
+
+doconf:	call pushio		;make sure command i/o is to the terminal
+	push p,a		;save the prompt
+	hrroi a,temp		;into temporary storage
+	move b,dldirn		;with given directory number
+	dirst%			;translate to a string
+	 fatal
+	movei b," "		;now get a space
+	idpb b,a		;to separate them
+	pop p,b			;get prompt back
+	call strcpy
+	hrroi b,[asciz/ [Confirm] /]
+	call strcpy		;finish up
+	idpb c,a		;drop null in
+	movei a,.priin		;with the terminal
+	cfibf%			;clear input buffer
+	hrroi a,temp		;now with prompt we built
+	call setcmd		;set up for confirmation parse
+	jrst confrm		;confirm it
+
+pushio:	push p,a		;save a register
+	move a,[.priin,,.priou]	;get command jfns we want
+	camn a,csb+.cmioj	;normal?
+	ifskp.
+	  exch a,csb+.cmioj	;no, set jfns to tty and get what they were
+	  exch a,(p)		;save on stack and restore register
+	  call @-1(p)		;call caller
+	  pop p,csb+.cmioj	;restore original jfns
+	endif.
+	pop p,a			;get reg back or flush caller from stack
+	ret			;return to caller or caller's caller
+
+strcpy:	mkptr (a)		;make sure we have real byte pointers
+	mkptr (b)
+	do.
+	  ildb c,b		;get a character
+	  jumpe c,r		;if null stop
+	  idpb c,a		;else drop it in
+	  loop.
+	enddo.
+
+subttl Exit command
+
+.quit:				;(invisible synonym)
+.exit:	noise <from Merlin>
+	call confrm		;finish command parse
+	haltf%			;stop the program
+	ret			;allow continue
+
+subttl Help command
+
+.help:	noise <with Merlin>
+	call confrm		;finish command parse
+	type hlptxt		;give the help
+	ret
+
+hlptxt:	asciz\Merlin performs various directory manipulations.  Commands are:
+    COPY   - Copy the contents of one directory into another.
+             The old directory is not affected.
+
+    DELETE - Remove a directory from the filesystem.
+             Merlin will ask for confirmation if it is not empty.
+
+    EXIT   - Return to the EXEC.
+
+    HELP   - Type this text.
+
+    RENAME - Change a directory's name to something else.
+             The new directory may be on a different structure.
+
+    UPDATE - Copy recently-modified files into a directory.
+
+Switches for COPY, DELETE, and RENAME are:
+    /NoFiles      - keep directory structure but don't copy contents.
+    /NoSubdirs    - don't recursively copy subdirectories (COPY only).
+    /UpdateQuotas - don't preserve superior directory quotas.
+    /Verbose      - confirm each file copy or rename.
+\
+
+subttl Rename command
+
+.rename:call odir		;parse source directory
+	noise <to be>
+	call ndir		;parse a new name for it
+	move a,[point 7,olddir]
+	move b,[point 7,newdir]
+	do.
+	  ildb c,a		;get a char from the old name
+	  ildb d,b		;and from the new name
+	  caie c,">"		;closing directory name?
+	   cain c,"]"		;or this kind of close?
+	    ifskp.
+	      camn c,d		;no, see if the same character
+	       loop.		;yes, go back for another try
+	    else.
+	      cain d,"."	;then the other better not be a subdir
+	       xpmsg <Can't rename a directory into its own subdirectory>
+	    endif.
+	enddo.
+	movx d,f%nsub		;this flag doesn't mean anything
+	call pflags		;parse flags
+	call confrm		;finish command parse
+	hrroi a,newdir		;point to new dir
+	move b,odirnm		;and get old dir num
+	txo f,f%renm		;renaming
+	jrst cpydir		;do the copy
+
+subttl Update command
+
+.update:trvar <updjfn,updptr,<updstr,20>>
+	noise <from files>
+	movei b,[flddb. .cmfil,cm%sdh,,<files from which to update directory>]
+	call .comnd		;parse wildcard filespec
+	 pmsg
+	movem b,updjfn		;save the JFN
+	noise <into directory>	;parse in this order to be consistent w/PUPFTP
+	call odirnn		;parse directory into which to update
+	call confrm		;finish the parse
+
+	hrroi a,updstr		;point to string space
+	move b,odirnm		;with old directory
+	dirst%			;make a string
+	 fatal
+	movem a,updptr
+	txo f,f%verb		;set verbose flag for cpyfil
+	do.
+	  call updfil		;update one file
+	  move a,updjfn		;get jfn back
+	  gnjfn%		;get the next one
+	   ret			;if none, finished
+	  loop.			;else go back for the next
+	enddo.
+
+; update one file
+; call with updjfn/jfn, updptr/pointer to end of dir name in updstr
+updfil:	move a,updptr		;get pointer to end of dir name
+	hrrz b,updjfn		;get jfn to handle
+	movx c,fld(.jsaof,js%nam)!fld(.jsaof,js%typ)!js%paf
+	jfns%			;make string for jfn
+	movx a,gj%sht!gj%old	;looking for an old jfn
+	hrroi b,updstr		;from string we just built
+	gtjfn%			;get a jfn on it
+	ifnje.			;if that succeeded
+	  movx b,<1,,.fbwrt>	;then for the write date of the file
+	  movei c,d		;into d
+	  gtfdb%		;get fdb word
+	  rljfn%		;now flush useless jfn
+	   nop
+	  hrrz a,updjfn		;with current jfn
+	  movei c,c		;into c
+	  gtfdb%		;get write date again
+	  camg c,d		;if source is not later than dest
+	   ret			;then skip that file
+	endif.
+	move a,updptr		;now get pointer to dir name again
+	hrrz b,updjfn		;get jfn to update from
+	movx c,fld(.jsaof,js%nam)!fld(.jsaof,js%typ)!fld(.jsaof,js%gen)!js%paf
+	jfns%			;make string for jfn, copying gen this time
+	movx a,gj%sht!gj%fou	;short form, for output
+	hrroi b,updstr		;from string we just built
+	gtjfn%			;get a jfn on the file
+	ifnje.
+	  movem a,curjfn	;save as current jfn
+	  move b,a		;and use as destination jfn
+	  hrrz a,updjfn		;get source jfn
+	  call cpyfil		;copy the file
+	  setz a,		;get zero
+	  exch a,curjfn		;and copy into current file jfn, getting into a
+	  rljfn%		;flush the old jfn
+	   nop
+	  ret			;all done
+	endif.
+	tmsg <%Couldn't get JFN for >
+	type updstr		;gtjfn% failed, type losing file spec
+	jrst erdash		;and go say why it failed
+
+subttl Parse flags
+
+; d/inapplicable flags
+; returns +1/always, flags set in right half of f
+
+pflags:	hllzs f			;clear out switchable flags
+	do.
+	  movei b,[flddb. .cmswi,,switab]
+	  call .comnd		;parse a switch
+	   ret			;failed, stop parsing
+	  hrrz b,(b)		;get dispatch word
+	  trne d,(b)		;applicable for this command?
+	   xpmsg <Switch inapplicable to this command>
+	  iori f,(b)		;set in flags
+	  loop.
+	enddo.
+
+define t (key,val,flags) <
+	[ ifnb <flags>,<cm%fw!flags>
+	  asciz\key\ ] ,, val
+>
+
+switab:	nswit,,nswit
+	t NoFiles,f%nfil	;don't copy contents
+	t NoSubdirs,f%nsub	;don't copy subdirectories
+	t UpdateQuotas,f%nprs	;don't preserve superior quotas
+	t Verbose,f%verb	;notify user for each file transfer
+nswit==.-switab-1
+
+subttl Directory parse routines
+
+odir:	noise <directory>
+odirnn:	movei b,[flddb. .cmdir,cm%sdh,,<existing directory>]
+	call .comnd
+	 pmsg
+	movem b,odirnm		;save number
+	hrroi a,olddir		;point to place to store dir string
+	dirst%			;get name of directory
+	 fatal
+	ret
+
+ndir:	movei b,[flddb. .cmdir,cm%sdh!cm%po,,<directory to create>]
+	call .comnd		;read parse-only directory name
+	 pmsg
+	hrroi b,atmbuf		;with the new directory name
+	call dirchk		;check if directory exists
+	ifskp.
+	  camn b,odirnm		;is it the same as the source directory number?
+	   xpmsg <Illegal to copy or rename to self>
+	  movem b,ndirnm	;old but not same as source, save for later
+	  txo f,f%kold		;remember we have to kill it before making anew
+	  hrroi a,newdir	;into new directory name buffer
+	  dirst%		;translate back into a canonicalized string
+	   fatal
+	  move a,[point 7,olddir] ;point to source string
+	  move b,[point 7,newdir] ;and our destination string
+	  do.
+	    ildb c,a		;get an old-dir char
+	    ildb d,b		;and a new-dir char
+	    caie d,">"		;if it's a close bracket
+	    ifskp.
+	      caie c,">"	;then if old is close bracket (impossible)
+	       cain c,"."	;or dot
+		xpmsg <Illegal to copy or rename to superior>
+	    else.
+	      camn c,d		;not a close.  if they're the same
+	       jumpn c,top.	;then go back for another
+	    endif.
+	  enddo.
+	  ret
+	endif.
+
+; Got here means directory doesn't exist.  Canonicalize after finding superior.
+	call super		;get superior directory, leave pointers in A, B
+	ifskp.
+	  movei c,"."		;get a dot
+	  dpb c,a		;drop it in to start subdirectory name
+	endif.
+	do.
+	  ildb c,b		;get next char of subdir name
+	  upcase (c)		;make sure it is uppercase
+	  caie c,"["		;if it's a funny open
+	   cain c,"]"		;or its a funny close
+	    subi c,"["-"<"	;turn it into an angle bracket instead
+	  idpb c,a		;drop it in
+	  jumpn c,top.		;loop back until done
+	enddo.
+	ret
+
+; Return the new directory's superior
+; returns +1/top level, a => STR:
+;	  +2/a => STR:<SUPER>
+; in either case b points to the rest of the directory (with "<" if top level)
+
+super:	stkvar <dotptr,clnptr,savptr>
+	move a,[point 7,newdir]	;point to destination buffer
+	move b,[point 7,atmbuf]	;and source buffer
+	setzm dotptr
+	setzm clnptr		;found no dots or colons yet
+	movem b,savptr		;save where to copy from
+	do.
+	  ildb d,b		;get next char
+	  upcase (d)		;make it uppercase
+	  cain d,"["		;if its a square bracket
+	   movei d,"<"		;use this kind instead
+	  idpb d,a		;drop it in
+	  caie d,"."		;if it's a dot
+	  ifskp.
+	    movem a,dotptr	;save it
+	    movem b,savptr	;and where we got it from
+	  endif.
+	  caie d,":"		;if it's a colon
+	  ifskp.
+	    movem a,clnptr	;save that too
+	    movem b,savptr
+	  endif.
+	  jumpn d,top.
+	enddo.
+	skipn c,dotptr		;if we found a superior directory
+	ifskp.
+	  movei b,">"		;get a close bracket
+	  dpb b,c		;drop it in
+	  idpb d,c		;drop our null in to terminate
+	  hrroi b,newdir	;with the new directory's superior
+	  call dirchk		;check if directory exists
+	   xpmsg <Superior does not exist>
+	  hrroi a,newdir	;into the new directory string
+	  dirst%		;translate the directory
+	   fatal
+	  move b,savptr		;get pointer to rest of directory
+	  retskp		;all done
+	endif.
+
+; Got here means the superior is <ROOT-DIRECTORY>
+	skipe a,clnptr		;if no colon found
+	ifskp.			;then we have to use connected directory
+	  gjinf%		;find out which that is
+	  hrroi a,newdir	;into new directory string space
+	  dirst%		;copy the directory name
+	   fatal
+	  move a,[point 7,newdir] ;now point to the name we just got
+	  do.
+	    ildb b,a		;get the next character
+	    caie b,":"		;if not a colon
+	     loop.		;then go back for more
+	  enddo.
+	endif.
+	move b,savptr		;get pointer to rest of directory
+	ret			;all done
+
+; Skip if string in B points to a real directory name
+; alternate entry .RCDIR lets caller give flags
+; if directory exists, a directory number is returned in B
+
+dirchk:	movx a,rc%emo		;force exact match
+.rcdir:	setz c,			;no directory to step to
+	rcdir%			;translate string to directory
+	txne a,rc%nom		;matched?
+	 ret			;no, give fail return
+	move b,c		;else leave directory number where it belongs
+	retskp
+
+subttl Call the CRDIR jsys
+
+.crdir:	txnn f,f%nprs		;preserving?
+	 txoa b,cd%len		;yes, make sure we use word with that flag
+	  tdza c,c		;no, no flags
+	   movx c,cd%nsq!crdlen	;else get quota flag, size of block
+	movem c,crdblk+.cdlen	;save word in crdir block
+	hrri b,crdblk		;get block number in right half of B
+	setz c,			;no password
+	crdir%			;do the jsys
+	 erjmp r		;failed, return +1
+	retskp
+
+subttl File manipulation routines
+
+; Map over all files in a directory
+; call with b/directory number, returns +3/always
+; executes instructions following call:
+;	+1/routine to call with files, a/jfn
+;	+2/routine to call with directories, b/directory number
+; neither instruction should skip
+
+mapdir:	pop p,a			;get return address
+	exch a,maploc		;save in standard place and get old value there
+	push p,a		;save in case recursively called
+	push p,b		;save dir number too
+	hrroi a,temp		;into temporary storage
+	dirst%			;get directory name
+	 fatal
+	movei a,wljblk		;get wild gtjfn block
+	hrroi b,temp		;with the string we just built
+	gtjfn%			;get a jfn
+	ifnje.
+	  do.
+	    movem a,curjfn	;save jfn for ctrl-a routine and nxtjfn
+	    hrrzs a		;don't get confused by flag bits
+	    movx b,<1,,.fbctl>	;file flags
+	    movei c,c		;into c
+	    gtfdb%		;get fdb word
+	    hrrz b,a		;copy jfn for jfns taken by either branch
+	    hrroi a,temp	;set output into temporary area
+	    txne c,fb%dir	;is it a file (instead of a directory)?
+	    ifskp.
+	      push p,c		;save for callee
+	      movx c,js%spc	;all fields
+	      jfns%		;make a string for the jfn
+	      movei a,gtjblk	;point to gtjfn block
+	      hrroi b,temp	;with string we just made
+	      gtjfn%		;get a new jfn to preserve ours from releasing
+	       fatal
+	      pop p,c		;restore saved .fbctl word
+	      call nxtjfn	;move on to next jfn, save it on stack
+	      movem a,curjfn	;use appropriate jfn in ^A interrupt
+	      push p,a		;save new jfn
+	      xct @maploc	;execute instruction following call
+	      pop p,a		;get new jfn back
+	      setzm curjfn	;forget current file if not already forgotten
+	      rljfn%		;flush it
+	       erjmp .+1	;must have already been flushed
+	    else.
+	      movx c,fld(.jsaof,js%dev)!fld(.jsaof,js%dir)!js%paf
+	      jfns%		;it's a directory, translate superior to string
+	      movei c,"."	;get a dot
+	      dpb c,a		;drop it in instead of the close bracket
+	      movx c,fld(.jsaof,js%nam)
+	      jfns%		;now add the subdirectory name
+	      movei c,">"	;get a close bracket
+	      idpb c,a		;drop it in
+	      setz c,		;get a null
+	      idpb c,a		;drop that in too
+	      call nxtjfn	;move it on to next jfn, save on stack
+	      hrroi b,temp	;with name we just built
+	      call dirchk	;make sure directory exists
+	      ifskp.
+		move a,maploc	;get address following call
+		xct 1(a)	;execute the +2 instruction
+	      else.
+		tmsg <%Couldn't get directory number for >
+		type temp	;tell user we couldn't do it
+		tmsg <
+  >
+	      endif.
+	    endif.
+	    pop p,a		;get jfn back from stack where nxtjfn left it
+	    jumpn a,top.	;maybe go back (above routines do the gnjfn)
+	  enddo.
+	endif.
+	move a,maploc		;get return address
+	pop p,b			;restore saved dir number
+	pop p,maploc		;save old return in case recursive call
+	jrst 2(a)		;return +3
+
+; Do GNJFN on jfn in B, leaving it pushed on the stack
+
+nxtjfn:	push p,a		;save caller's register
+	setz b,			;clear another register
+	exch b,curjfn		;get current jfn back, clear out temporarily
+	move a,b		;copy jfn so we don't lose flags
+	gnjfn%			;move on to next
+	 setz b,		;none, clear out jfn to return
+	pop p,a			;now safe to restore saved register
+	exch b,(p)		;leave new jfn on stack, get return address
+	jrst (b)		;and return in this strange way
+
+; Rename a file
+; takes arguments just like RNAMF jsys, copies if rename fails
+; returns +1/always
+
+.rnamf:	stkvar <oldjfn>
+	hrrzs a			;clear out left halves
+	hrrzs b			;in case this is a wildcard jfn
+	movem a,oldjfn		;save jfn in case rnamf fails
+	rnamf%			;try it the easy way first
+	ifskp.
+	  jrst vrbfil		;type success notification
+	endif.
+	move a,oldjfn		;get jfns back (b still holds new jfn)
+	call cpyfil		;copy one to the other (will type "[OK]")
+	move a,oldjfn		;get jfn once more
+	txo a,df%exp		;expunging on delete
+	delf%			;delete the file
+	 caia			;failed, go on
+	  ret
+	caie a,delfx2		;can't be expunged?
+	 fatal <Couldn't delete file>
+	ret
+
+; Copy a file
+; a/source jfn, b/destination
+; both files must be on disk
+; returns +1/always
+
+cpyfil:	stkvar <oldjfn,newjfn>
+	movem a,oldjfn		;save where it can be found by subroutines
+	movem b,newjfn
+	setom curpag		;no pages mapped yet
+	hrrz a,newjfn		;with the jfn for the new file
+	movx b,of%wr		;writing
+	openf%			;open the file
+	ifjer.
+	  tmsg <%Couldn't open >
+	  movei a,.priou	;to terminal
+	  hrrz b,newjfn		;get failing jfn
+	  setz c,		;normal typeout
+	  jfns%			;make string for file name
+	  jrst erdash		;type dash and error message, then return
+	endif.
+	hrrz a,oldjfn		;with the file we're copying from
+	movx b,of%rd		;reading
+	openf%			;open the file
+	ifnsk.
+	  hrrz a,oldjfn		;get jfn back for another try
+	  txo b,of%thw		;try thawed mode
+	  openf%
+	  ifnsk.		;if didn't open that way either
+	    ;; If renaming might be deleted when directory is and bits lost.
+	    ;; That is unlikely, though, because someone has it open now...
+	    ;; It is probably best to continue on with the copy ignoring it.
+
+	    hrrz a,newjfn	;get new file back
+	    txo a,co%nrj!cz%abt	;don't want to release jfn but abort output
+	    closf%		;close it - no point in keeping open
+	     fatal
+	    tmsg <%Couldn't open >
+	    movei a,.priou	;to the terminal
+	    hrrz b,oldjfn	;with the file we couldn't open
+	    movx c,js%spc	;all fields
+	    jfns%		;type file name
+	    jrst erdash		;type error message, dash, new line, and return
+	  endif.
+	endif.
+
+	do.
+	  aos a,curpag		;get next page
+	  hrl a,oldjfn		;from the source file
+	  ffufp%		;find first used file page
+	   exit.		;no more, done
+	  hrrzm a,curpag	;save back as current page
+	  movx b,<.fhslf,,cpypag> ;into self at appropriate page
+	  movx c,pm%rd!pm%cpy	;read access, copy-on-write
+	  pmap%			;map it in
+	  seto c,		;get -1 to flip all bits
+	  xorm c,cpyadr		;do so to first word
+	  xorm c,cpyadr		;and flip them back to dirty the page
+	  movx a,<.fhslf,,cpypag> ;from self at appropriate page
+	  move b,curpag		;into current page
+	  hrl b,newjfn		;of the new file
+	  movx c,pm%wr		;writing
+	  pmap%			;map back out
+	  loop.
+	enddo.
+	caie a,ffufx3		;is the error no more pages found?
+	 fatal			;no, complain
+	setom curpag		;no page being mapped anymore
+	hrrz a,oldjfn		;get the old file
+	txo a,co%nrj		;without releasing the jfn
+	closf%			;close it
+	 fatal
+	hrrz a,newjfn		;now the new file
+	txo a,co%nrj		;don't want to release jfn
+	closf%			;close it
+	 fatal
+
+; Copied the file's data, now copy its FDB words
+
+define cpfdbw (wrd,bits<-1>) <	;; copy fdb word from old to new
+	hrli a,wrd		;; at the given offset
+	movx b,bits		;; with the bits given, or all possible
+	move c,temp+wrd		;; with the old word we read into temp
+	chfdb%			;; set them
+	 erjmp .+1		;; ignore errors
+>
+define cpust (fnc) <		;; copy author string from old to new
+	hrrz a,oldjfn		;; from the original file
+	hrli a,fnc		;; with function code given
+	hrroi b,temp		;; into temp storage
+	gfust%			;; get the string
+	hrr a,newjfn		;; now into the new file
+	hrroi b,temp		;; with the string we just got
+	sfust%			;; set the author string
+	 erjmp .+1		;; ignore errors
+>
+	hrrz a,oldjfn		;with the old jfn
+	hrlzi b,.fblen		;all the way through
+	movei c,temp		;into temporary storage
+	gtfdb%			;read the file's fdb
+	hrrz a,newjfn		;now into the new file...
+	cpfdbw .fbprt,777777	;copy flags, file access bits
+	cpfdbw .fbcre		;copy last-write date
+	setzro fb%ret,temp+.fbbyv ;clear gen-ret count so file is not deleted
+	cpfdbw .fbbyv		;copy file i/o information
+	cpfdbw .fbsiz		;copy number of bytes in file
+	cpfdbw .fbcrv		;copy creation date
+	cpfdbw .fbwrt		;copy last user write date
+	cpfdbw .fbref		;copy last read date
+	cpfdbw .fbcnt		;copy number of references to file
+	cpfdbw .fbbk0		;copy dumper backup word
+	cpfdbw .fbbbt,777777	;copy archive bits
+	cpfdbw .fbnet		;copy on-line expiration
+	cpfdbw .fbusw		;copy user-settable word
+	cpfdbw .fbtdt		;copy archive tape-write date
+	cpfdbw .fbfet		;copy offline expiration
+	cpfdbw .fbtp1		;copy archive tape id
+	cpfdbw .fbss1		;copy save set numbers
+	cpfdbw .fbtp2		;copy tape id for second archive
+	cpfdbw .fbss2		;copy save set for second archive
+	cpust .gfaut		;copy author string
+	cpust .gflwr		;and last-writer string
+	hrrz a,oldjfn		;now with the original jfn
+	hrroi b,temp		;into temporary storage
+	gactf%			;get the account string
+	 fatal
+	 hrroi b,temp		;got a string, get it again (else number in b)
+	hrrz a,newjfn		;into the new file
+	sactf%			;set the file's account
+	 erjmp .+1		;couldn't, don't worry
+;	jrst vrbfil		;type verbose file notification
+
+vrbfil:	txnn f,f%verb		;verbose file notification?
+	 ret			;no, don't do anything
+	tmsg <    >		;include some space
+	movei a,.priou		;to the terminal
+	hrrz b,newjfn		;with new jfn
+	movx c,fld(.jsaof,js%nam)!fld(.jsaof,js%typ)!fld(.jsaof,js%gen)!js%paf
+	jfns%			;type the filename
+	tmsg < [OK]
+>				;finish message
+	ret
+
+subttl Control-A interrupt routine
+
+status:	call ptstat		;print the status
+	debrk%			;and return from interrupt
+
+ptstat:	skipn curjfn		;do we have a current file?
+	 ret			;no, ignore interrupt
+	saveac <a,b,c>		;save used registers
+	movei a,.cttrm		;controlling tty
+	rfpos%			;read cursor position
+	trnn b,-1		;are we at column 1?
+	ifskp.
+	  tmsg <
+>				;no, print a crlf
+	endif.
+	tmsg < Working on >	;start message
+	call ptcurj		;print current jfn
+	tmsg <
+>				;finish off with a new line
+	ret
+
+ptcurj:	movei a,.priou		;to the terminal
+	hrrz b,curjfn		;with the current jfn
+	movx c,js%spc		;all fields of the filename
+	jfns%			;type the file name
+	ifnje.
+	  skipge b,curpag	;is there a current page?
+	   ret			;no, done
+	  tmsg <, page >	;yes, start more message
+	  movei a,.priou	;to the terminal
+	  movei c,^d10		;decimal
+	  nout%			;type the number
+	   fatal
+	  ret			;all done
+	endif.
+
+	tmsg <?JSYS error: >	;failed, start to say why
+	setzm curjfn		;don't type file name again
+	jrst .erstr		;go print jsys error message
+
+subttl Command parsing routines
+
+.comnd:	movei a,csb		;with the normal command state block
+	comnd%			;parse the fdb given in b
+	txne a,cm%nop		;parsed?
+	 ret			;no, give failure return
+	retskp
+
+confrm:	saveac <a,b,c>		;don't mung caller's registers
+	movei b,[flddb. .cmcfm]
+	call .comnd		;parse carriage return
+	ifskp.
+	  txzn f,f%kold		;confirmed.  did we have to delete some dir?
+	   ret			;no, return now
+	  move a,ndirnm		;else get the number for it
+	  setzm ndirnm		;no more of that
+	  txo f,f%nsub		;killing subdirs
+	  txz f,f%dlok		;but not saying so
+	  jrst delcnf		;delete after confirmation
+	endif.
+	hrroi a,[asciz/Not confirmed/]
+	esout%			;type message, no atom buffer in case was pswd
+	jrst cmdini
+
+setcmd:	movem a,csb+.cmrty	;save prompt
+	pop p,csb+.cmflg	;save reparse address
+	hrrzs csb+.cmflg	;don't leave any flags
+	movem p,savpdl		;save the stack pointer
+	movei b,[flddb. .cmini]	;fdb to initialize comnd%
+	call .comnd		;parse it
+	 fatal <Fatal command initialization error>
+repars:	move p,savpdl		;restore stack
+	hrrz b,csb+.cmflg	;get reparse address
+	jrst (b)		;and jump to it
+
+subttl Error handlers
+
+.fatal:	call prterr		;type error message and jsys error
+	tmsg < at >		;some text
+	movei a,.priou		;to the terminal
+	pop p,b			;with our return address
+	subi b,2		;back two to the jsys or call
+	hrrzs b			;flush left-half bits
+	movei c,^d8		;octal radix
+	nout%			;type address
+	 xfatal <Couldn't type error location>
+	skipn curjfn		;if there's no current file
+	 jrst .erhlt		;then don't say anything
+	tmsg < in >
+	call ptcurj		;print current jfn
+	jrst .erhlt		;stop the program
+
+.xfatl:	esout%			;type error message without using erstr%
+.erhlt:	haltf%			;stop the program
+	xfatal <Can't continue>
+
+.xpmsg:	esout%			;type error message
+	caia
+.pmsg:	 call prterr		;type error message and jsys error
+	move a,[point 7,atmbuf]	;point to atom buffer
+	ildb a,a		;get the first character there
+	jumpe a,cmdini		;nothing, go re-initialize command parser
+	tmsg < - ">
+	type atmbuf		;type out failed parse atom buffer
+	tmsg <">
+	jrst cmdini		;all done, go restart parse
+
+prterr:	esout%			;type start of error message
+.erstr:	movei a,.priou		;to the terminal
+	hrloi b,.fhslf		;with our last error
+	setz c,			;no character limit
+	erstr%			;type string for jsys error
+	 xfatal <Undefined error number>
+	 xfatal <Error within an error>
+	ret
+
+	end <3,,evec>

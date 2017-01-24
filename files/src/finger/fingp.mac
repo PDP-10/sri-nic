@@ -1,0 +1,1580 @@
+;[SRI-NIC]SRC:<FINGER>FINGP.MAC.2, 17-Nov-89 23:01:07, Edit by MKL
+; Hack FINGER into FINGP for network finger server
+
+	TITLE FingP
+
+VMAJOR==7
+VMINOR==0
+VEDIT==7^D121
+VWHO==4	
+
+SEARCH MONSYM,MACSYM,FNGDEF,JOBDAT
+.TEXT "FINGP/SAVE"
+.TEXT "/SYMSEG:PSECT:CODE"
+.REQUIRE HSTNAM			;Host name and protocol lookup routines
+.REQUIRE GETLOC			;Routine to get a location
+.REQUIRE SYS:MACREL
+ASUPPRESS
+SALL
+EXTERN $GTPRO,$GTHNS,$PUPNS,$RMREL,$RMDOM
+EXTERN GETLOC
+
+SUBTTL Macro definitions
+
+;Dynamically generate a flag.  Argument is flag name, no argument initializes
+
+DEFINE FLAG. (LABEL) <
+IFB <LABEL>,<
+ ..FLAG==1B0			;;Start off with the leftmost bit
+>;IFB
+IFNB <LABEL>,<
+ IFE ..FLAG,<
+  IF2,<
+   PRINTX Too many flags, not creating LABEL
+  >;IF2
+ >;IFE
+ IFN ..FLAG,<
+  LABEL==..FLAG			;;Create the flag
+  ..FLAG==..FLAG_<-1>		;;Shift to the right one bit
+ >;IFN
+>;IFNB
+>;FLAG.
+
+DEFINE TABTOP <
+.TABLC==.
+	0			;;We'll fill this in later
+>;TABTOP
+
+;Fill in first word of table
+
+DEFINE TABBOT <
+.TABSV==.
+RELOC .TABLC
+	.TABSV-.TABLC-1,,.TABSV-.TABLC-1
+RELOC .TABSV
+>;TABBOT
+
+DEFINE DIEMSG (STRING) <
+	JRST [ CALL BRKTTY
+	       TMSG <STRING>
+	       JRST DEATH ]
+>;DIEMSG
+
+DEFINE ERMSG (STRING) <
+	JRST [ CALL BRKTTY
+	       TMSG <?STRING>
+	       RET ]
+>;ERMSG
+
+;Deposits a constant string into console output buffer
+
+DEFINE TYPE (STR) <
+	MOVE A,[POINT 7,[ASCIZ \STR\]]
+	CALL OUTSTR
+>;TYPE
+
+DEFINE ANNJE. <
+	..TAGF (ERJMP,)
+>;ANNJE.
+
+SUBTTL Constant definitions
+
+Q=0				;Flags register
+A=1				;Temporary ACs
+B=2
+C=3
+D=4
+E=5
+F=6
+S=7				;Permanent ACs
+I=10
+J=11
+K=12
+N=13
+T=14
+
+DATORG==1000			;Uninitialized impure data
+PURORG==150000			;Pure data
+CODORG==200000			;Code
+FNGORG==240000			;Finger database (must not change!)
+PAGORG==560000			;Paged data
+FREORG==700000			;Dynamic data
+
+.PSECT FNGBIN,FNGORG
+	BLOCK 320*1000		;Will map in 320 pages (used to be 340)
+.ENDPS
+
+.PSECT PAGED,PAGORG
+USRLST:	BLOCK 1000		;Where to store users to be fingered
+.ENDPS
+
+PDLEN==200			;Pushdown list length
+BUFLEN==200			;Buffer length for comnd buffers
+MAXJOB==^D512			;Maximum number of jobs supported by program
+
+SUNFLD==^D8			;Short user name print field size
+
+
+UNMFLD==^D13			;Controlling job's user name print field size
+
+PNMFLD==^D19			;Personal name print field size
+
+TLCFLD==^D31			;TTY location print field size
+CACHSZ==MAXUSR*2
+DEFWID==^D80			;Default width of terminals
+MMPAG==777			;Page where MM will want us to talk with it
+MMLOC==MMPAG*1000		;Same but location instead of page number
+FNGULN==10			;How many users we can handle in a list
+
+;Job data definition
+;GETJI words .JIJNO through .JISTM, plus the following new fields
+.JIIDL==.JISTM+1		;Job idle time
+.JIUNM==.JISTM+2		;Username field
+.JIKEY==.JISTM+3		;Sort key
+.JISUN==.JISTM+4		;Short username field
+.JITYP==.JISTM+5		;Terminal type
+JOBLEN==.JISTM+6		;This is now the length of a job record
+
+TCPCNO==0			;Channel to set up interrupt
+MAXSHL==^D9			;Maximum number of shellsort passes
+OUTBFL==200			;Output buffer length
+BUFLEN==200			;Buffer length for comnd buffers
+SYSBEG==NJOBS
+SYSLEN==1
+
+FLAG.
+FLAG. FL%JCL			;Are we working off of JCL?
+FLAG. FL%IDT			;Include detached jobs?
+FLAG. FL%DET			;Only detached jobs?
+FLAG. FL%OPR			;Include operator jobs?
+FLAG. FL%TER			;Suppress plan file?
+FLAG. FL%WHO			;Want site database info?
+FLAG. FL%HLP			;Want help?
+FLAG. FL%FUL			;Full user names?
+FLAG. FL%GOT			;Whether we've done one person yet
+FLAG. FL%TTY			;Are we doing /TTY:?
+FLAG. FL%LOG			;Want /LOGIN?
+FLAG. FL%JOB			;Only a specific job name?
+FLAG. FL%NHD			;No header wanted
+FLAG. FL%NPL			;Don't print a finger plan?
+FLAG. FL%TYP			;Only print ones of this TTY type
+FLAG. FL%MAT			;Whether we found a match
+FLAG. FL%TST			;Do we want to do a GETLOC test?
+FLAG. FL%FIR			;First time through?
+FLAG. FL%USR			;We are doing a list of usernames
+FLAG. FL%CID			;Idle time using last CPU
+FLAG. FL%TID			;Idle time using last TTY input
+FLAG. FL%NLI			;Working with people not logged in
+;DEF%FL==FL%IDT			;Default flags
+DEF%FL==0			;Default flags
+
+;Definitions for finger list
+.FDTYP==0			;Type of thing to finger
+				;-1 = local
+				;0 = end of list
+				;other = network host
+ FD%ETH==1B0			;If this bit set then ethernet host
+.FDNXT==1			;Location of next block
+.FDDAT==2			;Data
+				;Local - user number list, if 0 ignore
+				;Network - ASCIZ string to send
+
+OPDEF SKPA [TRNA]		;A faster skip always
+
+SUBTTL Block definitions
+
+.PSECT PURE,PURORG
+
+SIGNET:	SIXBIT \FINGER\		;The official seal
+USRFIL:	ASCIZ \SYSTEM:FINGER.TXT\ ;Raw user data file
+FNGFIL:	ASCIZ \SYSTEM:FINGER.BIN\ ;Finger info file
+
+;Host name parse lists
+
+HSTTAB:	[ASCIZ \TCP\],,NETTCP	;Always prefer TCP to Pup
+	0
+
+TTYTAB:	TABTOP
+	TTYPES
+	TABBOT
+
+UNK:	ASCIZ \ ???\
+BLANK:	ASCIZ \\		;Dummy record for unknowns
+	BLOCK BLANK+4-.
+	0
+	0
+NLI:	POINT 7,[ASCIZ \not logged in\]
+
+SKPSN:	CMPSN			;Extended op to compare strings for inequality
+	0
+
+SHELL:				;Increments for shellsort
+..XX==0
+REPEAT MAXSHL,<
+..XX==3*..XX+1
+	..XX
+>;REPEAT
+
+MOVST0:	MOVST STR0		;Extended op to move an asciz
+	0
+
+MOVSTX:	MOVST XSTR		;Extended op to move ascii ended by ctrl char
+	0
+
+STR0:	5_^D15,,.CHCNA		;Table to define asciz for string ops
+
+.RPCNT==0
+REPEAT 77,<
+	2*.RPCNT+2,,2*.RPCNT+3
+.RPCNT==.RPCNT+1
+>;REPEAT
+
+XSTR:	5_^D15,,1_^D15		;Table to quit string op on ctrl char
+REPEAT <<" "/2>-1>,<
+	1_^D15,,1_^D15
+>;REPEAT
+
+.RPCNT==0
+REPEAT <<100-" ">/2>,<
+	" "+2*.RPCNT,," "+2*.RPCNT+1
+.RPCNT==.RPCNT+1
+>;REPEAT
+
+.RPCNT==0
+UPPER:
+REPEAT "a",<
+	.RPCNT			;Uppercase already or irrelevant, no change
+.RPCNT==.RPCNT+1
+>;REPEAT
+
+.RPCNT==0
+REPEAT <"z"-"a"+1>,<
+	"A"+.RPCNT		;Lowercase, raise
+.RPCNT==.RPCNT+1
+>;REPEAT
+
+.RPCNT==0
+REPEAT <177-"z">,<
+	"z"+1+.RPCNT		;No change
+.RPCNT==.RPCNT+1
+>;REPEAT
+
+CRLF:	BYTE (7) .CHCRT,.CHLFD,0
+
+FNGINI:	'FINGER'		;FNGSIG
+	0			;FNGAUT
+	0			;FNGTIM
+	0			;FNGLOK
+	TTYLOC			;FNGTTY
+	0			;FNGTLN
+	USRLOC			;FNGINF
+	0			;FNGILN
+	SYSLEN			;FNGSLN
+
+ZERO:	0			;Constant zero
+ONE:	1			;Constant 1
+NEGONE:	-1			;Constant -1
+PDLP0:	IOWD PDLEN,PDL		;Pointer to bottom of stack
+PDLP1:	IOWD PDLEN-1,PDL+1	;Pointer to stack with 1 element on it
+OUTPTR:	OUTBFL*5-1		;Initial output buffer pointer
+	POINT 7,OUTBUF
+EVEC:	JRST FINGER		;Primary entry point to Finger
+	0
+	BYTE (3) VWHO (9) VMAJOR (6) VMINOR (18) VEDIT
+EVECL==.-EVEC
+
+.ENDPS
+
+.PSECT DATA,DATORG
+
+PDL:	BLOCK PDLEN		;Push-down stack
+CURTAD:	BLOCK 1			;Current time and day
+TMPJFN:	BLOCK 1
+PAGINF:	BLOCK 2			;Remembered page-map info
+
+pc1:	0
+pc2:	0
+pc3:	0
+levtab:	pc1
+	pc2
+	pc3
+chntab:	1,,timeup		;channel 0
+	Repeat <^d35>,<0>	;Nothing on other channels.
+
+TMPPTR:	BLOCK 1
+TMPBUF:	BLOCK BUFLEN		;Temp string buffer
+TMPLOC:	BLOCK 1			;Temporary location for whereever needed
+LOCFLG:	BLOCK 1			;Flags to pass to GETLOC
+FNGUST:	BLOCK FNGULN		;Stack for list of names to finger
+
+UNAM:	BLOCK BUFLEN
+OPRNUM:	BLOCK 1
+UNUM:	BLOCK 1
+OURWID:	BLOCK 1			;Width of our TTY
+
+JOBDAT:	BLOCK MAXJOB*JOBLEN	;Job data area matrix
+JOBTAB:	BLOCK MAXJOB		;Table of pointers to job records
+NJCNT:	BLOCK 1			;Negative number of jobs logged in
+CURUSR:	BLOCK 1
+AJOB:	BLOCK JOBLEN
+LSTUSR==AJOB+.JIUNO
+NDIRST:	BLOCK 1			;Negative count of dirsts we have done
+UNOTBL:	BLOCK MAXUSR		;User numbers whose user names we know
+INFTBL:	BLOCK MAXUSR		;User name pointers for those numbers
+CACHBF:	BLOCK CACHSZ
+CACHPT:	BLOCK 1
+GTDBLK:	BLOCK .CDLLD+1
+TMPFDB:	BLOCK .FBLEN
+
+HOST:	BLOCK 1			;current host
+NETPRO:	BLOCK 1			;current protocol
+NETJFN:	BLOCK 1			;network JFN
+NETSTR:	BLOCK 100
+SAVHST:	BLOCK 100		;Save name for host
+OUTBUF:	BLOCK OUTBFL		;Output buffer
+OUT:	BLOCK 1
+OUT$:	BLOCK 1
+FRKSTR:	BLOCK 4			;Return area for fork structure
+FATACS:	BLOCK 4			;AC save area for FATAL routine
+NJOBS:	BLOCK 1			;Negative number of jobs in this system
+tvtbeg:	block 1
+tvtend: block 1
+USRADR:	BLOCK 1			;Address of mapped in user data
+NEXPAG:	FRELOC/1000		;Free page allocator
+FNGJFN:	BLOCK 1			;JFN of mapped in data file
+RUNNER:	BLOCK 1			;Who's running finger
+TRIES:	BLOCK 1			;Times to try writelock before quitting
+
+.ENDPS
+.PSECT FREE,FREORG
+FRELOC:
+.ENDPS
+
+.PSECT CODE,CODORG
+
+FINGER:	JSP P,INIT		;Clean slate
+	TXO Q,FL%JCL		;Say we're working off of JCL
+	CALL MAPFNG		;Map in needed files
+	CALL SYSTEM
+
+	hrroi 1,netstr
+	hrroi 2,[asciz /tcp:.30010220426-7979;connection:active;timeout:60;persist:60/]
+	setz 3,
+	sout%
+
+loop:	movx 1,gj%sht
+	hrroi 2,netstr
+	gtjfn%
+	 erjmp tcperr
+	movem 1,netjfn
+	move 1,[.fhslf,,.timel]
+	move 2,[^d30*^d1000]
+	setz 3,
+	TIMER%
+	 erjmp .+1
+	move 1,netjfn
+	movx 2,of%rd!of%wr!fld(8,of%bsz)
+	openf%
+	 erjmp tcperr
+	move 1,[.fhslf,,.timal]
+	TIMER%
+	 erjmp .+1
+
+	CALL CHKJCL		;Go see if any jcl
+PAUSE:	CALL BRKTTY		;Print out any messages pending
+	move 1,[.fhslf,,.timel]
+	move 2,[^d60*^d1000]
+	setz 3,
+	TIMER%
+	 erjmp .+1
+	hrrz 1,netjfn
+	closf%
+	 erjmp clsabt
+	move 1,[.fhslf,,.timal]
+	TIMER%
+	 erjmp .+1
+
+errcnt:	setzm netjfn
+	move 1,[^d3*^d60*^d1000]
+	disms%
+	jrst loop
+      
+	CALL FNGOFF
+	HALTF%
+	JRST FINGER
+
+tcperr:	skipn 1,netjfn
+	 jrst errcnt
+	rljfn%
+	 erjmp .+1
+	jrst errcnt
+
+clsabt:	move 1,netjfn
+	txo 1,cz%abt
+	closf%
+	 erjmp .+1
+	jrst errcnt
+
+timeup:	move 1,netjfn
+	txo 1,cz%abt
+	closf%
+	 erjmp [move 1,netjfn
+		rljfn%
+		  erjmp .+1
+		jrst .+1]
+	move 1,[010000,,errcnt]
+	movem 1,pc1
+	debrk%
+
+
+;INIT - globals initializer
+;Call with JSP P,INIT
+;returns P/ top of stack
+;	 Q/ all flags cleared
+;trashes A
+
+INIT:	RESET%			;Flush all I/O, etc.
+	MOVX A,GL%LOC!GL%PRE!GL%TIP ;We don't have any location flags yet
+	MOVEM A,LOCFLG		;So say we want TTYLOC and prefix
+	 MOVEI C,^D80		;Make it really wide, then
+	MOVEM C,OURWID		;And save it away
+	MOVX Q,DEF%FL		;Clear all flags
+	SETOM LSTUSR		;No previous last user
+	DMOVE A,OUTPTR		;Init output buffer (OUT and OUT$)
+	DMOVEM A,OUT
+	MOVEI A,CACHBF
+	MOVEM A,CACHPT
+	MOVX A,RC%EMO
+	HRROI B,[ASCIZ \OPERATOR\] ;So we remember this user number
+	RCUSR%
+	TXNN A,RC%NOM!RC%AMB	;Did we have an operator (hopefully!)
+	 MOVEM C,OPRNUM		;Yes, save the number
+	MOVEM P,PDL		;Put retadr on stack for RET to caller
+	MOVE P,PDLP1		;Initialize stack
+
+	Movx	1,.FHSLF
+	Move	2,[LevTab,,ChnTab]
+	SIR%			;set interrupt levels,channels,and addresses
+	Movx	1,.FHSLF
+	Movx	2,1b0		;channel 0
+	AIC%			;activate the interrupt
+	Movx	1,.FHSLF	;process handle
+	EIR%			;enable interrupts
+	 Erjmp	.+1
+
+	RET			;And go back
+
+MAPFNG:	MOVX A,GJ%OLD!GJ%SHT	;Short form, old file
+	HRROI B,FNGFIL		;For the finger file
+	GTJFN%			;Try to get it
+	 ERJMP R		;Too bad
+	MOVEM A,FNGJFN		;Save the JFN
+	MOVEI B,OF%RD!OF%THW
+	OPENF%			;Open the file
+	 ERJMP RLJRT1
+	HRLZS A			;Put the JFN in the correct pl6ace
+	HRRI A,BLDPAG
+	DMOVE B,[ .FHSLF,,BLDPAG
+		  PM%CNT!PM%RD!PM%PLD+320 ]
+	DMOVEM B,PAGINF
+	PMAP%
+	MOVE A,BLDLOC		;Does it bear the official seal?
+	CAME A,SIGNET
+FNGOFF:	 SKIPN B,PAGINF		;Maybe the sanitation department isn't needed
+	  RET
+	MOVNI A,1		;Take out the garbage and put on the lid
+	DMOVE B,PAGINF
+	PMAP%
+	HRRZ A,FNGJFN
+	CLOSF%
+	 NOP
+	SETZM PAGINF            ;Clear out info
+	SETZM PAGINF+1
+	RET
+
+;CHKJCL - Check for jcl in rscan buffer
+
+CHKJCL:	SAVEAC <A>
+
+ jrst evrbdy
+
+;here to convert an ascii string into a sixbit string
+;takes a/ byte pointer to ascii string
+;returns +1 failure, if ascii string longer than 6 bytes or illegal characters
+;	 +2 success, sixbit word in A
+
+GETSIX:	TRVAR <ASCPTR,SIXPTR>
+	MOVEM A,ASCPTR		;Save ascii pointer
+	MOVE A,[POINT 6,A]
+	MOVEM A,SIXPTR		;Save sixbit pointer
+	SETZ A,			;Start with null result
+	MOVEI B,6		;Maximum of 6 chars
+	DO.
+	  ILDB C,ASCPTR		;Get next ascii character
+	  CAIE C,.CHLFD		;Linefeed
+	   CAIN C,.CHCRT	;Carriage return
+	    RETSKP		;Means done
+	  JUMPE C,RSKP		;Done if null
+	  CAIN C,.CHCNV		;The quoting character?
+	   ILDB C,ASCPTR	;Yes, allow next character regardless
+	  CAIL C,"a"		;Change lowercase letters to uppercase
+	   CAILE C,"z"
+	    SKPA		;Not lowercase
+	     TRZ C,40		;Lowercase, change it
+	  SUBI C,40		;Change to sixbit
+	  JUMPL C,R		;If illegal character, give non-skip
+	  IDPB C,SIXPTR		;Store in sixbit result in a
+	  SOJG B,TOP.		;Only do six characters
+	ENDDO.
+	ILDB C,ASCPTR		;Get character after sixth
+	JUMPE C,RSKP		;If null, string ended "just in time"
+	RET			;Non-skip if string too long
+
+EVRBDY:	CALL SNPSHT		;Take a picture of all the jobs
+	HRLZ I,NJCNT
+	DO.
+	  MOVE J,JOBTAB(I)	;For the moment, do all the dirsts
+	  CALL DIRSTJ
+	  AOBJN I,TOP.
+	ENDDO.
+;	CALL SORT		;Sort the jobs by short username
+	HRLZ I,NJCNT		;Simple output loop
+	TXZ Q,FL%GOT		;We haven't done any yet
+	DO.
+	  MOVE J,JOBTAB(I)	;I'th job to J
+	  CALL PRINTP		;Do we print this job?
+	  IFSKP.		;4 (was skipa)
+	   CALL PNTJOB		;Yes, print info for J'th job
+	  ENDIF.		;4
+	  AOBJN I,TOP.
+	ENDDO.
+	RET			;Print anything remaining in the buffer
+
+;See whether this job should be printed.  Takes offset into data in J
+;returns +1 if no print, +2 if print
+PRINTP:	SKIPGE A,.JITNO(J)	;Is job detached?
+	  RET			;skip it
+	SKIPE .JIBAT(J)		;Is the job a batch job?
+	 RET			;skip it
+	SKIPN .JIUNO(J)
+	 RET			;skip if NLI
+
+	MOVE A,OPRNUM
+	CAMN A,.JIUNO(J)	;Same as OPERATOR?
+         RET			;Yes, so suppress
+	SKIPN .JICPJ(J)		;Controlled by job 0?
+	 RET			;Yes, so its just like an OPERATOR
+
+	MOVE A,.JISUN(J)	;get short username pointer
+	PUSH P,4
+	MOVE 4,[POINT 7,B]
+	SETZ B,
+	ILDB C,A
+	IDPB C,4
+	ILDB C,A
+	IDPB C,4
+	ILDB C,A
+	IDPB C,4
+	ILDB C,A
+	IDPB C,4
+	ILDB C,A
+	IDPB C,4
+	POP P,4
+	CAMN B,[ASCII /ANONY/]
+	 RET
+	CAMN B,[ASCII /MILNE/]
+	 RET
+	CAMN B,[ASCII /TACNE/]
+	 RET
+	CAMN B,[ASCII /KERMI/]
+	 RET
+	CAMN B,[ASCII /NICGU/]
+	 RET
+
+	HRROI A,TMPBUF		;Pointer to our temporary location
+	MOVE B,.JITNO(J)	;Get our TTY number
+	HLL B,LOCFLG		;Get our flags that we want
+	CALL GETLOC		;Get a location
+	IFNSK.			;If we bombed
+	  ESOUT%		;Ouput the error they had
+	  JRST DEATH		;And shut down
+	ENDIF.
+	SETZ C,			;Get a null
+	IDPB C,A		;And drop it on the temporary buffer
+	RETSKP			;Otherwise its ok.
+
+
+FNGUS2:	MOVNI A,FNGULN		;-How many we can have
+	HLRES T			;Get -how many spaces we have left in stack
+	SUBM A,T		;Get -how many we parsed
+	HRLZS T			;Put it in the left half
+	TXO Q,FL%USR		;Flag we're going to be doing users
+;begin NIC
+	TXO Q,FL%IDT!FL%OPR	;And do all this too
+;end
+	CALL SNPSHT		;Who-all's around here these days?
+	HRLZ I,NJCNT
+	DO.
+	  MOVE J,JOBTAB(I)	;For the moment, do all the dirsts
+	  CALL DIRSTJ
+	  AOBJN I,TOP.
+	ENDDO.
+;	CALL SORT		;Sort the jobs by short username
+FNGUS1:	HRLZ I,NJCNT
+	TXO Q,FL%NHD		;Don't want a header of any sort
+FNGUS5:	MOVE J,JOBTAB(I)	;get the I'th job record
+	MOVE A,.JIUNO(J)	;Get the user number
+	CAMN A,LSTUSR		;Same as the last person displayeyd?
+	IFSKP.			;No, must check to see if we want him/her
+	  MOVE S,T		;Get AOBJN pointer over list
+	  DO.
+	    CAMN A,FNGUST(S)	;Does it match this entry?
+	     EXIT.		;Yes, go do it
+	    AOBJN S,TOP.	;Loop through all entries
+	    JRST FNGUS4		;Not in list, don't print this one
+	  ENDDO.
+	  CALL PRINTP		;Now, should we print the job?
+	   JRST FNGUS4		;No, don't do it
+	  DO.			;Now eliminate this name from our list
+	    MOVE A,FNGUST+1(S)	;Get the next entry up
+	    MOVEM A,FNGUST(S)	;And put it here
+	    AOBJN S,TOP.	;Go through all we have left
+	  ENDDO.
+	  HLRE A,T		;Get left half of AOBJN pointer
+	  HRLI T,1(A)		;Decrement it by one
+	ELSE.
+	  CALL PRINTP		;Should we print the job?
+	   JRST FNGUS4		;No, don't do it
+	ENDIF.
+	CALL PNTJOB		;Print it
+	MOVE A,JOBTAB+1(I)	;Get pointer to next job
+	MOVE A,.JIUNO(A)	;And get the next user number
+	TXNN Q,FL%WHO		;Do we want whois info?
+	 TXNN Q,FL%TER		;No, do we want verbose?
+	  CAMN A,.JIUNO(J)	;Yes, do we have more of this user?
+	   JRST FNGUS4		;No, don't do whois info
+	CALL PNTWHO		;show off what we know
+	CALL OCRLF
+FNGUS4:	AOBJN I,FNGUS5		;Go back for more of same
+	CALL OCRIF
+	JUMPE T,R		;If no more left, go back now
+	TXNE Q,FL%USR		;Are we doing a user?
+	 TXNN Q,FL%GOT		;Yes, did we get one?
+	 IFSKP.			;Yes, go ahead and separate
+	   TMSG <------->
+	   CALL OCRLF
+	 ENDIF.
+	TXO Q,FL%NLI		;Now working with people not logged in
+	DO.			;We need to show about these NLIs
+	  MOVEI J,AJOB		;Pointer to our scratch job area
+	  MOVE B,FNGUST(T)	;Get the first user off the stack
+	  MOVEM B,.JIUNO(J)	;This is the person we want to look up
+	  CALL PNTINF		;Show finger plan, etc.
+	  CALL OCRLF
+	  AOBJN T,TOP.		;Loop through all of these
+	ENDDO.
+	RET			;Go back when done
+
+FNGNAM:	CALL SNPSHT
+	HRLZ I,NJCNT
+	DO.
+	  MOVE J,JOBTAB(I)	;For the moment, do all the dirsts
+	  CALL DIRSTJ
+	  AOBJN I,TOP.
+	ENDDO.
+;	CALL SORT		;Sort the jobs by short username
+	HLLZ I,USRLOC		;Index into already-alphabetized username list
+	JUMPE I,NOBODY		;Maybe table is empty
+	MOVNS I
+	HRRI I,USRLOC+1
+	SETOM LSTUSR		;In case we fail right away
+	DO.
+	  HLRZ A,(I)		;First user
+	  HRLI A,(<POINT 7,0>)
+	  CALL MATCHA
+	   JRST FNGNM3		;Try personal name
+FOUNDN:	  MOVX A,RC%EMO
+	  HLRO B,(I)
+	  RCUSR%
+	  TXNE A,RC%NOM!RC%AMB
+	   JRST FNGNM4		;Just give up on lossage
+	  PUSH P,I
+	  SETOM LSTUSR		;Make sure not to be confused
+	  MOVEM C,FNGUST	;Put user number on top of stack
+	  HRLZI T,-1		;Say our stack is only one long
+	  CAMN C,OPRNUM		;FINGER OPERATOR?
+	   TXO Q,FL%OPR		;Yes, /OPERATOR is in effect then
+	  CALL FNGUS1		;Inform about the user we found
+	  SETZM UNUM
+	  TXNN Q,FL%TER
+	   CALL OCRLF2
+	  CALL BRKTTY
+	  POP P,I
+	  AOBJN I,TOP.          ;FNGUS1 wipes out TMPBUF
+	ENDDO.
+	RET
+
+FNGNM2:	HLRZ A,(I)		;user name
+	HRLI A,(<POINT 7,0>)
+	CALL MATCH
+	 SKPA
+	  JRST FOUNDN
+FNGNM3:	HRRZ A,(I)		;personal name
+	HRLI A,(<POINT 7,0>)
+	CALL MATCH
+	 SKPA
+	  JRST FOUNDN
+FNGNM4:	AOBJN I,FNGNM2
+	SKIPGE A,LSTUSR
+	 CAME A,NEGONE
+	  RET
+NOBODY:	TYPE <?Sorry, could not find ">
+	MOVE A,[POINT 7,UNAM]
+	CALL OUTSTR
+	TYPE <">
+	CALLRET BRKTTY
+
+SUBTTL GATHER - Snapshot routines
+
+SNPSHT:	HRLZ I,NJOBS		;Set up job AOBJN pointer
+	MOVEI J,JOBDAT		;Pointer to job area
+	MOVEI K,0		;Pointer into sortable index table
+SNPSH1:	MOVEI A,(I)		;Job #
+	MOVEI B,(J)		;AOBJN pointer to block to store data
+	HRLI B,-.JISTM-1
+	MOVEI C,.JIJNO
+	GETJI%
+	IFJER.
+	  CAIE A,GTJIX4		;No such job?
+	   CALL FATAL		;Oops
+	ELSE.
+	  HRRZM J,JOBTAB(K)	;Table entry points to current record
+	  ADDI K,1		;Next table entry
+	  CALL .IDLE		;Now get idle time
+	  MOVEM A,.JIIDL(J)	;Store minutes of idle time
+	  SKIPGE A,.JITNO(J)	;Get terminal number
+	ANSKP.
+	  TRO A,.TTDES		;Make sure we have a TTY designator
+	  GTTYP%		;Get what type of TTY that is
+	  IFJER.
+	    SETZ B,		;If error, assume a default of sorts
+	  ENDIF.
+	  MOVEM B,.JITYP(J)	;Save the terminal type
+	  MOVE B,.JITNO(J)	;Get back TTY number
+	ENDIF.
+	ADDI J,JOBLEN		;Next record
+	AOBJN I,SNPSH1		;Loop to next job
+	MOVNM K,NJCNT		;Save negative job count
+	RET
+
+;.IDLE - jacket for IDLE%
+;There may eventually be switches governing the type of idle time obtained.
+;For now we get CPU idle time if job is detached, else we get typein idle time.
+;Takes	A/ job number
+
+.IDLE:
+IFDEF ID%TTY,<	;;Not everyone has this change yet (11-Sep-83, KSL)
+	SKIPL .JITNO(J)		;Is the job detached? 
+	 TXO A,ID%TTY		;No, so get typein idle time
+	SKIPE .JIBAT(J)		;Is the job a batch job?
+	 TXZ A,ID%TTY		;Yes, force cpu idle time
+	TXNE Q,FL%TID		;Is /TTY-IDLE set?
+	 TXO A,ID%TTY		;Yes, force it
+	TXNE Q,FL%CID		;How about /CPU-IDLE?
+	 TXZ A,ID%TTY		;Yes, force it
+>;IFDEF ID%TTY
+	IDLE%			;Get idle time
+	IFJER.
+	  SETZ A,		;Possibly job logged out
+	ENDIF.
+	IDIVI A,^D<1000*60>	;Convert to minutes idle time
+	RET			;Return to caller
+
+SUBTTL Job printout routines
+
+PNTHDR:
+	move 1,[point 7,[asciz /NNIC
+/]]
+	call outstr
+	CALLRET BRKTTY
+
+PNTUSR:
+	MOVEM B,LSTUSR		;Make this the "last user"
+	CALL DIRSTJ
+	PUSH P,C
+	MOVE A,.JISUN(J)	;Print short username
+	CALL OUTSTR
+	CALL OCOMMA		;Space
+	POP P,C
+	HRRZ A,INFTBL(C)	;Print personal name
+	HRLI A,(<POINT 7,0>)
+	CALL OUTSTR
+	CALLRET OCOMMA		;Space
+
+; Job printout routine, with job record pointer in J.
+
+PNTJOB:
+	TXNN Q,FL%NHD		;Do we have occasion to print the header?
+	 TXNE Q,FL%GOT		;Yes, have we done any users yet?
+	  SKPA			;One or both failed, abort
+	   CALL PNTHDR		;No, output the header
+	TXO Q,FL%GOT		;Flag we have one (don't do above, in order
+				; to flag it even if we don't want a header)
+	MOVE B,.JIUNO(J)	;Get last user number PNTJOB'd
+
+	CALL OPLUS
+	MOVEM B,LSTUSR		;Make this the "last user"
+	CALL DIRSTJ
+	PUSH P,C
+	MOVE A,.JISUN(J)	;Print short username
+	CALL OUTLSR		;in lowercase
+	CALL OCOMMA		;Space
+
+	MOVE A,.JITNO(J)	;Get TTY number
+	CALL OUTOCT		;Nonnegative is octal TTY
+	CALL OCOMMA
+
+;	MOVE B,.JIPNM(J)	;Print program name
+;	CALL OUT6BT
+
+	MOVE B,.JIIDL(J)	;Any idle time?
+	IFE. B
+	  TYPE <0>
+	  JRST PNTJB2		;No
+	ENDIF.
+
+	  CALL BRKTTY		;Easiest to do this by ourselves
+	  MOVE A,netjfn		;Go to the tty
+	  MOVEI C,^D10
+	  NOUT%			;Output it
+	   ERJMP .+1		;Don't worry if we bomb
+
+PNTJB2:	CALL OCOMMA		;Space
+
+	POP P,C
+	HRRZ A,INFTBL(C)	;Print personal name
+	HRLI A,(<POINT 7,0>)
+	CALL OUTSTR
+	CALL OCOMMA
+	
+	move a,[point 7,[asciz /NIC via /]]
+	MOVE b,.JITNO(J)	;Get TTY number
+	CAML b,tvtbeg
+	 CAMLE b,tvtend
+   	   move a,[point 7,[asciz /NIC: /]]
+
+	call outstr
+	MOVE A,[POINT 7,TMPBUF]	;Pointer to what we want to print out
+	MOVE B,OURWID		;Get our TTY width
+	SUBI B,DEFWID		;Subtract the width we were working with
+	ADDI B,TLCFLD		;And make it so we have how many chars left
+	CALL OUTBDD
+	CALLRET OCRLF
+
+PNTINF:	CALL PNTUSR
+	CALL OSPACE
+	MOVE A,.JIUNM(J)
+	CALL OUTSTR
+	CALL OSPACE
+	MOVE A,NLI
+	CALL OUTSTR
+	CALL OCRLF
+	TXNE Q,FL%TER		;Suppress extras?
+	 RET			;Yes, just return
+	CALL PNTLGO
+PNTWHO:	CALL PNTMAI
+	TXNE Q,FL%WHO		;4 make /WHOIS print plan file even
+	 CALLRET PNTPLN		;4 if user is logged in.
+	TXNN Q,FL%NPL		;Don't print the finger plan?
+	 TXNN Q,FL%NLI		;Yes we do, working with not logged in?
+	  RET			;Nope, go back now
+	CALLRET PNTPLN
+
+PNTLGO:	SAVEAC <A,B,C,D>
+	ACVAR <TTYNUM>
+	MOVE D,CURUSR
+	HRRZ D,INFTBL(D)
+	SKIPE B,DIED(D)
+	IFSKP.
+	  SETZ A,		;No last logout, try last login
+	  MOVE B,CURUSR
+	  MOVE B,UNOTBL(B)
+	  RCDIR%
+	   ERJMP R
+	  MOVE A,C		;now try to get the last login time
+	  MOVEI B,GTDBLK
+	  SETZ C,		;No password
+	  GTDIR%
+	   ERJMP R
+	  TYPE <Last login >
+	  CALL BRKTTY
+	  SKIPE B,GTDBLK+.CDLLD
+	  IFSKP.
+	    TYPE <never>
+	    CALLRET OCRLF
+	  ENDIF.
+	  MOVEI A,.CDLLD+1	;Set block length
+	  MOVEM A,GTDBLK+.CDLEN
+	  MOVEI A,.PRIOU
+	  MOVX C,OT%DAY!OT%NSC!OT%12H!OT%SCL
+	  ODTIM%
+	  CALLRET OCRLF
+	ENDIF.
+	TYPE <Last logout >
+	CALL BRKTTY
+	MOVEI A,.PRIOU
+	MOVX C,OT%DAY!OT%NSC!OT%12H!OT%SCL
+	ODTIM%
+	SKIPL TTYNUM,R.I.P.(D)
+	 CAIL TTYNUM,1000
+	  JRST NLOCAL
+	TYPE < from TTY>
+	MOVEI A,(TTYNUM)
+	MOVEI D,0
+	CALL I8OUT
+	MOVE B,TTYNUM		;Get the terminal number, we just want name
+PRTLOC:	HRROI A,TMPBUF		;Temporary location string
+	CALL GETLOC		;Get the location
+	IFNSK.
+	  ESOUT%		;Output the error message
+	  JRST DEATH		;And shut down
+	ENDIF.
+	SETZ B,			;Get a null
+	IDPB B,A		;Drop it in
+	MOVE A,[POINT 7,TMPBUF]	;Get a pointer to our buffer
+	ILDB A,A		;Get the first char
+	IFN. A			;If it has something
+	  TYPE < (>		;Start with a paren
+	  MOVE A,[POINT 7,TMPBUF] ;And get the location
+	  HRLI A,(<POINT 7,0>)	;Make it a byte pointer
+	  CALL OUTSTR		;Output it
+	  TYPE <)>		;Add the closing paren
+	ENDIF.
+	CALLRET OCRLF		;And finish off with a CRLF
+
+NLOCAL:	CAME TTYNUM,NEGONE
+	IFSKP.
+	  TYPE < while detached>
+	  CALLRET OCRLF
+	ENDIF.
+	TLZE TTYNUM,400000	;Ethernet?
+	IFSKP.
+	  TYPE < from Internet host >
+	  CALL BRKTTY
+	  HRROI A,TMPBUF
+	  MOVE B,TTYNUM		;Restore host
+	  CALL $GTHNS
+	  IFNSK.
+	    MOVE A,[POINT 7,[ASCIZ \???\]] ;$GTHNS failed
+	  ELSE.
+	    SETZ B,		;Get a null
+	    IDPB B,A		;Drop it in
+	    HRROI A,TMPBUF	;5 Point to the name
+	    CALL $RMREL		;5 First flush relative domains
+	    HRROI A,TMPBUF	;Point to the name
+	    HRROI B,[ASCIZ \ARPA\] ;Want to remove the domain
+	    CALL $RMDOM		;Remove it
+	    MOVE A,[POINT 7,TMPBUF] ;Now set the string for output
+	  ENDIF.
+	  CALL OUTSTR
+	  CALLRET OCRLF
+	ENDIF.
+	TYPE < from >
+	CALL BRKTTY
+
+	LOAD A,HN%PRT,TTYNUM	;Get line number (assume this is a tip)
+	SKIPN ,A		;Was it a tip?
+	 JRST NLOCL1		;No line number, I guess it wasn't ...
+	HRROI A,TMPBUF
+	MOVE C,TTYNUM		;Get the net, host, and line number
+	MOVSI B,(GL%HNM!GL%LOC)
+	CALL GETLOC		;Get the location ...
+	 JRST [	TMSG <Ethernet host ???> ; GETLOC failed!!
+		CALLRET OCRLF ]
+	MOVEI B,0		;Get a null
+	IDPB B,A		;And tack it on ...
+	MOVE A,[POINT 7,TMPBUF] ;Got string, output it
+	CALL OUTSTR
+	CALLRET OCRLF
+
+NLOCL1:	TMSG <Ethernet host >	;Not a tip (or no line # in FINGER.BIN)
+	HRROI A,TMPBUF
+	MOVE B,TTYNUM		;Restore host
+	CALL $PUPNS
+	 SKIPA A,[-1,,[ASCIZ/???/]] ;$PUPNS failed??
+	  HRROI A,TMPBUF	;Got string, output it
+	CALL $RMREL
+	CALL OUTSTR
+	CALLRET OCRLF
+	ENDAV.
+
+PNTMAI:	MOVE A,[ASCIZ \PS:<\]
+	MOVEM A,TMPBUF
+	MOVEI A,^D39
+	MOVE B,.JIUNM(J)
+	MOVE E,[100700,,TMPBUF]
+	CALL CPYSTR
+	DMOVE A,[ ^D40
+		  POINT 7,[ASCIZ \>MAIL.TXT.1\] ]
+	CALL CPYSTR
+	IDPB C,E
+	MOVX A,GJ%SHT!GJ%OLD!GJ%DEL
+	HRROI B,TMPBUF
+	GTJFN%
+	 ERJMP R
+	HRRZM A,TMPJFN
+	MOVE B,[.FBREF,,.FBCTL]
+	MOVEI C,TMPFDB+.FBCTL
+	GTFDB%
+	 ERJMP RLJRET
+	CALL OCRLF
+	MOVX B,FB%DEL		;No mail if deleted
+	TDNE B,TMPFDB+.FBCTL
+	 JRST NOMAIL
+	MOVE B,TMPFDB+.FBWRT	;New mail if written since last read
+	CAMG B,TMPFDB+.FBREF
+	 JRST NOMAIL
+	MOVE A,TMPJFN
+	HRLI A,.GFLWR
+	HRROI B,TMPBUF
+	GFUST%
+	MOVX A,RC%EMO
+	HRROI B,TMPBUF
+	RCUSR%
+	 ERJMP PNTMA0		;RCUSR% Dies on "FOO%BAR@BAZ" 
+	TXNN A,RC%NOM!RC%AMB
+	 SKIPA A,[POINT 7,[ASCIZ \New \]]
+PNTMA0:	  MOVE A,[POINT 7,[ASCIZ \Net\]]
+	CALL OUTSTR
+IFE SUMXSW,<
+	TYPE <mail from >
+	MOVE A,TMPPTR
+	CALL OUTSTR
+	TYPE < at >
+>;IFE SUMXSW
+IFN SUMXSW,<
+	TYPE <mail since >
+>;IFN SUMXSW
+	CALL BRKTTY
+	MOVEI A,.PRIOU
+	MOVE B,TMPFDB+.FBWRT
+	MOVX C,OT%DAY!OT%NSC!OT%12H!OT%SCL
+	ODTIM%
+	SKIPE TMPFDB+.FBREF
+	IFSKP.
+	  TYPE <
+ Never read>
+	  JRST PNTMA1
+	ENDIF.
+	TYPE <
+ Last read on >
+PNTMA2:	CALL BRKTTY
+	MOVEI A,.PRIOU
+	MOVE B,TMPFDB+.FBREF
+	MOVX C,OT%DAY!OT%NSC!OT%12H!OT%SCL
+	ODTIM%
+PNTMA1:	CALL OCRLF
+RLJRET:	HRRZ A,TMPJFN
+RLJRT1:	RLJFN%
+	 NOP
+	RET
+
+NOMAIL:	TYPE <No new mail, >
+	SKIPE TMPFDB+.FBREF
+	IFSKP.
+	  TYPE <never read>
+	  JRST PNTMA1
+	ENDIF.
+	TYPE <last read on >
+	JRST PNTMA2
+
+PNTPLN:	CALL OCRLF
+	MOVE A,[ASCIZ \PS:<\]
+	MOVEM A,TMPBUF
+	MOVEI A,^D39
+	MOVE B,.JIUNM(J)
+	MOVE E,[100700,,TMPBUF]
+	CALL CPYSTR
+	DMOVE A,[ ^D40
+		  POINT 7,[ASCIZ \>FINGER.PLAN\] ]
+	CALL CPYSTR
+	IDPB C,E
+	MOVX A,GJ%SHT!GJ%OLD
+	HRROI B,TMPBUF
+	GTJFN%
+	 ERJMP NOPLAN
+	HRRZM A,TMPJFN
+	MOVX B,FLD(7,OF%BSZ)!OF%RD
+	OPENF%
+	 ERJMP PLNERR
+	TYPE <Plan:
+>
+	HRRZ A,TMPJFN
+	DO.
+	  MOVE B,OUT$
+	  MOVN C,OUT
+	  SIN%
+	   ERJMP ENDLP.
+	  MOVEM B,OUT$
+	  CALL BRKTTY
+	  LOOP.
+	ENDDO.
+	MOVEM B,OUT$
+	MOVMM C,OUT		;4 update count too
+	MOVEI A,.FHSLF
+	GETER%
+	CAME B,[.FHSLF,,IOX4]
+	 CALLRET FATAL
+	HRRZ A,TMPJFN
+	CLOSF%
+	 NOP
+	CALLRET OCRLF
+
+PLNERR:	HRRZ A,TMPJFN
+	RLJFN%
+	 NOP
+NOPLAN:	TYPE <[No plan]
+>
+	RET
+
+
+; DIRST takes user number in B, returns with index into user names in C
+
+DIRST:	HRLZ C,NDIRST		;Search pointer for cached users
+	JUMPE C,DIRENT		;If nothing yet in table, go enter
+	DO.
+	  CAME B,UNOTBL(C)	;Match?
+	   AOBJN C,TOP.		;No, go on
+	ENDDO.
+	JUMPGE C,DIRENT		;If not still negative it wasn't in table
+	HRRZS C			;This is it
+	RET
+
+DIRENT:	CAIL C,MAXUSR		;Are we at capacity?
+	 TDZA C,C		;Yes, just make sure in bounds
+	  SOS NDIRST		;Still have room, accommodate
+	MOVEM B,UNOTBL(C)	;Store the new user number
+	HRRZ A,CACHPT		;Get the name
+	HRLI A,(<POINT 7,0>)
+	MOVE D,A
+	DIRST%
+	 ERJMP UNKNAM		;Arrrgh!
+	MOVEI B,0		;Dirst doesn't point at the zerobyte,
+	IDPB B,A		; so we correct for it.
+	MOVE E,A
+	MOVEI A,USRLOC
+	MOVE B,D
+	PUSH P,C		;Save this reg from the TBLUK%
+	TBLUK%			;Look it up
+	POP P,C			;Restore the reg
+	MOVE A,(A)		;Grab that entry
+	TXNN B,TL%EXM
+	 JRST NTHERE
+DIREN1:	MOVEM A,INFTBL(C)	;Put the entry in the cache
+	RET
+
+NTHERE:	HRLZ A,D		;Use username in cache buffer
+	HRRI A,BLANK
+	ADDI E,1		;Update cache pointer
+	HRRZS E
+	CAILE E,CACHBF+CACHSZ
+	 DIEMSG <?Username cache overflowed>
+	HRRZM E,CACHPT
+	JRST DIREN1
+
+UNKNAM:	MOVE A,[UNK,,BLANK]	;No name, no name
+	JRST DIREN1
+
+DIRSTJ:	MOVE B,.JIUNO(J)
+	CALL DIRST
+	MOVEM C,CURUSR
+	HLRZ A,INFTBL(C)
+DIRSJ1:	HRLI A,(<POINT 7,0>)
+	MOVEM A,.JIUNM(J)
+;	CALLRET GETSHT
+
+;CALL GETSHT (A,J) [A,B,D]
+;given a job record and username pointer, fills in short name and key length
+
+GETSHT:	DO.
+	  MOVE B,A		;Start short name here
+	  SETZM .JIKEY(J)	;Reset length
+	  DO.
+	    ILDB D,A		;Get next char
+	    IFE. D
+	      MOVEM B,.JISUN(J)	;Save the short name at end
+	      RET
+	    ENDIF.
+	    AOS .JIKEY(J)	;Longer by one
+IFE LOTSW,<
+	    TXNN Q,FL%FUL	;Don't truncate if full user name
+	     CAIE D,"."		;Period?
+>;IFE LOTSW
+	      LOOP.		;No, get next byte
+	  ENDDO.
+	  LOOP.			;Yes, start anew
+	ENDDO.
+
+SUBTTL NETWORK
+
+NETFNG:	JRST @NETPRO		;Go do the protocol we need to
+
+NETTCP:
+	CALLRET OCRIF
+
+;Copy string, A/ Dest, B/ Source
+;Returns updated string pointers, does not copy null
+
+COPSTR:	SAVEAC <C>
+	DO.
+	  ILDB C,B
+	  JUMPE C,R
+	  IDPB C,A
+	  LOOP.
+	ENDDO.
+
+SUBTTL STRING
+
+;CALL BRKTTY  ! dumps the output buffer to the terminal, preserving all ACs
+
+BRKTTY:	SAVEAC <A,B>
+	MOVEI A,0		;Output buffer full, force it out
+	IDPB A,OUT$		;Put a zero byte at the end
+	move a,netjfn
+	hrroi b,outbuf
+	setz c,
+	SOUTR%			;Out! Out, damned spot!
+	 erjmp .+1
+	DMOVE A,OUTPTR		;Reset output pointer
+	DMOVEM A,OUT
+	RET
+
+;CALL OSPACE [A]  ! outputs a space to the buffer, maybe forces it out
+;CALL OUTCHR (A)  ! outputs a char to the buffer, maybe forces it out
+;takes	A/ char
+
+OPLUS: SAVEAC <A>
+	MOVEI A,"+"
+	JRST OUTCHR
+OCOMMA: SAVEAC <A>
+	MOVEI A,","
+	JRST OUTCHR
+OSPACE:	SAVEAC <A>
+	MOVEI A," "
+OUTCHR:	SOSGE OUT
+	 CALL BRKTTY
+	IDPB A,OUT$
+	RET
+
+;CALL OUTSTR (A) [C]  ! outputs an asciz string, maybe forces buffer out
+;takes	A/ source string pointer
+
+OUTST1:	SOSGE OUT
+	 CALL BRKTTY
+	IDPB C,OUT$
+OUTSTR:	ILDB C,A
+	JUMPN C,OUTST1
+	RET
+
+OUTLS1:	SOSGE OUT
+	 CALL BRKTTY
+	IDPB C,OUT$
+OUTLSR:	ILDB C,A
+	cail c,"A"
+	 caile c,"Z"
+	  skipa
+	   addi c,40		;lowercase it
+	JUMPN C,OUTLS1
+	RET
+
+;CALL OUTBDD (A,B) [C]  ! outputs bounded asciz string, maybe forces buffer
+;takes	A/ sources string pointer
+;	B/ field size
+
+OUTBD1:	SOSGE OUT
+	 CALL BRKTTY
+	IDPB C,OUT$
+OUTBDD:	ILDB C,A
+	SKIPE C
+	 SOJGE B,OUTBD1
+	RET
+
+;CALL OUTPAD (A,B) [C]  ! outputs asciz string padded with trailing spaces
+;takes	A/ sources string pointer
+;	B/ field size
+
+OUTPAD:	CALL OUTBDD
+OPAD:	SOJL B,R
+	MOVEI C," "
+OUTPD1:	SOSGE OUT
+	 CALL BRKTTY
+	IDPB C,OUT$
+	SOJGE B,OUTPD1
+	RET
+
+;CALL OCRIF [A,B] ! outputs CR LF if TTY not at left margin
+;CALL OCRLF [A]   ! outputs CR LF
+;CALL OCRLF2 [A]  ! outputs CR LF LF
+
+OCRIF:	CALL BRKTTY		;Output our buffer so we can see if at margin
+	MOVEI A,.PRIOU		;Cursor position as vert,,horiz
+	RFPOS%
+	TRNN B,-1		;Ok only if all RH bits 0
+	 RET
+OCRLF:	MOVEI A,.CHCRT		;Output CRLF
+	CALL OUTCHR
+	MOVEI A,.CHLFD
+	CALLRET OUTCHR
+
+OCRLF2:	CALL OCRLF
+	CALLRET OUTCHR
+
+;Output decimal number with no leading spaces
+OUTDEX:	SAVEAC <B,C>
+	MOVEM A,B		;Get the number in the correct accumulator
+	DO.
+	  IDIVI B,^D10		;Get the next digit
+	  PUSH P,C		;Save the first digit
+	  JUMPE B,ENDLP.	;Go out if we're done
+	  CALL TOP.		;Otherwise get the next character
+	ENDDO.
+	POP P,A			;Get back the digit
+	CALLRET OUTDIG		;Output this digit
+
+;Output three-digit octal number in A, with no leading spaces. Clobbers A,B,C.
+OUTOCX:	IDIVI A,^D8*^D8		;TIP ports are octal
+	IDIVI B,^D8
+	IFE. A
+	  JUMPE B,PNTPR3	;Flush leading zeros
+	  JRST PNTPR2
+	ENDIF.
+	ADDI A,"0"
+	CALL OUTCHR
+PNTPR2:	MOVEI A,"0"(B)
+	CALL OUTCHR
+PNTPR3:	MOVEI A,"0"(C)
+	CALLRET OUTCHR
+
+; Output three-digit number in A, with leading spaces. Clobbers A,B,C.
+OUTDEC:	IDIVI A,^D100		;Hundreds,
+	IDIVI B,^D10		;Tens and ones
+	CALLRET OUTNUM
+
+OUTOCT: IDIVI A,100		;Hundreds,
+	IDIVI B,10		;Tens and ones
+OUTNUM:	IFN. A
+	  ADDI A,"0"		;If no leading space, no spaces
+	  ADDI B,"0"		;Leading digits done, output them
+	ELSE.
+	  MOVEI A," "		;Leading zero becomes space
+	  SKIPN B		;Check for another space
+	   SKIPA B,[" "]
+	    ADDI B,"0"		;Leading digits done, output them
+	ENDIF.
+	CAIE A," "
+	 CALL OUTCHR		;Already has hundreds place
+	MOVEI A,(B)		;Fetch tens place
+	CAIE A," "
+	 CALL OUTCHR
+	MOVEI A,(C)		;Always at least one true digit
+OUTDIG:	ADDI A,"0"		;Convert digit to ascii and output it
+	CALLRET OUTCHR		;Return via OUTCHR
+
+; Output SIXBIT word in B.  Clobbers A,C,D.
+OUT6BT:	DMOVE C,[POINT 6,B
+		 6]		;C/ sixbit pointer, D/ counter
+	DO.
+	  ILDB A,C		;Get a byte
+	  ADDI A," "		;Convert sixbit to ascii
+	  CALL OUTCHR		;Output a byte
+	  SOJG D,TOP.		;Loop till all six outputted
+	ENDDO.
+	RET
+
+;maximum number of chars in A, source in B, dest in E
+CPYSTR:	TDZA S,S		;ASCIZ
+CPYSTX:	 MOVEI S,1		;ASCII ended by ctrl chr
+CPYST:	MOVE D,A		;Same length to dest
+	TLO A,4_^D15		;All bytes significant
+	TLC B,-1		;Map -1 to 0 (in left half only)
+	TLCE B,-1		;Map back and check if it was 0 (ie is -1)
+	 TLNN B,-1		;Check if it is 0 then
+	  HRLI B,(<POINT 7,0>)	;Left half -1 or 0, perform pointer service
+	TLC E,-1		;Map -1 to 0 (in left half only)
+	TLCE E,-1		;Map back and check if it was 0 (ie is -1)
+	 TLNN E,-1		;Check if it is 0 then
+	  HRLI E,(<POINT 7,0>)	;Left half -1 or 0, perform pointer service
+	SETZB C,C+3		;Operation undefined if these not zero
+	XCT STMOV(S)		;End on zero byte if there is one
+	 NOP			;We know it might not fit, but that's ok
+	RET
+
+STMOV:	EXTEND A,MOVST0		;Quit on zero
+	EXTEND A,MOVSTX		;Quit on control char
+
+;Output integer A in fieldsize D, D=0 for unformatted.  Uses A,B,C,D.
+DEC10:	SKIPA C,[^D10]		;Base ten
+I8OUT:	 MOVEI C,8		;Base eight
+CVSCAL:	IDIVI A,(C)		;B/ rightmost digit
+	PUSH P,B		;Store digit on stack
+	JUMPE A,RPAD		;Done stacking digits, stick in filler
+	SOJE D,STAR		;Overflow, print a star and stop stacking
+	CALL CVSCAL		;More digits, more space, stack more
+CVSRCL:	POP P,A			;Recall stacked digit
+	CALLRET OUTDIG		;Output it and unrecurse
+
+RPAD:	MOVE B,D
+	SUBI B,1
+	CALL OPAD
+	CALLRET CVSRCL
+
+STAR:	MOVEI A,"*"		;Use a star instead of this digit
+	CALLRET OUTCHR		;Put in digits previously stacked
+
+
+;CALL MATCH (A) [A,B,C,D,E]
+;takes in A string in which to find string in TMPBUF
+;returns +1 for failure (no match found), +2 for success (match found)
+;CALL MATCHA (A) [A,B,C,D,E]
+;copies ATMBUF uppercased to TMPBUF and then performs MATCH
+;CALL MATCHB (A,B) [A,B,C,D,E]
+;takes in B string to use instead of ATMBUF
+
+MATCHA:	MOVE B,[POINT 7,UNAM]	;Uppercase atom buffer to temp buffer
+MATCHB:	MOVE C,TMPPTR		; (or perhaps uppercase some other string)
+MATCH2:	ILDB D,B
+	MOVE D,UPPER(D)
+	IDPB D,C
+	JUMPN D,MATCH2
+;fallin	CALLRET MATCH
+
+MATCH:	MOVE B,A		;Pointer to match string
+	MOVE C,TMPPTR
+MATCH1:	ILDB E,C		;Get char from search string
+	JUMPE E,RSKP		;End of search string = win
+	ILDB D,B		;Get char from match string
+	JUMPE D,R		;End of match string = lose
+	MOVE D,UPPER(D)
+	CAIN D,(E)		;Are characters the same?
+	 JRST MATCH1		;Yes.  advance to next pair
+	IBP A			;No. advance the match string
+	JRST MATCH		;And try again.
+
+SUBTTL Error handlers
+
+ERRMS1:	CALL BRKTTY
+ERRMSG:	HRROI A,ZERO
+	ESOUT%
+	MOVEI A,.PRIOU
+	HRLOI B,.FHSLF
+	MOVEI C,0
+	ERSTR%
+	 SKPA
+	  NOP
+	RET
+
+;Fatal errors are here (impossible it says here)
+FATAL:	DMOVEM A,FATACS		;Save the ACs we clobber
+	DMOVEM C,FATACS+2
+	CALL ERRMSG
+	TMSG <, at PC >
+	MOVEI A,.PRIOU		;Output the PC
+	POP P,B
+	SUBI B,2		;Point PC at actual location of the JSYS
+	MOVE C,[NO%MAG!8]
+	NOUT%
+	 HALT			;This can't happen
+	MOVEI A,.PRIIN		;Flush input buffer
+	CFIBF%
+	DMOVE A,FATACS		;Restore ACs
+	DMOVE C,FATACS+2
+DEATH:	HALTF%
+	TMSG <?Can't continue>
+	JRST DEATH
+
+SUBTTL INITIATE
+
+Comment \
+
+Here is what the finger data file looks like:
+
+	word		contents
+
+	FNGSIG:		sixbit 'FINGER
+	FNGAUT:		user number of last writer
+	FNGTIM:		date and time of last write
+	FNGLOK:		lock word
+	FNGTTY:		address of TTY info data area
+	FNGTLN:		length of TTY info data area
+	FNGINF:		address of user info data area
+	FNGILN:		length of user info data area
+	FNGSLN:		number of system parameters
+	FNGSYS:		start of (FNGSLN) system parameters
+			    . . .
+	TTYLOC:		table of (MAXTTY) TTY locations indexed by TTY #
+	TTYFRE:		pointer to TTY string space free list
+	TTYS:		the TTY location strings
+			    . . .
+	USRLOC:		TBLUK format directory of user names and information
+				number of users,,MAXUSR
+				entries of the form <username,,user info>
+	INFFRE:		pointer to user info record free list
+	USRFRE:		pointer to user string space free list
+	USRINF:		MAXUSR fixed block user info records
+				4 words of personal name string
+				time of last logout
+				location of last logout
+	USERS:		all the username strings
+END-OF-COMMENT \
+
+SYSTEM:	HRROI A,.JOBNA		;Get how many jobs in this system
+	GETAB%
+	 ERCAL FATAL
+	CAMGE A,[-MAXJOB]
+	 DIEMSG <?System has more jobs than FINGER supports>
+	MOVEM A,NJOBS		;Save negative number of jobs
+
+	MOVX A,TCP%NT
+	SETZ B,
+	STAT%			;GET NVT RANGES
+	 ERJMP [setzb a,b
+		jrst .+1]
+	HLRE A,B
+	TLZ B,-1		;FIRST NVT IN B
+	MOVN A,A
+	SUBI A,1
+	ADD A,B			;LAST NVT IN A
+	movem b,tvtbeg
+	movem a,tvtend
+	RET			;Go back
+
+LOCKIT:	MOVEI A,^D10		;Try up to ten times
+	MOVEM A,TRIES
+LOCKT1:	AOSE FNGLOK		;Lock it
+	 JRST RELOCK
+CLAIM:	GTAD%			;Date of this update
+	MOVEM A,FNGTIM
+	CALL MASTER
+	MOVEM A,FNGAUT
+	RET
+
+RELOCK:	MOVEI A,^D5000		;Somebody already has it locked
+	DISMS%			;Wait for half a sec
+	SOSLE TRIES		;Try, try again
+	 JRST LOCKT1
+	TMSG <?Lock failed>	;Give up
+	JRST DEATH
+
+UNLOCK:	CALL CLAIM
+	SETOM FNGLOK		;Unlock writelock
+	RET
+
+MASTER:	SKIPE A,RUNNER		;Find out who's running us
+	 RET
+	GJINF%
+	MOVEM A,RUNNER
+	RET
+
+.ENDPS
+
+END <EVECL,,EVEC>

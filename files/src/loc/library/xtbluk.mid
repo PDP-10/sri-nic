@@ -1,0 +1,162 @@
+;-*-Midas-*-
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	User-mode TBLUK% like JSYS calls using extended addressing
+;;	not quite the same as standard system calls
+;;
+;;  Table format:
+;;	word 0:    <# of entries>,,<max # of words available>
+;;	word 1-n:  <extended address of string>
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; $XTBLUK
+;; 	ac1/  extended address of table
+;;	ac2/  extended address of lookup string
+;; rets +1 if no match found, with
+;;	ac1/  extended address of table entry where entry would be
+;; rets +2 if match was found, with
+;;	ac1/  extended address of table entry
+
+;; $XTBADD
+;;	ac1/  extended address of table
+;;	ac2/  extended address of string to add
+;; rets +1 if table full or entry already exists, or
+;; rets +2 if ok, with
+;;	ac1/  extended address of entry in table
+
+XTBLUK:
+
+;table addr in t1, addr of lookup string in t2
+;rets +1 if not found, +2 if found
+;ac1 contains addr of entry
+
+Q1==5
+Q2==6
+Q3==7
+Lo==10
+Hi==11
+Tst==12
+XTLOOK:	Push P,Q1
+	Push P,Q2
+	Push P,Q3
+	Push P,Lo
+	Push P,Hi
+	Push P,Tst
+
+	Move Q1,2		;Save address of string
+	Move Q2,1		;Save table address
+
+	Movei Lo,1		;Lo is first entry
+	Hlrz Hi,(1)		;Hi is last entry (size of table)
+	Jumpe Hi,Tablky
+
+Tablk0:	Camg Hi,Lo		;Still searching?
+	 Jrst Tablkx		;nope
+	Move Tst,Hi
+	Sub Tst,Lo
+	Addi Tst,1
+	Lsh Tst,-1		;Test is in the middle
+	Add Tst,Lo		;and make table offset out of it
+	Move Q3,Q2		;table addr
+	Add Q3,Tst		;plus test offset 
+	Move Q3,(Q3)		;addr of string
+	Move 1,[440700(Q3),,0]	;Test string
+	Move 2,[440700(Q1),,0]	;Base string
+	$STCMP			;Compare them
+	Jumpe 1,Tablkf		;Jump if exactly equal
+	Txne 1,SC%GTR		;Test greater than base?
+	 Jrst Tablkg		;yes
+	Move Lo,Tst		;Up lower bound to test point
+	Camn Tst,Hi		;Is test point now at high point?
+	 Jrst Tablkx		;yes, so quit looking
+	Addi Lo,1
+	Jrst Tablk0		;continue search
+Tablkg:	Move Hi,Tst		;Lower high bound to test point
+	Subi Hi,1
+	Jrst Tablk0		;continue search
+
+Tablkf:	Move 1,Q2		;Return addr of table
+	Add 1,Tst		;Plus entry offset
+Tablkp:	Pop P,Tst
+	Pop P,Hi
+	Pop P,Lo
+	Pop P,Q3
+	Pop P,Q2
+	Pop P,Q1
+	Aos (P)
+	Ret
+
+Tablkx:	Move Q3,Q2		;table addr
+	Add Q3,Lo		;plus lower bound
+	Move Q3,(Q3)		;addr of string
+	Move 1,[440700(Q3),,0]	;Test string
+	Move 2,[440700(Q1),,0]	;Base string
+	$STCMP			;Compare them
+	Jumpe 1,Tablke		;Jump if exactly equal
+	Move 2,1		;save flags
+	Move 1,Q2		;table addr
+	Add 1,Lo		;plus last entry
+	Txnn 2,SC%GTR		;Test greater than base?
+Tablky:	 Addi 1,1		;no, so next location is where new entry goes
+	Pop P,Tst
+	Pop P,Hi
+	Pop P,Lo
+	Pop P,Q3
+	Pop P,Q2
+	Pop P,Q1
+	Ret
+
+Tablke:	Move 1,Q2		;addr of table
+	Add 1,Lo		;plus offset
+	Jrst Tablkp
+
+
+XTBADD:
+	Push P,1		;-3: save table addr
+	Push P,2		;-2: save new entry addr
+	Push P,3		;-1: 
+	Push P,4		; 0:
+	Call XTLOOK		;find place for it
+	 SkipA			;not found
+	  Jrst XTBAER		;found, error
+	Move 2,1		;save addr to put entry at
+	Move 1,-3(P)		;get addr of table
+	Hlrz 4,(1)		;increment number of entries in use
+	Aos 4
+	Hrrz 3,(1)		;get table size
+	Camle 4,3		;enuf room?
+	 Jrst XTBAER		;sorry table full
+	Hrlm 4,(1)		;update entry count
+
+	Move 3,2		;addr of new entry
+	Sub 3,1			;minus table addr (gives offset)
+	Sub 4,3			;from entry count (gives # of words to move)
+
+	Move 1,2		;save addr of new entry
+	Move 3,2		;source
+	Add 3,4			;last source addr+1
+	Movn 2,4		;count
+	Move 4,3		;destination 
+	Addi 4,1		;  (source+1)
+	Extend 2,[XBLT]		;make hole for new entry (reverse xblt)
+	Move 2,-2(P)		;get new entry
+	Movem 2,(1)		;save new entry
+
+XTBAOK:	Pop P,4
+	Pop P,3
+	Pop P,2
+	Adjsp P,-1
+	Aos (P)
+	Ret
+
+XTBAER:	Pop P,4
+	Pop P,3
+	Pop P,2
+	Pop P,1
+	Ret
+
+
+$XTBADD=<Call XTBADD>
+$XTBLUK=<Call XTBLUK>

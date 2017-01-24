@@ -1,0 +1,985 @@
+;[SIERRA.STANFORD.EDU]SRC:<6.1.MONITOR.STANFORD.MARS>PHYSAI.MAC.8, 16-Mar-87 16:19:34, Edit by ALDERSON
+; More GOTCHN cleanup
+; Fix UDSINI code from previous edit
+;[SIERRA.STANFORD.EDU]SRC:<6.1.MONITOR.STANFORD.MARS>PHYSAI.MAC.7, 13-Mar-87 12:22:06, Edit by ALDERSON
+; Allow GOTCHN routine to start at channel table entry 0
+; Make SSAINI say that subchannels not found by UDSINI are OFFLINE and
+; UNAVAILABLE (US.OFS!US.UNA)
+;[SIERRA.STANFORD.EDU]SRC:<6.1.MONITOR.STANFORD.MARS>PHYSAI.MAC.6, 14-Feb-87 20:03:15, Edit by ALDERSON
+; More of same:  Make a constant KNIRH2 instead of hardcoding numeric 5 in
+; GOTCHN routine
+;[MACBETH.STANFORD.EDU]EPIC:<SU-MONITOR.MARS>PHYSAI.MAC.5, 29-Jan-87 15:48:25, Edit by A.ALDERSON
+; Make GOTCHN routine start AFTER the CI slot
+; Make KOO's change:
+;; Increased IU1CWT timeout count
+;[SIERRA.STANFORD.EDU]SRC:<6.1.MONITOR.STANFORD.MARS>PHYSAI.MAC.3, 27-Jan-87 17:53:46, Edit by ALDERSON
+; Make SSAINI more civilized with respect to its treatment of CHNTAB and P4
+;EPIC:<SU-MONITOR.MARS>PHYSAI.MAC.2, 11-Apr-86 17:13:23, Edit by A.ALDERSON
+; Comment out references to FA disk symbols
+;<5-1-MONITOR>PHYSAI.MAC.5033, 29-Oct-84 17:03:25, Edit by MRC
+; Changes for IU10/MARS operation
+;<5.ISI.MONITOR>PHYSA.MAC.5000	22-Oct-82 08:45:54	Edit by SMITH
+;#500 CDSCCA dispatch added
+;<4.ISI-MONITOR>PHYSA.MAC.260	31-Mar-81 13:08:50	Edit by SMITH
+;#26 Support IBM-3420 compatable Tape drives on SA10 channel
+;#25 Support IBM-3330 compatable disks on SA10 channel.
+;#25 ;#26 Entire module included in these change #'S
+
+	SEARCH PROLOG		; system parameter file
+	TTITLE (PHYSA,,< - Channel dependent code for SA10 controller>)
+	SUBTTL Dennis R. Smith 30-Nov-79/Mark Crispin 9/84 for IU10/FA10
+
+	SEARCH PHYPAR		; PHYSIO parameters
+
+Comment	~
+	
+	This module contains  the code  to handle one  or more  SA10
+	controllers.  It interfaces with PHYSIO, which calls it, and
+	individual  device  modules,   which  it  calls   (currently
+	supported: IBM 3330 style disks and IBM 3420 style  magnetic
+	tapes).  SSAINI is intitially called by PHYSIO during system
+	initialization through the  dispatch vector SSADSP.   SSAINI
+	sets up CDB's for each subchannel  on each SA10 it finds  of
+	those it is assembled to handle, and call each of the device
+	initialization routines it  knows about  for every  possible
+	unit on each subchannel  (except that channels having  disks
+	are not  checked for  other devices).   SSASV is  a  routine
+	called by the PI service  routine for the channel  'SSACHN'.
+	It dispatches PHYSIO as though it were the routine put  into
+	the CDB  by massbus  controller routines  to handle  massbus
+	interrupts.
+
+	The base addresses for the SA10s  reside on a page which  is
+	not cached, and SSAINI sets  that. The device lists used  by
+	the devices are  assumed to reside  on a page  which is  not
+	cached, and it is up to the device routines to see that this
+	is so.  It is also up to the device routines to assure  that
+	any pages involved in I/O  have been flushed from cache,  or
+	are not cached.
+
+	~
+	SUBTTL Parameters
+
+; Device dependent definitions in the CDB
+
+SSACNI==CDBDDP+0		; CONI SSA,T1
+SSACNO==CDBDDP+1		; CONO SSA,SA%CHn(T1)
+SSACN1==CDBDDP+2		; what to do before SSACNO
+SSABAS==:CDBDDP+3		; address of base register for subchannel
+SSASCI==:CDBDDP+4		; subchannel index (4*<SA10 #> + subchan)
+SSASBA==:CDBDDP+5		; address of sense buffer for channel
+SSADVL==:CDBDDP+6		; address of device list for channel (disk)
+SSACUB==:CDBDDP+6		; current UDB that is active on this channel (tape)
+SSAFAF==:CDBDDP+7 		; non-zero if FA10
+L.SSA==CDBDDP+10-CDBINT		; length of SA10 CDB
+	SUBTTL Channel Dispatch Table for SA10
+
+SSADSP::JRST SSAINI		;  0 - Initiation
+	JRST SSASTK		;  1 - Stack second channel command
+	JRST SSASIO		;  2 - Start I/O
+	JRST SSAPOS		;  3 - Position request
+	JRST SSALTM		;  4 - Return best xfer
+	JRST SSAINT		;  5 - Interrupt processing
+	JRST SSACCW		;  6 - Make channel xfer word
+	JRST SSAHNG		;  7 - Transfer hung
+	JRST SSARST		; 10 - Reset channel
+	JRST SSACHK		; 11 - Periodic check
+	JRST EXTKDB		; 12 - check legality of unit - use PHYSIO rtn.
+	JRST SSACCA		; 13 - Extract address from CCW 
+
+; Dummy routines
+
+SSALTM:	RET
+	SUBTTL Initialization
+
+; SSAINI - initialize SA10 devices on system
+; Called from PHYSIO via CDSINI entry in SSADSP.
+; P4/ first free system channel #
+;	CALL SSAINI	or	 CALL CDSINI(ac) ; Where ac/ SSADSP
+; RETURN +1: Always
+;  P4/ next free system channel #
+;   Other AC's not preserved.
+
+SSAINI:	MOVEI T1,SA0BAS/PGSIZ	; page uncacheable data is on
+	CALL NOCASH		; turn off caching on it
+	ADDI T1,1		; turn off caching for next page as well
+	CALL NOCASH
+	MOVE T1,[SAXCDB,,SAXCDB+1]
+	MOVE T2,SAXMSC		; get maximum subchannel number
+	SETZM SAXSEL		; zero selector
+	ADDI T2,SAXCDB		; Point to last entry in table
+	SETZM SAXCDB		; clear table of CDB for each subchannel
+	BLT T1,0(T2)		; clear rest of table
+	SETZ P2,		; Start with CH0 on SA0
+	DO.
+	  MOVX T1,SA%INI!SA%CME	; clear the channel
+	  XCT SAXCNO(P2)
+	  MOVX T1,SSACHN	; assign PI but do not enable
+	  XCT SAXCNO(P2)
+	  XCT SAXCNI(P2)	; Read it back
+	  IFXN. T1,SA%PIA	; Have a PI assignment?
+	    HRLI P2,-SSANSC	; Yes, counter for doing each subchannel
+	    DO.
+	      CALL GOTCHN	; Check whether there is a free channel slot
+	      IFSKP.
+		SKIPN SAXFAF(P2) ; is this an FA?
+		IFSKP.
+		  MOVX T1,FACPSZ ; yes, get a base block big enough for an FA
+		  CALL SSAALC
+		   BUG.(HLT,SSAFSE,PHYSA,HARD,<PHYSA - Not enough uncached free space for FA10 base block>)
+		  MOVEM T1,SAXBAS(P2) ; Set up new base address
+		ENDIF.
+	        MOVX T1,SA%SET!FLD(.SARSC,SA%FCN)!SA%CME!SSACHN ; Reset subchan
+		HRRZ T2,P2	; Get subchannel index
+		ANDX T2,<SSANSC-1> ; subchannel only
+		STOR T2,SA%CHN,T1 ; Set in reset command
+		XCT SAXCNO(P2)	; do the reset
+		XCT SAXCNI(P2)	; Read status back
+	      ANDXN. T1,SA%PIA	; Make sure it really exists!
+		MOVX T1,L.SSA	; Length of CDB
+		CALL PHYALC	; allocate CDB
+		 RET		; failure, quit
+		HRRZ T3,P2	; Get subchannel index
+		ANDX T3,<SSANSC-1> ; Isolate subchannel
+		MOVEI P1,-CDBINT(T1) ; CDB base address to P1
+		MOVEM P1,CHNTAB(P4) ; Save CDB in channel table
+		MOVEM P1,SAXCDB(P2) ; Save CDB in SA10 subchannel table
+		HRRZM P4,CDBADR(P1) ; Store logical channel number
+		HRRZM P2,SSASCI(P1) ; Store subchannel index
+		EXCH P1,P3	; Get CDB in P3
+		MOVX T1,.BTCDB	; Mark as CDB
+		DPB T1,USYBKT
+		EXCH P1,P3	; Restore
+		MOVX T1,.CTSSA	; Set type
+		DPB T1,CSYTYP
+		MOVX T1,SSACHN	; SA10 PI channel
+		DPB T1,CSYPIA	; Set PIA in configuration information
+		STOR T3,SA%CHN,T1 ; Store subchannel number in it
+		HRLI T1,(<IORI T1,>) ; Make IOR instruction
+		MOVEM T1,SSACN1(P1) ; Store as setup
+		MOVE T1,SAXCNO(P2) ; Get CONO SAn,SSACHN
+		MOVEM T1,SSACNO(P1) ; Store CONO in CDB
+		MOVE T1,SAXCNI(P2) ; Get CONI appropriate for this channel
+		MOVEM T1,SSACNI(P1) ; Keep a copy handy in CDB
+		SKIPE SAXFAF(P2) ; is this an FA10?
+		 SETOM SSAFAF(P1) ; yes, note that this is an FA
+		MOVE T1,SAXBAS(P2) ; Get base address for this subchannel
+		MOVEM T1,SSABAS(P1) ; Save base address in CDB
+		DMOVE T1,[BLT 17,17 ; Get instruction to restore AC's
+			  SETOM SAXICH]	; and one to show no int in progress
+		DMOVEM T1,CDBJEN(P1) ; Put them in CDB for PHYSIO exit sequence
+		MOVE T1,[UNBRK SSA] ; Instruction to return to PI5 routine
+		MOVEM T1,CDBJEN+2(P1) ; Put in exit sequence
+		MOVEI T1,SSADSP	 ; Insert address of dispatch vector
+		MOVEM T1,CDBDSP(P1) ; into DCB
+		MOVE Q3,[-MAXSAU,,CDBUDB] ; AOBJN pointer to UDB table
+		ADDI Q3,(P1)	; Relocate pointer
+		MOVEM Q3,CDBCUN(P1) ; Store in UDB as current pointer
+		MOVEM Q3,CDBIUN(P1) ; Store also as initial pointer
+		SETOM CDBXFR(P1) ; Indicate channel free   ???
+		MOVEI Q2,0	; first unit #
+		DO.
+		  SETZ P3,	; In case not wanted
+		  SKIPN SSAFAF(P1) ; Is this an FA10?
+		  IFSKP.
+;		    SKIPE T1,[FADDSP] ; FA10 disk service exists?
+;		     CALL UDSINI(T1) ; Yes, initialize
+		    jfcl
+		  ELSE.
+		    SKIPE T1,[CC1DSP] ; SA10 disks exist?
+		     CALL UDSINI(T1) ; Yes, initialize
+		  ANDE. P3
+		    SKIPE T1,[SATDSP] ; SA10 tapes exist?
+		     CALL UDSINI(T1) ; Yes, initialize
+		  ENDIF.
+		  LOAD T2,USTYP,UDBSTS(P3)	; Any device there?
+		  SKIPE T2
+		  IFSKP.	; Say "Not there and you can't have it anyway"
+		    MOVX T2,US.UNA!US.OFS
+		    IORM T2,UDBSTS(P3)
+		  ENDIF.
+		  MOVEM P3,0(Q3) ; Store in CDB if any (0 if none)
+		  ADDI Q2,1	; Next device
+		  AOBJN Q3,TOP.	; Keep going
+		ENDDO.
+		ADDI P4,1	; Next system channel #
+	      ENDIF.
+	      AOBJN P2,TOP.	; do each subchannel
+	    ENDDO.
+	    MOVX T1,SA%SET!FLD(.SAPIE,SA%FCN)!SSACHN ; enable PI interrupts
+	    DO.
+	      XCT SAXCNO-4(P2)	; enable PI interrupts on SA10 just processed
+	      ADDI T1,FLD(.SACH1,SA%CHN) ; Next subchannel on that SA10
+	      JXN T1,SA%CHN,TOP. ; do next subchannel if any left
+	    ENDDO.
+	  ELSE.
+	    ADDI P2,SSANSC	; No PIA, on to next SA10
+	  ENDIF.
+	  CAMGE P2,SAXMSC	; done them all?
+	   LOOP.		; No, do next
+	ENDDO.
+	MOVE T1,[JRST SSASV2]	; Interrupt entry for 2 SA10's
+	SKIPE SAXCDB		; SA0 found?
+	 SKIPN SAXCDB+SSANSC	; and SA1 too?
+	  HRRI T1,SSASV1	; Only 1 SA10, use simpler routine
+	MOVEM T1,SSASV		; establish entry routine
+	RET			; Return to PHYSIO
+
+KNIRH2==5
+
+GOTCHN:	SETZ P4,		; Initiate search for unused channel slot
+	DO.
+	  CAIL P4,CHNN		; Less than maximum number of channels?
+	   RET			; No, fail
+	  CAIE P4,KNIRH2	; Is this a KLNI channel?
+	   CAIN P4,KLPRH2	;  or a KLIPA channel?
+	  IFSKP.		; No
+	    SKIPN CHNTAB(P4)	; Is this channel already assigned?
+	     JRST RSKP		; No, use it
+	  ENDIF.
+	  AOJA P4,TOP.		; Next possible channel number
+	ENDDO.
+
+	SUBTTL Start I/O and Positioning
+
+; SSAPOS - start positioning
+; P1/ CDB
+; P3/ UDB
+; P4/ IORB
+;	CALL CDSPOS(ac)		; Where ac/ SSADSP
+; RETURNS +1: failure
+; RETURNS +2: success, positioning started
+
+SSAPOS:	HRRZ T1,UDBDSP(P3)	; address of device routine vector
+	CALLRET UDSPOS(T1)	; Start positioning
+
+; SSASIO - Start an I/O operation
+; P1/ CDB
+; P3/ UDB
+; P4/ IORB
+;	CALL CDSSIO(ac)		; Where ac/ SSADSP
+; RETURNS +1: failure
+; RETURNS +2: success, I/O started
+
+SSASIO:	HRRZ T1,UDBDSP(P3)	; Get device routine vector
+	CALL UDSSIO(T1)		; Try to start I/O
+	 RETBAD			; Lost, do not skip
+	RETSKP			; Won
+
+; SSASTK - stack a second command
+; P1/ CDB
+; P3/ UDB
+; P4/ IORB
+;	CALL CDSSTK(ac)		; Where ac/ SSADSP
+; RETURNS +1: failure
+; RETURNS +2: success, command stacked
+
+SSASTK:	HRRZ T1,UDBDSP(P3)	; Get device dispatch
+	CALLRET UDSSTK(T1)	; Let him stack it if he can
+	SUBTTL Hung, Reset, and Check entries
+
+; SSAHNG - handle a hung transfer
+; called with PI off
+; P1/ CDB
+; P3/ UDB
+; P4/ IORB
+;	CALL CDSHNG(ac)		; Where ac/ SSADSP
+; RETURNS +1: Always
+
+SSAHNG:	RET			; do nothing
+
+; SSARST - Reset the channel and all units
+; T1/ 0 for reset just the channel (subchannel)
+; T1/ 1 for full reset
+; ( both resets currently the same for the SA10 )
+; P1/ CDB
+;	CALL CDSRST(ac)		; Where ac/ SSADSP
+; RETURNS +1: Always
+
+SSARST:	MOVX T1,SA%SET!FLD(.SARSC,SA%FCN)!SA%CME ; Reset subchannel
+	XCT SSACN1(P1)		; do any setup
+	XCT SSACNO(P1)
+	RET
+
+; SSACHK - check PIA for SA10 (call about once a second)
+; P1/ CDB
+;	CALL CDSCHK(ac)		; Where ac/ SSADSP
+; RETURNS +1: Always
+
+SSACHK:	XCT SSACNI(P1)		; do CONI
+	LOAD T1,SA%PIA,T1	; Isolate PIA
+	LDB T2,CSYPIA		; Get what PIA should be
+	CAMN T1,T2		; are they the same?
+	 RET			; Yes
+	HRRZ T3,SSASCI(P1)	; No, get SubChannel Index
+	BUG.(CHK,SSAPIM,PHYSA,HARD,<PHYSA - SA10 lost PI assignment>,<<T3,CONI>>)
+	LDB T1,CSYPIA		; Get correct PIA
+	IORX T1,SA%SET!FLD(.SAPIE,SA%FCN) ; enable PI interrupts 
+	XCT SAXCNO(T3)		; Set the PIA
+	RET
+	SUBTTL CCW Generation entry
+
+; SSACCW - generate a channel xfer word.
+; This routine generates the second word of an SA10 CCW (IOW).
+; T1/ mode,,+count (1B0 if backwards)
+; T2/ Physical address
+; P1/ CDB
+; P3/ UDB
+; P4/ IORB
+;	CALL CDSCCW(ac)		; Where ac/ SSADSP
+; RETURNS +1: Always
+;  T1/ CCW for this transfer
+;[note: Transfer cannot cross page boundary ... that is caller's problem.]
+
+SSACCW:	HRRZ T3,T1		; Get count
+	TXZ T1,1B0		; clear backwards bit from mode
+	HLRZS T1		; Get mode in correct place
+	CAIN T1,IRMWRD		; Is it the common case (word mode)?
+	IFSKP.
+	  IFG. T1		; make sure legal mode
+	    CAILE T1,IRMMAX
+	  ANSKP.
+	    IDIV T3,MODTAB(T1)	; convert to words
+	    SKIPE T4		; Leftovers?
+	     ADDI T3,1		; Yes, need another word
+	  ELSE.
+	    BUG.(CHK,SSAIHM,PHYSA,HARD,<PHYSA - Illegal HDW Mode - Word Mode Assumed>,<<T1,MODE>,<SSASCI(P1),SUBCHN>>)
+	    MOVX T1,IRMWRD	; assume word mode
+	  ENDIF.
+	ENDIF.
+	MOVX T1,SC%LST		; build CCW - indicate no chaining
+	MOVNI T3,0(T3)		; Get negative count
+	STOR T3,SC%CNT,T1	; Store count in CCW
+	STOR T2,SC%ADR,T1	; Store address in CCW
+	MOVEM T1,CDBCCL(P1)	; Store CCW
+	RET			; Return
+
+;#500 SSACCA - EXTRACT THE PHYSICAL MEMORY ADDRESS FROM A CCW TRANSFER WORD.
+;#500 ARGUMENT:
+;#500   T1/	CCW WORD
+;#500 RETURNS:
+;#500   T1/	ADDRESS, OR ZERO IF NONE
+
+SSACCA:	LOAD T1,SC%ADR,T1	;#500  Get Address from CCW
+	RET			;#500 .
+	SUBTTL Interrupt routine
+
+; SSAINT - service interrupt on SA10 for subchannel
+; P1/ CDB
+;	CALL CDSINT(ac)		; Where ac/ SSADSP
+; RETURNS +1: Error detected
+;  P4/ 0 : request PHYSIO to dismiss interrupt
+;      negative : Request Schedule cycle
+;      IORB : I/O completed on this IORB
+;  P2-P3 not preserved
+;  Q1-Q4 not preserved
+; RETURNS +2: no error detected
+;  P4/ 0 : request PHYSIO to dismiss interrupt
+;      negative : Request Schedule cycle
+;      IORB : I/O completed on this IORB
+;  P2-P3 not preserved
+;  Q1-Q4 not preserved
+
+SSAINT:	SETZ P4,		; assume exit with no IORB
+	XCT SSACNI(P1)		; get conditions on channel
+	MOVEM T1,CDBCNI(P1)	; save them
+REPEAT 0,<	;only for "real" SA10
+	IFXN. T1,SA%MPE!SA%NXM	; any fatal memory errors?
+	  SETOM SAXICH		; Yes, show no subchannel being serviced
+	  MOVX T2,<-6,,0>	; Read 6 SA10 registers (0-5)
+	  HRRZ T3,SSASCI(P1)	; Get subchannel index
+	  DO.
+	    MOVEI T1,0(T2)	; Register to read
+	    LSH T1,3		; Shift register number to select position
+	    XCT SAXCNO(T3)	; Select word desired
+	    MOVEI T1,SAXERD(T2)	; Where to store this word
+	    XCT SAXDTI(T3)	; Input word to buffer
+	    AOBJN T2,TOP.	; Loop to get all registers
+	  ENDDO.
+	  MOVX T1,SA%CME!SSACHN	; clear memory errors
+	  XCT SAXCNO(T3)	; clear memory errors
+	  MOVE T4,CDBCNI(P1)	; Get conditions back
+	  IFXN. T4,SA%NXM	; Was it a NXM?
+	    BUG.(CHK,SSANXM,PHYSA,HARD,<PHYSA - NXM detected by SA10>,<<SAXERD,CHN/CBUS/uPC>,<SAXERD+1,MEMADR>,<SAXERD+2,MB.LH>,<SAXERD+3,MB.RH>>)
+	    AOS CDBNXM(P1)	; count errors
+	  ELSE.
+	    HLRZ T1,SAXERD+2	; Get channel pariter error happened on
+	    ANDI T1,3		; Isolate subchannel number
+	    ADDI T3,(T1)	; create subchannel index
+	    MOVSI T1,(SIXBIT 'SSA') ; Record who saw error
+	    MOVEM T1,DEVMPE	; Save for JOB0
+	    AOS CDBPAR(P1)	; count errors
+	  ENDIF.
+	  RETBAD
+	ENDIF.
+>;REPEAT 0
+	MOVE Q3,SSABAS(P1)	; Get base register address
+	SKIPN SSAFAF(P1)	; Is this really an FA10?
+	IFSKP.
+	  LOAD T1,FASTW,(Q3)	; Get FA10 status word
+	  MOVEM T1,CDBCS0(P1)	; Save it in the CDB
+	ELSE.
+	  DMOVE T1,1(Q3)	; Get SA10 status words from base block
+	  DMOVEM T1,CDBCS1(P1)	; Save them in the CDB
+	ENDIF.
+	AOS T2,SAXTTP		; Get Trace Table Pointer
+	ANDI T2,SAXTTL-1	; Wrap around
+	MOVEM T1,SAXTT(T2)	; Store status word 1 in table
+	SKIPN SSAFAF(P1)	; Is this an FA10?
+	IFSKP.
+	  LOAD T1,FAUNT,.FAUSB(Q3) ; get number of device causing interrupt
+	ELSE.			; SA10 case
+	  LOAD T1,S1%DEV,1(Q3)	; Get number of device causing interrupt
+	  MOVE Q2,T1		; copy address
+	ENDIF.
+	ANDX T1,<MAXSAU-1>	; convert to unit number
+	CALL SETUDB		; Set P3 := UDB, T2 := xxxDSP
+	IFN. P3			; Unit known?
+	  CALL UDSINT(T2)	; Yes, call interrupt service
+	   NOP			; ERROR: special action necessary?
+	ELSE.			; Interrupt from unknown unit
+	  SKIPN SSAFAF(P1)	; If FA10, this is easy
+	  IFSKP.
+;	    MOVEI T2,FADDSP	; Get address of FA disk service
+;	    CALL FADDSP+UDSINT	; call interrupt routine
+	     BUG.(CHK,SSAFIF,PHYSA,HARD,<PHYSA - FA unit initialization failed>,<<Q2,DEVADR>,<SSASCI(P1),SUBCHN>>)
+	  ELSE.			; SA10 case
+	    MOVE T1,Q2		; Get device address
+ 	    TRZ T1,<MAXSAU-1>	; Remove unit code
+	    SETZ T2,		; don't know what type of unit
+	    CAIN T1,.IDDSK	; disk?
+	     MOVEI T2,CC1DSP	; Yes
+	    CAIN T1,.IDMTA	; Mag tape?
+	     MOVEI T2,SATDSP	; Yes
+	    IFE. T2		; bugchk if no unit found
+	      BUG.(CHK,SSAUKU,PHYSA,HARD,<PHYSA - Unknown unit interrupted>,<<Q2,DEVADR>,<CDBCS1(P1),SW1>,<SSASCI(P1),SUBCHN>>)
+	    ELSE.
+	      CALL UDSINT(T2)	; call interrupt routine
+	       BUG.(CHK,SSAIIS,PHYSA,HARD,<PHYSA - Unit initialization failed>,<<Q2,DEVADR>,<SSASCI(P1),SUBCHN>>)
+	    ENDIF.
+	  ENDIF.
+	ANDN. P3		; Have a UDB?
+	  MOVEI Q3,CDBUDB(P1)	; Yes, get address of UDB list
+	  ADDI Q3,0(Q2)		; Where to store UDB for this unit
+	  MOVEM P3,0(Q3)	; Store UDB for unit
+	ENDIF.
+	MOVX T1,FLD(.SASTS,SA%FCN) ; clear status of interrupting channel
+	XCT SSACN1(P1)		; do any setup
+	XCT SSACNO(P1)		; clear status
+	SETOM SAXICH
+	RETSKP			; Good return
+	SUBTTL Interrupt Service - called from PI service routine
+
+; This routine is called by the PI service routine for "SSACHN".
+; It has T1-T4 & CX available for scratch, and must save any
+; other AC's it uses.  P is set to a ^O20 word stack, and a RET
+; will return to process the next device on that channel.  The
+; RET is used if the interrupt was not for the SA10.  Otherwise,
+; return is via "UNBRK SSA".
+
+; This routine will set up for a call to PHYSIO as though an
+; interrupt came from an RH20 channel thru the interrupt code in
+; a CDB.  PHYSIO will save all the AC's except for P1, which it
+; expects in CDBSVQ, and the AC's will be restored in CDBJEN,
+; thru which PHYSIO exits.
+
+;; SSASV::	; SA10 PI interrupt service routine, JRST SSASV1 or SSASV2
+
+SSASV2::			; interrupt routine if 2 SA10s
+	MOVE T3,SAXSEL		; get last channel serviced
+	TRC T3,SSANSC		; switch to other SA10
+	XCT SAXCNI(T3)		; do a CONI
+	JXN T1,SA%PIR,SSASV9	; service interrupt if it wants it
+SSASV1::			; interrupt routine if only one SA10 
+	xct saxcni+0
+	jxn t1,sa%pir,ssasv9
+	xct saxcni+1
+	jxn t1,sa%pir,ssasv9
+	xct saxcni+2
+	jxn t1,sa%pir,ssasv9
+	xct saxcni+3
+	jxn t1,sa%pir,ssasv9
+	ret
+
+;	MOVE T3,SAXSEL		; get subchannel number
+;	XCT SAXCNI(T3)		; do a CONI
+;	JXE T1,SA%PIR,R		; return to PI routine if no interrupt request
+SSASV9:				; merging point of SSASV1,SSASV2
+	setz t3,
+;	MOVEM T3,SAXSEL		; remember channel serviced
+	MOVE T4,T1		; save the status
+	ANDX T1,SA%SFN		; only want status flags
+	JFFO T1,.+2		; find the first flag
+	IFSKP.
+	  ADDI T3,-^L<SA%SFN>(T2)  ; compute subchannel index
+	  MOVEM T3,SAXICH	; remember where interrupt came from
+	  SKIPE T2,SAXCDB(T3)	; get address of CDB for this channel
+	  IFSKP.
+	    BUG.(CHK,SSAUKC,PHYSA,HARD,<PHYSA - Interrupt from unknown channel>,<<T3,SUBCHN>,<T4,CONI>>)
+	    RET			; dismiss interrupt
+	  ENDIF.
+	  MOVEM P1,CDBSVQ(T2)	; save P1 where PHYSIO expects it
+	  MOVE P1,T2		; put CDB address in P1 for PHYSIO
+	  JRST PHYINT		; go to interrupt handler in PHYSIO
+	ENDIF.
+	LOAD T1,SA%PIA,T4	; Z80 interrupt, get current PIA
+	IORX T1,<FLD .IUCLR,IU.FCN> ; merge in clear Z80 interrupt function
+	XCT SAXCNO(T3)		; do the CONO
+	RETSKP			; done, dismiss interrupt
+	SUBTTL SAINGO - Initialization routine to start I/O
+
+; SAINGO - Routine to start I/O during initialization
+; [Note: Caller must worry about caching of channel program and I/O area.]
+; T1/ address of channel program 
+; T2/ 0 = do reset (else don't)
+; P1/ CDB
+;	CALL SAINGO
+; RETURNS +1: I/O unsuccessful
+;  T1-T4 destroyed
+; RETURNS +2: I/O successful
+;  T1-T4 destroyed
+
+SAINGO::SAVEQ			; Save some AC's
+	MOVE Q1,T1		; copy CP address
+	TXO Q1,TCH		; create transfer program
+	MOVE Q2,SSASCI(P1)	; Get subchannel index
+	MOVE Q3,SSABAS(P1)	; Get base address
+	IFE. T2			; Reset desired?
+	  CALL SSARST		; Reset subchannel, clear errors
+	  MOVX T1,4000		; some delay for the SA10 and channel
+	  SOJG T1,.		; Stall
+	ENDIF.
+	MOVX T3,4		; Try up to 4 times
+	DO.
+	  SETOM 1(Q3)		; Store phony SA10 status
+	  SETOM CDBCS1(P1)	; Store phony status for caller
+	  MOVE T1,Q1		; Get CP address
+	  CALL SSAGO		; Start the I/O
+	  MOVX T4,100000	; Lots of time to find the device
+	  DO.
+	    XCT SSACNI(P1)	; Get current conditions
+	    IFXN. T1,SA%MPE!SA%NXM ; Parity error or NXM?
+	      BUG.(CHK,SAIERR,PHYSA,HARD,<SAINGO - parity error or NXM>,<<T1,CONI>,<Q2,SUBCHN>>)
+	      SETZ T4,		; blow it away
+	    ENDIF.
+	    TDNN T1,BITS+^L<SA%SFN>(Q2) ; Status flag present?
+	     SOJG T4,TOP.	; No, go look again
+	  ENDDO.
+	  IFG. T4		; continue if not timed out yet
+	    DMOVE T1,1(Q3)	; Get SA10 status words
+	    DMOVEM T1,CDBCS1(P1) ; Save in CDB
+	    IFXE. T1,FLD(.S1SER!.S1BIP!.S1CSE,S1%CHS) ; Stop if "not found"
+	      JXE T1,FLD(.S1BSY!.S1CUE,S1%DVS),ENDLP. ; done if no transients
+	    ENDIF.
+	    MOVX T1,SA%CME!FLD(.SASTS,SA%FCN) ; clear status and errors
+	    XCT SSACN1(P1)	; do any setup
+	    XCT SSACNO(P1)	; Now clear them so we can try again
+	    SOJG T3,TOP.	; Try again if haven't tried too much
+	  ENDIF.
+	  SETZ T4,		; Indicate failure
+	ENDDO.
+	SETZM 0(Q3)		; clear channel dispatch
+	MOVX T1,SA%CME!FLD(.SASTS,SA%FCN) ; clear status and errors
+	XCT SSACN1(P1)		; do any setup
+	XCT SSACNO(P1)		; do clears
+	JUMPE T4,R		;"not found" return
+	RETSKP			; Win big
+	SUBTTL SSAGO - Start I/O
+
+; SSAGO - Start I/O on SA10 subchannel
+; P1/ CDB
+; T1/ TCH to Channel program, or Mux pointer (SA10 only)
+;	CALL SSAGO
+; RETURNS +1: Always
+;  T1 destroyed
+
+SSAGO::	SKIPE SSAFAF(P1)	; Is this an SA10?
+	IFSKP.
+	  MOVEM T1,@SSABAS(P1)	; Yes, store pointer
+	ENDIF.
+	MOVX T1,SA%SET!FLD(.SAGOF,SA%FCN) ; Request channel to execute cmd
+	XCT SSACN1(P1)		; do any setup
+	XCT SSACNO(P1)		; Go
+	RET			; Return
+	SUBTTL SSAALC - Allocate space in uncached page
+
+; SSAALC - Allocate uncached space
+; T1/ number of words needed
+; Returns +1: Failure - not enough space
+; Returns +2: Success
+;  T1/ Address of 1st word allocated
+
+SSAALC::SAVEAC <T2,T3>
+	MOVE T3,T1		; copy size to T3
+	HRLI T1,(T1)		; copy amount wanted to LH
+	ADD T1,SAXFRE		; calculate <-amt left>,,<new free>
+	JUMPGE T1,R		; fail if negative count goes positive
+	EXCH T1,SAXFRE		; set up new header, get address from old
+	HRRZS T2,T1		; address only, copy to T2
+	HRLI T2,1(T1)		; destination,,source
+	MOVSS T2		; source,,destination
+	ADDI T3,-1(T1)		; last address to clear in T3
+	SETZM (T1)		; clear block
+	BLT T2,(T3)
+	RETSKP			; Skip return for success
+	SUBTTL IU10 Parameters
+
+IU0==:440			; device code of first IU10
+IU1==:444
+
+; CONI/CONO bits
+
+IU.DFL==:MASKB(24,27)		; (CONI) channel done flags
+IU.INT==:1B28			; (CONI) interrupt
+IU.AOK==:1B29			; (CONI) OK (running, no reset pending)
+IU.DRQ==:1B30			; (CONI) data request
+IU.STA==:MASKB(31,32)		; (CONI) protocol state
+IU.FCN==:MASKB(28,32)		; (CONO) function code
+IU.CHN==:MASKB(31,32)		; (CONO) channel number in function code
+IU.PIA==:MASKB(33,35)		; PIA channel
+
+; DATAI/DATAO bits
+
+IU.GFL==:MASKB(24,27)		; (DATAI) channel go flags
+IU.DAT==:MASKB(28,35)		; data to/from IU10
+IU.DCH==:MASKB(29,30)		; channel number in commands which take it
+
+; Protocol state in CONI 
+
+.IUCWT==:0			; waiting for command
+.IUDWT==:1			; waiting for data
+.IUBZY==:2			; busy
+.IUDAT==:3			; data available for CPU
+
+; Function code in CONO
+
+.IUNOP==:1			; no-op
+.IUCLR==:4			; clear interrupt
+.IUSDR==:5			; set data request
+.IURST==:6			; reset all channels
+.IUERS==:7			; emergency reset
+.IUSGF==:10			; (+chnl#) set go
+.IUCDF==:14			; (+chnl#) clear done
+
+; Data (status code) in DATAI
+
+.IZOKB==:001			; good status
+.IZBPE==:020			; buffer parity error
+.IZCPE==:040			; control memory parity error
+
+; Data (command code) in DATAO
+
+.IZNOP==:000			; no-op
+.IZGO==:203			; initialize channel
+.IZRST==:204			; read status
+.IZRNN==:214			; read node number
+.IZSLR==:215			; selective reset
+	SUBTTL IU10 Support routines
+
+;  SAnCNI - Simulation for CONI SAn,T1.  This routine isn't as straightforward
+; as it could have been because it can be called from channel 5 unvectored
+; interrupt level where the stack is disgustingly short.  Consequently this
+; routine must be *very* conservative with its stack usage.  No SAVEAC is done,
+; so T1 (which is known to be the CONI address) and CX (saved by PISC5) are the
+; only two AC's available to us.
+
+SA1CNI::SKIPA T1,[IU1IOT]
+SA0CNI:: MOVEI T1,IU0IOT
+SANCNI:	STKVAR <SACONI,IUDATI,IUCONI>
+	SETZM SACONI		; initially no status
+	MOVX CX,^D2000
+	DO.
+	  XCT $IUSOK(T1)	; see if OK
+	   SOJG CX,TOP.		; no, wait some more
+	ENDDO.
+	IFG. CX			; got an okay?
+	  XCT $IUCNI(T1)	; do CONI IUn,IUCONI
+	  XCT $IUDTI(T1)	; do DATAI IUn,IUDATI
+	  IFQN. IU.INT,IUCONI	; is IU10 interrupt set?
+	    SETONE SA%PIR,SACONI ; yes, just set PIR
+	  ENDIF.
+	  LOAD T1,IU.PIA,IUCONI	; get PIA
+	  STOR T1,SA%PIA,SACONI	; save IU PIA as SA PIA
+	  LOAD T1,IU.DFL,IUCONI	; get channel done flags
+	  STOR T1,SA%SFN,SACONI	; set as status flags
+	  IFN. T1		; if any channels done
+	    SETONE SA%PIR,SACONI ; indicate interrupt requested
+	  ENDIF.
+	  LOAD T1,IU.GFL,IUDATI	; get go flags
+	  STOR T1,SA%GON,SACONI	; save them
+	  SETONE SA%IEN,SACONI	; interrupt enable is always set
+	ENDIF.
+	MOVE T1,SACONI		; get resulting status
+	RET			; and return to caller
+
+; Here to define the CONI instruction vectors
+
+	DEFINE IUXIOT (N) <
+IU'N'IOT:
+	PHASE 0
+$IUSOK:!CONSO IU'N',IU.AOK
+$IUCNI:!CONI IU'N',IUCONI
+$IUDTI:!DATAI IU'N',IUDATI
+	DEPHASE
+>; DEFINE IUXIOT
+
+	IUXIOT 0		; define vector for IU0
+	IUXIOT 1		; define vector for IU1
+
+	ENDSV.
+
+; SA0CNO - Simulation for CONO SA0,(T1)
+
+SA0CNO::TRVAR <SACONO,IUCONO,IUDATO>
+	SAVEAC <T1,T2>
+	HRLI T1,<(CONO IU0,)>	; set up CONO
+SANCNO:	CALL DOCONO		; interpret code
+	 XCT IUCONO		; success, hit it
+	RET			; return to caller
+
+; SA1CNO - Simulation for CONO SA1,(T1)
+
+SA1CNO::TRVAR <SACONO,IUCONO,IUDATO> ; ** must match SA0CNO **
+	SAVEAC <T1,T2>
+	HRLI T1,<(CONO IU1,)>	; set up CONO
+	JRST SANCNO
+
+; ... still under CONO TRVAR context
+;
+;  Common code to build a CONO via the IU10.  Warning: it is NOT "alright" to
+; do a SA%INI CONO except at system initialization or unless you are prepared
+; to do a .SARSC CONO right afterwards.  This is because unlike a real SA the
+; IU SA is stopped and the base address cleared by this function.
+;  Also, neither SA%INI nor .SARSC should be done with PI's on.
+; Returns +2 if no CONO should be done
+
+DOCONO:	HLLZM T1,IUCONO		; initially no conditions set
+	HRRZM T1,SACONO		; save CONO argument
+	IFXN. T1,SA%INI		; push the button?
+	  MOVX T1,.IURST	; yes, get reset all function
+	  STOR T1,IU.FCN,IUCONO	; set in command
+	  XCT IUCONO
+	  MOVX T1,^D2000	; timeout period
+	  MOVE T2,IUCONO	; get CONO word
+	  ANDX T2,774B9		; only want device code
+	  IOR T2,[CONSO .-.,IU.AOK] ; make CONSO out of it
+	  DO.
+	    XCT T2		; do CONSO
+	     SOJG T1,TOP.	; wait until okay
+	  ENDDO.
+	  IFG. T1		; make sure didn't time out
+	    MOVX T1,.IUCLR	; get clear interrupt code
+	    STOR T1,IU.FCN,IUCONO ; set in command
+	    XCT IUCONO
+	    MOVX T1,.IZNOP	; send a (bogus) no-op
+	    MOVE T2,IUCONO	; get CONO word
+	    ANDX T2,774B9	; only want device code
+	    IOR T2,[DATAO .-.,T1] ; make DATAO out of it
+	    XCT T2		; do DATAO
+	    LOAD T1,SA%PIA,SACONO ; get PIA
+	    STOR T1,IU.PIA,IUCONO ; okay to let it get set now
+	    CALL IU1DRW		; wait for DREQ to fall
+	  ANSKP.
+	    RETSKP		; and don't try to do anything more!
+	  ENDIF.
+	  SETZRO IU.PIA,IUCONO	; loser, don't let this IU have a PIA!
+	  MOVX T1,.IUNOP	; set up a NOP
+	  STOR T1,IU.FCN,IUCONO
+	  RET			; make sure this last CONO gets done
+	ENDIF.
+	LOAD T1,SA%PIA,SACONO	; get PIA
+	STOR T1,IU.PIA,IUCONO	; set it
+
+; . . .
+
+; . . .
+
+	LOAD T1,SA%FCN,SACONO	; get function code
+	CAIE T1,.SARSC		; reset subchannel?
+	IFSKP.
+	  STKVAR <BASADR>
+	  LOAD T2,SA%CHN,SACONO	; get subchannel
+	  LDB T1,[POINT 7,IUCONO,9] ; get IU10 device code
+	  LSH T1,2		; offset it properly
+	  SUBI T1,IU0
+	  ADDI T1,(T2)		; make SA10 channel number
+	  MOVE T1,SAXBAS(T1)	; and base address from that
+	  MOVEM T1,BASADR
+	  MOVX T1,.IZGO		; get a GO command
+	  STOR T2,IU.DCH,T1	; set channel number in GO
+	  CALL IU1SNC		; send it down
+	  IFSKP.
+	    LDB T1,[POINT 8,BASADR,35] ; send three bytes of channel base addr
+	    CALL IU1SND
+	  ANSKP.
+	    LDB T1,[POINT 8,BASADR,27] ; second byte
+	    CALL IU1SND
+	  ANSKP.
+	    LDB T1,[POINT 8,BASADR,19] ; third byte
+	    CALL IU1SND
+	  ANSKP.
+	    CALL IU1CWT		; wait for protocol to return done
+	  ANSKP.
+	    MOVX T1,.IUCLR	; get clear interrupt code
+	    STOR T1,IU.FCN,IUCONO ; set in command
+	    XCT IUCONO		; now do it
+	    MOVX T1,.IZRST	; read status
+	    LOAD T2,SA%CHN,SACONO ; get subchannel
+	    STOR T2,IU.DCH,T1	; set it
+	    CALL IU1SNC		; do it!
+	  ANSKP.
+	    CALL IU1DWT		; wait for it to complete
+	  ANSKP.
+	    MOVE T2,IUCONO	; get IOT
+	    ANDX T2,774B9	; only want device code
+	    IOR T2,[DATAI .-.,T1] ; make DATAI
+	    XCT T2		; get status
+	    LOAD T1,IU.DAT,T1	; get status back
+	    MOVEM T1,BASADR	; Save status for a moment
+	    CALL IU1DRW		; Wait for DREQ to fall
+	  ANSKP.
+	    MOVE T1,BASADR	; Get the status back
+	    CAIE T1,.IZOKB	; got good status?
+	  ANSKP.
+
+; . . .
+
+; . . .
+
+	  ELSE.			; here the channel is sick sick sick
+	    LOAD T2,SA%CHN,SACONO ; failed, get subchannel number
+	    LDB T1,[POINT 7,IUCONO,9] ; get IU10 device code
+	    LSH T1,2		; offset it properly
+	    SUBI T1,IU0
+	    ADDI T1,(T2)	; make SA10 channel number
+	    MOVX T2,<SETZ T1,>	; CONI T1 now just zeros T1
+	    MOVEM T2,SAXCNI(T1)
+	    MOVX T2,<NOP>	; CONO now does nothing
+	    MOVEM T2,SAXCNO(T1)
+	  ENDIF.
+	  RETSKP		; return, doing nothing more
+
+	  ENDSV.		; exit STKVAR BASADR context
+	ENDIF.
+	CAIE T1,.SAGOF		; frob GO flag?
+	IFSKP.
+	ANDQN. SA%SET,SACONO	; yes, better be setting it!
+	  LOAD T1,SA%CHN,SACONO	; we are, get subchannel to set
+	  ADDI T1,.IUSGF	; make into appropriate set GO command
+	  STOR T1,IU.FCN,IUCONO	; store resulting function
+	  RET
+	ENDIF.
+	CAIE T1,.SASTS
+	IFSKP.
+	ANDQE. SA%SET,SACONO	; yes, better not be setting it!
+	  LOAD T1,SA%CHN,SACONO	; we aren't, get subchannel to set
+	  ADDI T1,.IUCDF	; make into appropriate clear DONE command
+	  STOR T1,IU.FCN,IUCONO	; store resulting function
+	  RET
+	ENDIF.
+	CAIE T1,.SAPIE		; set interrupt enables?
+	 CAIN T1,.SANOP		; or no-op?
+	IFNSK.
+	  MOVX T1,.IUNOP	; yes, get no-op code
+	  STOR T1,IU.FCN,IUCONO	; set in command
+	  RET
+	ENDIF.
+	BUG.(HLT,SSABGC,PHYSA,HARD,<PHYSA - bogus CONO>,<<SACONO,CONOFN>>)
+	RET
+	SUBTTL IU10 protocol transmit/receive
+
+; ... still under CONO TRVAR context
+
+; Routine to send IU10 protocol command
+; Accepts: T1/ protocol byte to send
+;	CALL IU1SNC for command, CALL IU1SND for data
+; Returns: +1 Failure
+;	   +2 Success
+
+IU1SNC:	TDZA T2,T2		; .IUCWT=0 so eqv to SKIPA T2,[.IUCWT]
+IU1SND:	 MOVX T2,.IUDWT		; waiting for data
+	STKVAR <STATE>
+	MOVEM T2,STATE		; save desired protocol state
+	MOVE T2,IUCONO		; get CONO word
+	ANDX T2,774B9		; only want device code
+	IOR T2,[CONI .-.,T2]	; make CONI out of it
+	XCT T2			; do CONI
+	TXNE T2,IU.AOK		; protocol ok?
+	 TXNE T2,IU.DRQ		; yes, data request?
+	  RET			; protocol lost or data request
+	LOAD T2,IU.STA,T2	; get protocol state
+	CAME T2,STATE		; waiting for command?
+	 RET			; no, complain
+	MOVE T2,IUCONO		; get CONO word
+	ANDX T2,774B9		; only want device code
+	IOR T2,[DATAO .-.,T1]	; make DATAO out of it
+	XCT T2			; do DATAO
+	CALLRET IU1DRW
+
+	ENDSV.
+
+; ... still under CONO TRVAR context
+
+; Routine to wait for IU10 DREQ to fall
+;	CALL IU1DRW
+; Returns: +1 Failure
+;	   +2 Success
+
+IU1DRW:	MOVX T1,.IUSDR		; get set DREQ
+	STOR T1,IU.FCN,IUCONO	; set in command
+	XCT IUCONO
+	MOVX T1,^D2000		; this long to wait
+	MOVE T2,IUCONO		; get CONO word
+	ANDX T2,774B9		; only want device code
+	IOR T2,[CONSZ .-.,IU.DRQ] ; make CONSZ out of it
+	DO.
+	  XCT T2		; do CONSZ
+	   SOJG T1,TOP.
+	ENDDO.
+	XORX T2,IU.DRQ!IU.AOK	; now check for OK status
+	XCT T2
+	 JUMPG T1,RSKP		; and that it said it was done
+	RET			; no to either, indicate lossage
+
+; ... still under CONO TRVAR context
+
+; Routine to wait for IU10 protocol command to complete
+;	CALL IU1CWT or CALL IU1DWT
+; Returns: +1 Failure
+;	   +2 Success
+
+IU1DWT:	SKIPA T1,[IU.AOK!<FLD .IUDAT,IU.STA>] ; data wait
+IU1CWT:	 MOVX T1,IU.AOK!<FLD .IUCWT,IU.STA> ; command wait
+	STKVAR <WAITCN>
+	MOVEM T1,WAITCN
+;	MOVEI T2,^D25000	; wait at last 50 ms
+	MOVSI T2,1		; KOO's change
+	DO.
+	  MOVE T1,IUCONO	; get CONO word
+	  ANDX T1,774B9		; only want device code
+	  IOR T1,[CONI .-.,T1]	; make CONI out of it
+	  XCT T1		; do CONI
+	  ANDX T1,IU.AOK!IU.DRQ!IU.STA ; only look at OK, DREQ, state
+	  CAMN T1,WAITCN	; wait condition satisfied?
+	  IFSKP.
+	    SKIPLE T2		; give up if already timed out
+	     CAIE T1,IU.AOK!<FLD .IUBZY,IU.STA> ; busy?
+	      SOJA T2,R		; error if not
+	    MOVE T1,IUCONO	; get CONO word
+	    ANDX T1,774B9	; only want device code
+	    IOR T1,[CONSO .-.,IU.INT] ; make CONSZ out of it
+	    DO.
+	      XCT T1		; do the CONSZ
+	       SOJG T2,TOP.	; not yet
+	    ENDDO.
+	    LOOP.		; interrupt or timeout, take another look
+	  ENDIF.
+	ENDDO.
+	RETSKP
+
+	ENDSV.
+
+	ENDTV.			; leave CONO TRVAR context
+
+	TNXEND
+	END

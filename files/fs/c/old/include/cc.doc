@@ -1,0 +1,1072 @@
+			KCC USER DOCUMENTATION
+<About KCC>
+
+KCC is a compiler for the C language on the PDP-10.  It was originally
+begun by Kok Chen of Stanford University around 1981 (hence the name
+"KCC"), and has had many improvements made to it since then by a
+number of people at Stanford, Columbia, and SRI.  It implements C as
+described by the following references:
+	H&S: Harbison and Steele, "C: A Reference Manual",
+		Prentice-Hall, 1984, ISBN 0-13-110008-4
+	K&R: Kernighan and Ritchie, "The C Programming Language",
+		Prentice-Hall, 1978, ISBN 0-13-110163-3
+
+Currently KCC is only supported for TOPS-20, although there is no reason
+it cannot be used for other PDP-10 systems or processors, if the need
+arises.  The remaining discussion assumes you are on a TOPS-20 system.
+
+Assuming that the EXEC at your site has been modified to know about KCC,
+you can use the compiler simply by typing:
+	@COMPILE PROGRAM.C
+
+Alternatively, if you want to do something more complicated, or if you
+are more comfortable with the UN*X way of doing things, you can invoke
+it directly:
+	@CC [switches] program
+
+The command line is interpreted in a fashion similar to UN*X.  However,
+if no extension is given in the file specification, the file with a
+".C" extension is first searched for.  If unsuccessful, the filename
+as specified is then searched for.
+
+If none of -c, -E, or -S are given as switches, LINK will be invoked
+after compilation and an executable file (*.EXE) produced.
+
+<Compiler switches>
+
+	The KCC compiler switches are intended to resemble those of the
+UN*X "cc" command as closely as possible.  If you are familiar with these,
+you can probably use KCC instinctively.  The command line is broken up into
+argument strings each separated by a space (NOT by a comma).  If an argument
+string starts with a "-", it is a switch, otherwise it is a filename.
+
+	The ordering of switches and filenames does not matter; all
+switches are processed before compiling starts.  However, filenames
+will be compiled in the order given, and -I switch directories will
+also be scanned in the order given.
+
+	It is possible to specify KCC switches while giving a
+COMPILE-class command to the EXEC, if your EXEC recognizes the switch
+/LANGUAGE-SWITCHES.  The argument to this EXEC switch should be a
+double-quoted string which starts with a space.  For example:
+	@compile foo /laNGUAGE-SWITCHES:" -m -d=sym"
+
+The following are the available compiler switches.  Those marked with
+a "*" are specific to KCC; otherwise they are the same as the UN*X CC.
+
+  -c	Compile and assemble, but don't link (produce *.REL)
+  -C	Don't flush comments in preprocessor (only useful with -E)
+* -d	Debugging output.  Same as -d=all.  Generates many debug files.
+* -d=<fs>	Debugging fine-tuning.
+	<fs> are flag names of particular kinds of debug output files.
+	The names can be abbreviated.  Prefixing the name with a
+	'+' turns it on; '-' turns it off.  All flags are initially
+	assumed off.  Current flags are:
+		parse	Parse tree output (*.DEB)
+		pho	Peep-Hole Optimizer output (*.PHO) - Huge!!!
+		sym	Symbol table output (*.SYM)
+		all	All of the above
+	E.g. "-d=parse+sym" == "-d=all-pho"
+  -D	Define following ident to "1" or string after '='.
+	Several of these may be specified.
+  -E	Run source only through preprocessor, to standard output.
+* -H	Give file name for assembly header included at start of output.
+  -I	Supply default path for doublequoted #include files.
+	Several of these may be specified, and will be searched in
+	that order.
+  -l<lib>	Specify library filename for loader.  NOT IMPLEMENTED YET.
+* -m	Use MACRO rather than FAIL.  Semi-obsolete, same as -x=macro.
+  -O	Optimize (no-op, defaults on).  Same as -O=all.
+* -O=<fs>	Optimization fine-tuning.  Mainly for debugging.
+	<fs> are flag names of particular kinds of optimizations.
+	The names can be abbreviated.  Prefixing the name with a '+' turns
+	it on; '-' turns it off.  All flags are initially assumed off,
+	so to ask for no optimization use -O= (same as -O=-all).
+	Current flags are:
+		parse	Parse tree optimization
+		gen	Code generator optimizations
+		object	Object code (peephole) optimizations
+		all	All of the above
+	E.g. "-O=parse+gen" == "-O=all-object"
+  -o file	Specify output filename.  NOT IMPLEMENTED YET.
+  -S	Don't assemble (produce *.FAI or *.MAC, plus *.PRE)
+  -U	Undefine following identifier.  All -U switches are processed before
+		any -D switches.  Only __FILE__ and __LINE__ are predefined.
+* -v	Verbose - give statistics for run.
+  -w	Don't type out warnings.
+* -x=<fs>	Cross-compile switches.  Several switches may be given in
+	a format similar to that for -d and -O.  The <fs> flags
+	specify an aspect of the "target machine" that the
+	code should be compiled for:
+		Target System: tops20, tops10, waits, tenex, its
+		Target CPU: ka, ki, kl
+		Target Assembler: fail, macro, midas
+		Target char size: ch7	(to compile with 7-bit chars)
+	e.g. "-x=ka+tenex".  See "Cross-compiling".
+
+Obsolete features:
+
+	The following switches and interpretations are obsolete.  They will
+likely be flushed altogether, but are documented here for historical reasons:
+
+	* -a	same as -x=ka (target is KA-10)
+	* -A	same as -x=kl (target is KL-10)
+	* -n	same as -O= (no optimization)
+	* -s	same as -d=sym (output *.SYM symbol table dump)
+
+	It used to be a feature that "simple" switches, which did not take any
+arguments, could be lumped together into a single switch string.
+For example,
+	@CC -mS test
+would produce an unassembled MACRO source file from TEST.C, just as will
+	@CC -m -S test
+However, use of this feature is discouraged; the confusion and inconsistency
+don't seem to be worth it.
+
+<Command line interpretation>
+
+Command line arguments can be passed to the main() function from the
+EXEC or monitor in the UN*X fashion.  If you have compiled your source
+files, linked them, and saved them into a file called FOO.EXE, then
+invoking FOO by:
+		@FOO one two
+will pass an argument vector to main() consisting of "FOO", "one", and
+"two".  Note that arguments are separated by blanks and not by commas.
+
+I/O redirection is also supported by the runtime routines upon startup.
+Thus:
+		@FOO >bar
+will route all stdout output to the file "bar".
+		@FOO <bletch
+will take all stdin inputs from the file "bletch".
+
+However,
+		@FOO <bar>bletch
+on TOPS-20 will pass "<bar>bletch" as an argument to FOO.  On some
+TOPS-20 machines, pipes are also supported, so you can type
+		@FOO | BAZ
+to have the stdout of FOO redirected to the stdin of BAZ.
+
+<C as implemented by KCC>
+
+	KCC is intended to conform to the description of C as
+specified by Harbison & Steele's "C: A Reference Manual".  It is
+strongly recommended that all C programmers use this book in preference
+to Kernighan & Ritchie.  When the ANSI C standard becomes more concrete,
+KCC will likewise conform to this standard.
+
+	The next several pages document KCC's implementation of C by
+following the general ordering of H&S and pointing out aspects where
+KCC differs or describing which of several optional behaviors KCC
+implements.
+
+<KCC Lexical Elements>		[H&S 2, "Lexical Elements"]
+
+	KCC uses the US ASCII character set.  There is provision for
+using a separate target character set, different from the source set,
+but currently the only such is a target set for WAITS ASCII.
+
+	KCC has no maximum line length.  Error messages will only quote
+part of an offending line if it is longer than 80 characters.
+
+	KCC is standard in that nested comments are not supported.  If
+the sequence "/*" is seen within a comment, a warning message will be
+printed just in case the user neglected to terminate the previous
+comment.
+
+<Identifier names>
+
+	KCC adheres to the standard definition of C identifier syntax,
+allowing the character "_", the letters A-Z and a-z, and the digits
+0-9 as valid identifier characters.  Identifiers may have any length,
+but only the first 19 characters (case sensitive) are unique during
+compilation.  This applies to all of the following name spaces (as
+per H&S 4.2.4):
+	Macro names
+	Statement labels
+	Structure, union, and enum tags
+	Component (member) names
+	Ordinary names:
+		Enum constants and typedef names.
+		Variables (see discussion of storage classes).
+
+	However, the situation is different for symbols which must be
+exported to the PDP-10 linker.  Such names are truncated to 6
+characters and case is no longer significant.  The character '_'
+(underscore) is transformed into '.' (period); the PDP-10 software
+allows the additional symbol characters '$' and '%', but there is no
+way to generate these with C unless special provision is made (see
+#asm).  See the discussion of exported symbols.
+
+<Reserved Words>
+	KCC reserves the identifier "entry" in certain special
+circumstances - see discussion of libraries and entries.
+
+<Constants>
+
+	The types "int" and "long" are the same -- one PDP-10 word of
+36 bits, with the high bit a sign bit.  Thus, the largest positive integer
+constant is 0377777777777, or 34,359,738,368.
+	The type "double" is represented by a PDP-10 hardware format
+standard range double precision number (two words).  On KA processors
+the format is slightly different.  The decimal range is from 1.5e-39
+to 1.7e38, with eighteen digits of precision.
+	Character constants have type "int".  Multicharacter constants
+are non-standard and not supported.  Because characters are 9-bit bytes,
+numeric escape code values can range from '\0' to '\777'.  Hexadecimal
+character constants are not permitted.
+
+<Preprocessor directives>	[H&S 3, "The C Preprocessor"]
+
+All standard C preprocessor directives are supported as described in
+Harbison and Steele, including #elif and the "defined" operator.  This
+page specifies how KCC behaves for situations which are implementation
+dependent.
+
+Lexical Conventions: [H&S 3.2]
+	Preprocessor commands must have '#' as the first character on
+the line; whitespace cannot precede it.  KCC allows whitespace between
+the '#' and the command name (this is non-portable).  Formal parameter
+names ARE recognized within character and string constants in macro
+body definitions.  Comments are treated as whitespace and not passed
+on to anything else; however, KCC will print a "Nested comment"
+warning if it encounters a comment which contains "/*".  This serves both
+to catch slightly non-portable usage (see H&S 2.2 p.12) and to detect
+places where the user may have accidentally omitted a "*/".
+
+Defining Macros: [H&S 3.3]
+	When defining a macro, formal parameter names are recognized
+within string and character constants, and therefore no check is made
+for lexical correctness of such constants; this may change.  Any
+comments and whitespace in the macro body are replaced by a single
+space.  KCC permits an argument token list (arguments to a macro call)
+to extend over multiple lines.  Arguments to a call are converted in a
+fashion similar to that for macro bodies -- comments and whitespace
+are replaced by a single space.  Newlines within an argument list are
+also considered whitespace.  However, string and character constants
+in arguments are treated as tokens, and their contents are not scanned
+for macro names.
+
+Predefined Macros: [H&S 3.3.4]
+	__LINE__ expands into the current decimal line number.
+	__FILE__ expands into the current source filename.
+These macros are furnished for compatibility with 4.2BSD.
+There are no other predefined macros.  Use the file <c-env.h> for
+standard KCC environment definitions.
+
+Undefining and Redefining Macros: [H&S 3.3.5]
+	It is not an error to redefine an already defined macro, but a
+warning message will be output unless the new macro definition is the
+same as the old definition; i.e. redundant definitions are allowed.
+There is no macro definition stack, i.e. definitions are not
+pushed/popped by #define/#undef.  Attempting to define a macro named
+"defined" will cause an error, since otherwise it would conflict with
+the "defined" operator.
+
+File Inclusion: [H&S 3.4]
+	Included files may be nested to 10 levels.  Macro expansion
+is done on the line if the filename does not start with '<' or '"'.
+Filenames may contain '>' or '"' characters.
+#include <filename> looks only in the standard directory.
+#include "filename" looks first in DSK:, then in the -I paths in order
+	of specification (left to right), then in the standard directory.
+The standard directory for include files is C: on TOPS-20, <KC> on
+TENEX, and [SYS,KCC] on WAITS, but this is site dependent in any case.
+
+Conditional Compilation: [H&S 3.5] #if,#else,#endif,#elif,#ifdef,#ifndef
+	The "defined" operator is recognized only within #if and #elif
+expressions; note that neither #elif nor "defined" are in K&R, and
+H&S is used as the reference here.  Within the body of a failing
+conditional, only other conditional commands are recognized; all others,
+even illegal commands, are ignored.
+
+Explicit Line Numbering: [H&S 3.6] #line
+	The information from #line will be used in KCC error messages.
+Macro expansion is performed on the line.  Like all other
+preprocessor commands, #line is eliminated and not passed on when
+using the -E switch.  With regard to "#" alone at the start of a line,
+remember that whitespace is allowed between the "#" and the command
+name, thus KCC will not recognize a "#" alone as a synonym for "#line".
+If there is no command name, the line is simply ignored without error.
+
+KCC-specific Commands:
+	#asm, #endasm
+	These two commands cause the text delimited by them to be
+macro-expanded (as for -E) and sent straight through into the output
+assembly language file.  This currently only works outside functions.
+This feature is very likely to change, and should only be used where
+absolutely necessary.  Keep the code simple, as someday KCC may want
+to parse it.
+
+<Storage classes>		[H&S 4.3  "Storage Class Specifiers"]
+
+KCC implements the standard storage classes of auto, extern, register,
+static, and typedef (H&S sec 4.3), with the following notes:
+
+REGISTER declarations are currently equivalent to AUTO.  KCC does not
+assign variables to registers, and optimizations are performed without
+using the "hint" given by REGISTER.  AUTO variables are almost always
+more efficient, and in any case they are easier to implement.
+
+KCC uses the "omitted-EXTERN" solution to deal with the question of
+top-level definitions versus references (H&S sec 4.8.1).  That is,
+omitting "extern" from a top-level declaration has the effect of
+indicating that this is a defining declaration rather than a referencing
+declaration.
+
+Duplicate Declarations:
+	As per H&S 4.2.5, KCC permits any number of external
+referencing declarations, if the types are the same.  However, because
+KCC treats omitted-extern declarations as defining declarations, these
+references must all have an explicit "extern".  Likewise, an external
+reference may be later followed by a defining declaration.
+	KCC has additional special handling for declarations of
+functions, because it can always be determined whether a function
+declaration is a reference or a definition.  Any number of "static"
+referencing declarations are allowed.  Conflicts are resolved as
+follows: If an implicit external reference is followed by a static
+reference or definition, KCC will assume the function is static.  It
+is an error if the first reference has an explicit "extern".  It is
+also an error if a static reference is followed by an external
+reference or definition.  In either case compilation proceeds as if
+the function was static.
+
+<Initializers>				[H&S 4.6 "Initializers"]
+
+	KCC adheres to H&S in all required respects.  The following
+notes cover points which H&S describes as implementation dependent:
+
+Optional braces are allowed for all non-aggregate initializers.  It is
+permitted to drop braces from initializer lists under the rules described
+in H&S 4.6.9, but KCC attempts to perform extremely stringent checking on
+the "shape" of initializers, and will complain about too many or too few
+braces.
+
+FLOATING-POINT initializers may be of any arithmetic type.  KCC performs
+compile-time floating-point arithmetic, so initializers for static and
+external variables may use any constant arithmetic expression.
+
+POINTER initializers, as described in H&S, must evaluate to an integer or
+to an address plus (or minus) an integer constant.
+
+ARRAY initializers are currently not allowed for automatic arrays.
+This may change.
+
+ENUMERATION initializers may use any integer (as well as enum) expression.
+
+STRUCTURE initializers can initialize bit fields with any integer expression.
+As for arrays, automatic and register structures cannot be initialized.
+
+UNIONS currently cannot be initialized.  This may change.
+
+<Exported symbols>			[H&S 4.8 "External Names"]
+
+Symbols which are exported to the assembler file have special restrictions
+imposed by current PDP-10 software, which only recognizes 6-character
+symbols from the set A-Z, 0-9, '.', '$', and '%'.  In particular, case
+is not significant.
+
+Also, there is a distinction between symbols exported only to the assembler
+and those exported both to the assembler and the linker.  While there is
+technically no reason that any symbol has to be given to the assembler if
+it is not also meant for the linker, in practice it is convenient for
+debugging to have some "local" symbol definitions available so that DDT
+can access them.
+
+Here is a breakdown of export status by storage class:
+
+typedef	 = Exports nothing.  (Not a real storage class)
+auto	 = Exports nothing.  (Local stack variables use an internal offset)
+register = Exports nothing.
+static	 = If not global scope (i.e. is within a block) then nothing exported;
+		an internally-generated label is used.
+	If global (top-level, within no block) then exported to assembler only.
+		A label is made, but no INTERN or ENTRY statement.
+extern	 = Always exported to both assembler and linker.
+	 Omitted-extern:  a DEFINITION.  A label, INTERN, and ENTRY are output.
+	 Explicit-extern: a REFERENCE.  An EXTERN statement is output, but only
+		if the symbol is actually referenced by the code.
+
+Omitted-Extern:
+	External declarations with no "extern" storage class
+explicitly given are assumed to be external DEFINITIONS.  A defined
+extern symbol will have its own label, plus an INTERN statement
+telling the assembler that this is an externally visible symbol, plus
+an ENTRY statement which allows library routine search to find this
+symbol.  ENTRY statements will be put into the .PRE output file rather
+than the main output file, since the assembler will need to scan them
+prior to anything else.
+
+Explicit-Extern:
+	If an "extern" is explicitly given, the compiler assumes that
+it is simply a REFERENCE.  Nothing will be done unless the symbol is
+actually referenced by the code, in which case an EXTERN line will be
+generated in the assembler output for that file.  The reason for the
+reference count check is that each assembler EXTERN constitutes a
+library search request which must be satisfied by a module with the
+corresponding symbol declared as an ENTRY.  Unless this is only done
+for actual references, the many superfluous declarations found in *.h
+files will tend to cause many unneeded library modules to be loaded.
+
+Static symbols:
+	Note that global static symbols are passed on to the assembler
+even though this is not necessary; an internally-generated label could
+be used just as well.  The main reason this is done is to facilitate
+debugging with DDT, otherwise it could be difficult to identify static
+functions when looking at the machine instructions.  This may cause
+problems if identifiers which are otherwise distinct become identical
+as a result of the conversion to a 6-char PDP-10 symbol.
+
+However, a symbol declared static within a given source file will
+never be visible from another file that you may link later with it.  For
+example, a function declared as
+
+	static char *function()
+	{
+	   ...
+	}
+
+will only be visible from other functions within the same source file.
+This allows several modules to have functions with the same name
+modulo the six character limit, as long as no two of the functions are
+both extern.  It is STRONGLY recommended for multi-module programs
+that you declare as many functions as possible to be "static".
+
+<Libraries and Entries>
+
+REL files to be converted by MAKLIB into object libraries must have
+any external symbols declared with ENTRY rather than merely INTERNing
+them, and this declaration must be at the start of the REL file.  In
+order to do this, KCC generates a *.PRE "prefix" output file in
+addition to the *.FAI or *.MAC output file, and invokes the assembler
+in such a way that the PRE file is assembled before the main file.
+This file contains ENTRY statements and any other predeclarations that
+are needed before the assembler sees the actual code.  Normally the
+user will never see this file, but if the -S switch is used then it
+will be left around as well as the FAI/MAC file.  Note that if running
+the assembler manually on the FAI/MAC file, you must invoke it with
+a command line like this:
+	[@]FAIL				[@]MACRO
+	[*]FOO=FOO.PRE,FOO.FAI		[*]FOO=FOO.PRE,FOO.MAC
+
+
+COMPATIBILITY INFO:
+	For compatibility, KCC will continue to recognize an "entry"
+keyword for some time to come.  The following describes the obsolete
+syntax:
+
+To declare an entry, use the "entry" keyword at the start of the source,
+before any other declarations:
+
+    "entry" ident ["," ident ...] ";"
+
+i.e., the keyword "entry", followed by a list of identifiers separated
+by commas, followed by a semicolon.  This is passed on essentially
+verbatim to the assembler, and has no other affect on compilation.  It
+should be used at the start of any runtimes or other file intended for
+a library, on all variables and functions that should be visible as
+entries in the library.
+
+Note that it should still be safe to use "entry" as a non-keyword; if
+used other than at the start of the file it will be treated like any
+other normal identifier.
+
+To repeat: the "entry" statement is no longer necessary.  It should not
+be used in new code, and should be removed from old code.
+
+<KCC Types>				[H&S 5 "Types"]
+
+STORAGE UNITS:
+	A KCC storage unit (what "sizeof" returns) is a 9-bit byte, and
+there are 4 of these in each 36-bit PDP-10 word, ordered left to right.
+
+INTEGERS:
+	The types "short", "int", and "long" are all equivalent and
+all use one PDP-10 word.  Someday shorts may be implemented as
+halfwords instead of full words.  A single variable declared as "char"
+is also a full word; only when chars are packed into an array are they
+stored as 9-bit bytes, left to right within each word.  Note that the
+chars of a string constant are packed in 7-bit form, 5 to a word (ASCIZ
+format).
+
+UNSIGNED INTEGERS:
+	Currently the only difference between signed and unsigned
+integer types is that the right shift operator ">>" uses the LSH (logical
+shift) instruction for unsigned operands, and ASH (arithmetic shift)
+for signed operands.  That is, sign bit propagation is only done for
+signed types.  The left-shift operator "<<" always uses LSH.
+	Unsignedness is only guaranteed for values within the low 35
+bits; if the sign bit is set, the code will not work as you expect.
+In particular, comparisons will be wrong.  This is because the
+instructions needed to implement unsigned operators for a full 36-bit
+word are much slower than those needed for signed operators, and 35
+bits should be adequate for all foreseeable purposes.
+
+CHARACTER:
+	The "char" type is unsigned and no sign extension is done
+when extracting a char from an array.  Normally a char is 9 bits,
+although it is possible to compile code using a 7-bit assumption
+(see the section on char pointer hints).
+
+
+FLOATING-POINT:
+	The "float" type is represented by one word in the PDP-10
+single precision floating point format; there is one bit of sign, 8
+bits of exponent, and 27 bits of mantissa.  The "double" type uses two
+words in the double precision format.  (Note that for the KA-10 this is
+a software format rather than the more usual hardware format.)  The
+exponent range is approximately 1.5e-39 to 1.7e38 in both formats;
+single precision has about 8 significant digits and double precision
+has 18.  See a PDP-10 hardware reference manual for details.
+	The (double) type can represent all values of (long).  That
+is, conversion of a (long) to a (double) and back to (long) results in
+exactly the original value.
+
+POINTERS:
+	Pointers are always a single word, but can have two different
+formats.  Pointers to char arrays, or bit fields, are PDP-10 byte
+pointers (local or one-word global); pointers to all other objects are
+PDP-10 global word addresses.  Byte pointers point to the byte itself
+rather than to the preceding byte, thus LDB instead of ILDB is done
+to fetch the byte.
+	It is very important to ensure that functions which return
+values of (char *) be properly declared; likewise, any function
+arguments which are expected to be (char *) must be cast to this if
+necessary.  Operations which expect a char pointer will not work
+properly when given a word pointer, and vice versa.  See the section
+on "pointer hints" near the end of this file for additional information.
+	The "NULL" pointer is represented internally as a zero word,
+i.e. the same representation as the integer value 0, regardless of
+the type of the pointer.  The PDP-10 address 0 (AC 0) is zeroed and
+never used by KCC, in order to help catch any use of NULL pointers.
+
+ARRAYS:
+	The only special thing about arrays is that arrays of chars
+consist of 9-bit bytes packed 4 to a word; all other objects occupy
+at least one word.
+
+ENUMERATIONS:
+	KCC treats enumeration types simply as integers.  In the words
+of H&S 5.6.1, KCC uses the "integer model" of enumerations.  This may
+change but probably will not.
+
+STRUCTURES and UNIONS:
+	Structures and unions are always word-aligned and occupy a
+whole number of words.  Note that adjacent "char" types use separate
+words; they are only packed together for arrays.  Structures and
+unions may be assigned, passed as function parameters, and returned
+as function values.
+	Bit fields are implemented; the maximum size of a bit field is
+36 bits.  Fields are packed left to right, conforming to the PDP-10
+byte ordering convention.  It's too bad that C does not allow pointers
+to bit fields, because the PDP-10 byte pointer instructions are
+perfectly suited to this application!
+
+FUNCTIONS:
+	As per H&S.  A pointer to a function is simply a word address.
+For the gory details of function calls and stack usage, see the
+"Internals" section.
+
+TYPEDEFS:
+	As per H&S.  With regard to 5.11.1, KCC has no problems with
+redefining typedef names in inner blocks.
+
+<KCC Type Conversions>			[H&S 6 "Type Conversions"]
+
+	There are no representation changes when converting any
+integer type to any other integer type, since all are two's-complement
+and occupy a single word.  The exception is characters which are
+fetched from or stored into arrays; fetching does not extend the sign
+bit, and storing simply truncates.
+
+	A cast to (char *) of a word pointer (pointer to int, float,
+struct etc) produces a byte pointer that points to the leftmost 9-bit
+byte that would have occupied the word pointed to by the int pointer.
+The exception to this is that (char *) (int *) NULL remains zero.
+
+	A cast to (int *) of a char pointer produces an address that
+points to the word that the char in which the char pointer is pointed
+to occupies.  Converting a char pointer into an int pointer is
+slightly slower than the reverse transformation.  Again, casting NULL
+(zero) doesn't change it.
+
+	A cast to (float) of an int may lose some precision.  (double)
+will always retain the exact value of the integer, which can be
+restored to its original value by converting back to (int).
+
+	KCC permits any casting conversion during an assignment, but
+will complain about the implied cast if the conversion is not one of
+the legal assignment conversions.
+
+	KCC does not currently provide an option for suppressing
+the automatic conversion of (float) to (double).  Unless both operands
+are (float), all floating-point arithmetic is double-precision.
+
+<Expressions>				[H&S 7 "Expressions"]
+
+As per H&S, with the following notes:
+
+[7.2.3] Overflow and underflow are neither noticed nor handled.  The result is
+whatever the PDP-10 hardware gives in those cases.
+
+[7.3.3] KCC correctly does not use parentheses to force the usual
+unary conversions.
+
+[7.3.5] KCC has trouble with component selection for structures
+returned from functions, when the component is an array.  "f().a" will
+work and will select component "a" of the returned structure, but it
+is not possible to do "f().array[i]".  This will be fixed someday.
+
+[7.3.6] KCC correctly does not allow formal parameters of type "function",
+so the issue of converting this type does not arise.
+	KCC does not currently do any checking to see if the types of
+the arguments match the types of the parameters for the called
+function.  KCC also does not issue any warnings about discarded function
+return values.
+
+[7.4.1] Casts - KCC does implement "narrowing" casts for floating point, but
+currently has no similar casts for integers, because all integer types
+are the same size.  The peculiar nature of chars muddies the issue,
+however.  For the record, it does not work to say "(char)077777" (that
+is, the result is 077777 rather than 0777).  This will probably someday
+be fixed up.
+
+[7.4.2] "sizeof" - the result of "sizeof" currently has type (int).
+This is far more than adequate for any possible size value.
+
+[7.4.6] '&' - Attempting to apply '&' to a "register" variable
+simply causes KCC to issue a warning message and force the variable to
+class "auto".  KCC does not permit '&' to be applied to array or
+function names.
+
+[7.4.7] '*' - Applying the indirection operator to a null pointer (0)
+simply retrieves (or sets) the contents of AC 0, which should always
+be zero if nothing accidentally sets it.
+
+[7.5.1] '*','/','%' -
+	Division by zero is a no-op; the value will be that of the dividend.
+Truncation is always toward zero whether the operands are negative or
+not.  That is, (-5)/2 == 5/(-2) == -2 and (-5)/(-2) == 5/2 == 2.
+	For the remainder operator, (x)%0 gives unpredictable garbage.
+If either (or both) operands are negative, the resulting remainder will
+be the negative of the positive%positive result:
+	5%2 == 1 but (-5)%2 == 5%(-2) == (-5)%(-2) == -1.
+
+[7.5.2] '-' - The type of the difference between two pointers is (int).
+
+[7.5.3] '<<','>>' - Left shift (<<) always uses logical shifting; bits
+can be shifted into the sign bit.  Right shift uses logical
+shifting for unsigned integer types (the sign bit is shifted out, and
+0-bits shifted in), but uses ARITHMETIC shifting for signed integer
+types (the sign bit is propagated).
+	Using a negative value for the right operand reverses the
+direction of the shift.  Using a large number (36 or greater) simply
+shifts everything to oblivion as expected.  Note that it is possible
+to use left-shift arithmetic shifting (the ASH instruction) by giving
+a negative shift distance to >>; of course this is very non-portable.
+
+[7.7] '?' - KCC correctly permits the result of a conditional expression
+to have structure, union, enumeration, or void types.
+
+[7.8.1] Structure and union assignment is (of course) permitted.
+
+[7.8.2] 'op=' - KCC currently has a minor bug with compound assignment
+statements.  If the left-hand side of the compound assignment has
+side effects, as for example in "foo[++i] += 2;" then KCC may or may not
+be able to correctly generate code for this case; it will complain if
+not.  This will eventually be completely fixed, but it will take time.
+	KCC does not support the obsolete "=+" compound assignment forms.
+
+[7.10] Constant expressions -
+	KCC can and does evaluate constant floating-point expressions at
+compile time.  All casts are also allowed.
+	KCC is currently somewhat too liberal about the constant
+expressions in preprocessor #if statements; it allows the use of any
+integral constant expression, including enum constants and sizeof
+operators.  This is possible because the preprocessor is integrated
+with the compiler.  The eventual fix for this will probably issue a
+warning but permit the usage.
+
+[7.11] KCC correctly does not interleave expression computations.
+
+[7.12] KCC currently does not issue any warnings about discarded values.
+This may change.
+
+[7.13] KCC does some optimization of memory accesses, but not much.
+
+<Statements>				[H&S 8 "Statements"]
+
+As per H&S, with the following notes:
+
+[8.7] switch statement - KCC permits the control expression of a switch
+statement to be of any integral or enumeration type.
+
+<Functions>				[H&S 9 "Functions"]
+
+9.4 Adjustments to Parameter Types
+	Parameters which are declared as "char" or "short" are really
+handled as type "int", and "float" is really "double"; however, KCC
+does not implement narrowing as per 9.4, because the description of
+this is too unclear -- what happens if such a parameter is used as
+an lvalue?
+
+	KCC follows the language strictly and does not permit formal
+parameters of type "function returning...".
+
+<KCC Run-time C Library>		[H&S 11 "The Run-time Library"]
+
+	ALL of the facilities described in H&S chapter 11 are
+implemented as described.  In addition, various UN*X system call
+emulations and standard library routines are also supported.
+
+[11.1] Character Processing
+	All facilities work with any 9-bit character value and EOF.
+None evaluate their argument more than once; most are macros and very
+fast.
+
+[11.2] String Processing
+	All supported.  <string.h> must be included.
+"index" and "rindex" are recognized as synonyms for "strchr" and "strrchr".
+
+[11.3] Mathematical Functions
+	All supported.  <math.h> must be included.  These are mostly
+derived from the Portable Math Library.
+
+[11.3.5] For atan2(0, 0), the value 0 is returned and errno set to EDOM.
+
+[11.3.22] sinh() of a negative argument that is too large returns the
+	largest representable negative float-point number.
+
+[11.3.25] According to CARM, "If the argument is so close to an odd multiple
+	of pi/2 that the correct result value is too large to be represented,
+	then the largest representable positive floating-point number is
+	returned and the error code ERANGE is stored into the external
+	variable errno".  The actual error check done is to see if for tan(x),
+	cos(x) == 0.  If so, the error behavior above is done.
+
+[11.4] Storage Allocation
+	All supported.  Despite CARMs claim that "the facilities
+described in this section are predeclared in the C compiler, and so
+their use does not require the inclusion of a library header file",
+that does not appear in general to be the case.  So be especially
+careful about declaring these functions properly if they return a char
+pointer, and be sure that routines which expect a char pointer
+argument are given one.  A common mistake is failing to declare
+malloc(), so that the compiler is unaware of the proper conversions
+that must be applied to the return value (which is a PDP-10 byte
+pointer).
+
+	Using brk() and sbrk() is not prohibited, but doing so is
+guaranteed to confuse the storage allocator and cause problems.
+
+	Since is there is no "long int" data type, the long and int
+forms of calls are functionally identical.
+
+[11.4.2] cfree() and free() are identical and interchangeable, but for
+maximum portability it is best to use cfree() only to deallocate
+memory allocated by calloc(), and free() only to deallocate memory
+allocated by malloc().
+
+[11.4.4] free() is identical to cfree(), see note [11.4.2] above.
+
+[11.5] Standard I/O
+	All supported.  In particular, putc and getc are implemented as
+macros.  However, it does not yet work to open a stream for "update"
+(simultaneous reading and writing).
+
+	All 4.2BSD functions are implemented.  The additional facilities
+provided are: fdopen, fileno, getw, putw, setbuf, setbuffer, and setlinebuf.
+
+	In general, the sequence CR-LF is converted to LF on 7-bit
+input, and LF converted to CR-LF on 7-bit output.  This conversion is
+performed by the system call read/write functions and not by STDIO,
+however.  See the notes on fopen [11.5.10] below for details.
+
+[11.5.7] fflush() called on an input stream flushes any buffered but
+unread data.
+
+[11.5.10] The type specification string can have the character 'R'
+following the normal specification to set "raw mode", in which no
+newline-CRLF conversion is done.
+
+	Following the (optional) raw-mode flag, one of '7', '8', or
+'9' may be specified to force the bytesize of the file opening.  This
+is mainly useful for output files, which are otherwise opened in 7-bit
+mode.  When opening an input file, the bytesize automatically defaults
+to the one that the file was written with (9-bit if it was not either
+7 or 8).  For example, binary files with a 36-bit bytesize are opened
+with a 9-bit stream, which gives access to all bits of each word.
+
+	Update mode (specified by a '+' following the 'r' or 'w' in
+the type specification) is not yet implemented.  It is an error to
+attempt to open a file for update.
+
+[11.5.11] fprintf(): see the notes on printf() [11.5.23].
+
+[11.5.14] fread() is implemented assuming that the input stream is open
+in 9-bit raw mode, such that all 36 bits of an int can be read with four
+successive bytes.  No byte-size of mode checking is done by fread(), so
+it is the users responsibility to make sure the stream is open correctly.
+
+[11.5.15] freopen(): see fopen() [11.5.10]
+[11.5.16] fscanf(): see scanf() [11.5.28]
+[11.5.19] fwrite(): see fread() [11.5.14]
+
+[11.5.23] printf(): An additional facility has been provided for the
+user to assign his own conversion specification character to arbitrary
+functions.  See the source for details.
+
+[11.5.28] scanf(): Common sense was used in inplementing the various
+conversion routines when there was doubt about CARMs description:
+
+	For numeric conversions ('d', 'u', 'o', 'x', 'f'), there must
+be at least one digit present for the parse to succeed, despite CARMs
+claim that "some number" of digits, "possibly none" are allowed.  For
+string scanners ('s' and '['), at least one character must be read.
+
+[11.5.29] See printf() [10.5.23]
+[11.5.30] See scanf() [10.5.28]
+
+[11.5.34] The number of characters able to be pushed back with ungetc is
+an option available at compile-time.  _SIO_NPBC in STDIO.H defaults to 1.
+
+[11.6] Error Codes
+	Somewhat disorganized at present.  EDOM and ERANGE exist.  The
+standard set of UN*X errors are present now, but are not very useful.
+
+Additional STDIO routines:
+
+	sopen(): opens a string as a source or destination for I/O.
+The first arg is a string pointer, second is a standard fopen type
+specification.  The implementation of this is not yet complete: 'a'
+(append) mode does NOT do the obvious thing; place has been kept for
+'w+' to automatically expand the given string if the end is reached
+(assuming it was allocated by malloc); the file pointer cannot be
+repositioned (e.g. a string can be scanned only once).  These things
+will be finished some day.
+
+Emulated UN*X System Calls:
+	abort
+	access
+	close	- UIO
+	dup
+	fork
+	fstat	- UIO
+	getpid
+	gettimeofday
+	lseek	- UIO
+	open	- UIO
+	perror
+	pfork
+	pipe
+	read	- UIO
+	rename
+	sbrk
+	signal	- (crude, not really implemented)
+	sleep
+	stat	- UIO
+	time
+	unlink
+	wait
+	write	- UIO
+
+Other facilities:
+	ATOI
+	BCOPY
+	MKTEMP
+	QSORT
+	REGEX
+	SETJMP
+
+If the file LIBC.DOC exists yet (unfinished as of this writing) it will
+furnish more details on library routines.
+
+<KCC: Making system calls>
+
+The jsys() function has been provided for ease in performing simple
+TOPS-20 monitor calls without being forced to resort to assembly
+language or #asm.  The calling convention is:
+
+	int jsys(num, ablock)
+	int num, ablock[5];
+
+The jsys number is given in num, and registers 1 through 4 are given
+and returned in ablock.  Offsets in ablock correspond to machine
+registers; thus ablock[1] goes into AC1 before the call and then takes
+tha value of AC1 after the call.  ablock[0] is not referenced.  The
+function returns 0 if the jsys caused an illegal instruction trap, or
+1 if it returned successfully.
+
+<KCC Internals - Stack structure>
+
+The organization of the portion of the stack seen by a C routine is
+shown in the following diagram (with the top of the stack being the
+earlier lines in this file, and the stack pointer at the very top):
+
+SP-->________________________________________________________________
+    |                                                                |
+    |    A stacked structure					     |
+    |    generated as part of a structure-to-structure copy          |
+    |    or the result of a structure-valued function                |
+    |________________________________________________________________|
+    |                                                                |
+    |    Spilled registers                                           |
+    |    generated when we need more intermediate values than        |
+    |    there are available PDP-10 registers                        |
+    |________________________________________________________________|
+    |             |                                                  |
+    | (as many    |    Arguments being stacked for the next call     |
+    | repetitions |    These are generated in the reverse of         |
+    | of these    |    lexical order; thus the first argument        |
+    | two areas   |    appears at the top of the stack.  This is     |
+    | as levels   |    so that functions like printf which take a    |
+    | of nesting  |    variable number of arguments can work.        |
+    | in function |__________________________________________________|
+    | calls)      |                                                  |
+    |             |    Values to be saved over the call              |
+    |             |    e.g. if we do foo()+bar() then one function   |
+    |             |    has to be called first, and we save its       |
+    |             |    value here so we can add it to the other      |
+    |             |    result once the second call returns           |
+    |_____________|__________________________________________________|
+    |                                                                |
+    |    Local variables                                             |
+    |    stored in lexical order, i.e. the first declared            |
+    |    variable is lowest on the stack                             |
+    |________________________________________________________________|
+    |                                                                |
+    |    Return address for calling function                         |
+    |________________________________________________________________|
+    |                                                                |
+    |    Space for return value                                      |
+    |    this only exists if the function returns a struct           |
+    |    that takes more than two words; otherwise the result        |
+    |    is returned in registers 1 and (if two words) 2             |
+    |________________________________________________________________|
+    |                                                                |
+    |    Arguments to this call                                      |
+    |    in reverse lexical order as described above                 |
+    |________________________________________________________________|
+
+Of course, not all of these areas are likely to appear at once.
+There is no frame pointer, only a stack pointer; generated code always
+knows the location of the stack pointer in relation to changes in the
+above structure (as arguments get pushed and popped, registers get
+spilled and despilled, structures get stacked, assigned, and
+unstacked, etc).  Thus code to access an argument or local variable
+will use a different offset from the stack pointer depending on where
+it is generated.
+
+<KCC Internals - Calling conventions and register use>
+
+As described in the section on stack structure, function arguments are
+pushed in reverse order onto the stack, followed by space if necessary
+for a return value more than two words long, followed by the return
+address pushed by the PUSHJ 17, instruction used to call the function.
+
+Note that no section is allocated for storing the caller's registers;
+instead the caller is reponsible for saving all active accumulators
+before performing a function call. Thus, the callee will not have to
+worry about accumulator usage.  All accumulators (except AC17) are at
+the callee's disposal.  However, AC0 is never used by generated code,
+as some old programs assume NULL always points to zero, and as the
+hardware imposes several silly restrictions on its use.  AC15 and AC16
+are also reserved for minor KCC runtime functions.
+
+Single word function return values are left in AC1; double word
+returns go in AC1 and AC2.  Return values larger than that are left in
+the space reserved for them below the return address as described above.
+
+<KCC Internals - Extended addressing>
+
+	A C program can be run in an extended section either by using
+the /USE-SECTION switch of the EXEC RUN command, or by depositing the
+desired section number in cell $EXADF.  No special switches need be
+given to KCC for the generated code to be suitable for extended
+addressing - the same code will always run either extended or
+non-extended.
+
+	In extended sections, code and permanently allocated data
+(i.e.  global variables) live in one section, the stack lives in
+another section, and allocated memory can expand to fill all remaining
+sections.  All byte pointers not intended for immediate use (e.g.
+literal arguments to a LDB or DPB instruction) are constructed as
+OWGBPs (One-Word Global Byte Pointer).
+
+<KCC Cross-compiling>
+
+The -x and -H switches allow some degree of cross-compilation.
+The effects of the various -x specifications are listed below:
+
+CPU:
+	Currently the CPU type specifications have no effect.  Machine
+dependencies are determined by macros in the -H header file.  See the
+C-HDR.C source.
+
+System:
+	Currently the only things which are affected by this setting are
+character and string constant values.  If compiling for WAITS (or for
+anything else if on WAITS), character values are mapped to and from WAITS
+ASCII and standard US ASCII.  Note that the proper run-time library
+must be selected for loading; this happens within the -H file which
+specifies a load-time .REQUEST.  See the C-HDR.C source for an example.
+
+Assembler:
+	The assembler selection is independent of the system or CPU.
+Currently either FAIL and MACRO can be selected and both will work.
+Selecting MIDAS does not yet work completely.
+
+
+Ideally KCC (on any system) should be able to generate code for any
+other PDP-10 system.  To actually do this requires some understanding
+of how the various parts of a program come together.  It is not enough
+just to specify some -x switches; you must take care of the following:
+
+	1. #include files.  You may need to use an alternate standard
+	include-file directory to satisfy <>-type includes.
+
+	2. Switches.  In addition to -x, you should also use -D to predefine
+	any parameters from <c-env.h> which are not properly defaulted.
+
+	3. Header file.  The -H switch should be used to specify the
+	appropriate version of C-HDR. (if one does not exist you may need
+	to generate it from the C-HDR.C source).  This is how machine-dependent
+	instructions like ADJBP, DMOVx, etc are handled.
+
+	3. Library.  The C runtime library loaded with the program must
+	be the correct one (already cross-compiled for the target).  The
+	library filename is specified inside the -H header file as the
+	object of a .REQUEST to the loader.
+
+<Char Pointer Hints>
+
+	The code generated for handling char pointers always uses
+byte-pointer instructions, and so will work for any byte size (at
+least on machines implementing the ADJBP instruction).  This can
+sometimes be useful when dealing with PDP-10 based data structures.
+However, such pointers have to be constructed "by hand" since all char
+pointers that KCC generates are either 9-bit or 7-bit.
+
+	It is possible to request that KCC generate code which assumes
+that chars are 7 bits, and char pointers are 7-bit byte pointers.  Thus,
+arrays of chars will have 5 chars per word, instead of 4.  This feature,
+invoked by the "-x=ch7" switch, is mainly of use to people who must
+integrate C code with old software that cannot deal with anything but
+7-bit bytes.
+
+	In general, when char pointers are involved, constructs like
+*++ptr are faster than *ptr++. This is because *++ptr can usually be
+folded by the optimizer into an ILDB (or IDBP) instruction.  There is
+no equivalent on the PDP-10 to a *ptr++ construct; this must always
+be done as at least two instructions.
+
+	Whenever possible, try to avoid using two char pointers in
+subtraction, as in (ptr1-ptr2).  Many instructions have to be executed
+to find the difference between two char pointers, due to the strange
+internal format.  For the same reason, try to avoid less-than (<, <=)
+or greater-than (>, =>) comparison of char pointers.  Finally, on
+machines which do not implement the ADJBP instruction (KA, KI), it
+is also helpful to avoid addition or subtraction of integers to char
+pointers.
+	None of this applies to other types of pointers, such as (int *),
+which are simple addresses and can be manipulated very efficiently.

@@ -1,0 +1,26 @@
+@ENABLE
+@delete parnew.mac,*.ccl,bugstrings.txt,
+@keep 1
+@
+@diskp 1200
+@DEFINE MON: src:<monitor>
+@DEFINE R: MON:
+@DEFINE SYS: MON:, SYS:
+@DEFINE DSK: DSK:,SYS:
+@CONNECT MON:
+@set trap file-openings
+@TAKE ASMNIC.CMD
+@LINK
+*@LNKNEW
+*@LNKNIC
+@GET MON
+@START 142
+*06M
+*BUGHLT<HLTADR12B
+*BUGCHK<CHKADR11B
+*DBUGIP/2
+*INTBYP/-1
+*DBUGSW/0
+*EDDTF/0
+*G
+@DELETE MON.EXE.*

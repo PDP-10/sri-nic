@@ -1,0 +1,251 @@
+;[SRI-NIC]SRC:<LOC.SYSTEM>BUGCHK.MID.16, 20-Jan-88 01:53:04, Edit by MKL
+; fix routine to find proper log file, make based on julian day of year
+;[SRI-NIC]SRC:<LOC.SYSTEM>BUGCHK.MID.12, 14-Jan-88 13:38:49, Edit by MKL
+; include ACJ messages in report
+;[SRI-NIC]PS:<MKL>DOMNIT.MID.20, 27-Mar-87 16:43:28, Edit by MKL
+; send daily bug reports to interested people
+
+	Title  BugChk
+	Subttl       
+
+.DECSAV
+
+P=17
+In=10
+Out=11
+
+;insertions
+.INSRT	MID:MACROS
+.INSRT	MID:SYMBOLS
+.INSRT  MID:SOUT
+.INSRT  MID:STCMP
+$$QJFN==1
+$$WAKE==1
+.INSRT  MID:MMUTIL
+Define RetSkp
+	Jrst Popj1
+Termin
+
+PDLen==100
+PDL:	Block PDLen
+
+InJFN:	0			;input JFN
+OutJFN:	0			;output JFN
+OutNam:	Block 40
+
+Buger:	0
+
+InBuf:	Block	1000
+OutBuf:	Block	1000
+HstBuf:	Block	100
+
+HstNam:	Block 100
+
+BugNam:	Block 100
+
+;bugs to not report (alphabetical)
+BugNot:	BugLen,,BugLen
+	[Asciz "BLKF3"],,0
+	[Asciz "IPGCOL"],,0
+	[Asciz "ULKSTZ"],,0
+BugLen==.-BugNot-1
+
+
+Start:	RESET%
+	Move P,[PDL(-PDLen)]	;init stack
+
+	Movei 1,.FHSLF
+	Setob 2,3
+	EPCAP%
+
+	Movei 1,.GTHNS
+	Hrroi 2,HstNam
+	Seto 3,			;us? (this ain't documented as working)
+	GTHST%
+	 Erjmp Die
+
+	Movx 1,GJ%SHT\GJ%OLD\GJ%IFG
+	Hrroi 2,[Asciz /PS:<OPERATOR>CONSOLE.LOG.*/]
+	GTJFN%
+	 Erjmp	[TypeCR "?Can't find Console.Log file."
+		 Jrst Die]
+	Movem	1,InJFN
+	Seto 2,
+	Movx 4,IC%JUD
+	ODCNV%
+	Hrrz 5,2		;save day of year
+	Subi 5,1		;make yesterday
+
+NxtLog:	Hrrz 1,InJFN
+	Movei 2,4
+	Movei 3,1
+	RFTAD%
+	Move 2,4
+	Movx 4,IC%JUD
+	ODCNV%
+	Hrrz 1,2
+	Camn 1,5		;yesterdays file?
+	 Jrst GotIt
+	Move 1,InJFN
+	GNJFN%
+	 Erjmp [Typecr "?Can't find yesterdays log file."
+		jrst die]
+	Jrst NxtLog
+
+GotIt:	Hrrz 1,InJfn
+	Movem 1,InJFN
+	Move 2,[Field(7,OF%BSZ)\OF%RD]
+	OPENF%
+	 Erjmp	Die
+
+	Movx 1,GJ%SHT\GJ%NEW\GJ%FOU
+	Move 2,[440700,,[Asciz /BUGCHK/]]
+	Call MMUTIL"QJFN
+	 Jrst Die
+	Movem 1,OutJFN
+	Move 2,[Field(7,OF%BSZ)\OF%WR]
+	OPENF%
+	 Erjmp	Die
+
+	Move 1,OutJfn
+	Hrroi 2,[Asciz /_/]
+	Setz 3,
+	SOUT%
+	Hrroi 2,HstNam
+	SOUT%
+	Hrroi 2,[Asciz /
+OPERATOR
+/]
+	SOUT%
+	Hrroi 2,HstNam
+	SOUT%
+	Hrroi 2,[Asciz /
+BUG-WATCHERS
+
+Date: /]
+	SOUT%
+	Seto 2,
+	Setz 3,
+	ODTIM%
+	Hrroi 2,[Asciz /
+From: The System <OPERATOR@/]
+	SOUT%
+	Hrroi 2,HstNam
+	SOUT%
+	Hrroi 2,[Asciz />
+To: Bug-Watchers <BUG-WATCHERS@/]
+	SOUT%
+	Hrroi 2,HstNam
+	SOUT%
+	Hrroi 2,[Asciz />
+Subject: Yesterdays Bugs
+
+Ignoring bugs:  /]
+	SOUT%
+	Hrlzi 4,-BugLen
+IgnBug:	Hlro 2,BugNot+1(4)
+	SOUT%
+	Hrroi 2,[Asciz / /]
+	SOUT%
+	Aobjn 4,IgnBug
+	Hrroi 2,[Asciz /
+
+/]
+	SOUT%
+
+Loop:	Move	1,InJFN
+	Hrroi	2,InBuf
+	Movei	3,2550.
+	Movei	4,.CHLFD
+	SIN%
+	 Erjmp	InEOF
+	Setz	1,
+	Idpb	1,2
+
+;	Move 1,[440700,,InBuf]
+;	Hrroi 2,[Asciz /[CONLOG] Logging started/]
+;	$STCMP
+;	Jumpe 1,
+
+	Move	In,[440700,,InBuf]
+	
+	move 5,[440700,,6]
+	setz 6,			;store 3 first letters here
+
+	Movei 3,19.
+	Adjbp 3,In
+	Ildb 1,3
+	Idpb 1,5
+	Ildb 1,3
+	Idpb 1,5
+	Ildb 1,3
+	Idpb 1,5
+	Camn 6,[asciz /[AC/]
+	 Jrst FndBug		;catch [ACJ] messages
+	Came 6,[asciz /BUG/]
+	 Jrst Loop
+	Movei 4,5.
+	Adjbp 4,3
+	Move 2,[440700,,BugNam]
+BugNa1:	Ildb 3,4
+	Idpb 3,2
+	Caie 3,.CHSPC
+	 Jrst BugNa1
+	Setz 3,
+	Dpb 3,2
+
+	Movei 1,BugNot
+	Hrroi 2,BugNam
+	TBLUK%
+	 Erjmp Die
+	Txne 2,TL%EXM		;match?
+	 Jrst Loop		;yes, skip this bug then
+
+fndbug:	Setom Buger
+
+	Move	1,OutJFN
+	Hrroi	2,InBuf
+	Setz	3,
+	SOUT%
+	Jrst	Loop
+
+InEof:	Skipn Buger
+	 Jrst [Move 1,OutJfn
+	       Hrroi 2,[Asciz /No bugs yesterday.
+/]
+	       Setz 3,
+	       SOUT%
+	       Jrst .+1]
+	Move 1,InJFN
+	CLOSF%
+	 Erjmp .+1
+	Move 1,OutJfn
+	CLOSF%
+	 Erjmp .+1
+	Call MMUTIL"WAKE
+	 jfcl
+	Jrst	Done
+
+
+;; Miscellany
+
+Popj1:	Aos	(P)
+R:	Ret
+
+ErrRet:	Type	"%"
+Error:	Movei	1,.PRIOU
+	Hrloi	2,.FHSLF
+	Setz	3,
+	ERSTR%
+	 jfcl
+	 jfcl
+	TypeCR	"."
+	Ret
+
+Die:	Type	"?"
+	Call	Error
+Done:
+DieHlt:	Haltf%
+	Jrst	DieHlt
+
+	End Start

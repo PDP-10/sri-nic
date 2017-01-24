@@ -1,0 +1,567 @@
+Entry;
+begin "-- User interface routines --"
+
+comment User interface routine, externals;
+
+
+require "genhdr.sai" source!file;
+
+require "ebgsrc.sai" source!file;
+		! debugging facility;
+	
+
+external integer filepagelimit, ! max outfile pages;
+	         maxd,		! number of glyph data bytes allowed output 
+								    per page;
+	 	 maxi;		! number of input data bytes allowed output 
+								    per page;
+external string	username;       ! user name of print file;
+
+external boolean qlook,         ! true to run queue looker;
+              waitflag,         ! true if wait requested on print;
+	     spoolflag,         ! true if a spooler request;
+	      savefile,         ! true if we save a .imp file;
+	    headerflag,         ! true if want headers;
+	    pagebrflag,
+	     titleflag,         ! true if want a title page;
+	    notifyflag;         ! true if user to be notified on print;
+
+
+external integer InFlType;	! input file type;
+
+external simp procedure MakeDir(reference string name; string dir);
+		! places the directory dir onto the filename name;
+external simp procedure MakeExt(reference string name; string ext);
+		! places the extension ext onto the filename name;
+
+external simp procedure Error(string s); ! Error handling;
+
+external procedure 
+	ScanFileName(reference string name, struct, dir, fname, ext, gen);
+
+external simp integer procedure Wordsin(integer chan); 
+		! Returns length (in words) of file associated with chan;
+
+external simp string procedure SepSwitches(reference string e); 
+					! returns switches from user input;
+external simp string procedure GetExt(reference string name);
+					! returns file name extension;
+external simp boolean procedure FileExists(reference string name);
+					! returns TRUE if given file exists;
+External simp integer procedure TryExts(reference string file; 
+							string num, exts);
+					! returns TRUE if any of a list of
+					  			files exits;
+
+define HasExt(name) = {not GetExt(name) = null};
+
+!	Global variables;
+
+
+! ---------- file variables;
+internal boolean fourformat;	! For use when trying to squeeze four pages 
+								    onto one;
+
+internal integer InChan,	! input file channel number;
+		 Injfn,		! input file JFN;
+		 inFltype,	! type of the input file;
+		 InFlsize,	! the size (in words) of the .DVI file;
+		 IMPchan,	! .IMP (output) file channel number;
+		 IMPjfn,	! .IMP (output) file JFN;
+
+		 firstp, 	! first page to be printed;
+		 lastp, 	! last page to be printed;
+	  	 copynumber,	! number of copies to make of each page, 
+						must be in the range [1,250];
+
+!	output page size variables, all in units of pixels;
+	         pageht, 	! physical height of the paper;
+	         pagetop, 	! start of printable space;
+	         tmarg,		! Tex' y=0 line;
+	         lmarg,		! left margin, default set at x=25 mm, 
+							      can write to 0;
+                 pagewd;	! physical width of the page;
+
+internal string	 name,		! name of the input file;
+		 infname,	! input file name;
+		 outfname,	! output file name;
+		 ercname;	! name of .ERC file;
+
+Internal real	 mag;		! product of TEX mag and user mag;
+
+! ---------- Several parameters used for listings; 
+internal integer spacing, 	! Spacing for listings: single, double, 
+							triple, or quadruple;
+          	 pitch, 	! Pitch for listings, not perfectly 
+							     implemented yet;
+            	 lpi; 		! Lines per inch for listings.  Will be 
+				  ignored if vastly different than
+						baselineskip (xline) in font;
+
+internal string	 lstfont; 	! Font for listings;
+
+internal real    listfontmag;	! Magnification for listings;
+
+internal string	 psize;		! "legal" or "standard" or "b4";
+
+boolean 	 pagehtset,	! True if user set page height with switch;
+		 pagewdset;	! True if user set page width with switch;
+
+IFTOPS20
+string  	 inputname; 	! filename gotten from rescan buffer;
+boolean 	 incmdline, 	! = TRUE implies user gave filename in 
+								command line;
+          	 impfile;	! True if file type search found .IMP file, 
+						     used only for TOPS20 IO;
+ENDTOPS20
+
+
+
+internal simp procedure openoutput;
+   begin "--openout--"
+
+   integer impeof,brch,infileeof,flag;
+
+	Impeof _ -1;
+
+    	scanfilename(infname,junk,junk,outfname,junk,junk);
+
+	MakeExt(outfname,"imp");
+
+	if not savefile then begin if spoolflag then
+	    makedir(outfname,"<LSR.SPOOL>") else makedir(outfname,"LSR:") end;
+	    ! write into spooler directory if we're not saving this file;
+
+    	IFWAITS 
+    	open(ImpChan_getchan,"DSK", '10, 0, 2, 512, brch, eofout);
+    	enter(ImpChan, outfname, Impeof);
+    	if Impeof then error("couldn't open "&outfname&"  for writing???");
+    	ENDWAITS
+
+    	IFTOPS20 
+    	ImpChan_openfile(outfname,"W");
+    	if ImpChan=-1 then 
+		begin "-- error --"
+		erstr(!skip!,curfork);
+		error ("couldn't open "&outfname&" for writing???")
+		end   "-- error --"
+    	else setinput(ImpChan,512,brch,Impeof);
+	Impjfn_cvjfn(ImpChan);
+    	ENDTOPS20
+
+        end "--openout--";
+
+!	CmdInit;
+
+
+!	C O M M A N D   I N I T
+!
+! ***********************************************************************
+! Initializes various user setable variables.
+! ***********************************************************************;
+simp procedure cmdinit;
+	begin "-- command init --"
+	integer i; 
+
+	pagehtset _      FALSE; 
+	pagewdset _      FALSE; 
+	fourformat_      FALSE; 
+
+	InFlType  _    badfile; ! no file type yet;
+	impfile   _      FALSE; 
+
+        copynumber_	     1;
+	lstfont   _   LISTFONT; ! font for listings;
+       listfontmag_    LISTMAG; ! font magnification for listings;
+	spacing   _LISTSPACING;	! spacing for listings;
+	pitch     _  LISTPITCH; ! pitch for listings;
+	lpi       _    LISTLPI; ! lines per inch for listings;
+
+	mag       _    	   1.0; ! default magnification;
+	pageht    _     SPgHgt; ! physical height of the paper;
+	pagewd    _       PgWd; ! physical width of the page;
+	tmarg     _     -1; ! Tex' y=0 line;
+	lmarg     _     LlMarg; ! left margin;
+	firstp    _       -100; ! first printing page; 
+	maxi      _          2; ! amount of space available for input;
+
+	maxd      _ TOTD-(maxi)*8192;
+	lastp     _ firstp + pagelimit ! last printing page;
+
+	end   "-- command init --";
+
+!	Setup!Files
+
+
+! 	S E T U P   F I L E S
+!
+! **********************************************************************
+! prompts the user for the input file name and sets up i/o channels
+! **********************************************************************;
+internal procedure setup!files; 
+	begin "-- setup files --"
+	integer brch, flag, InFileeof, Impeof;     ! i/o parameters;
+
+	IFWAITS
+	safa integer array stuff [0:5]; ! 6 word array for fileinfo; 
+	ENDWAITS
+
+! Getswitches parses the switch specifications of the command line;
+
+
+
+procedure getswitches(string s);
+	begin "-- get switches --"
+	integer i,j,temp; string z,switch; 
+	
+! ********** L O W E R *********;
+simp string procedure lower(string s);
+	begin
+	string new, c;
+	new_"";
+	while not (length(s)=0) do 
+		begin
+		c_lop(s); 
+		if c"A" and c"Z" then c_(c+"a"-"A")&"";
+		new_new&c
+		end;
+	return(new)
+	end;
+
+
+	simp procedure eat(integer t); begin
+	    t_t max 1; while s=t or s=" " do z_lop(s)
+	    end;
+
+	define be={begin eat(":"); eat("=");}, ee={; eat("/"); eat(" ") end}; 
+
+		simp procedure standard; 
+			begin "-- standard --"
+			psize_"standard"; pageht_SPGHGT 
+			end   "-- standard --";
+
+		simp procedure legal;    
+			begin "-- legal --"
+			psize_"legal";    pageht_LPGHGT; pagehtset_true;
+			end   "-- legal --";
+
+		simp procedure b4;
+		        begin "--b4--"
+			psize_"b4"; pageht_LPGHGT; pagewd_B4PGWD;
+			lmarg_MINLM; pagehtset_true; pagewdset_true;
+			end "--b4--";
+
+	procedure badswitch(string s);	! Error in switches, exit;
+	begin
+		print(nl,"bad switch-- "&s,nl);
+		start!code haltf;  jrst .-1; end;
+	end;
+
+	simp string procedure gettoken;	! Gets the next token from s;
+	begin "--gettoken--"
+		string token;
+		token_"";
+		eat(" ");		! get to first alpha char;
+		while not (equ(s,"") or s="/" or s=" " or s=":" or s="=") do 
+			token_token&lop(s);
+		return(lower(token));		! return string parameter;
+	end "--gettoken--";
+
+
+	headerflag_true;
+	pagebrflag_false;
+	standard; 
+
+	while not equ(s,"") do 
+	    begin
+		switch_gettoken;
+		if equ(switch,"bug") then be	! set bug params;
+			case intscan(s,j) of begin  
+			[0] begin bug1_true; bug2_true; bug3_true; bug4_true;
+				  bug5_true; bug6_true; bug7_true;
+				  bug8_true; bug9_true; 
+				  bugf1_true; bugf2_true; bugf3_true;
+				  bugf4_true; bugf5_true; bugf6_true;
+				  bugf7_true;
+				  end;
+			[1] bug1_true;    [2] bug2_true;   [3] bug3_true;
+			[4] bug4_true;    [5] bug5_true;   [6] bug6_true;
+			[7] bug7_true;    [8] bug8_true;   [9] bug9_true;
+		        else end; ee else
+		if equ(switch,"bugi") then be	! set bug params;
+			case intscan(s,j) of begin  
+			[0] begin bugi1_true; bugi2_true;
+				  bugi3_true; bugi4_true; bugi5_true;
+				  bugi6_true; bugi7_true; bugi8_true;
+				  end;
+			[1] bugi1_true;    [2] bugi2_true;   [3] bugi3_true;
+			[4] bugi4_true;    [5] bugi5_true;   [6] bugi6_true;
+			[7] bugi7_true;    [8] bugi8_true;   
+			else end; ee else
+		if equ(switch,"bugo") then be	! set bug params;
+			case intscan(s,j) of begin  
+			[0] begin bugo1_true; bugo2_true;
+				  bugo3_true; bugo4_true; bugo5_true;
+				  bugo6_true; bugo7_true; bugo8_true;
+				  end;
+			[1] bugo1_true;    [2] bugo2_true;   [3] bugo3_true;
+			[4] bugo4_true;    [5] bugo5_true;   [6] bugo6_true;
+			[7] bugo7_true;    [8] bugo8_true;  
+			else end; ee else
+		if equ(switch,"impmax") then be ! set outfile page limit;
+		        filepagelimit_intscan(s,j);
+			if filepagelimit < 0 then filepagelimit_25; ee else
+		if equ(switch,"q") then be	! run the queue looker;
+			qlook_true; ee else
+		if equ(switch,"mag") then be 	! change magnification;
+			mag_realscan(s,j); if mag>50 then mag_mag/1000;
+			  if mag>50 or mag<.1 then mag_1.0 ee else
+		if equ(switch,"legal") then be  ! legal size paper;
+		        legal;  waitflag_true; ee else
+		if equ(switch,"b4") then be     ! b4 paper size;
+		        b4; waitflag_true; ee else
+		if equ(switch,"spool") then be   ! set spooler file;
+		        spoolflag_true; ee else
+		if equ(switch,"font") then be	! change font for listings;
+			lstfont_gettoken; ee else
+		if equ(switch,"user") then be	! change user name;
+			username_gettoken; ee else
+		if equ(switch,"imp") then be	! save an .imp file;
+			savefile_true; ee else
+		if equ(switch,"dvi") then begin infltype_dvifile; ee else
+						! input is a .dvi file;
+		if equ(switch,"list") then begin infltype_lptfile; ee else
+						! input is a listing;
+		if equ(switch,"lisp") then begin infltype_LISPfile; ee else
+						! input is a LISP file;
+		if equ(switch,"scribe") then begin infltype_SCRfile; ee else
+						! input is a scribe file;
+		if equ(switch,"nohead") then begin  ! don't use headers;
+				 headerflag_false; ee else
+                if equ(switch,"paged") then begin ! use page breaks;
+		                 pagebrflag_true; ee else
+		if equ(switch,"notitle") then begin  ! don't use title;
+				 titleflag_false; ee else
+	        if equ(switch,"n") or equ(switch,"notify") then begin
+				 notifyflag_true; ee else
+                if equ(switch,"w") or equ(switch,"wait") then begin
+		                 waitflag_true; ee else
+		if equ(switch,"spacing") then be     ! set interline spacing;
+			 	 spacing_ 0 max (4 min realscan(s,j)); ee else
+		if equ(switch,"dspace") then begin   ! use double spacing;
+				 spacing _ 2; ee else
+		if equ(switch,"pages") then be  ! set page limits;
+			 firstp_intscan(s,j); eat("-"); eat(":");
+			 lastp _ intscan(s,j);
+			 if firstp>lastp then begin temp_firstp;
+                                                    firstp_lastp;
+                                                    lastp_temp; end; ee else
+		if equ(switch,"lm") then be	! left margin in inches;
+			lmarg_horzrsu*realscan(s,j); ee else
+		if equ(switch,"tm") then be	! top margin in inches;
+			tmarg_vertrsu*realscan(s,j); ee else
+		if equ(switch,"wd") then be	! pagewidth in inches;
+		        pagewdset_true;
+			pagewd_horzrsu*realscan(s,j); ee else
+		if equ(switch,"ht") then be	! pageheigth in inches;
+		        pagehtset_true;
+			pageht_vertrsu*realscan(s,j); ee else
+		badswitch(switch); 	! couldn't find it;
+	    end;
+
+end   "-- get switches --";
+
+
+!	    SetUpFiles, end;
+
+
+	IFTOPS20
+	incmdline _ FALSE;
+		startcode ! get line from rescan buffer;
+	       	setz  1,0;
+		jsys  '500;	haltf;
+		end;
+	inputname_intty; ! gets the users command line that started up MakImp;
+	while length(inputname)>0 and inputname[1 for 1] neq " " do 
+							temp_lop(inputname);
+	while length(inputname)>0 and inputname[1 for 1]=" " do 
+							temp_lop(inputname);
+	if length(inputname)>0 then incmdline_TRUE;
+	ENDTOPS20
+
+	IFDEBUG print(nl,"Debugging version"); ENDDEBUG
+	
+	CmdInit;
+
+	while InFlType=badfile do
+		begin "-- get input file --" 
+		string e; 
+		integer i;
+
+		simp procedure lookforit(string ext); 
+			begin "-- look for it --"
+	    		if not hasext(infname) then makeext(infname,ext);
+	    		if not fileexists(infname) then 
+				begin "-- not this time --"
+				IFTOPS20 incmdline_FALSE; ENDTOPS20
+				InFlType_badfile
+				end   "-- not this time --"
+	    		end   "-- look for it --";
+
+		IFWAITS
+		print(nl,"Input (DVI or XGP) file name: ");
+		infname_inchwl;
+		ENDWAITS
+
+		IFTOPS20
+		if (not incmdline) then
+			begin "-- prompt --"
+			print(nl,"Input file name: ");
+			inchan_gtjfn("",0);      ! Do recognition on input;
+			infname_jfns(inchan,0)&intty;
+			rljfn(inchan);
+			end   "-- prompt --"
+
+		else infname_inputname;
+		ENDTOPS20
+
+		e_SepSwitches(infname); ! separate out file switches;
+		getswitches(e);
+
+
+		IFWAITS
+		if hasext(infname) then
+	    		begin "-- check extensions --"
+	    		e_getext(infname);
+	    		if equ(e,"xgp") then InFlType_xgpfile else 
+	    		if equ(e,"dvi") then InFlType_dvifile else
+	    		if lop(e)="r" and "0"(i_lop(e)) and i"9" and
+			   ((i_lop(e))="" or ("0"i and i"9"))
+			    then InFlType_rstfile
+	    		else InFlType_LPTfile
+	    		end   "-- check extensions --"
+
+		else if InFlType=badfile then
+			InFlType_tryexts(infname,filenums,filenames);
+		ENDWAITS
+
+		IFTOPS20
+		if InFlType=badfile then
+	    		begin "-- check extensions --"
+	    		if not hasext(infname) then 
+				InFlType_tryexts(infname,"0","*");
+	    		e_getext(infname);
+	    		if equ(e,"xgp") then
+				begin "-- illegal --"
+				print(nl,".XGP files not legal on this system",nl);
+				InFlType_badfile
+				end   "-- illegal --"
+	    		else if equ(e,"imp") then 
+				begin "-- wrong type --"
+				print(nl,"File type search found .IMP file ",infname,
+						", please specify extension.",nl);
+				impfile_TRUE;
+				InFlType_badfile
+				end   "-- wrong type --"
+	    		else if equ(e,"dvi") then InFlType_ dvifile 
+			else if equ(e,"scr") then InFlType_ SCRfile
+			else if equ(e,"lisp") then InFlType_ LISPfile
+			else if lop(e)="r" and "0"(i_lop(e)) and i"9" and
+			   		((i_lop(e))="" or ("0"i and i"9"))
+			    		then InFlType_rstfile
+	    		else InFlType_LPTfile
+	    		end   "-- check extensions --";
+		ENDTOPS20
+
+		if InFlType=rstfile then 
+			begin "-- raster extension --"
+			i_mag*10; e_"r"&cvs(i);
+			if not fileexists(infname) then 
+						makedir (infname,FONTDIR); 
+			lookforit(e) 
+			end   "-- raster extension --"
+								else
+		if InFlType=LPTfile then begin lookforit("") end		else
+		if InFlType=SCRfile then begin lookforit("scr") end		else
+		if InFlType=LISPfile then begin lookforit("") end		else
+		IFWAITS 
+		if InFlType=xgpfile then begin lookforit("xgp") end		else 
+		ENDWAITS
+		if InFlType=dvifile then
+			begin "-- expand --"
+			lookforit("dvi");
+			if not InFlType=badfile then ! Allow maximum
+							  page dimensions;
+				begin "-- maxdimen --" 
+				if not (pagehtset) then pageht_abspageheight;
+				if not (pagewdset) then pagewd_absrightmarg
+				end   "-- maxdimen --"
+			end   "-- expand --";
+
+		if InFlType=badfile then 
+	    		begin "-- no good --"
+            		IFTOPS20
+	    		incmdline_FALSE;
+	    		ENDTOPS20
+	    		if not (impfile) then
+				print(nl,"Couldn't open file: "&infname,
+						".  Please try again.");
+	    		impfile_FALSE
+            		end   "-- no good --"
+
+		end   "-- get input file --";
+
+	if InFlTyperstfile then 
+		begin "-- open input file --"
+		print3(<nl,"before open&lookup infname=",
+					infname," type=",InFlType>)
+		IFWAITS
+		open(InChan_getchan,"DSK", '10, 2, 0, 512, brch, InFileeof);
+		lookup (InChan, infname, InFileeof);
+		if InFileeof then error("OOOPs, couldn't find input file: "
+								&infname&nl);
+		fileinfo (stuff);
+		InFlSize _ -1 * (stuff[3] ash -18); 
+			! cleverly extracts the file size 
+						(this comment due to RAS);
+		ENDWAITS
+
+		IFTOPS20
+		InChan_openfile(infname,"R");
+		if (!skip!) then 
+			begin "-- error --"
+			erstr(!skip!,curfork);
+			error("OOOPs, couldn't find input file: "&infname&nl)
+			end   "-- error --"
+		else 
+			begin "-- get size --"
+			name _ jfns(inchan,'111110000001);
+			         ! Always return device and dir;
+			setinput(InChan,512,brch,InFileeof);
+			InFlSize _ wordsin(InChan); ! gets file length;
+			Injfn_cvjfn(InChan)
+			end   "-- get size --";
+		ENDTOPS20
+
+		print3(<nl,"Input file size=",InFlSize>)
+		end   "-- open input file --";
+
+    	print(nl,name," ");
+
+        if tmarg<0 then begin if infltype=dvifile  then tmarg_100
+						else tmarg_200; end;
+
+	if (ercname=null) then 
+		begin "-- error file name --"
+		ercname_name; 
+		makeext(ercname,"ERC") ! init the error file;
+		end   "-- error file name --";
+
+!	print(nl,"glyph table space  = ",maxd,", left margin = ",lmarg,
+		 ", page width = ",pagewd,nl,
+		 "top margin = ",tmarg,", page depth = ",pageht,
+		 ", page size: ",psize,", pp: ",firstp," to ",lastp,nl);
+
+    	end   "-- setup files --";
+
+end   "-- User interface routines --"

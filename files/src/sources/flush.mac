@@ -1,0 +1,978 @@
+;<SU-UTILITIES>FLUSH.MAC.28, 14-Apr-85 14:42:39, Edit by LOUGHEED
+; GTDIR% argument block is longer under Release 6
+;<SU-UTILITIES>FLUSH.MAC.27, 14-Apr-85 14:31:16, Edit by LOUGHEED
+; More MACRO conversion work
+;<SU-UTILITIES>FLUSH.MAC.26, 14-Apr-85 14:22:03, Edit by LOUGHEED
+; Remove obsolete VERIFY command
+;<SU-UTILITIES>FLUSH.MAC.25, 14-Apr-85 14:17:39, Edit by LOUGHEED
+; Fix ENCRYPT command to work under Release 6
+; Convert to MACRO assembly
+;<SU-UTILITIES>FLUSH.FAI.24,  6-Oct-84 13:37:37, Edit by LOUGHEED
+; Minor code cleanups
+;<SU-UTILITIES>FLUSH.FAI.23,  6-Oct-84 13:25:36, Edit by LOUGHEED
+; Add a CONVERT command for going between 5.3 and 6.0 filesystems
+;<SU-UTILITIES>FLUSH.FAI.20, 29-Dec-83 17:42:25, Edit by LOUGHEED
+;Add an ENCRYPT command for forcing password encryption on an old structure
+;Remove crock mentioned in edit 4
+;<LOUGHEED>FLUSH.FAI.4, 13-Mar-83 22:57:40, Edit by LOUGHEED
+;Add a FREEZE command
+;Add a Sierra only crock for detecting null account strings (in FILTER)
+;ACCT:<ADMIN.PROGRAMS>FLUSH.FAI.18, 11-Jul-82 10:51:47, Edit by B.BOMBADIL
+;Fix test for usage-update in domestic structure filter
+;ACCT:<ADMIN.PROGRAMS>FLUSH.FAI.17, 11-Jul-82 10:25:53, Edit by B.BOMBADIL
+;Remove CM%FIX
+;ACCT:<ADMIN.PROGRAMS>FLUSH.FAI.16, 11-Jul-82 10:24:29, Edit by B.BOMBADIL
+;Better noise words and documentation for IGNORE command
+;ACCT:<ADMIN.PROGRAMS>FLUSH.FAI.15, 17-Apr-82 20:44:05, Edit by B.BOMBADIL
+;Update internal documentation (HELP command)
+;ACCT:<ADMIN.PROGRAMS>FLUSH.FAI.14, 16-Apr-82 21:38:46, Edit by B.BOMBADIL
+;ACCT:<ADMIN.PROGRAMS>FLUSH.FAI.10, 16-Apr-82 21:10:45, Edit by B.BOMBADIL
+;Add LIST command
+;ACCT:<ADMIN.PROGRAMS>FLUSH.FAI.7, 16-Apr-82 20:11:35, Edit by B.BOMBADIL
+;ACCT:<ADMIN.PROGRAMS>FLUSH.FAI.5, 16-Apr-82 19:20:03, Edit by B.BOMBADIL
+;Ignore recently created domestic structure directories
+;Flush domestic directories that have usage-update-needed set
+;Rename CUTOFF command to IGNORE
+;Add USAGE-UPDATE command
+;ACCT:<ADMIN.PROGRAMS>FLUSH.FAI.4, 20-Jan-82 02:03:58, Edit by B.BOMBADIL
+;change prompt, add version information
+;ACCT:<ADMIN.PROGRAMS>FLUSH.FAI.3, 11-Oct-81 08:55:26, Edit by B.BOMBADIL
+;if directory has been flushed, CTRL-A prints out contents of DIRBUF
+;ACCT:<ADMIN.PROGRAMS>FLUSH.FAI.2, 30-Jul-81 15:15:36, Edit by B.BOMBADIL
+;fix bug in VERIFY command
+;<B.BOMBADIL>FLUSH.FAI.19, 29-Jul-81 17:25:57, Edit by B.BOMBADIL
+
+
+Title FLUSH - Account Purging Program
+Subttl Kirk Lougheed / July 1981 / Stanford University
+Subttl Definitions and Storage
+Search Monsym, Macsym
+.require sys:macrel
+asuppress
+sall
+
+a=1
+b=2
+c=3
+d=4
+p=17
+
+mappag==100			;PMAP% files starting at this page
+mapadr==mappag*1000		;the corresponding address
+
+pdlen==20
+buflen==50
+achan==0			;ctrl-A goes on channel 0
+
+pdlist:	block pdlen		;pushdown stack 
+atmbuf:	block buflen		;atom buffer for COMND%
+cmdbuf:	block buflen		;command buffer for COMND%
+tmpbuf:	block buflen		;scratch area
+dirbuf:	block buflen		;buffer for directory we are flushing
+wldbuf:	block 10		;wild card string for RCDIR%
+jfnblk:	block 16		;argument block for long form GTJFN%
+injfn:	block 1			;jfn of input file
+outjfn:	block 1			;jfn of output file
+npages:	block 1			;size of file, in pages
+level1:	block 1			;LEVTAB, level 1 interrupts
+level2:	block 1			;LEVTAB, level 2 interrupts
+level3:	block 1			;LEVTAB, level 3 interrupts
+gendev:	block 1			;device designator (GENERATE command)
+psflg:	block 1			;-1 if we're working on PS
+flushf:	block 1			;-1 if killing, 0 if freezing
+cutoff:	block 1			;cutoff date for flush consideration
+dirblk:	block 50		;data from GTDIR
+dirnam:	block 10		;name of current dir
+accstr:	block 10		;default account for current dir
+passwd:	block 10		;password string
+datblk:	block 5			;date of creation, etc.
+curdir:	block 1			;current directory number
+modtyp:	block 1			;used in LIST command
+kilcnt:	block 1			;number of killed directories
+inton:	block 1			;-1 if CTRL-A interrupts are on
+
+;COMND% argument block
+
+csb:	0,,repars		;.cmflg - reparse address, flags
+	.priin,,.priou		;.cmioj - I/O jfns
+	-1,,[asciz/FLUSH>/]	;.cmrty - pointer to prompt
+	-1,,cmdbuf		;.cmbfp - holds whole command being assembled
+	-1,,cmdbuf		;.cmptr - pointer to next field
+	buflen*5-1		;.cmcnt - number of bytes in CMDBUF
+	0			;.cminc - count of unparsed characters
+	-1,,atmbuf		;.cmabp - pointer to atom buffer
+	buflen*5-1		;.cmabc - number of bytes in ATMBUF
+	jfnblk			;.cmgjb - address of GTJFN% block
+
+
+;EMSG
+;pretty print a general error message
+
+define emsg (str) <
+	 jrst [ hrroi a,[asciz/str/]
+	 	call eprint
+		haltf
+		jrst .-1 ]
+>
+
+
+;JMSG
+;informative error messages for JSYS failure returns
+
+define jmsg (str) <
+	 erjmp [ ifdif <str>,<>,<hrroi a,[asciz/str/]>
+		 ifidn <str>,<>,<hrroi a,[asciz/JSYS error/]>
+		 jrst perr ]
+>
+
+;PMSG
+;handle parsing errors
+
+define pmsg (str) <
+	 jrst [ hrroi a,[asciz/str/] ;;pointer to a descriptive string
+		call eprint	;;print the message
+		jrst parse ]	;;jump to top of the parse loop
+>
+
+
+;NOISE
+;print some noise words
+
+define noise (str) <
+	movei b,[flddb. .cmnoi,,<-1,,[asciz/str/]>] ;;b/ function code
+	call .comnd		;;parse a noise word
+	 pmsg <Invalid noise word> ;;some error
+>
+
+
+;simple macros used in building keyword tables
+
+;KEYWRD
+;create an entry in a keyword table
+
+define keywrd (keywrd,addrss,flags) <
+	ifidn <flags> <> < [asciz\keywrd\],,addrss>
+	ifdif <flags> <> < [ cm%fw+flags
+			     asciz\keywrd\ ],,addrss>
+>
+
+;KEYBEG
+;Define first entry of keyword table
+
+define keybeg <
+.tablc==.
+	0			;;We'll fill this in later
+>
+
+;KEYEND
+;Fill in first entry of keyword table
+
+define keyend <
+.tabsv==.
+reloc .tablc
+	.tabsv-.tablc-1,,.tabsv-.tablc-1
+reloc .tabsv
+>
+
+
+;entry vector information
+
+evec:	jrst start		;START address
+	jrst start		;REENTER address
+evecl==.-evec	
+
+
+;main loop of FLUSH program
+
+start:	reset%			;reset the world
+	tmsg <FLUSH version of 14-April-1985
+>
+	move p,[iowd pdlen,pdlist] ;set up a stack
+	movei a,.fhslf		;a/ current process
+	rpcap%			;read capabilities
+	txnn b,sc%whl+sc%opr	;WOPR?
+	 emsg <WHEEL or OPERATOR privileges required> ;no...
+	move c,b		;c/ set up capabilities mask
+	epcap%			;enable them
+	move b,[xwd levtab, chntab] ;b/ address of level and channel tables
+	sir%			;set up interrupts
+	eir%			;enable interrupts
+	move a,[xwd .ticca, achan] ;a/ character,,channel number
+	ati%			;assign CTRL-A to channel
+	setzm inton		;no CTRL-A reporting just now
+	setzm cutoff		;no fence or cutoff date set yet
+parse:	movei b,[flddb. .cmini]	;b/ initialization function
+	call .comnd		;initialize the COMND% jsys
+	 emsg <Unable to initialize state block> ;some error
+repars:	move p,[iowd pdlen,pdlist] ;reset stack in case of reparse
+	seto a,			;a/ -1 for all jfns
+	rljfn%			;release any jfns in case of reparse
+	 jfcl			;ignore any error
+	movei b,[flddb. .cmkey,,comtab]	;b/ keywords
+	call .comnd		;parse a command keyword
+	 pmsg <Unrecognized command> ;some error
+	hrrz b,(b)		;fetch subroutine address
+	call (b)		;call subroutine
+	jrst parse		;get next command
+
+
+;.COMND
+;COMND% jacket routine
+;takes	b/ address of function descriptor block
+;returns +1 no parse
+;	 +2 good parse
+
+.comnd:	movei a,csb		;a/ address of state block
+	comnd%			;parse something
+	 erjmp [emsg <Fatal error while parsing>] ;we die on all errors for now
+	txnn a,cm%nop		;no parse?
+	aos (p)			;no, skip return
+	ret			;return to caller
+
+
+;COMTAB
+;master command table
+
+comtab:	keybeg
+	keywrd (CONVERT,.conve)
+	keywrd (ENCRYPT,.encry)
+	keywrd (EXIT,.exit)
+	keywrd (FLUSH,.flush)
+	keywrd (FREEZE,.freez)
+	keywrd (GENERATE,.gener)
+	keywrd (HELP,.help)
+	keywrd (IGNORE,.ignor)
+	keywrd (LIST,.list)
+	keywrd (QUIT,.exit,cm%inv)
+	keywrd (USAGE-UPDATE,.usage)
+	keyend
+
+Subttl HELP and EXIT commands
+
+;.EXIT
+;here to gracefully leave the program
+
+.exit:	noise (FROM FLUSH)
+	call confrm		;wait for confirmation
+	haltf%			;shut us down
+	ret			;return to command loop if continued
+
+
+;.HELP
+;general help
+
+.help:	noise (WITH FLUSH)	;some noise
+	call confrm		;wait for confirmation
+	hrroi a,hlptxt		;pointer to help text
+	psout			;print it
+	ret			;return to caller
+
+hlptxt:	asciz/
+The FLUSH program is used to perform various file system manipulations,
+especially the purging of inactive accounts.
+
+The IGNORE command takes a date as an argument.  Every directory created
+or logged into after that date will not be considered a candidate for flushing.
+
+The GENERATE command produces a flush list for the specified structure, for
+example, "GENERATE (FLUSH LIST FOR) PS: (DIRECT OUTPUT TO) PS-FLUSH.LIST".
+Directories on both PS and domestic structures are ignored if they were
+created recently or if they are "special" directories, i.e.  files-only,
+faculty, staff, or perpetual directories.  PS directories that have not been
+logged into since the date given in IGNORE command are added to flush list.
+Directories on domestic structures such as SX are added if they have the
+USAGE-UPDATE-NEEDED bit set or if the corresponding PS directory no longer
+exists.
+
+The FLUSH and FREEZE commands take a list of directories such as produced by
+the GENERATE command and kill or freeze each directory.
+
+The USAGE-UPDATE command takes a structure name as an argument and sets the
+USAGE-UPDATE-NEEDED bit for each user directory on that structure.
+Files-only, staff, and root-directories are ignored.
+
+The ENCRYPT command takes a structure name as an argument and ensures that
+all directories on a password encrypted structure have encrypted passwords.
+
+The CONVERT command takes a structure name and converts the directory page
+format between 5.3 and 6.0 monitors.  A Stanford only feature.  Read the
+CRDIR% code in the 6.0 version of JSYSF.MAC before using.
+
+The LIST command is used to produce a list of directories having a certain
+bit set in their directory mode word.  It has the following syntax:
+"LIST (DIRECTORIES ON) sx: (WITH) faculty (DIRECT OUTPUT TO) sx-faculty.out"
+
+Typing CTRL-A during a command that scans a filesystem will print out the
+name of the directory currently being processed.
+/
+
+Subttl IGNORE command
+
+.ignor:	noise (DIRECTORIES LOGGED INTO OR CREATED AFTER) ;some noise
+	movei b,[flddb. .cmtad,cm%sdh,cm%ida,<Date, e.g. 1-Aug-81>]
+	call .comnd		;parse the cutoff date
+	 pmsg <Invalid date format> ;some error
+	call confrm		;wait for confirmation
+	movem b,cutoff		;set up the cutoff
+	ret			;return to caller
+
+Subttl GENERATE command
+
+.gener:	noise (FLUSH LIST FOR)	;some noise
+	movei b,[flddb. .cmdev,cm%sdh,,<Structure name>] ;b/ device name
+	call .comnd		;parse it
+	 pmsg <No such structure> ;an error
+	call makwld		;make wildcard structure string, etc.
+	noise (DIRECT OUTPUT TO) ;more noise
+	movei b,[flddb. .cmofi]	;b/ output file name
+	call .comnd		;parse it
+	 pmsg <Invalid file specification> ;an error
+	movem b,outjfn		;store output file jfn
+	call confrm		;wait for confirmation
+	skipn cutoff		;was a cutoff date set?
+	 pmsg <Must use IGNORE command to set cutoff date> ;no, complain
+	move a,outjfn		;get jfn of output file
+	move b,[7b5+of%wr]	;7 bits, write access
+	openf%			;openf the fiel
+	 jmsg <>		;some error
+	move a,outjfn
+	hrroi b,[asciz/! Flush list for /]
+	setz c,
+	sout%
+	hrroi b,wldbuf
+	sout%
+	hrroi b,[asciz/ generated /]
+	sout%
+	seto b,
+	movx c,ot%nsc+ot%scl
+	odtim%
+	hrroi b,[asciz/
+! Directories logged into or created after /]
+	setz c,
+	sout%
+	move b,cutoff
+	movx c,ot%ntm+ot%scl
+	odtim%
+gener0:	hrroi b,[asciz/ were ignored.
+!
+/]
+	setz c,
+	sout%
+	setzm curdir		;start from beginning
+
+genlup:	hrroi b,wldbuf		;b/ pointer to wildcard string
+	call getnxt		;get next user name
+	 jrst gendon		;no more users
+	call filter		;what kind of user?
+	 jrst genlup		;we're ignoring this one
+	move a,outjfn		;a/ jfn of output file
+	hrroi b,dirnam		;b/ pointer to directory string
+	setz c,			;c/ end on a null byte
+	sout%			;record the directory name
+	hrroi b,[asciz/
+/]
+	sout%			;add a crlf
+	jrst genlup		;go look at next directory
+
+
+;here to close the file and finish up
+
+gendon:	move a,outjfn		;a/ jfn of output file
+	closf%			;close the file
+	 jfcl			;ignore errors
+	ret			;return to main loop
+
+
+;GETNXT - get next directory in a wildcard specification
+;call:	b/ wildcard string for RCDIR%
+;retn:	+1 no more directories
+;	+2 ok.  Various tables have been set up
+;	curdir/ updated to new current directory number
+;	dirnam/ directory name string (punctuated)
+;	dirblk/ directory info (from gtdir)
+;	accstr/ default-account-for-login string
+;	passwd/ password string
+
+getnxt:	push p,b		;save this register
+	skipn inton		;skip if CTRL-A interrupts turned on 
+	 call ctrlon		;else turn them on now
+	movx a,rc%awl+rc%stp	;step to next user
+	pop p,b			;restore directory string pointer
+	skipn c,curdir
+	 movx a,rc%awl		;first time through
+	rcdir%
+	txne a,rc%nmd		;ran out of directories?
+	 jrst ctrlof		;yes, disable CTRL-A and return now
+	txne a,rc%nom!rc%amb	;shouldn't happen
+	 emsg <No match or ambiguous from RCDIR% in GETNXT>
+	movem c,curdir		;store directory number
+	hrroi a,dirnam		;a/ buffer for name string
+	move b,c		;b/ directory number
+	dirst%			;produce the string
+	 jmsg <>		;some error
+	setz c,
+	idpb c,a		;tie off with null, just in case
+	move a,[point 7,accstr]	;pointer to account string storage
+	movem a,dirblk+.cddac	;store it
+	setzm accstr		;be able to detect null account string
+	setzm passwd		;be able to detect a null password string
+	movei a,.cdppn+1	;number of words in Rel 6 GTDIR%/CRDIR% block
+	movem a,dirblk+.cdlen	;set it
+	move a,b		;a/ directory number
+	movei b,dirblk		;b/ address of argument block
+	hrroi c,passwd		;c/ password buffer
+	gtdir%			;get directory info
+	retskp			;skip return
+
+
+;MAKWLD - make wildcard string give a device designator
+;Verifies that the device is a legitmate disk structure
+;Takes	b/ device designator
+;Returns +1 always with:
+;	 GENDEV - device designator
+;	 WLDBUF - wildcard string for directories on structure, e.g. PS:<*>
+;	 PSFLG - -1 if structure is PS:, zero otherwise
+
+makwld:	movem b,gendev		;save device designator
+	move a,b		;a/ device designator
+	dvchr%			;get device characteristics
+	ldb b,[point 9,b,17]	;get device type
+	caie b,.dvdsk		;skip if it's a disk
+	 pmsg <Must specify a disk structure> ;nonsense was typed
+	setzm wldbuf		;clear first word of wildcard string buffer
+	hrroi a,wldbuf		;a/ dump string in this buffer
+	move b,gendev		;b/ device designator
+	devst%			;write a string
+	 jmsg <>		;some error
+	setzm psflg		;assume structure is not PS
+	move c,wldbuf		;get structure string we just wrote
+	camn c,[asciz/PS/]	;public structure?
+	setom psflg		;yes, set the flag
+	hrroi b,[asciz/:<*>/]	;b/ the wildcards
+	call cpystr		;add them to device field
+	idpb c,a		;end with a null
+	ret			;return to caller
+
+
+;GETDAT - get creation date of directory
+;Takes DIRNAM - directory name string
+;returns +1 always with creation date in DATBLK
+
+getdat:	move a,[point 7,tmpbuf]	;a/ we are using the temporary buffer
+	move b,[point 7,dirnam]	;b/ pointer to directory string
+getda0:	ildb c,b		;pick off a byte
+	cain c,">"		;closing bracket?
+	 jrst getda4		;yes, go finish up
+	jumpe c,[emsg <Null directory name in GETDAT>] ;bad error
+	cain c,"<"		;opening bracket?
+	 jrst [	push p,b
+		hrroi b,[asciz/<ROOT-DIRECTORY./]
+		call cpystr
+		move d,a	;save position of last "." seen
+		pop p,b
+		jrst getda0 ]
+	idpb c,a
+	cain c,"."
+	 move d,a		;save position of last "." seen
+	jrst getda0
+
+getda4:	hrroi b,[asciz/.DIRECTORY/]
+	call cpystr
+	idpb c,a		;tie off with null
+	movei c,">"		;and overwrite a "."
+	dpb c,d
+	movx a,gj%old+gj%sht
+	hrroi b,tmpbuf
+	gtjfn%
+	 jrst [	setom datblk+.rscrv	;bad directory -- prob. top level
+		ret ]
+	movei b,datblk
+	movei c,2		;two words
+	rftad%
+	rljfn%			;throw away the jfn
+	 jfcl
+	ret			;return to caller
+
+
+;FILTER - decide what to do about this directory
+;Takes	CURDIR - directory number
+;	DIRBLK - GTDIR% information
+;Criteria for keeping a directory:
+;	1.) Special directories are ignored
+;	2.) Recently created directories are ignored
+;	3.) PS directories must be recently logged into
+;	4.) Domestic structure directories must not have usage-update set
+;	    and must have a corresponding PS directory.
+;Returns +1 save directory
+;	 +2 flush directory
+
+filter:	hrrz a,curdir		;fetch directory number
+	caig a,17		;special number
+	 ret			;yes...
+	move a,dirblk+.cdmod	;fetch directory mode word
+	txne a,cd%dir+cd%stf+cd%fac+cd%prm+cd%rtd ;special?
+	 ret			;yes, return now
+	call getdat		;look up creation date
+	skiple a,datblk+.rscrv	;get build date
+	caml a,cutoff		;built after cutoff?
+	 ret			;yes
+	skipn psflg		;are we working on PS?
+	 jrst filtr0		;no, use domestic structure criteria
+	move a,dirblk+.cdlld	;last login
+	caml a,cutoff		;logged in since cutoff?
+	 ret			;yes, save it
+	retskp			;inactive, flush it
+
+;here if we're working on a domestic structure
+
+filtr0:	move a,dirblk+.cdmod	;get back mode word
+	txne a,cd%upd		;usage-update-needed?
+	retskp			;yes, add to flush list
+	hrroi a,tmpbuf		;a/ use temporary buffer
+	hrroi b,[asciz/PS:/]
+	call cpystr		;move first string
+	move b,[point 7,dirnam]
+filtr1:	ildb c,b
+	caie c,":"		;look for colon
+	jumpn c,filtr1		;terminate on colon or null
+	call cpystr		;copy rest of string
+	idpb c,a		;tie off with null
+	movx a,rc%emo		;a/ want an exact match
+	hrroi b,tmpbuf		;b/ directory string
+	rcdir%			;get the directory number
+	 erjmp r		;oops, say directory exists
+	txnn a,rc%nom		;no match?
+	 ret			;nope. directory exists
+	retskp			;no PS directory, flush it
+
+
+Subttl FLUSH and FREEZE Commands
+
+.freez:	tdza a,a		;we are freezing accounts
+.flush:	seto a,			;we are killing accounts
+	movem a,flushf		;set flag
+	noise (DIRECTORIES FROM) ;some noise
+	movei b,[flddb. .cmifi]	;b/ input file
+	call .comnd		;parse it
+	 pmsg <Invalid or file not found> ;an error
+	call confrm		;wait for confirmation
+	tmsg <[Confirm]>
+	call confrm		;make damn sure
+	movem b,injfn		;save jfn
+	move a,injfn		;a/ jfn of input file
+	move b,[7b5+of%rd]	;b/ open for 7 bit, read access
+	openf%			;open it
+	 jmsg <>		;some error
+	setzm curdir		;no directory yet
+	setzm kilcnt		;number of directories we've killed/frozen
+flush0:	call getnam		;read file for punctuated directory name
+	 jrst flush2		;end of file
+	movx a,rc%emo		;a/ want an exact match
+	hrroi b,dirbuf		;b/ file specification
+	setz c,			;c/ not stepping
+	rcdir%			;get directory number
+	txne a,rc%amb!rc%nom	;is there really a directory there?
+	 jrst [ hrroi a,[asciz/No such directory - "/]
+		call eprint
+		hrroi a,dirbuf
+		psout%
+		tmsg <", continuing
+>
+		jrst flush0 ]
+	movem c,curdir		;save directory number for CTRL-A
+	skipe flushf		;skip if freezing (need to get .CDMOD)
+	 jrst flush1		;else go straight to CRDIR%
+	move a,curdir		;a/ directory number
+	movei b,dirblk		;b/ address of argument block
+	setz c,			;c/ don't want the password
+	gtdir%			;get directory info
+	movx a,cd%nvd		;get frozen bit (Not ValiD for login)
+	iorm a,dirblk+.cdmod	;set it
+	skipa b,[cd%mod+dirblk]	;b/ argument block for freezing
+flush1:	move b,[cd%del+c]	;b/ argument block for killing
+	hrroi a,dirbuf		;a/ directory name
+	setz c,			;c/ no password required
+	call .crdir		;kill or freeze the directory
+	 jrst flush0		;some failure, try next directory
+	aos kilcnt		;count a directory killed or frozen
+	jrst flush0
+
+;here to finish up
+
+flush2:	tmsg <Processed >
+	movei a,.priou
+	move b,kilcnt
+	movei c,^D12
+	nout%			;print casualty count
+	 jfcl
+	tmsg < directories.
+>
+	move a,injfn		;a/ jfn of input file
+	closf%			;close it
+	 jfcl			;ignore an error here
+	ret			;return to caller
+
+;GETNAM - read a punctuated directory string from the input file
+;returns +1 end of file
+;	 +2 directory string in DIRBUF
+
+getnam:	setzm dirbuf		;clear first word of buffer
+	move a,injfn		;a/ input jfn
+	hrroi b,dirbuf		;b/ address to stuff it
+	movei c,buflen*5-1	;c/ maximum byte count
+	movei d,12		;terminate on LF
+	sin%			;read in a line
+	 erjmp getnm1		;test for eof
+	setz d,
+	idpb d,b		;ensure a terminating null
+	move a,[point 7,dirbuf]	;pointer to name buffer
+	ildb b,a		;examine first character
+	caie b,.chcrt		;if blank line
+	cain b,"!"		;or comment line
+	 jrst getnam		;go for more
+	skipa			;skip into main loop
+getnm0:	ildb b,a		;fetch a character
+	jumpe b,[emsg <Input file had bad format>] ;shouldn't be any nulls yet
+	caie b,">"		;end of directory spec?
+	jrst getnm0		;no, go look some more
+	movei b,.chnul		;yes, flush rest of line
+	idpb b,a		;by ending string now
+	retskp			;skip return
+
+getnm1:	move a,injfn		;a/ jfn of input file
+	gtsts%			;get file status
+	txnn b,gs%eof		;end of file?
+	 emsg <File error other than end of file> ;nope, die
+	ret			;yes, single return
+
+Subttl USAGE-UPDATE Command
+
+;Set the usage update needed bit in all non-overhead directories of the
+;specified structure.  Ignores files-only, root-directory-subdirectory,
+;and staff directories.
+
+.usage:	noise (FOR DIRECTORIES ON) ;some noise
+	movei b,[flddb. .cmdev,cm%sdh,,<Structure name>] ;b/ device name
+	call .comnd		;do so
+	 pmsg <No such structure> ;bad parse
+	call makwld		;verify structure, build wildcard string
+	call confrm		;wait for confirmation
+	setzm curdir		;have no current directory
+usglup:	hrroi b,wldbuf		;b/ wildcard string
+	call getnxt		;get next directory
+	 ret			;all done, return to caller
+	move a,dirblk+.cdmod	;get directory mode word
+	txne a,cd%upd!cd%dir!cd%rtd!cd%stf ;special directory?
+	 jrst usglup		;yes, ignore it
+	movx a,cd%upd		;get usage update bit
+	iorm a,dirblk+.cdmod	;set it in argument block
+	hrroi a,dirnam		;a/ directory name
+	move b,[cd%mod+dirblk]	;b/ change only mode word
+	setz c,			;c/ no password needed
+	call .crdir		;do the work
+	 nop			;ignore the error
+	jrst usglup		;loop over all directories
+
+Subttl ENCRYPT Command
+
+;Resets all passwords on a structure to their original values.  If the
+; structure has the MS%CRP set in its homeblocks, all passwords will be
+; encrypted.  Already encrypted passwords are not touched.
+
+.encry:	noise (PASSWORDS ON) ;some noise
+	movei b,[flddb. .cmdev,cm%sdh,,<Structure name>] ;b/ device name
+	call .comnd		;do so
+	 pmsg <No such structure> ;bad parse
+	call makwld		;verify structure, build wildcard string
+	call confrm		;wait for confirmation
+	setzm curdir		;have no current directory
+enclup:	hrroi b,wldbuf		;b/ wildcard string
+	call getnxt		;get next directory
+	 ret			;all done, return to caller
+repeat 0,<	;;Code for Stanford 5.X style of encryption
+	move a,dirblk+.cdmod	;get directory mode word
+	skipe passwd		;if no password set
+	 txne a,cd%crp		;or already encrypted?
+	  jrst enclup		;ignore it
+>;repeat 0
+repeat 1,<	;;Code for DEC 6.X style of encryption
+	skipe passwd		;if no password set
+	 skipe dirblk+.cdpev	;or if already encrypted 
+	  jrst enclup		;then ignore this directory
+>;repeat 1
+	hrroi a,dirnam		;a/ directory name
+	move b,[cd%psw+dirblk]	;b/ change only mode word
+	hrroi c,passwd		;c/ use old password
+	call .crdir		;reset password, causing it to be encrypted
+	 nop			;ignore the error
+	jrst enclup		;loop over all directories
+
+Subttl CONVERT Command
+
+;The CONVERT command converts the directory format of a filesystem between
+; Release 5.X and 6.0.  It depends on a Stanford modification to CRDIR% in
+; the Release 6.0 monitor.  Read and understand the code in JSYSF.MAC before
+; attempting to use this function.  Note that you will need to patch the
+; monitor before this command will modfiy a directory.
+
+ifndef cd%cnv,<cd%cnv==1b17>	;CRDIR% flag for directory format conversion
+
+.conve:	noise (FILESYSTEM FORMAT FOR) ;some noise
+	movei b,[flddb. .cmdev,cm%sdh,,<Structure name>] ;b/ device name
+	call .comnd		;do so
+	 pmsg <No such structure> ;bad parse
+	call makwld		;verify structure, build wildcard string
+	call confrm		;wait for confirmation
+	setzm curdir		;have no current directory
+cnvlup:	hrroi b,wldbuf		;b/ wildcard string
+	call getnxt		;get next directory
+	 ret			;all done, return to caller
+	move a,[cd%cnv+<.cdppn+1>] ;flag to perform convertion, block length
+	movem a,dirblk+.cdlen	;set it
+	hrroi a,dirnam		;a/ directory name
+	move b,[cd%len+dirblk]	;b/ change only mode word
+	setz c,			;c/ no password
+	call .crdir		;convert the directory
+	  nop
+	jrst cnvlup		;loop over all directories
+
+Subttl LIST Command
+
+;Generate a list of directories with certain mode word bits set
+
+;MODTAB - table of keywords and mode bits
+
+define xx (a,b) <
+	xwd [asciz/a/],[b]	;;special keyword entry
+>
+
+modtab:	keybeg
+	xx (FACULTY,cd%fac)
+	xx (FILES-ONLY,cd%dir)
+	xx (FROZEN,cd%nvd)
+	XX (GUEST,cd%gst)
+	xx (MUST-RUN-PROGRAM,cd%mrp)
+	xx (PERPETUAL,cd%prm)
+	xx (ROOT-DIR-SUBDIR,cd%rtd)
+	xx (STAFF,cd%stf)
+	xx (USAGE-UPDATE,cd%upd)
+	keyend
+
+
+.list:	noise (DIRECTORIES ON)	;some noise
+	movei b,[flddb. .cmdev,cm%sdh,,<Structure name>]
+	call .comnd		;parse structure or device
+	 pmsg <No such structure> ;bad parse
+	call makwld		;check structure, make wildcard string
+	noise (WITH)		;some noise
+	movei b,[flddb. .cmkey,,modtab,<A characteristic,>]
+	call .comnd		;parse the field
+	 pmsg <Unrecognized directory characteristic> ;bad parse
+	movem b,modtyp		;store address of table entry
+	noise (DIRECT OUTPUT TO) ;more noise
+	movei b,[flddb. .cmofi] ;want an output file
+	call .comnd		;parse the field
+	 pmsg <Invalid output file specification> ;bad file spec
+	movem b,outjfn		;store jfn
+	call confrm		;wait for confirmation
+	move a,outjfn		;a/ jfn of output 
+	move b,[7b5+of%wr]	;b/ 7 bits, write access
+	openf%			;open the file
+	 jmsg <>		;some error
+	move a,outjfn		;a/ output file
+	hrroi b,[asciz/! List of /]
+	setz c,
+	sout%
+	hlro b,@modtyp
+	sout%
+	hrroi b,[asciz/ directories on /]
+	sout%
+	hrroi b,wldbuf
+	movei c,6
+	movei d,":"
+	sout%
+
+
+
+	hrroi b,[asciz/ as of /]
+	setz c,
+	sout
+	seto b,
+	movx c,ot%nsc!ot%scl
+	odtim%
+	hrroi b,[asciz/
+!
+/]
+	setz c,
+	sout%
+	hrrz a,@modtyp		;get address mode word flags
+	move a,(a)		;fetch test mode word
+	movem a,modtyp		;store it
+	setzm curdir		;no current directory
+lstlup:	hrroi b,wldbuf		;b/ wildcard string
+	call getnxt		;get next directory
+	 jrst lstdon		;all done, go finish up
+	move a,dirblk+.cdmod	;get mode word
+	tdnn a,modtyp		;do we want this directory?
+	 jrst lstlup		;no, get next one
+	move a,outjfn		;a/ jfn of output file
+	hrroi b,dirnam		;b/ directory name
+	setz c,			;c/ end on nulls
+	sout%			;write the directory string
+	hrroi b,[asciz/
+/]
+	sout%			;print a crlf
+	jrst lstlup		;loop over all directories
+
+
+lstdon:	move a,outjfn		;file handle
+	closf%			;close the file
+	 jfcl			;ignore error
+	ret			;return to caller
+
+Subttl Interrupt System
+
+;CTRLON, CTRLOF - toggle ctrl-A interrupt
+
+ctrlof:	setzm inton		;flag that interrupts are off
+	movei a,.fhslf		;a/ fork handle
+	move b,[1b<achan>]	;b/ channel mask
+	dic%			;disable interrupts
+	ret			;return to caller
+
+ctrlon:	setom inton		;flag that interrupts are on
+	movei a,.fhslf		;a/ fork handle
+	move b,[1b<achan>]	;b/ channel mask
+	aic%			;activate interrupts
+	ret			;return to caller
+
+;CTRL-A - progress reporting
+
+ctrla:	skipn curdir		;skip if we have a directory
+	debrk%			;otherwise return right now
+	push p,a		;save accumulators
+	push p,b
+	tmsg <Working on >
+	movei a,.priou
+	move b,curdir
+	dirst%			;write directory name
+	 erjmp [ hrroi a,dirbuf
+		 psout%
+		 jrst .+1 ]	;must have killed it, write out string
+	tmsg <
+>
+	pop p,b
+	pop p,a
+	debrk%			;return from interrupt
+
+;LEVTAB, CHNTAB
+;level and channel tables
+
+levtab:	level1
+	level2
+	level3
+
+chntab:	xwd 1, ctrla		;here on channel 0 interrupts
+	block 35
+
+
+
+Subttl Miscellaneous Utility Subroutines
+
+;EPRINT
+;here to pretty print an error message
+;takes	a/ pointer to error string
+;returns +1 always
+
+eprint:	push p,a
+	movei a,.priou		;a/ reading from the tty
+	rfpos%			;get cursor position
+ 	hrroi a,[byte(7) 15,12,0] ;a/ a CRLF
+	trne b,-1		;skip if against left margin
+	psout%			;print a CRLF otherwise
+	pop p,a			;restore the string pointer
+	esout%			;print the message
+	ret			;return to caller
+
+
+;PERR
+;like EPRINT, but prints most recent error message
+;takes	a/ pointer to error string
+;never returns
+
+perr:	call eprint		;print the string
+	tmsg < - >		;print the separator
+	movei a,.priou		;a/ to the terminal
+	hrloi b,.fhslf		;b/ most recent error for this process
+	setz c,			;c/ no string length limit
+	erstr%			;print the error string
+	 jfcl			;ignore errors
+	  jfcl			;...
+	haltf%			;shut us down
+	jrst .-1		;and stay that way
+
+;.CRDIR - CRDIR% jacket routine
+;Arguments to CRDIR% must already be set up
+;Returns +1 error, messaage already printed
+;	 +2 success
+
+.crdir:	crdir%			;do the work
+	 erjmp crdirx		;some error
+	retskp			;success, skip return
+
+crdirx:	hrroi a,[asciz/ CRDIR% failed on /]
+	call eprint
+	hrroi a,dirnam
+	psout%
+	tmsg < because >
+	movei a,.priou
+	hrloi b,.fhslf
+	setz c,
+	erstr%
+	 jfcl
+	  jfcl
+	tmsg <, continuing....
+>
+	ret
+
+;CONFRM
+;wait for confirmation of a command
+;returns +1 always
+
+confrm:	push p,a		;save some AC's
+	push p,b
+	push p,c
+	movei b,[flddb. .cmcfm,cm%sdh,,<Press RETURN>] ;b/ function block
+	call .comnd		;wait for confirmation
+	 pmsg <Not confirmed>	;no...
+	pop p,c			;restore the AC's
+	pop p,b
+	pop p,a
+	ret			;return to caller
+
+
+;CPYSTR - copy a string.  Terminates on null byte
+;call:	a/ destination byte-pointer, or -1,,addr, or jfn
+;	b/ source byte-pointer, or -1,,addr
+;ret:	+1 always, with updated string pointers in a and b, and break char
+;		(0) in c
+
+cpystr:	tlnn a,-1		;is left half zero?
+	 jrst cpyst1		;yes, must be a jfn.  Do SOUT%
+	tlc a,-1		;convert to real byte ptr if necessary
+	tlcn a,-1
+	hrli a,(<point 7,0>)
+	tlc b,-1		;convert to real byte ptr if necessary
+	tlcn b,-1
+	hrli b,(<point 7,0>)
+cpyst0:	ildb c,b
+	jumpe c,r
+	idpb c,a
+	jrst cpyst0
+	ret
+
+cpyst1:	setz c,
+	sout%
+	ret
+
+	end <evecl,,evec>

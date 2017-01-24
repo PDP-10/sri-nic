@@ -1,0 +1,127 @@
+ 5-Jan-88 16:23:20-PST,2148;000000000005
+Return-Path: <SRA@XX.LCS.MIT.EDU>
+Received: from XX.LCS.MIT.EDU by SRI-NIC.ARPA with TCP; Tue 5 Jan 88 16:23:13-PST
+Date: Tue 5 Jan 88 19:22:34-EST
+From: Rob Austein <SRA@XX.LCS.MIT.EDU>
+Subject: Re: PSECT support for KCC
+To: KLH@SRI-NIC.ARPA
+cc: Bug-KCC@SRI-NIC.ARPA, MRC@XX.LCS.MIT.EDU
+In-Reply-To: <12364283106.28.KLH@SRI-NIC.ARPA>
+Message-ID: <12364288013.49.SRA@XX.LCS.MIT.EDU>
+
+The files are in XX:<SRA.77>.  You want CPSECT.MAC (sic), CENDPS.C,
+and CRT.C.
+
+My interest in being compatable with existing MACRO libraries stems
+from extreme frustration at trying to keep parallel versions
+consistant when we have a perfectly good linking loader that's
+supposed to be able to solve all these problems for us.  I want the C
+code (which will be installed, on XX anyway, as C:LIBsomething.REL) to
+be able to load whatever the current latest and greatest HSTNAM.REL
+is, straight out of the MMAILR distribution.  The C code will just be
+something to translate between calling conventions.  Or I might even
+just write a single routine that translates between the normal MACRO
+calling conventions (args/vals in AC1->AC4, +1/+2 return) and C
+conventions, sort of like jsys().  Reimplementing the same code in
+multiple languages is a huge waste of time that I can't afford.
+
+I agree that making extended .EXEs directly would be nice.  The CRT changes
+should free you from some of the LINK randomness; the only JOBDAT symbol
+used by the PSECT version is .JBSA, and that's only used so that we can
+safely include the symbol table at the end of the code segment.
+
+There shouldn't be any problem with handling this stuff like -i, that's
+why the modules are set up as they are.  Nor should there be any problem
+with using FAIL for user modules, although I can't see why anyone would
+want to (I know, ancient history).  All the static data and code
+still fits in a single section; in fact, the only difference in the
+memory layout in my initial version of the PSECT code is that
+the low segment begins at 1000 instead of 140 so that the DATA
+psect can start on a page boundry (LINK gets -very- upset otherwise).
+-------
+ 7-Mar-88 22:11:17-PST,1730;000000000015
+Return-Path: <SRA@XX.LCS.MIT.EDU>
+Received: from XX.LCS.MIT.EDU by SRI-NIC.ARPA with TCP; Mon 7 Mar 88 22:11:11-PST
+Date: Tue, 8 Mar 1988  01:10 EST
+Message-ID: <SRA.12380604295.BABYL@XX.LCS.MIT.EDU>
+From: Rob Austein <SRA@XX.LCS.MIT.EDU>
+To:   Ken Harrenstien <KLH@SRI-NIC.ARPA>
+Cc:   sra@XX.LCS.MIT.EDU
+Subject: PSECT support
+In-reply-to: Msg of 7 Mar 1988  23:25-EST from Ken Harrenstien <KLH@SRI-NIC.ARPA>
+
+/REDIRECT is documented at least minimally in the v6 HLP:LINK.HLP.
+There's a copy of this on XX if it's not on NIC.
+
+Everything in CPSECT.MAC can be done trivially by LINK switches with
+one exception: I don't think LINK supports any way of making the code
+PSECT read-only via LINK switches.  I suppose this is not vital, but
+it would certainly be a nice feature to be able to use for debugging.
+This is a general-purpose feature missing from LINK, not KCC specific,
+so it might be reasonable to distribute a LINK source patch and some
+conditionalized code in KCC to use it, for sites that want it.  Or
+maybe DEC has fixed this since the last time I read the documentation,
+although I doubt it.
+
+If you think you can do the CENDPS stuff via PDVs, great.  I've never
+tried to use PDVs for anything.  I certainly have no attachment to the
+current method, other than that it works.  I don't think there is any
+way to cleanly define the end-of-psect symbols from LINK command level
+without resorting to really nasty kludgery.
+
+The .HBHSP test was derived empiricly, obviously DEC could break it in
+the next version of LINK they release.  All I can say is that it seems
+to work and that the only other method I could think of to determine
+PSECTness was to grovel the symbol table at runtime.
+ 7-Mar-88 20:25:56-PST,1765;000000000001
+Mail-From: KLH created at  7-Mar-88 20:25:54
+Date: Mon, 7 Mar 88 20:25:54 PST
+From: Ken Harrenstien <KLH@SRI-NIC.ARPA>
+Subject: PSECT support
+To: sra@XX.LCS.MIT.EDU
+cc: klh@SRI-NIC.ARPA
+Message-ID: <12380585238.50.KLH@SRI-NIC.ARPA>
+
+OK, I have a little time now, and have cleaned up KCC for distribution
+with the exception of possibly adding PSECT support.  What I'd like to
+do is remove the need for CPSECT, and possibly CENDPS as well, by
+telling KCC to invoke LINK with the appropriate arcane switches.
+
+It's been a long-time problem trying to set things up so that the
+COMPIL class commands for COMPILE, LOAD, etc. will work properly.
+I've more or less given up on this and now use KCC itself as the
+front-end to LINK; at the cost of losing the COMPILE generality,
+everything else becomes much simpler (and more homelike for Unix fans,
+if that helps any).  Of course if one were willing to hack the EXEC
+and LINK to know about KCC specially, the way they already do for
+other things like FORTRAN, anything is possible.  But that isn't a
+realistic alternative.
+
+I'm pretty sure that KCC can take care of the stuff that CPSECT is
+currently doing.  The problem is, my LINK manual is dated March 1983
+and doesn't contain things like /REDIRECT.  I'm trying to dig up a
+more recent one, but don't know yet whether we have one lying around.
+
+As for CENDPS, I was thinking that CRT.C could use the PDV to
+determine where things are at runtime; alternatively KCC could define
+the end-symbols using switches, if there is any way to query LINK on
+the current value of its location counters.
+
+Including the changes to CRT.C is no problem, as long as that
+.JBHSP test is guaranteed to distinguish the PSECT case.
+
+Any thoughts?
+-------
+ 8-Mar-88 12:06:29-PST,450;000000000001
+Mail-From: KLH created at  8-Mar-88 11:44:16
+Date: Tue, 8 Mar 88 11:44:15 PST
+From: Ken Harrenstien <KLH@SRI-NIC.ARPA>
+Subject: Re: PSECT support
+To: SRA@XX.LCS.MIT.EDU
+cc: KLH@SRI-NIC.ARPA
+In-Reply-To: <SRA.12380604295.BABYL@XX.LCS.MIT.EDU>
+Message-ID: <12380752419.50.KLH@SRI-NIC.ARPA>
+
+Thanks!  I'll let you know if I uncover anything myself.  Boy, I hate
+messing with LINK!  I'm impressed you managed to get anything to work.
+-------

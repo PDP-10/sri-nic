@@ -1,0 +1,361 @@
+COMMENT <CANON.MAKIMP>MAKIMP.SAI.32,  8-Jan-84 14:58:40, Edit by LOUGHEED
+COMMENT Have to unmap the data areas first.  Real sloppy design!;
+COMMENT <CANON.MAKIMP>MAKIMP.SAI.30,  8-Jan-84 14:17:47, Edit by LOUGHEED;
+COMMENT Just before stopping, do a RESET% to close open files;
+COMMENT CANON.MAKIMP>MAKIMP.SAI.28, 28-Nov-83 13:51:49, Edit by LOUGHEED;
+COMMENT <CANON.MAKIMP>MAKIMP.SAI.27, 28-Nov-83 13:44:19, Edit by LOUGHEED;
+COMMENT <CANON.MAKIMP>MAKIMP.SAI.26, 28-Nov-83 13:40:09, Edit by LOUGHEED;
+COMMENT Comment out code for generating new-style headers;
+COMMENT Re-install code for old-style headers;
+
+comment ***** MakImp:  Impress file translator *****;
+
+comment ***********************************************************
+	 Converts files to Impress format for the Imprint-10
+
+	 By Jan Stoeckenius, with assistance from Pentti Kanerva.
+	 Based on an earlier program by Randy Strauss.
+
+	 This module runs under TOPS20 (TOPS20 = TRUE).
+
+	 Sail customizing macros are in genhdr.sai
+	 Some file utilities are in makfil.sai
+	 Documentation begins on page 2.
+	***********************************************************;
+
+begin "-- program --"
+
+begin "-- makimp --"
+
+require "genhdr.sai"source!file;
+
+!	Introduction;
+
+
+! *********************************************************************
+!
+! Note:  See the ImPrint-10 systems manual for documentation on the 
+!        Impress language and RST font file format.
+!
+! 	MakImp takes file in a variety of formats and translates them 
+! into ImPress format for use with the IMAGE ImPrint-10 laser printer.  
+! The Present module handles user commands and provides various utility 
+! routines.  Separate modules handle font files and the various types
+! of input files.  As of this date (6/27/82) these other modules are:
+! FNTDLR (for handeling RST format font files) and DVIINP (for Device
+! Independent format files, as produced by TEX).  
+!
+! 	MakImp has essentially three functions:
+!		
+!		1.  To integrate font declarations and raster masks
+!		    into the output file as necessary.
+!
+!		2.  To manage glyph table space.
+!
+!		3.  To translate arbitrary precision positioning 
+!		    information in the input file to the 1/240th of an
+! 		    inch precision available on the ImPrint-10.
+!
+!	To accomplish the first task, Makimp and the font file handler
+! maintain four buffers: one for the input file, one for the output file,
+! one for font directories, and one for raster images.  To allow for 
+! maximum speed and flexibility, all but the output file buffers are run
+! as separate virtual memories, with associated page tables.  The output
+! buffer is simply output when full or when the program is complete.
+!
+!	The finite size of the glyph table within the ImPrint-10 requires
+! MakImp to delete and redeclare glyphs so as to keep the total space 
+! occupied at any one time below a certain maximum.  For speed
+! considerations such activity should be kept to a minimum, thus infre-
+! quently used glyphs should be discarded before others.
+!	MakImp attempts to meet this criterion by maintaining a deletion
+! queue.  As each "page" in the input file is scanned ("page" here 
+! denoting all the material intended for one physical output page), the
+! first instance of a glyph causes it to be moved to the end of the
+! queue (or added to the end, if it had not occurred previously).  Glyphs
+! are deleted from the front of the queue as necessary to make room in
+! the glyph table.  A pointer to the first glyph in the queue used on the
+! current page is maintained to prevent deletion of needed glyphs.
+! 
+!	The method by which MakImp translates positioning information is
+! dependent on the type of input file.  For a further discussion, see the
+! documentation associated with the routine SetPos is the file TYPSET.
+! *********************************************************************;
+
+!	Detailed discussion;
+
+
+! *********************************************************************
+!	
+! The Data Structures:
+!
+!	The array GLYPHS contains four integer entries for every 
+! possible glyph needed in the output file.  They are: a pointer to the
+! deletion queue (stored in the array glyst), the advance width of the 
+! glyph in pixels, the advance width of the glyph in input file units 
+! (e.g.: rsu's), and the number of bytes taken up by this glyph in the 
+! glyph table.  Indexing is by font number and character code.  A nega-
+! tive pointer to the deletion queue indicates a certain glyph has not
+! been used or has been deleted.
+!
+!	The array GLYST houses the deletion queue.  Each entry is 
+! either -1, indicating a gap in the queue, or a right-justfied glyph
+! identifier in the standard Impress format (000ffffffccccccc).  
+! The routine SHRINKGLYST removes gaps from the queue, as does COMPACT,
+! the latter also deleting up to 10 glyphs in certain circumstances.
+! The integer PAGEPOINTER points to the first element in the queue
+! representing a glyph used on the current page.  GLYST is staticaly
+! allocated (of size MAXR), so its size sets a maximum on the number of
+! distinct glyphs in any input file.
+!
+! 	The array CHARS is a list of the all the information for those 
+! glyphs which must be declared on this page.  Each entry occupies 
+! eight words, the first two being the font number and character code.
+! 
+! Flow Chart:
+!
+! 	Let us suppose that such preliminaries as the identification of
+! the input file and the necessary fonts has been taken care of.  Assume 
+! the input file is being scanned, and that the glyph associated with 
+! character code c in font f is required.  The program first examines 
+! deletion queue in the array glyphs.  If the entry is not negative, 
+! it indicates the glyph is present in the glyph table.  The entry is 
+! then examined to see if it points to a location before or after the 
+! page pointer.  If the location is after the page pointer, the glyph 
+! has already been used on this page, and no action is called for.  If 
+! it is before, it is altered so as to point to the end of the queue, 
+! the original entry in the queue (glyst) is changed to -1, and the new 
+! entry in the queue is set equal to the glyph identifier of the glyph 
+! in question.  See the routine FINDCHAR for more information.
+!	If the queue pointer for the glyph had been negative, it indi-
+! cates this glyph is not present in the glyph table.  The font handler
+! routine GETGLYPHINFO is then called upon to get the information necessary
+! to declare this glyph (pixel height and width, offsets, and advance
+! width).  This information, along with the pointer to the raster mask
+! of the glyph, is placed at the end of the chars array.  The queue 
+! pointer for the glyph is set to the end of the queue, where the glyph
+! identifier is then stored.  
+!	After a page has been completely scanned, the total amount of 
+! space required in the glyph table is calculated, and any necessary
+! deletions are made.  This is done off the front of the queue by the 
+! routine DELETE!PACK, and only as many glyphs as are necessary are
+! deleted.  This accomplished, the chars array is scanned, the glyphs
+! declared, and the routine GETRASTERINFO is used to transfer their 
+! raster masks into the output file.  All these tasks take place in
+! the routine OGLYMSK;
+! **********************************************************************;
+
+!	Externals, global variables;
+
+
+External simp procedure Setup!Files;	! User interface routines;
+
+External simp procedure doDVIfile;	! DVI input file handler;
+
+External simp procedure doSCRfile;	! Scribe input file handler;
+
+External simp procedure doLISPfile;	! INTERLISP input file handler;
+
+External simp procedure doListing;	! ASCII input file handler;
+
+! External simp procedure TitlePage;	! Title page routine;
+
+
+! ---------- file variables;
+external integer InFlType,	! type of the input file;
+		 inchan,	! input channel;
+		 IMPchan,	! .IMP (output) file channel number;
+		 IMPjfn;	! .IMP (output) file JFN;
+
+external string  name,		! input file name;
+		 outfname,	! output file name;
+		 ercname,	! name of .ERC file;
+		 username,	! user's name;
+		 psize;		! page size, legal or not;
+
+internal integer maxd,		! number of glyph data bytes allowed output 
+								    per page;
+	 	 maxi;		! number of input data bytes allowed output 
+								    per page;
+internal string logdirname,	! logged in dir name;
+		  username;	! user name for title page;
+
+internal boolean notifyflag,	! true if user is to be notified;
+		      qlook,    ! true if queue look desired;
+		 headerflag,    ! true if headers wanted on listings;
+		  spoolflag,    ! true if spooler requested this;
+		   savefile,    ! true if .imp file to be saved;
+		   waitflag,	! true is Canon is to wait;
+		  titleflag;	! true if title page desired;
+
+internal integer outpages;	! page count;
+
+!	Error, Conversion;
+
+
+! 	E R R O R
+!
+! **********************************************************************;
+! Error handling routine.  Prints argument string as error message.
+! **********************************************************************;
+Internal simp procedure error(string s); 
+	begin "-- error --"
+	if ercname=null then ercname_"makimp.erc";
+	setprint(ercname,"B");
+	print(nl,"error !!!: ",s,"!",nl) 
+	end   "-- error --";
+
+
+! prev:     hdr.sai
+    and  bugsrc.sai;
+
+require "cmdinp.rel" load!module;	! User interface routines;
+require "dviinp.rel" load!module; 	! DVI input file handler;
+require	"fntdlr.rel" load!module;	! Font file handler;
+require "lstinp.rel" load!module;	! ASCII file handler;
+require "lspinp.rel" load!module;	! INTERLISP file handler;
+require "scrinp.rel" load!module;	! Scribe file handler;
+
+require "arydcl.sai" source!file;	! arrays needed only in other
+					! modules but which SAIL can
+					  allocate only in the driver file;
+require "bugsrc.sai" source!file; 	! debugging macros;
+require	"makfil.sai" source!file; 	! file manipulation routines;
+! Uses   scflnm.sai		  	! TOPS20 filename scanner;
+require "typset.sai" source!file;  	! Character addition and positioning;
+! Uses   outmac.sai;			! Byte output routines;
+! and    serivce.sai;			! Various support routines;
+
+!	Init;
+
+
+!	I N I T
+!
+! ***********************************************************************
+! Does some initialization.
+! ***********************************************************************;
+procedure init;
+	begin "-- init --"
+	integer logdir,conndir,ttyno,jn;
+
+	marg_xspace_bskip_curf_0; ! set up some type setting variables;
+
+	! and some book keeping ones;
+	arrclr(glyst,-1); arrclr(glyph,-1); arrclr(fntinf,Null!Record); 
+	nexglyrec_0; glydata_0;	InFlType_badfile;
+
+	! the output file pointer;
+	OutPtr_Point(OutBpB,memory[FirstImpPage*512],-1);
+
+	InitBug;	! lastly, set up the debugging macros;
+
+	titleflag_true;	! initially have titles;
+	outpages_0;	! output page count;
+	jn_gjinf(logdir,conndir,ttyno);	! Logdir contains logged directory;
+	logdirname_dirst(logdir);
+	username_logdirname;		! User is logged in dir, initially;
+
+	notifyflag_waitflag_false;
+	savefile_spoolflag_qlook_false;
+
+	end   "-- init --";
+
+!     adduserinfo
+
+! *********************************************************************
+! Adds user info at the end of the Imp file.
+! The format is (in bytes): 0,#pages,0,"username",0,notifyflag,'177.
+! Notifyflag is 1 to notify, 2 to wait, and 3 for no action.
+! *********************************************************************;
+
+procedure adduserinfo;		! Adds user name and notify flag;
+begin integer c; string s;
+	OutByte(0);
+	OutByte(outpages);	! Number of pages to print here;
+	OutByte(0);
+	s_username;
+	while not 0=c_lop(s) do begin OutByte(c) end;
+	OutByte(0);
+	if notifyflag then begin OutByte(1) end else 
+	   if waitflag then begin OutByte(2) end else begin OutByte(3) end; 
+	OutByte(177);		! End of this file;
+end;
+
+! 	main program;
+
+
+!	M A I N
+!
+! *********************************************************************
+! the main program 
+! *********************************************************************;
+init; 
+setup!files;		! does the getswitches; 
+
+print0(<nl,"log of video output going to file: ",ercname>);
+if bug0 then setprint(ercname,"B");
+
+! Current ImPress file header peculiarities;
+	begin "-- peculiarities --"
+
+! The code here is for the old-style Canon. ;
+! The code for the new Canon causes all sorts of grief.;
+	string s;
+	integer t;
+
+	s_cvs(maxi)&name; 
+	while s"" do 
+		begin "-- lop --"
+		t_lop(s); OutByte(t) 
+		end   "-- lop --";
+	OutByte(0);
+	OutFourByte(imagenmark);  
+	OutFourByte(impresmark);
+	end   "-- peculiarities --";
+
+
+case InFlType of begin "-- file case --"
+		   [dvifile] doDVIfile;
+		   [LPTfile] doListing;
+		   [SCRfile] doSCRfile;
+		   [LISPfile] doLISPfile;
+		   else end   "-- file case --";
+     
+! if titleflag then titlepage; 
+
+OutByte(I!eof);		! end IMP file, close IMP file, release channels;
+adduserinfo;	! adds stuff to end of file for spooler;
+rljfn (InChan); 
+CloseImp;
+print(" ==> ",outfname,nl);
+setprint("","T");
+
+IFTOPS20
+	begin "-- the end --"
+	string s; integer i;
+	s_PROTDIR&"staff "&outfname;
+!	for i_1 step 1 until length(s) do sti('101,s[i for 1]) ! magic;
+	end   "-- the end --";
+
+	if qlook then runprg("<unsupported>iq.exe",0,true);  
+                                              ! Run the queue looker;
+
+	startcode 
+	seto 1,;
+	move 2,['400000000500];	comment .fhslf,,500;
+	move 3,['400000000100]; comment pm%cnt+100;
+	pmap;           	comment unmap pages 500-577;
+	seto 1,;
+	move 2,['400000000700];	comment .fhslf,,700;
+	move 3,['400000000100];	comment pm%cnt+100;
+	pmap;			comment unmap pages 700=777;
+	reset;		        comment close files, release jfns;
+	haltf;			comment no `End of SAIL execution';
+	jrst .-1;
+	end;
+ENDTOPS20
+
+end   "-- makimp --"
+
+end   "-- program --";
+

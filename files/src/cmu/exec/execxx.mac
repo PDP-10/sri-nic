@@ -1,0 +1,1126 @@
+;<EXEC.CMU>EXECXX.MAC.5,  9-May-85 16:53:09, Edit by VAF
+; Reverse sense when checking for name component too short in CHKSUB.
+;<EXEC.CMU>EXECXX.MAC.4,  4-Apr-85 22:39:57, Edit by VAF
+; Code for checking passwords.
+;<EXEC.CMU>EXECXX.MAC.3,  8-Feb-85 14:51:37, Edit by VAF
+; Make IPCF initialization not fail badly if no INFO
+;<EXEC.CMU>EXECXX.MAC.2, 17-Jul-84 10:08:58, Edit by VAF
+; Always do ^D to .PRIOU. Flush BUG command.
+;<EXEC.CMU>EXECXX.MAC.1, 11-Feb-84 14:22:46, Edit by VAF
+; Flush WHO command. Flush EXEC-MESSAGES stuff.
+;<CMEXEC>EXECXX.MAC.55,  1-Feb-84 16:29:09, Edit by VAF
+;Fast login support in XMESS
+;<CMEXEC>EXECXX.MAC.52,  3-Dec-83 14:17:18, Edit by VAF
+;Move EM85 here from EXEC1. EM35 from EXECIN
+;<CMEXEC>EXECXX.MAC.50, 28-Nov-83 12:03:38, Edit by VAF
+;EM134 Create XMESS routine. Reorganize MESS.
+;<CMEXEC>EXECXX.MAC.49, 27-Nov-83 23:04:24, Edit by VAF
+;EM133 Check for logged-in, receiving messages in IPCINI
+;      Check for logged-in in MESS
+;<CMEXEC>EXECXX.MAC.48,  5-Aug-83 17:24:13, Edit by VAF
+;Remove .COKE stuff. It is in EXECIN now.
+;<CMEXEC>EXECXX.MAC.47, 20-Jul-83 00:27:46, Edit by VAF
+;EM117 Allow longer sends & do BLT instead of SOUT to copy buffer.
+;<CMEXEC>EXECXX.MAC.45,  5-Jul-83 18:13:03, Edit by VAF
+;EM114 Request migration of CMEXEC-MESSAGES.KLUGE. Also, clean up code to
+;      handle messages a bit.
+;<CMEXEC>EXECXX.MAC.44, 18-Jun-83 19:37:27, Edit by VAF
+;EM107 At CS: move CMEXEC.MESSAGES to UNS:
+;<CMEXEC>EXECXX.MAC.38, 20-Feb-83 18:08:28, Edit by BLACKWELL
+;EM89 Bug command puts version number in subject field
+;<CMEXEC>EXECXX.MAC.27, 15-Feb-83 01:52:23, Edit by BLACKWELL
+;EM87 Verbose switch for Info Coke-Status
+;<VAF.CMEXEC>EXECXX.MAC.20, 26-Jan-83 23:08:26, Edit by BLACKWELL
+;EM82 Info Coke
+;<BLACKWELL.CMEXEC>EXECXX.MAC.14, 29-Nov-82 16:13:21, Edit by VAF
+;EM72 Moved <CL0X>CMEXEC.MESSAGES to <CL0X>EXEC.MESSAGES, since it is
+;     replacing CLEXEC.
+;<BLACKWELL.CMEXEC>EXECXX.MAC.10, 29-Nov-82 13:46:47, Edit by BLACKWELL
+;EM71 Add Set Terminal-Location, fix Bug so it doesn't thrash exec if you
+;     quit from MM.
+;<BLACKWELL.CMEXEC>EXECXX.MAC.5, 21-Nov-82 20:40:02, Edit by VAF
+;EM67 Moved CMEXEC.MESSAGES to <CL0X> at CC.
+;<BLACKWELL.CMEXEC>EXECXX.MAC.2, 20-Nov-82 19:53:08, Edit by BLACKWELL
+;EM66 Take out all the old history stuff
+;<HPM.TEMP>EXECXX.MAC.62, 14-Nov-82 23:37:10, Edit by VAF
+;EM63 Make GUSPID take either a tty# or tty device designator.
+;<HPM.TEMP>EXECXX.MAC.56, 11-Nov-82 05:47:37, Edit by BLACKWELL
+;EM61 Don't save commands that are executed in PCL's
+;<HPM.TEMP>EXECXX.MAC.55, 10-Nov-82 23:48:30, Edit by BLACKWELL
+;EM60 Flush LF's from history commands
+;<HPM.TEMP>EXECXX.MAC.52, 10-Nov-82 21:39:33, Edit by BLACKWELL
+;EM59 Pretty up Who command output
+;<HPM.TEMP>EXECXX.MAC.51,  9-Nov-82 23:54:25, Edit by BLACKWELL
+;EM58 Fix minor bug ("off by one") in redo command
+;<HPM.TEMP>EXECXX.MAC.50,  4-Nov-82 02:09:25, Edit by VAF
+;EM56 Fix bogus, illegal-instruction getting code in MESS:
+;<HPM.TEMP>EXECXX.MAC.45,  3-Nov-82 14:46:00, Edit by VAF
+;EM54 Added BUG command. Don't record non-terminal commands.
+;<HPM.TEMP>EXECXX.MAC.43,  3-Nov-82 14:10:37, Edit by VAF
+;EM53 Use CMEXEC-MESSAGES.KLUGE to keep track of printing of "login" messages.
+;<HPM.TEMP>EXECXX.MAC.34,  3-Nov-82 09:18:33, Edit by BLACKWELL
+;EM52 New login messages facility
+;<HPM.TEMP>EXECXX.MAC.18, 30-Oct-82 07:44:57, Edit by VAF
+;EM50 Who command.
+;<HPM.TEMP>EXECXX.MAC.2, 30-Oct-82 00:23:24, Edit by VAF
+;EM48 Created this module. This module contains user IPCF, command history,
+;     and other CMEXEC-specific functions (CTDPSI).
+
+	SEARCH EXECDE,DKTBLD
+	TTITLE EXECXX
+
+T1==1
+T2==2
+T3==3
+T4==4
+
+;EM31
+;PSI Routine for terminal character that prints disk usage (^D)
+
+CTDPSI::CALL SAVACS		;Save all AC's
+	CALL CTDX		;Do the work
+	CALL RESACS		;Retore AC's
+	DEBRK%			;And return
+
+CTDX:
+CS,<	STKVAR <used,cijfn0,cojfn0,sav40>>
+CC,<	STKVAR <used,wlim,plim,cijfn0,cojfn0,sav40>>
+	MOVE A,CIJFN
+	MOVE B,COJFN
+	MOVEM A,CIJFN0		;Save possible diverted output
+	MOVEM B,COJFN0
+	MOVE A,40
+	MOVEM A,SAV40		;Possible UUO in progress
+	MOVEI A,.PRIOU		;Always display output to primary,
+	MOVEM A,COJFN		; since that's where ^D was typed.
+	GJINF%			;Get current job info
+	SETO A,
+	GTDAL%			;Get disk allocation info
+	MOVEM B,used		;Save amount used away
+CC,<	MOVEM A,wlim		;Working storage limit
+	MOVEM C,plim		;Permanent storage limit
+>;CC
+	HRROI A,[ASCIZ/DSK:/]
+	STDEV%			;Get connected device name
+	 ERJMP .+1
+	MOVE D,B		;Save device designator
+	MOVE A,B
+	GDSKC%			;Get count of free pages
+	 ERJMP .+1
+	MOVE C,used		;Get used count back
+CS,<	ETYPE < %3Q pages used in %G, %2Q free on %4H:
+>>
+CC,<	ETYPE < %3Q pages used (>
+	MOVE C,B		;Copy free count into C
+	MOVE B,plim		;Get permanent quota back
+	CAML B,[377777,,0]	;+INF?
+	 JRST [ETYPE <+inf>
+	       JRST CTDX1]
+	SUB B,used		;Compute actual free
+	ETYPE <%2Q>		;and print it out
+CTDX1:	MOVE B,wlim		;Working quota
+	CAML B,[377777,,0]	;+INF?
+	 JRST [ETYPE </+inf>
+	       JRST CTDX2]
+	SUB B,used		;Compute remaining working quota
+	ETYPE </%2Q>		;and print it
+CTDX2:	ETYPE < free) in %G, %3Q free on %4H:
+>
+>;CC
+	MOVE A,SAV40
+	MOVEM A,40
+	MOVE A,CIJFN0
+	MOVEM A,CIJFN
+	MOVE B,COJFN0
+	MOVEM B,COJFN		;Restore possible buffered output
+	RET
+
+
+;EM34
+;Define a PID for this user. Called whenever the exec starts or we login.
+
+IPCINI::SKIPE CUSRNO		;Not logged in?
+	SKIPE RCVFLG		;Or not receiving messages?
+	RET			;Don't do anything, then
+	SKIPN MYPID		;Got a PID yet?
+	 CALL GETPID		;Create me a PID
+	SKIPE HAVPID		;Was it ever named?
+	 RET			;Then we are done
+	CALL XGIPID		;Get INFO's PID now
+	 RET			;Non-existant - just punt
+	HRROI A,SNDFNM		;Where the message file name is
+	MOVE B,LIDNO		;First put on home directory name
+	DIRST%
+	 TRN
+	HRROI B,[ASCIZ/MSGS/]	;Initial part
+	SETZB C,D
+	SOUT%			;Do the string copy
+	MOVE B,JOBNO		;My jobno
+	MOVEI C,^D10		;In decimal
+	NOUT%			;goes next
+	 TRN
+	HRROI B,[ASCIZ/.TXT;T/]	;The extension
+	SETZB C,D
+	SOUT%			;Finsih making the name
+	SETZM IPCFP+.IPCI1	;No message copy
+	HRROI A,IPCFP+.IPCI2	;Argument is the PID name
+	MOVE B,CUSRNO		;Current user #
+	DIRST%			;Translate us
+	 ERJMP NONPID		;Oh well...
+	MOVEI B,"."		;Special separator
+	IDPB B,A		;Add it on
+	MOVE B,JOBNO		;Current job number
+	MOVEI C,^D10		;In decimal
+	NOUT%			;Add it to the PID name
+	 TRN
+	MOVE A,[1,,.IPCIJ]	;Code,,FCN
+	MOVEI B,0		;Sending to INFO
+	CALL SNDMSG		;Send a message...
+	  CALL CJERR		;We don't want this to happen...
+INII.2:	MOVE A,INFPID		;Get INFO pid back
+	CALL IPCRCV		;Receive message from INFO
+	MOVE C,IPCFP		;Get request ID returned by INFO
+	CAME C,[1,,.IPCIJ]	;Is it mine?
+	 JRST INII.2		;Try again, then
+	LOAD A,IP%CFE,A		;Load the error/flag bits
+	JUMPE A,IPCIOK		;If 0, then we are in good shape
+	CAIN A,.IPCDN		;Duplicate name?
+	 RET			;Just return, then
+	ETYPE <%%During PID name def: INFO returned error code %1O
+>
+	RET			;Return
+IPCIOK:	SETOM HAVPID		;We now have a named PID
+NONPID:	RET			;And are now done...
+
+;Kill off our PID. Called whenever the exec halts to insure that no one 
+;tries to send any messages to us.
+
+IPCKIL::TRVAR <<ARGBLK,4>>	;MUTIL% argument BLOCK
+	MOVEI A,.MUDES		;Delete PID function
+	MOVE B,MYPID		;Argument is this PID
+	DMOVEM A,ARGBLK		;Define the argument block
+	MOVEI A,4		;Length is 4
+	MOVEI B,ARGBLK		;Located here
+	MUTIL%			;Kill my PID
+	 ERJMP .+1		;Maybe, but we don't really care
+	SETZM MYPID		;No longer have a PID
+	SETZM HAVPID		;Ditto
+	RET			;Done
+
+;Come here when we get a message from a user. Called with A=address of msg,
+;B=PID of sender, C=user # of sender
+
+USRMSG::TRVAR <<ACKMSG,2>,<MYPDB,4>,UJOBNO,<UBLK,4>>
+	AOS RCVCNT		;Increment count of received messages
+	MOVE D,A		;Save pointer to received message
+	SKIPE RCVFLG		;Are we receiving messages?
+	 JRST USRIGN		;Ignore it, then
+	MOVEI A,.MUFOJ		;Function to return job #
+	MOVE B,.IPCFR+MYPDB	;PID of sender
+	DMOVEM A,UBLK		;Define the MUTIL% block
+	MOVEI A,3		;Length of argblock
+	MOVEI B,UBLK		;Location of argblock
+	MUTIL%			;Get job number of PID
+	 ERJMP [MOVE B,MSGJOB(D);Guess we have to trust him...
+		JRST .+2]
+	MOVE B,2+UBLK		;Job number is here
+	MOVEM B,LFJOB		;Last job number who sent to us
+	MOVEM C,LFUSER		;Last user number who sent to us
+	ETYPE <%_[From %3N/%2Q at %A]:%_> ;Type out the header
+	UTYPE MSGTXT(D)		;Type the message itself
+	ETYPE <%_>
+	MOVE A,RECFLG		;Get record state word
+	ANDX A,RC%RCV		;Mask receives bit
+	JUMPE A,USRIGN		;If not there, don't try to record
+	EXCH B,C		;Switch job# and user#
+	MOVEI D,MSGTXT(D)	;Make an address in D
+	CALL USRMRC		;Do the recording
+USRIGN:	RET			;That's all, folks (for now...)
+
+
+;USRMRC is called to record a user message. Called with record flag in A 
+;(which type of message it is), user # in B, job # in C, address of msg in
+;D.
+
+USRMRC::PUSH P,D		;Save D
+	PUSH P,C		;Save C
+	PUSH P,B		;save B
+	PUSH P,A		;save A
+	HRROI B,SNDFNM		;Name of file
+	CALL TRYGTO		;Get an output jfn
+	 JRST USRMRQ		;Punt...
+	MOVX B,<OF%APP!FLD(7,OF%BSZ)>
+	OPENF%			;Try to open it
+	 JRST USRMRQ		;Nope...
+	HRROI B,[ASCIZ/Msg #/]	;First part of header
+	MOVNI C,5
+	SOUT%
+	MOVE B,RECCNT		;Current msg number
+	ADDI B,1		;Add one to make based-1
+	MOVEI C,^D10		;Want it in decimal
+	NOUT%			;Output message number to the file
+	 TRN
+	HRROI B,[ASCIZ/ From /]
+	POP P,D			;Get back the flag
+	TXNN D,<RC%RCV>		;Recording a receive?
+	 HRROI B,[ASCIZ/ To /]	;Then it's a send
+	SETZB C,D		;Flush both counts
+	SOUT%			;Write first part of header
+	POP P,B			;Get the user number back
+	DIRST%			;Translate him
+	 TRN			;Ignoring error...
+	HRROI B,[ASCIZ/, job /]	;More header
+	SOUT%			;Output it
+	POP P,B			;Get the job number back
+	MOVEI C,^D10		;Always in decimal
+	NOUT%			;Add it on
+	 TRN			;ignoring errors...
+	HRROI B,[ASCIZ/ at /]	;get ready for time/date
+	SETZB C,D
+	SOUT%
+	SETO B,			;-1 means now
+	ODTIM%			;Add it to the message
+	 ERJMP .+1		;Again, no errors
+	HRROI B,[ASCIZ/:
+/]
+	SOUT%			;Last bit of header
+	POP P,D			;Get back message pointer
+	HRRO B,D		;The pointer
+	SETZB C,D		;Clear these words
+	SOUT%			;Write the message itself
+	HRROI B,[BYTE(7)15,12,37,0] ;What the end of it looks like
+	MOVNI C,3
+	SOUT%			;That's it!!
+	CLOSF%			;Close the JFN
+	 TRN
+	AOS RECCNT		;Bump record count
+	RET			;And return
+USRMRQ:	ADJSP P,-4		;Flush 4 words of stack
+	RET			;And return
+
+;EM35
+;GUSPID Does a PID lookup for the tty number in A. Returns the PID, if found,
+;in A. Returns +2 on success, +1 on failure.
+
+GUSPID::TRVAR <<JOBINF,3>>
+	SETZM IPCFP+.IPCI1	;No message copy
+	CAIN A,.CTTRM		;EM50 This terminal?
+	 SKIPA A,[-1]		;EM50 Then do it for this job
+	TXO A,.TTDES		;EM63 Make a device designator, if nec.
+	MOVSI B,-3		;LH is -length of block
+	HRRI B,JOBINF		;RH is block location
+	MOVEI C,.JIJNO		;Want job number thru user number
+	GETJI			;Get it
+	 RET			;Nope
+	CALL XGIPID		;Get INFO's PID
+	 RET			;No luck...
+	CALL GETPID		;EM50 in case we don't have one
+	MOVE B,.JIUNO+JOBINF	;Get user # where we want it
+	HRROI A,IPCFP+.IPCI2
+	DIRST%			;Username is first
+	 RET			;Lose
+	MOVEI B,"."		;Then a dot
+	IDPB B,A
+	MOVE B,.JIJNO+JOBINF	;Get the job number 
+	MOVEI C,^D10		;In decimal
+	NOUT%			;Add it to the name
+	 RET			;Lose
+	MOVE A,[1,,.IPCIW] 	;Code,,fcn
+	MOVEI B,0		;Send to INFO
+	CALL SNDMSG		;Go send message
+	 RET			;It lost
+GUSR.2:	MOVE A,INFPID		;Get INFO's PID
+	CALL IPCRCV		;Receive message from INFO
+	TXNE A,IP%CFE+IP%CFM	;Name lookup successful?
+	 RET			;Lose him, then
+	MOVE A,IPCFP		;Get returned word
+	CAME A,[1,,.IPCIW] 	;Check expected
+	JRST GUSR.2		;Try again
+	MOVE A,IPCFP+.IPCI1	;This is the pid we want
+	MOVE B,.JIUNO+JOBINF	;User number returned in B
+	MOVE C,.JIJNO+JOBINF	;Job number returned in C
+	RETSKP			;And return with a skip
+
+;USRSND Sends the message pointed to in B to the PID in A and waits for a
+;reply before returning. This should be tied to a timer interrupt to return 
+;failure on a timeout. Returns with B=user #, C=Job #
+
+USRSND::
+	PUSH P,A		;Save the PID
+	PUSH P,B		;and the message pointer
+	HRROI A,IPCFP+MSGUSR	;Userid field of message
+	MOVE B,CUSRNO		;My user #
+	DIRST%			;Translate it
+	 TRN			;Don't really care
+	MOVE A,JOBNO		;My job #
+	MOVEM A,IPCFP+MSGJOB	;Put in job number field of msg
+	HRLZ A,(P)		;Get address of user's buffer in LH
+	HRRI A,IPCFP+MSGTXT	;Pointer to message text location
+	BLT A,IPCFP+777		;Copy message into message page
+	MOVX A,<1000,,<IPCFP/1000>> ;Pointer to the message
+	MOVEM A,SNDPDB+.IPCFP	;(Is this necessary?)
+	MOVE B,-1(P)		;Get pid number off of stack
+	ADJSP P,-2		;Flush two words of stack
+	MOVE A,[MAGNUM]		;and the "request code" in A
+	CALL SNDMSG		;Send the message off
+	 RET			;SNDMSG lost - we lose too...
+	RETSKP			;And return success...
+
+;Print any new entries in a message file, since given date
+;Called with: A/ Beginning date to use
+;	      B/ Pointer to name of file
+
+XMESS::	SKIPGE LGNFLG		;If fast login or no login, then skip this
+	SKIPN CUSRNO		;Make sure logged-in (can this happen?)
+	RET			;Nope - do nothing
+	MOVE A,LOGDAT		;Get login date
+	HRROI B,[ASCIZ/HLP:MESSAGE.TXT/] ;And setup file name
+	STKVAR <MJFN,SDATE,<MBUFF,30>>	;Message file JFN, start date,buffer
+	MOVEM A,SDATE		;Save date argument
+	CALL TRYGTJ		;Look up the file
+	 RET			;No file. Just quit
+	MOVX B,<OF%RD+FLD(7,OF%BSZ)>
+	OPENF%			;Open for read
+	 JRST NOMESS		;Open failed... Just RLJFN
+	HRRZM A,MJFN		;Save the JFN
+	DO.
+	  MOVE A,MJFN		;Get input file JFN
+	  HRROI B,MBUFF		;Read into buffer
+	  MOVEI C,600		;Up to 600 chars
+	  MOVEI D,LF		;Or a LF
+	  SIN%			;Read a line from the file
+	   ERJMP ENDLP.		;Done
+	  SETZ C,		;A null
+	  IDPB C,B		;Make sure at least one in the buffer
+	  HRROI A,MBUFF		;Pointer to the buffer
+	  SETZ B,		;No flags
+	  IDTIM			;Strip off time
+	   LOOP.		;Bad line... Ignore it
+	  CAMGE B,SDATE		;This message after last login?
+	   LOOP.		;Nope - skip it
+	  HRROI A,MBUFF		;Point at buffer
+	  PSOUT%		;Print remainder of line
+	  LOOP.			;Go for more
+	ENDDO.
+	MOVE A,MJFN		;JFN on input file
+	CLOSF%			;Try to close...
+	 TRNA			;Failed.
+	RET
+NOMESS:	MOVE A,MJFN		;Get message file JFN
+	RLJFN%			;Release the JFN
+	 TRN			;Ignore the error
+	RET			;Done
+
+;EM54 Begin
+.BUG::	NOISE <report to the maintainer>
+	CONFIRM
+	ETYPE <%%Bug command no longer supported - send mail to GRIPE%_>
+	RET
+REPEAT 0,<
+	HRROI B,[ASCIZ/SYS:MM.EXE/]
+	CALL TRYGTJ		;Get a jfn on MM
+	 ERROR <MM not found>
+	PUSH P,A		;EM89 Save JFN
+	MOVE A,[POINT 7,BUF0]	;EM89
+	HRROI B,[ASCIZ/MM Send GRIPE@CMU-CS-C,MKB@CMU-CS-C
+Bug in CMEXEC /]
+	SETZ C,			;EM89
+	SOUT			;EM89
+	MOVE Q1,EXEC+2		;EM89 Get version information
+	LDB B,[POINT 9,Q1,11]	;EM89 Major version number
+	MOVEI C,^D8		;EM89 Want it all in octal
+	NOUT			;EM89
+	 NOP			;EM89
+	MOVEI B,"."		;EM89 And a dot
+	IDPB B,A		;EM89
+	LDB B,[POINT 6,Q1,17]	;EM89 Minor version number
+	NOUT			;EM89
+	 NOP			;EM89
+	MOVEI B,"("		;EM89
+	IDPB B,A		;EM89
+	HRRZ B,Q1		;EM89 Edit number
+	NOUT			;EM89
+	 NOP			;EM89
+	MOVEI B,")"		;EM89
+	IDPB B,A		;EM89
+	MOVEI B,"-"		;EM89
+	IDPB B,A		;EM89
+	LDB B,[POINT 3,Q1,2]	;EM89 Group code
+	NOUT			;EM89
+	 NOP			;EM89
+	MOVEI B,CR		;EM89 CR/LF to end it all
+	IDPB B,A		;EM89
+	MOVEI B,LF		;EM89
+	IDPB B,A		;EM89
+	SETZ B,			;EM89 And a null
+	IDPB B,A		;EM89
+	MOVE B,[POINT 7,BUF0]	;EM89 Point back to the beginning of this mess
+	MOVEM B,RSPTR		;EM71 Put the rescan where REPH can find it
+	POP P,A			;EM89 Get back MM JFN
+	SETZ B,			;EM71 Start at main entry point
+	CALLRET REPH1		;EM71 Go run MM
+   >;REPEAT 0
+;EM54 End
+
+;EM71 **** Begin ****
+.SLOC::	NOISE <to>
+	LINEX <terminal location string>
+	 CMERRX
+	CONFIRM
+	HRROI B,[ASCIZ/SYS:PROFILE.EXE/]
+	CALL TRYGTJ		;Get a JFN for profile
+	 ERROR <Couldn't find Sys:Profile.Exe>
+	PUSH P,A		;Save JFN
+
+	MOVE A,[POINT 7,BUF0]
+	LDB B,[POINT 7,ATMBUF,6]
+	SKIPN B			;If null, really clear terminal location
+	 JRST [ HRROI B,[ASCIZ/Clear Terminal-Location/]
+		JRST SLOC0 ]
+	HRROI B,[ASCIZ/Set Terminal-Location /]
+	SETZ C,
+	SOUT			;Store command for Profile
+	MOVE B,[POINT 7,ATMBUF]
+SLOC0:	SETZ C,
+	SOUT			;Store the location
+	MOVEI B,CR
+	IDPB B,A		;Add a carriage return
+	HRROI B,[ASCIZ/Exit/]
+	SETZ C,
+	SOUT			;The exit command
+	MOVEI B,CR		;Line terminator
+	IDPB B,A
+	SETZ B,			;And a null
+	IDPB B,A
+
+	MOVE C,[POINT 7,BUF0]
+	MOVEI A,.CTTRM
+SLOC1:	ILDB B,C
+	JUMPE B,SLOC2
+	STI			;Stuff it
+	JRST SLOC1
+
+SLOC2:	POP P,A			;Get back JFN
+	SETZ B,			;Start at main entry point
+	CALLRET REPH1		;Go run Profile
+
+;EM71 **** End ****
+
+;EM85 *** Begin *** 
+;The following lifted from CLEXEC, which lifted it from SRI...
+;pa203 New comands from SRI -- Pmap, Unmap, and ^EReplace
+
+; MAP (source pages) NNN (to) NNN (of) FORK/filename (beginning at
+; page) NNN (of) FORK/FILENAME (access) ACCESSES
+.PMAP::	NOISE	<source pages>	;pa202 .Map is used by the Map command
+	DEFX	<0>
+	OCTX	<Page number>
+	 ERROR	<Must be an octal number>
+MPBSP:
+	CAIL 2,0
+	CAILE 2,777
+	 ERROR	<Pages are 0 to 777>
+	PUSH P,2		;SAVE SOURCE START PAGE
+	NOISE (to)
+	DEFX	<777>
+	OCTX	<Page number>
+	 ERROR	<Must be an octal number>
+MPESP:
+	CAIL 2,0
+	CAILE 2,777
+	 ERROR	<Pages are 0 to 777>
+	PUSH	P,2		;SAVE SOURCE END PAGE
+	NOISE	<of>
+MPSH:	HRRI	Z,CINFN		;PASS THE FILE INPUT ROUTINE AS AN ARG
+	CALL	MPHAND		;GET SOURCE HANDLE INTO A
+	PUSH	P,A		;SAVE SOURCE FORK/FILE HANDLE
+	NOISE	<beginning at page>
+	DEFX	<0>
+	OCTX	<Page number>
+	 ERROR	<Must be an octal number>
+MPBDP:
+	CAIL 2,0
+	CAILE 2,777
+	 ERROR	<Pages are 0 to 777>
+	PUSH	P,2		;SAVE BEGINNING DESTINATION PAGE
+	NOISE	<of>
+MPDH:	HRRI	Z,COUTFN	;PASS THE FILE INPUT ROUTINE AS AN ARG
+	CALL	MPHAND		;GET DESTINATION HANDLE INTO A
+	PUSH	P,A		;SAVE DESTINATION HANDLE
+ 
+	MOVEI	A,400000	;GET FORK BIT
+	TDNN	A,-2(P)		;IS SOURCE FORK?
+	TDNE	A,0(P)		;   IS DEST. FORK?
+	JRST	.+2
+	ERROR	<File to file mapping can't be done>
+ 
+MPACC:	NOISE	<Access>
+	MOVSI	A,(PM%RD)	;START WITH READ ACCESS
+ 
+	PUSH	P,A		;ASSEMBLE BITS ON STACK
+MPACCL:	KEYWD	$MAPAC
+	 0
+	 JRST	[CRRX
+		 CMERRX	<Bad access>
+		 JRST	MPDO ]
+	MOVSI	B,400000	;GRAB A BIT
+	MOVNI	C,0(P3)		;AND ITS NUMERIC POSITION
+	ROT	B,0(C)		;PUT IT THERE
+	IORM	B,0(P)		;PUT IT IN THE ACCESS WORD
+	CRRX	<Access specification, or return to confirm>
+	JRST	MPACCL		;NO, LOOK FOR MORE
+	POP	P,A		;GET BITS WHERE WE CAN SEE THEM
+ 
+; NOW WE HAVE PMAP ACCESSES IN LH A, OPENF ACCESSES IN RH A
+; (READ, WRITE, EXECUTE FOR OPENF TAKEN FROM PMAP)
+MPDO:	LDB	B,[POINT 3,A,4]	;GET READ, WRITE, EXECUTE FROM PMAP
+	DPB	B,[POINT 3,A,21];GIVE TO OPENF
+	TRO	A,OF%RD		;GOTTA BE ABLE TO READ
+	TRZ	A,OF%APP	;NEVER APPEND (UGH!)
+	PUSH	P,A		;SAVE ACCESSES
+ 
+	MOVE	A,-3(P)		;GET SOURCE HANDLE
+	TRNE	A,400000	;IS IT A FILE?
+	JRST	MPDO3		;NO, GO ON
+	HRRZ	B,0(P)		;YES, GET THE FILE ACCESS BITS
+	CALL	$OPENF		;AND OPEN IT
+MPDO3:	MOVE	A,-1(P)		;GET DESTINATION HANDLE
+	TRNE	A,400000	;IS IT A FILE?
+	JRST	MPDO5		;NO, GO ON
+	HRRZ	B,0(P)		;YES, GET THE FILE ACCESS BITS
+	CALL	$OPENF		;AND OPEN IT
+MPDO5A:	MOVE	A,-5(P)		;BEGINNING SOURCE PAGE
+	MOVE	Q1,-4(P)	;ENDING SOURCE PAGE
+	SUB	Q1,A		;DIFFERENCE
+	MOVM	D,Q1		;MAGNITUDE
+	IDIV	Q1,D		;GET THE INCREMENT (CLOBBERS F)
+	MOVE	Q2,Q1		;INTO F
+	AOJ	D,		;MAGNITUDE PLUS ONE MAKES COUNT
+	HRL	A,-3(P)		;SOURCE HANDLE
+	HRL	Q1,-1(P)	;DESTINATION HANDLE
+	HRR	Q1,-2(P)	;BEGINNING DESTINATION PAGE
+	HLLZ	C,0(P)		;PMAP ACCESSES
+	TLZ	Z,F2+F3		;F3 SAYS "NOT MAPPED" HEADER PRINTED
+				;F2 SAYS WE ARE IN BLOCK OF MISSING PAGES
+	TRZ	Z,-1		;RH OF Z IS THE PAGE NUMBER OF THE FIRST
+				;PAGE IN THIS BLOCK OF NON-EXISTANT PAGES
+MPDOL:	RPACS			;GET SOURCE PAGE INFO
+	TXNN	B,PA%PEX	;pa203 (use mnemonic) DOES IT EXIST?
+	 JRST	[TLNN	Z,F2	;NO, ARE WE IN MISSING BLOCK?
+		 HRR	Z,1	;NO, SAVE PAGE NUMBER
+		 TLO	Z,F2	;SAY NOW IN BLOCK
+		 JRST	MPDOLZ]	;AND SKIP OVER THE REST
+	TLNE	Q1,400000	;IS DESTINATION A FORK?
+	TRNN	Q1,777000	;YES, TRYING FOR PAGE 1000 OR GREATER?
+	 JRST	MPDOK		;NO, IT'S OK
+	CALL	CRIF
+	ETYPE	<Can't map source page %1P to fork page %5P, quitting>
+	JRST	MPDOZ
+MPDOK:	TLZE	Z,F2		;ARE(WERE) WE IN MISSING BLOCK?
+	 CALL	MPRINT		;YES, PRINT PAGES SKIPPED (CLOBBERS B)
+	MOVE	B,Q1		;GET DESTINATION DESCRIPTION
+	PMAP
+MPDOLZ:	ADD	A,Q2
+	aoj q1,		;next page
+	SOJG	D,MPDOL		;TALLY, DONE?
+	TLNE	Z,F2		;WERE WE IN MISSING BLOCK?
+	 CALL	MPRINT		;YES, PRINT IT
+MPDOZ:	SUB	P,[6,,6]	;FLUSH CRAP
+	CALL	RLJFNS
+	POPJ	P,
+
+MPDO5:	MOVE Q2,FRKTAB-400000(A)	;get fork type word
+	TLNN Q2,(FK%KPT+FK%BKG)	;pa203 see if its special
+	 JRST MPDO5A		;nope
+	CALL ECFORK		;yes get a new fork
+	MOVE A,FORK		;remember it
+	MOVEM A,-1(P)
+	JRST MPDO5A		;Done
+
+$MAPAC:	TABLE
+	T Copy-on-write,,^D9
+	T Cw,,^D9
+	T Execute,,4
+	T Read,,2
+	T Thawed,,^D25
+	T Trap-to-user,,^D8
+	T Write,,3
+	TEND
+
+; THIS ROUTINE GETS A SOURCE/DESTINATION DESIGNATOR INTO AC1
+; ADDRESS OF FILE INPUT ROUTINE TO CALL IS IN RH Z
+MPHAND:HELPX	<
+A specific fork handle, a file name, or >
+	KEYWD	$MPFRK		;SEE IF THEY JUST WANT THE LOWER FORK
+	 0			;No default
+	 JRST	MPHSF		;NO, SEE IF THEY WANT A SPECIFIC FORK
+	SKIPG	FORK		;YES, DO WE ALREADY HAVE ONE?
+	CALL	ECFORK		;NO, GET ONE
+	MOVE	A,FORK		;RETURN ITS HANDLE
+	JRST	MPHANZ
+ 
+MPHSF:	CALL	MPGFRK		;TRY TO READ FORK NUMBER
+	 JRST	MPHFIL		;NOT FORK, TRY FILE NAME
+	TRO	A,400000	;MAKE NUMBER INTO FORK HANDLE
+	PUSH	P,A
+	RFSTS
+	 ERJMP CJERRE		;EM109 In case of invalid process handles
+	TLNE	A,077700	;DISTINGUISH BETWEEN FROZEN AND UNASSIGN
+	 ERROR	<That fork handle not assigned>
+	POP	P,A
+	JRST	MPHANZ
+ 
+MPHFIL:	PUSH	P,B
+	HRRZ	B,Z		;GET ADDR OF FILE INPUT ROUTINE
+	TRZ	Z,-1		;AND CLEAR IT
+	MOVSI	A,-1
+	CALL	0(B)		;GO THERE
+	 JRST	CERR
+	POP	P,B
+ 
+MPHANZ:	TRZ	Z,-1		;CLEAN UP
+	RET
+ 
+$MPFRK:	TABLE
+	T fork,,0
+	TEND
+ 
+; THIS ROUTINE WILL TRY TO NIN THE FORK OR FILE HANDLE,
+; RETURN +1 ERROR
+; 	 +2 WITH THE FORK HANDLE IN RH 1
+ 
+; WE HAVE TO USE THIS ROUTINE BECAUSE BOTH "OCTAL" AND "CINFN" GO TO
+; CERR ON OUR INPUTS
+ 
+MPGFRK:	PUSH	P,2
+	PUSH	P,3
+	OCTX
+	 JRST	MPGFRZ
+	AOS	-2(P)		;SKIP RETURN
+	ANDI	2,17		;SOME LIMIT ON THE FORK NUMBER
+	TRO	2,400000
+	HRRZ	1,2		;RETURN HANDLE IN 1
+	SKIPN	PRVENF
+	JUMPE	1,[ UERR [ ASCIZ /Fork handle must be between 1 and 17/ ] ]
+MPGFRZ:	POP	P,3
+	POP	P,2
+	RET
+ 
+;ROUTINE TO PRINT THE PAGES SKIPPED
+;TAKES START PAGE FROM RH Z, PAGE AFTER NON-EXISTANT BLOCK IN RH 1,
+;"HEADER PRINTED" FLAG (F3).
+;CLOBBERS B, CLEARS RH Z
+MPRINT:	TLON	Z,F3		;WAS THE HEADER PRINTED?
+	 JRST	[UTYPE [ASCIZ /%Source pages not mapped: / ]
+		 JRST .+2 ]	;SKIP THE COMMA
+	TYPE	<, >		;YES, JUST A COMMA THEN
+	HRRZ	B,Z		;GET START PAGE
+	TRZ	Z,-1		;SAY THIS GROUP PRINTED
+	ETYPE	<%2P>		;PRINT IT
+	CAIN	B,-1(1)		;IS START PAGE THE ONE BEFORE CURRENT?
+	 RET			;YES, ONLY ONE PAGE SKIPPED, ALL DONE
+	PRINT	"-"
+	HRRZI	B,-1(1)		;NO, GET FINAL SKIPPED PAGE
+	ETYPE	<%2P>		;PRINT IT
+	RET
+;EM85 *** End ***
+
+;EM35 *** Begin ***
+
+.SHOW::	TRVAR <<XBUF,200>>	;Room for the message
+	NOISE <recorded messages>
+	MOVEI B,[FLDDB. .CMCFM,,,,,[
+		 FLDDB. .CMNUM,CM%SDH,^D10,<number to show>]]
+	CALL FLDSKP		;SEE WHAT'S BEING TYPED
+	 CMERRX <Carriage return or message count required>
+	LOAD D,CM%FNC,.CMFNP(C)
+	CAIE D,.CMCFM		;Confirmed?
+	 JRST [	MOVE D,B	;Get the count into D
+		CONFIRM		;And confirm it
+		JRST .+2]	;Skip over next one
+	MOVEI D,777777		;A large number to show...
+	SETZ Q2,		;Counter of messages
+	MOVE Q1,RECCNT		;Number we have recorded
+	SUB Q1,D		;Find number to skip
+	HRROI B,SNDFNM		;File name we're recording on
+	CALL TRYGTJ		;Is it there?
+	 JRST .SHOWN		;No sends...
+	MOVX B,<OF%RD!FLD(7,OF%BSZ)> ;Open for read, 7-bit mode
+	OPENF%
+	 JRST .SHOWN		;Assume none...
+.SHOWT:	HRROI B,XBUF		;Pointer to message buffer
+	MOVEI C,200*5		;Maximum length of message
+	MOVEI D,37		;Special delimiter
+	SIN%			;Read a message
+	 ERJMP .SHOWD		;Assume an EOF
+	SETZ C,			;Need a null
+	DPB C,B			;Flush the delimiter character
+	SOSGE Q1		;Decrement skip count, skip if positive
+	UTYPE XBUF		;Type out the message
+	AOJA Q2,.SHOWT		;Increment message count, read next
+.SHOWN:	ETYPE <%%No messages
+>
+.SHOWD:	MOVEM Q2,RECCNT		;Assure correct record count
+	RET
+
+SNDINF::CONFIRM
+	MOVE A,RECFLG		;Get record flag
+	TXNN A,RC%BOT		;Any recording at all?
+	 ETYPE < Set No Record All
+>
+	TXNE A,RC%RCV		;Recording received?
+	 ETYPE < Set Record Received
+>
+	TXNE A,RC%SND		;How about sent?
+	 ETYPE < Set Record Sent
+>
+	MOVE A,RECCNT		;How many recorded?
+	JUMPE A,SNDINR		;Handle 0 specially
+	MOVE B,RCVCNT		;Number received
+	ETYPE < %1Q messages recorded, %2Q received
+>
+SNDINR:	SKIPN A,LFUSER		;Who was last message from?
+	 JRST SNDINX		;None
+	MOVE B,LFJOB		;His job number
+	ETYPE < Last message received from %1N, job %2Q
+>
+SNDINX:	SKIPN A,LTUSER		;Who was last we sent to?
+	 JRST SNDINT		;None
+	MOVE B,LTJOB		;His job number
+	ETYPE < Last message sent to %1N, job %2Q
+>
+SNDINT:	RET
+
+;EM35 *** End ***
+
+;CS146 *** Begin ***
+
+;The following code implements the "valid password" check as defined for
+;CMU-CSD. The code is not the best, but it was needed in a hurry.
+
+CS,<
+
+;Routine to check password validity & related support routines.
+;Called with T1/ Password to check
+;Returns +1/ Password not allowed, reason string in T1
+;	 +2/ Password may be used
+;Clobbers T1-T4
+
+MINPLN==6			;Minimum password length
+
+CHKPSW::STKVAR <PWDPTR,<NAMSTR,40>,NAMPTR>
+	MOVEM T1,PWDPTR		;Save password ptr
+	SETZ T3,		;Place to count # of characters in pwd
+	DO.
+	  ILDB T2,T1		;Get char
+	  JUMPE T2,ENDLP.	;Done
+	  AOJA T3,TOP.		;Count & check again
+	ENDDO.
+	CAIL T3,MINPLN		;Too short
+	IFSKP.
+	  HRROI T1,[ASCIZ/password must be at least 6 characters long/]
+	  RET			;Punt him
+	ENDIF.
+
+	CALL MAPDKT		;Map dictionary file
+	 JRST CHKPS1		;Can't - skip this
+	MOVEI T1,MAPBUF		;Where DKT is
+	MOVE T2,PWDPTR		;Pointer to password string
+	TBLUK%			;Is it in there?
+	IFXN. T2,TL%EXM		;Got a match?
+	  HRROI T1,[ASCIZ/password is in dictionary of common words/]
+	  RET			;Punt
+	ENDIF.
+
+CHKPS1:	HRROI T1,NAMSTR		;Point at place for name
+	MOVE T2,CUSRNO		;Get user number
+	DIRST%			;Translate it
+	 ERJMP CHKPS2		;This shouldn't happen, but deal with it
+	MOVE T2,PWDPTR		;Get pointer to password
+	MOVEI T1,NAMSTR		;Pointer to name
+	HRLI T1,(POINT 7,)	;...
+	MOVEM T1,NAMPTR		;Save pointer
+	CALL CHKSUB		;Check for username is substring of password
+	IFSKP.			;Yes
+	  HRROI T1,[ASCIZ/password contains your login id/]
+	  RET			;Punt
+	ENDIF.
+
+CHKPS2:	MOVE T1,NAMPTR		;Get name pointer again
+	CALL GETPNM		;Get personal name
+	 RETSKP			;Strange - allow anything, then
+
+	DO.
+CHKPS3:	  MOVE T1,NAMPTR	;Get name pointer again
+	  MOVE T2,PWDPTR	;Password pointer
+	  CALL CHKSUB		;See if first name is substring
+	  IFSKP.		;Yes
+	    HRROI T1,[ASCIZ/password contains part of your personal name/]
+	    RET
+	  ENDIF.
+	  DO.
+	    ILDB T1,NAMPTR	;Get next char
+	    JUMPE T1,ENDLP.	;End - done
+	    CAIN T1," "		;Space separator?
+	    JRST CHKPS3
+	    LOOP.
+	  ENDDO.
+	ENDDO.
+	AOS (P)			;Setup skip return
+	RET
+
+;Routine to check for substrings
+;Called with T1/ Pointer to substring to check
+;	     T2/ Pointer to main string (password pointer)
+;Returns +1/ Second string not substring of first or too short
+;	 +2/ Second string is substring of first
+;Updates T1 to point past terminator of substring (space or null)
+;Clobbers T2..T4
+
+MINSUB==3			;Minimum length of substring
+
+CHKSUB:	SAVEAC <Q1,Q2>
+	DMOVE Q1,T1		;Copy pointers
+	SETZ T4,
+	DO.
+	  ILDB T3,T1		;Get char
+	  JUMPE T3,ENDLP.	;Null - done
+	  CAIE T3," "		;Space - done
+	  AOJA T4,TOP.		;Count more
+	ENDDO.
+	CAIGE T4,MINSUB		;Is this one too short?
+	 RET			;Yes - it is OK.
+	DO.
+OLOOP:	  DMOVE T1,Q1		;Point at start of substring, next char in main
+	  ILDB T4,T2		;Get character from main string
+	  JUMPE T4,R		;End of string - no match
+	  MOVE Q2,T2		;Save pointer to next character in main string
+	  DO.
+	    ILDB T3,T1		;Get next character from substring
+	    JUMPE T3,RSKP	;If end of substring, then matched
+	    CAIN T3," "		;...
+	    RETSKP
+	    CAIL T3,"a"		;Do case folding
+	    CAILE T3,"z"
+	    TRNA
+	    TXZ T3,40
+	    CAIL T4,"a"		;Ditto...
+	    CAILE T4,"z"
+	    TRNA
+	    TXZ T4,40		;Make upper case
+	    CAME T3,T4		;Match?
+	    JRST OLOOP		;No - try next character position
+	    ILDB T4,T2		;Get next character from main string
+	    LOOP.		;and check it
+	  ENDDO.
+	ENDDO.
+
+;Routine for mapping "dictionary keyword table"
+
+MAPDKT:	HRROI T2,[DKTFIL]
+	CALL TRYGTJ		;Look it up
+	 RET
+	MOVX T2,OF%RD
+	OPENF%			;Try to open
+	 ERJMP R		;Should not happen
+	SIZEF%			;Get file size
+	 ERJMP R
+	IFLE. T3		;Empty?
+MAPDK1:	  CLOSF%		;Close
+	   TRN
+	  RET			;And punt
+	ENDIF.
+	CAILE T3,MAPSIZ		;Small enough?
+	 JRST MAPDK1		;No - punt, then
+	HRLZS T1		;Make jfn,,0
+	MOVE T2,[.FHSLF,,MAPBUF/1000] ;Where to put
+	TXO T3,<PM%CNT!PM%RD!PM%PLD!PM%CPY>
+	PMAP%			;Read dictionary table in
+	HRLZ T4,MAPBUF		;Get number of entries
+	MOVNS T4		;Make negative
+	HRRI T4,MAPBUF+1	;Point at first...
+	DO.
+	  MOVX T2,<MAPBUF,,0>
+	  ADDM T2,(T4)		;Fix address
+	  AOBJN T4,TOP.		;For all...
+	ENDDO.
+	RETSKP
+
+;Coroutine for running in section 1
+;Called: JSP CX,SE1ENT
+;Returns: +1 always, running in section 1
+;Return from subroutine will return & unmap section 0
+
+SE1ENT:	MOVX T1,<.FHSLF,,0>
+	MOVX T2,<.FHSLF,,1>
+	MOVX T3,<SM%RD!SM%WR!SM%EX!SM%IND!FLD(1,.RHALF)>
+	SMAP%			;Map self
+	XJRSTF [PC%USR
+		1,,.+1]
+	HRLI CX,1		;...
+	CALL (CX)
+	TRNA			;Skip return....
+	AOS (P)			;Fix return...
+	XJRSTF [PC%USR
+		0,,.+1]
+	PUSH P,T1		;Save return args
+	PUSH P,T2
+	PUSH P,T3
+	SETO T1,
+	MOVX T2,<.FHSLF,,1>
+	MOVX T3,<1>
+	SMAP%			;Delete section 1
+	POP P,T3
+	POP P,T2
+	POP P,T1
+	RET			;And return from user routine
+
+;Routines to get personal name of user
+
+USRSEC==2			;Section to map database
+NPTRS==	"Z"-"A"+1		;One pointer each for "A"-"Z"
+HASHPN==^D509			;Hash table prime number
+USRLEN==^D8			;Room for user or personal name
+
+;Pointer offsets
+	PHASE 0
+US.FRE:!BLOCK 1			;Next free block,,Head of free list
+US.UPT:!BLOCK HASHPN		;User to name pointers (+1 for others)
+US.NPT:!BLOCK <NPTRS+1>*<NPTRS+2> ;Name to user pointers
+US.DAT:!BLOCK 0			;Beginnning of data
+	DEPHASE
+
+;Data offsets
+	PHASE 0
+US.UNM:!BLOCK USRLEN		;This username
+US.NXT:!BLOCK 1			;Next personal name in this group or 0 if last
+US.HPT:!BLOCK 1			;Next user name with the same hash or 0 if last
+US.FPT:!BLOCK 1			;Relative byte pointer to first name or 0
+US.MPT:!BLOCK 1			;Relative byte pointer to middle name or 0
+US.LPT:!BLOCK 1			;Relative byte pointer to last name
+US.PNM:!BLOCK USRLEN		;This personal name
+US.SIZ:!BLOCK 0			;Size of a name to user entry
+	DEPHASE
+
+;Routine to get personal name of this user. Called with:
+;T1/ Byte pointer to area to store user name
+;Returns +1/ failure
+;	 +2/ success, name stored
+
+GETPNM::ASUBR <PTR>
+	JSP CX,SE1ENT		;Setup section 1
+	CALL USROPN		;Try to open USRNAM DB
+	 RET			;Failed... Punt
+	MOVE T1,CUSRNO		;Get user number
+	CALL USRNAM		;Get personal name for user number in T1
+	 RET			;Failed... Punt
+	MOVE T2,PTR		;Get our pointer
+	DO.
+	  ILDB T3,T1		;Get char
+	  IDPB T3,T2		;Copy
+	  JUMPN T3,TOP.		;Until done
+	ENDDO.
+	AOS (P)			;Setup skipreturn
+	CALLRET USRCLS		;Close & return
+
+;Routine to do business of name lookup. Stolen from USRNAM.MAC.
+
+USRNAM:	TRVAR <<USRSTR,USRLEN>,USRJFN,USER>
+	MOVEM T1,USER		;Stash argument
+	SETZM USRSTR		;Zero the username block
+	MOVSI T1,USRSTR		;Make BLT ptr...
+	HRRI T1,1+USRSTR
+	BLT T1,USRLEN-1+USRSTR	;And do it
+	HRROI T1,USRSTR		;Point to the user string
+	MOVE T2,USER		;Get the user number
+	DIRST%
+	 ERJMP USRNR1		;...
+	CALL HASHUN		;Hash user in USRSTR, return hash in T2
+	HRLI T2,USRSEC		;And point at the right section
+	SKIPN T3,US.UPT(T2)	;Get the user to name pointer
+	JRST USRNR1		;Return to previous context +1
+	DO.
+	  HRLI T3,USRSEC	;And point at the right section
+	  MOVE T1,T3		;Get the address of the name
+	  ADD T1,[G1BPT 0,7,US.UNM] ;Point there
+	  HRROI T2,USRSTR	;Point to the user given
+	  STCMP%
+	   ERJMP USRNR1
+	  IFN. T1
+	    JXN T1,SC%GTR,USRNR1 ;Not less
+	    SKIPN T3,US.HPT(T3)	;Point to the next user in this hash chain
+	    JRST USRNR1		;No luck
+	    LOOP.		;Loop
+	  ENDIF.
+	ENDDO.
+	ADD T3,[G1BPT 0,7,US.PNM] ;Point there
+	MOVE T1,T3		;Return in T1
+	RETSKP
+
+USRNR1:	SETZ T1,
+	RET
+
+	ENDAS.
+
+;Hash USRSTR, returns the hash in T2
+
+HASHUN:	SAVEAC <T1,T3>		;Save ACs
+	MOVSI T3,-USRLEN	;All the words (the block is cleared first)
+	HRRI T3,USRSTR		;Make ptr in RH...
+	SETZ T1,		;Nothing yet
+	DO.			;Loop
+	  HRRZ T2,T3		;No crazyiness, we're probably in section 1
+	  XOR T1,(T2)		;XOR the data
+	  AOBJN T3,TOP.		;And do the whole thing
+	ENDDO.			;End loop
+	MOVMS T1		;Make it positive
+	IDIVI T1,HASHPN		;Divide by a nice prime number
+	RET
+
+;Routine to open username databse
+
+USROPN:	SAVEAC <Q1,Q2>		;Save these
+	MOVX T1,GJ%OLD!GJ%SHT!GJ%ACC
+	HRROI T2,[ASCIZ /SYSTEM:USERNAMES.PMAP/]
+	GTJFN%
+	 ERJMP R
+	MOVEM T1,USRJFN		;Save the JFN
+	MOVX T2,FLD(^D36,OF%BSZ)!OF%RD
+	OPENF%
+	IFJER.
+	  MOVE T1,USRJFN
+	  RLJFN%
+	   ERJMP .+1
+	  RET
+	ENDIF.
+	HRLZ T1,USRJFN		;This file, section 0
+	MOVEI T2,USRSEC		;Section to use
+	HRLI T2,.FHSLF		;This process
+	MOVX T3,SM%RD!FLD(1,.RHALF) ;Read-only, 1 section
+	SMAP%			;Read in the file
+	IFJER.
+	  MOVE T1,USRJFN
+	  CLOSF%
+	   ERJMP .+1
+	  RET
+	ENDIF.
+	RETSKP			;Skip return
+
+;Routine to close username database
+
+USRCLS:	SKIPN USRJFN
+	RET
+	SETO T1,		;Unmap
+	MOVEI T2,USRSEC		;The database
+	HRLI T2,.FHSLF		;This process
+	MOVEI T3,1		;One section
+	SMAP%			;...
+	 ERJMP R		;No good, oh well
+	MOVE T1,USRJFN		;Get the jfn
+	CLOSF%			;Close the file
+	 ERJMP R
+	RET
+
+   >;CS
+
+	END

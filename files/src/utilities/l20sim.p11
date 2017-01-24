@@ -1,0 +1,269 @@
+;<SYSTEM>L20SIM.P11.4, 11-Apr-79 00:45:59, Edit by ADMIN.MRC
+;CHANGES FOR SCORE OPERATION
+
+;	L20SIM - LP20 simulator for LP11 under RSX20F
+;
+;THIS COMPILES WITH MACN11
+;
+;	Copyright (C) 1977 by Erik J. Gilbert
+;	3/30/78 (reg) modified this for Jan 78 release 3 front end
+;	3/22/79 (jqj) mod. for Oct. 78 rel. 3a front end
+;	4/11/79 (mrc) mod. for Dec. 78 rel. 3a front end for SCORE
+
+.enabl ama
+.abs
+
+PS=-2
+
+.=60434
+HAKBR1:	BR	HAKBR1-50
+CHUNK1:
+
+CSRA:	.WORD	0	;CSRA
+	.WORD	0	;CSRB
+	.WORD	0	;Bus Address Register
+	.WORD	0	;Byte Counter
+	.WORD	0	;Page Counter
+	.WORD	0	;RAM Data Register
+	.BYTE	0	;Character Buffer
+	.BYTE	0	;Column Counter
+	.BYTE	0	;Printer Data
+	.BYTE	0	;Checksum
+LPV=.-CSRA
+	.WORD	754
+LPS=.-CSRA
+	.WORD	177514
+LPB=.-CSRA
+	.WORD	177516
+IOIP=.-CSRA
+	.WORD	0
+OFFLIN=.-CSRA
+	.WORD	0
+TCOUNT=.-CSRA
+	.WORD	0
+
+L11INT:	MOV	R0,-(SP)
+	MOV	R2,-(SP)
+	MOV	R3,-(SP)
+	MOV	#CSRA,R3
+	TST	@LPS(R3)
+	BMI	LERROR		;branch if error
+	TST	IOIP(R3)
+	BEQ	NIOINT		;branch if no I/O in progress
+	CLR	IOIP(R3)	;set no I/O in progress
+L11GO:	JSR	PC,GOMORE	;go GO some more
+	BR	LINTRT		;return
+
+L20INT:	MOV	2(SP),R2
+	MOV	4(SP),R0
+	MOV	LPV(R3),R3	;pick up LP20 vector address
+	MOV	(R3)+,2(SP)	;put LP20 vector PC on stack
+	MOV	(R3)+,4(SP)	;put LP20 vector PS on stack
+	MOV	(SP)+,R3
+	bit	#200,6(sp)
+	beq	$4
+	jsr	pc,ldie		;DIE if interrupting BR4 or higher
+$4:	RTI			;simulate LP20 interrupt
+
+LINTRT:	MOV	(SP)+,R3
+	MOV	(SP)+,R2
+	MOV	(SP)+,R0
+	RTI
+
+NIOINT:	TST	OFFLIN(R3)
+	BEQ	LINTRT		;ignore interrupt if not offline
+	CLR	OFFLIN(R3)	;set not offline now
+	BIS	#4000,@R3	;set CSRA online
+	BIC	#100000,@R3	;clear CSRA error
+	BIC	#20200,2(R3)	;clear CSRB not rdy, offline
+	BR	L20INT		;go simulate LP20 interrupt
+
+LERROR:	CLR	IOIP(R3)	;clear I/O in progress
+	MOV	#1,OFFLIN(R3)	;set offline
+	BIC	#4001,@R3	;clear CSRA online, GO
+	BIS	#100000,@R3	;set CSRA error
+	BIS	#20200,2(R3)	;set CSRB not rdy, offline
+	BR	L20INT		;go simulate LP20 interrupt
+
+L1102:	JSR	PC,ILEVEL	;save regs, simulate interrupt level
+				;		(at least BR4)
+	CLR	IOIP(R3)	;clear I/O in progress
+	CLR	OFFLIN(R3)	;clear offline
+	MOV	#14102,@R3	;initialize CSRA
+	CLR	2(R3)		;clear CSRB
+	BIC	#100000,@LPS(R3);clear LP11 error bit
+	BIS	#100,@LPS(R3)	;set LP11 interrupt enable
+	BR	LINTRT		;return
+
+L103:	JSR	PC,ILEVEL	;save regs, simulate interrupt level
+				;		(at least BR4)
+	CLRB	17(R3)		;zero checksum
+	BIS	#103,@R3	;set CSRA int enb, par enb, and GO
+	BR	L11GO		;go GO and return
+
+ILEVEL:	MOV	R0,-(SP)
+	MOV	R2,-(SP)
+	MOV	R3,-(SP)
+	MOV	6(SP),-(SP)	;copy callers PC to top of stack
+	MOV	12(SP),10(SP)	;shuffle callers callers PC
+	MOV	PS,12(SP)	;save PS
+	BIT	#200,PS
+	BNE	IRET		;branch if already BR4 or higher
+	MOVB	#200,PS		;put us at BR4
+IRET:	RTS	PC
+
+LDIE:	BIS	#340,PS		;we will die at BR7
+	MOV	SP,#-1
+	HALT			;  * D I E *
+
+; GOMORE - simulate LP20 GO some more
+;  Destroys: R0, R2    Uses: R3
+GOMORE:	TST	IOIP(R3)
+	BEQ	gotst2
+	cmp	#spcgo1,10(sp)
+	bne	godie1
+	inc	#0		;allow special case (but count it)
+	JMP	GOMORT 		;BR WON'T REACH ANYMORE
+
+.=61136
+	NOP
+.=.+6
+CHUNK2:
+
+godie1:	JSR	PC,LDIE		;DIE if I/O in progress
+gotst2:	MOV	#4103,R0
+	BIC	@R3,R0
+	BEQ	$2
+	JSR	PC,LDIE		;DIE if CSRA not set up for going
+$2:	TST	6(R3)
+	BEQ	GODONE		;branch if byte count zero
+	BMI	$3
+	JSR	PC,LDIE		;DIE if byte count positive
+$3:	BIT	#14,@R3
+	BNE	GOFAKE		;branch if DAVFU load or test mode
+	MOV	4(R3),R2	;pick up bus address
+	TST	TCOUNT(R3)
+	BEQ	GOLENT		;branch if no tab expanding pending
+	BR	TLENT		;enter tab expand loop
+
+GOTAB:	MOVB	15(R3),R0	;pick up column count
+	BIC	#-10,R0
+	SUB	#10,R0		;minus number of spaces needed
+	MOV	R0,TCOUNT(R3)	;save in TCOUNT
+TLOOP:	MOVB	#40,@LPB(R3)	;send a space to LPT
+	INCB	15(R3)		;increment column count
+	INC	TCOUNT(R3)	;increment tab space count
+	BEQ	TLAST		;branch if last space sent
+TLENT:	TSTB	@LPS(R3)
+	BMI	TLOOP		;loop back if last char done
+	BR	GOIOIP		;else go set IOIP and return
+
+TLAST:	MOV	#11,R0		;get tab char back
+	BR	GOLOO2		;and go make like it never happened
+
+GOLOOP:	MOVB	(R2)+,R0	;pick up next char
+	CMP	#11,R0
+	BEQ	GOTAB		;if a tab char, go process
+	MOVB	R0,@LPB(R3)	;send char to LPT
+	CMP	#15,R0
+	BNE	GONOCR
+	CLRB	15(R3)		;if a CR, zero column count
+GONOCR:	CMP	#40,R0
+	BGT	GOLOO2
+	INCB	15(R3)		;if space or greater, bump col count
+GOLOO2:	MOVB	R0,14(R3)	;save char in char buff
+	ADD	16(R3),R0
+	MOVB	R0,17(R3)	;new checksum
+	INC	4(R3)		;increment bus address reg
+	INC	6(R3)		;increment byte count
+	BEQ	GOLAST		;branch if no more bytes
+GOLENT:	TSTB	@LPS(R3)
+	BMI	GOLOOP		;loop back if last char done
+golast:
+GOIOIP:	MOV	#1,IOIP(R3)	;set I/O in progress
+	BR	GOMORT		;return
+
+.=61512
+CHUNK3:
+
+GODONE:	BIC	#1,@R3		;clear CSRA GO bit
+	BIS	#200,@R3	;set CSRA DONE bit
+GOI20R:	ADD	#2,@SP		;set to take LP20 interrupt needed ret
+GOMORT:	RTS	PC		;return
+
+GOFAKE:	MOV	4(R3),R2	;pick up bus address
+GOFAKL:	MOVB	(R2)+,R0	;pick up next char
+	ADD	16(R3),R0
+	MOVB	R0,17(R3)	;new checksum
+	INC	6(R3)		;increment byte count
+	BNE	GOFAKL		;loop back if more bytes
+	MOV	R2,4(R3)	;save bus address
+	MOVB	R0,14(R3)	;save last char in char buff
+	clrb	@lpb(r3)	;send null to lpt to cause interrupt
+	BR	GOLAST		;go get done
+
+.=55750
+	ADD	#CSRA,R3		;clobbers ADD #175400,R3
+.=55774
+	CLR	R5			;clobbers SOB R5,....
+
+.=54444
+	JSR	PC,L103			;clobbers BIS #103,@R3
+spcgo1:
+.=56122
+	JSR	PC,L103			;clobbers BIS #103,@R3
+.=56234
+	JSR	PC,L103			;CLOBBERS MOV #103,R3
+.=57342
+	JSR	PC,L103			;CLOBBERS BIS #103,@R3
+
+.=55660
+	JSR	PC,L1102		;CLOBBERS BIS #1102,@R3
+.=55760
+	JSR	PC,L1102		;CLOBBERS MOV #1102,@R3
+.=56642
+	JSR	PC,L1102		;COBBERS MOV #1102,@R3
+
+.=200
+	.WORD	L11INT,4200	;LP11 interrupt vector
+
+	.END
+
+;how to install this.
+;
+;start with your pdp-11 containing the original front-end code.
+;if you have doubts, reload it from the floppies.
+;
+;with tops-20 running, log in, enable, and run FEDDT
+;
+;use the following FEDDT commands:
+;
+;$$o - open pdp-11 core
+;$$^E - enable pdp-11 writes (that's Control-E)
+;$$^L - read file
+;       tell it the name of the file containing the binary of this
+;       program
+;
+;FEDDT will say Core Size 0K.
+;Wait for the second CRLF following the 0K message.
+;Type ^Z to exit from FEDDT.
+;
+;Shutdown the system. Use ^ECEASE or something
+;
+;type ^\ on the CTY to get to the pdp-11 parser
+;PAR>SHUT
+;PAR>SET CON MAINT
+;PAR>HALT
+;PAR%SET MEM ELEVEN
+;PAR%EXA 31206
+;/31206	 some bits, including 40000
+;PAR%DE 31206:some number, the same as was typed out with 600000
+;	turned off.  Usually the number 0 will do.
+;PDP-11 should respond with DECsystem-20 not running, if it hasn't 
+;already
+;PAR%MCR SAV
+;SAV>SY0:/WB
+;SAV will write out the munged pdp-11 core image, and reboot the 11.
+;
+;
+;then reload the 20 operating system.

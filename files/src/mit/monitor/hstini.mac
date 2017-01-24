@@ -1,0 +1,450 @@
+;<5.ISI.MONITOR>HSTINI.MAC.5350  6-Jan-83 18:57:35	Edit by CLYNN
+;<134>HSTINI.MAC;3    10-DEC-82 15:11:30    EDIT BY TAFT
+; Reactivate code for updating the GETAB table pointers for HOSTN and HSTNAM.
+; Add MONCLR instructions as necessary; and save/restore map entry rather than
+; unconditionally leaving it write-protected.
+;<5.ISI.MONITOR>HSTINI.MAC.4660	21-Oct-82 16:45:39	Edit by JGOLDBERGER
+;#466 Recognize TAC's as well as TIP's
+;#457 Fix TBLUK table for system type
+
+	SEARCH	PROLOG,MNTPAR
+	TTITLE	HSTINI
+
+	ASCIZ	/
+	HSTINI
+	COPYRIGHT (C) 1982,1983 BOLT BERANEK and NEWMAN INC.
+	/
+
+;;; New Internet host table parser
+;;;
+;;; This is intended as a stopgap measure to
+;;; allow Tops20's to use the Internet format host table,
+;;; until they can really take advantage of it
+
+;;;
+;;; Structures in the Host tables
+;;; For reference the Hostables have the following formats
+;;;
+;;; Tables indexed by a hash of the host number
+;;; HOSTNN - The 32 bit host number
+;;; HSTSTS - Status bits
+;;; HOSTPN - index in HOSTN of primary name for this number
+;;;
+;;; Tables indexed by order in the Hostname file
+;;; HOSTN - LH 18 bit address in HSTNAM
+;;;	    RH Index into hashed tables
+;;;
+;;; HSTNAM - a block NHSTN long which holds the null terminated
+;;;		name strings.
+;;;
+
+;;;
+	SWAPCD
+
+HSTINI::
+	SE1CAL
+
+	TRVAR	<HTBJFN,<TMPBUF,10>,NAMPTR,NAMIDX,NAMSPC,NAMCNT,SAVEP,BOL,TERM,HSTS,NAMLST,NUMLST>
+	MOVEM	P,SAVEP			; Save a stack fence in case of errors
+
+	MOVX	T1,GJ%SHT!GJ%OLD
+IFNKA <	HRROI	T2,[ASCIZ /SYSTEM:HOSTS.TXT/]>
+IFKA <	HRROI	T2,[ASCIZ /<SYSTEM>HOSTS.TXT/]>
+	GTJFN
+	 RET
+	MOVX	T2,7B5!OF%RD
+	OPENF
+	 RET
+	MOVEM	T1,HTBJFN		; save the JFN
+	PUTSEC	T1,MNTSEC		; initial HOSTN index
+	MOVEM	T1,NAMIDX
+	MOVEI	T1,NHOSTS		; size of HOSTN
+	MOVEM	T1,NAMCNT		; save
+
+	MOVNI	T1,NHSTN		; size of name space
+	MOVEM	T1,NAMSPC		; save
+	PUTSEC	T1,MNTSEC		; initial index into name space
+	MOVEM	T1,NAMPTR		; save
+
+;;; Clear the current tables
+	MOVE	T1,[XWD MNTSEC,HSTNAM]
+	SETZM	0(T1)		; Clear first word of name space
+	MOVE	T2,[XWD HSTNAM,HSTNAM+1]
+	BLT 	T2,NHSTN-1(T1)
+
+	PUTSEC	T4,MNTSEC		; Make pointer to section
+	MOVEI	T2,NHOSTS		; Count of table size
+HSTCLR:	SETZM	HOSTN(T4)		; Clear old number
+	SETZM	HOSTNN(T4)		; Clear number
+	SETZM	HSTSTS(T4)		; and status
+	SETZM	HOSTPN(T4)		; and primary name
+	AOS	T4			; Increment pointer
+	SOJG	T2,HSTCLR		; And loop through all
+
+LOOP:	MOVE	P,SAVEP			; reset stack fence
+
+	CALL	GBOL			; Skip to start of next non-blank,
+					; non-comment line @ first non-white
+
+	CALL	RDFLD			; read a value
+	MOVE	T1,TMPBUF		; get first word
+	CAME	T1,[ASCIZ /HOST/]	; Right kind of entry?
+	 JRST	LOOP			; no, ignore
+
+;;; Here on either HOST of gateway entries	
+
+	MOVEM	P,NUMLST		; Save pointer to numbers
+;;; Now read in all the numbers
+NUMLP:	CALL	RDHNUM			; read a host number
+	CALL	HSTHSH			; Hash it into the tables
+	 JUMPL	T2,[
+		   TMSG	<Number tables full before end of file
+>
+		   JRST	FILERR]
+	MOVEM	T1,HOSTNN(T2)		; Save the number
+	PUSH	P,T2			; and the index
+	MOVE	T1,TERM			; get field terminator
+	CAIE	T1,":"			; end?
+	 JRST	NUMLP			; No, loop.
+	PUSH	P,[-1]			; Flag end of list
+
+;;; Here with all addresses on the stack
+	MOVEM	P,NAMLST		; Start of name list
+NAMLP:	CALL	RDFLD			; read the next field
+	JUMPE	T1,[
+		   TMSG	<Null name not allowed
+>
+		   JRST	FILERR]
+
+	AOS	T1			; count the NULL terminator
+	IDIVI	T1,5			; convert char count to word count
+	SKIPE	T2			; round up if needed
+	 AOS	T1			; ...
+
+	PUSH	P,T1			; Save
+	ADDM	T1,NAMSPC		; decrement name space left
+	SKIPG	NAMSPC			; table full?
+	IFSKP.	<
+		TMSG	<Name space full before end of file
+>
+		JRST	FILERR
+	>
+
+	MOVE	T1,0(P)			; get count back
+	XMOVEI	T2,TMPBUF		; point to name read
+	MOVE	T3,NAMPTR		; next empty space in table
+	ADDI	T3,HSTNAM		; ...
+	CALL	XBLTA			; move the name
+
+	POP	P,T1			; restore count
+	PUSH	P,NAMPTR		; Save this index
+	ADDM	T1,NAMPTR		; update table
+	MOVE	T1,TERM			; get terminator
+	CAIE	T1,":"			; end of list?
+	 JRST	NAMLP			; No, Loop
+
+	PUSH	P,[-1]			; flag end of list
+
+	CALL	SKPFLD			; Skip machine type
+
+	CALL	RDFLD			; Read operating system
+	SETZ	T2,
+	JUMPE	T1,GOTOPS		; If null field
+
+	MOVEI	T1,OPSTAB		; Operating system type table
+	MOVE	T2,[POINT 7,TMPBUF]	; point to name
+	TBLUK
+	TXNE	T2,TL%NOM!TL%AMB	; no match?
+	 SKIPA	T2,[0]			; then no opsys
+	  HRRZ	T2,(T1)			; else get table value
+GOTOPS:	TXO	T2,HS%SRV		; pretend their all servers
+	MOVEM	T2,HSTS			; save it
+
+;;;
+;;; Now things are set up as follows
+;;; NUMLST points to a list of HOSTNN indices for this host
+;;; NAMLST points to a list of HSTNAM indices for it's names
+;;; HSTS holds the operating system type
+	HRRZ	T1,NUMLST		; point to list of numbers
+	MOVE	T2,NAMIDX		; Index of primary name in HOSTN
+;;; First set the primary name for each number
+NUMLP1:	SKIPG	T3,1(T1)		; get an index
+	 JRST	NUMLPX			; done with the list
+	MOVEM	T2,HOSTPN(T3)		; save
+	MOVE	T4,HSTS			; and opsys type
+	MOVEM	T4,HSTSTS(T3)		; ...
+	AOJA	T1,NUMLP1		; loop through number list
+
+;;; Now set primary number for each name
+NUMLPX:	HRRZ	T1,NUMLST		; get number list back
+	HRRZ	T2,NAMLST		; and name list
+	MOVE	T1,1(T1)		; and primary number index
+
+	MOVE	T3,NAMIDX		; Get index into name table
+
+NAMLP1:	SKIPG	T4,1(T2)		; get next name on the list
+	 JRST	NAMLPX			; done
+	STOR	T4,HSTNMP,(T3)		; set name pointer
+	STOR	T1,HSTIDX,(T3)		; save number index
+	MOVX	T4,1B0			; nickname flag
+	HRRZ	CX,NAMLST		; start of list
+	CAME	T2,CX			; this the first name?
+	 IORM	T4,HOSTN(T3)		; No, flag as a nickname
+	AOS	T3			; increment name table index
+	SOSLE	NAMCNT			; count down total number of names
+	IFSKP.	<	 
+		TMSG	<Name table full before end of file
+>
+		JRST	FILERR
+	>
+	AOJA	T2,NAMLP1		; and name list index
+
+NAMLPX:	MOVEM	T3,NAMIDX		; save new index into name table
+	JRST	LOOP			; onward
+
+;;; TBLUK table for operating system names
+OPSTAB:	XWD	NUMOPS,NUMOPS
+	XWD	[ASCIZ	/ANTS/],.HSANT
+	XWD	[ASCIZ	/ELF/],.HSELF
+	XWD	[ASCIZ	/ITS/],.HSITS
+	XWD	[ASCIZ	/MTIP/],.HSMTP
+	XWD	[ASCIZ	/MULTICS/],.HSMLT
+	XWD	[ASCIZ  /TAC/],.HSTIP	;#466 
+	XWD	[ASCIZ	/TENEX/],.HS10X
+	XWD	[ASCIZ	/TIP/],.HSTIP
+	XWD	[ASCIZ	/TOPS10/],.HSDEC
+	XWD	[ASCIZ	/TOPS20/],.HST20
+	XWD	[ASCIZ	/UNIX/],.HSUNX
+NUMOPS=.-OPSTAB-1		;#457 
+
+;;;	
+;;; Routines used above
+;;;
+
+;;; GBOL -- Move to start of next line
+;;; returns BOL -- file pointer of start of this line
+;;;
+GBOL:	MOVE	T1,HTBJFN		; Get JFN back
+GBOL1:	BIN				; read a byte
+IFNKA <	 ERJMP	DONE>			; end of file
+IFKA <	CALL	EOFCHK			; Tenex end-of-file check
+	 JRST	DONE>			; end of file
+	CAIE	T2,.CHLFD		; EOL?
+	 JRST	GBOL1			; Loop
+	
+	RFPTR				; read file position
+IFNKA <	 ERJMP	FILERR>			; fatal (? this necessary?)
+IFKA <	 JRST	FILERR>			; fatal
+	MOVEM	T2,BOL			; Save start of this line
+
+GBOL2:	BIN				; read start of next line
+IFNKA <	 ERJMP	DONE>			; end of file
+IFKA <	CALL	EOFCHK			; Tenex end-of-file check
+	 JRST	DONE>			; end of file
+
+	CAIE	T2,";"			; Comment?
+	 CAIN	T2,.CHCRT		; Or blank line?
+	  JRST	GBOL1			; skip
+
+	CAIE	T2," "			; LSWP?
+	 CAIN	T2,.CHTAB		; ?
+	 JRST	GBOL2			; yes
+	BKJFN				; back up
+	 NOP
+	RET				; return
+
+;;; RDFLD -- Read next field
+;;; Terminated by a "," or  ":"
+;;; Returns
+;;;	T1/	number of characters read
+;;;	TERM -- terminating character
+;;;	TMPBUF -- holds string (Null terminated)
+;;;
+RDFLD:	STKVAR	<COUNT,PTR>
+	SETZM	COUNT			; clear field length
+
+	MOVE	T1,[POINT 7,TMPBUF]	; point to start of buffer
+	MOVEM	T1,PTR			;  to store string in
+	SETZM	TMPBUF			; first word of buffer MBZ
+
+	MOVE	T1,HTBJFN		; get file handle
+
+;;; Skip LWS
+RDFLD1:	BIN				; read a byte
+IFNKA <	ERJMP	PEOF>
+IFKA <	CALL	EOFCHK			; Tenex end-of-file check
+	 JRST	PEOF>			; end of file
+
+	CAIE	T2,.CHTAB		; TAB?
+	 CAIN	T2," "			; blank?
+	  JRST	RDFLD1			; yes
+
+RDFLD2:	CAIE	T2,":"			; end of field?
+	 CAIN	T2,","			; ?
+	  JRST	RDFLDD			; yes
+	CAIE	T2," "			; ?
+	 CAIN	T2,.CHTAB		; ?
+	  JRST	RDFLDD			; yes
+	CAIN	T2,.CHCRT		; EOL?
+	 JRST	PEOL			; error
+	IDPB	T2,PTR			; save character
+	AOS	COUNT			; count it
+	BIN				; read the next
+IFNKA <	ERJMP	PEOF>			; premature end of file
+IFKA <	CALL	EOFCHK			; Tenex end-of-file check
+	 JRST	PEOF>			; end of file
+	JRST	RDFLD2			; continue
+
+RDFLDD:	CAIE	T2,","			; Field terminator seen?
+	 CAIN	T2,":"			; ?
+	   JRST	RDFLDX			; yes
+
+	CAIN	T2,.CHCRT		; EOL?
+	 JRST	PEOL			; error
+
+	BIN				; skip TWS
+IFNKA <	ERJMP	PEOF>
+IFKA <	CALL	EOFCHK			; Tenex end-of-file check
+	 JRST	PEOF>			; end of file
+	JRST	RDFLDD			; loop
+
+RDFLDX:	MOVEM	T2,TERM			; save terminator
+
+	SETZ	T2,
+	IDPB	T2,PTR			; NULL terminate the string
+
+	MOVE	T1,COUNT		; Get size of field
+	RET
+	ENDSV.
+
+;;;
+;;; SKPFLD -- Skip to next field (next ":")
+;;;
+SKPFLD:	MOVE	T1,HTBJFN
+SKPFL1:	BIN				; read a byte
+IFNKA <	ERJMP	PEOF>
+IFKA <	CALL	EOFCHK			; Tenex end-of-file check
+	 JRST	PEOF>			; end of file
+
+	CAIN	T2,":"			; start of new field?
+	 RET				; yes, done
+	CAIE	T2,.CHCRT		; end of line?
+	 JRST	SKPFL1			; no, continue
+PEOL:	TMSG	<Premature end of line
+>
+	JRST	FILERR
+
+;;; RDHNUM -- Read a host number "#.#.#.#"
+;;;	returns number in T1
+RDHNUM:	STKVAR	<COUNT,HOST>
+	CALL	RDFLD			; read in a field
+	SKIPE	T1
+	IFSKP.	<
+		TMSG	<Null host number
+>
+		JRST	FILERR
+	>
+
+	MOVEI	T1,4			; size of a number (bytes)
+	MOVEM	T1,COUNT		; save
+	SETZM	HOST
+
+	MOVE	T1,[POINT 7,TMPBUF]
+	MOVX	T3,^D10			; read in decimal
+RDHNU1:	NIN				; read part of number
+	IFNSK.	<
+		TMSG	<Bad host number format
+>
+		JRST FILERR
+	>
+
+	EXCH	T2,HOST			; Get part read so far
+	LSH	T2,^D8			; shift over
+	ADDM	T2,HOST			; add in new part
+	SOSLE	COUNT			; decrement count
+	 JRST	RDHNU1			; loop
+
+	MOVE	T1,HOST			; get number back
+	RET				; and return
+	ENDSV.
+
+;;; ERROR handlers
+;;;
+
+;;; PEOF -- premature end of file
+PEOF:	TMSG	<Premature end of file
+>
+
+;;; FILERR -- Error printout routine
+FILERR:	MOVE	T1,HTBJFN		; Get JFN
+	RFPTR				; read current file position
+	 JFCL
+	PUSH	P,T2			; save
+	MOVE	T2,BOL			; get start of line pointer
+	SFPTR				; ...
+	 JFCL
+	SUBM	T2,0(P)			; difference
+
+FILER1:	MOVE	T1,HTBJFN
+	BIN				; read a byte
+IFNKA <	ERJMP	DONE>			; end of file
+IFKA <	CALL	EOFCHK			; Tenex end-of-file check
+	 JRST	DONE>			; end of file
+
+	MOVX	T1,.PRIOU
+	BOUT				; write to primary output
+	SOSN	0(P)			; count down to error position
+	 CALL	[MOVEI	T2,"^"
+		 BOUT
+		 RET]
+	CAIE	T2,.CHLFD		; end of line?
+	 JRST	FILER1			; loop
+
+;;; Here when finished
+DONE:
+;;; Now set up various count words
+	HRRZ	T1,NAMIDX		; get count of host names
+	MOVNM	T1,MHOSTS		; Save
+
+IFNKA <	CALL	SWPMWE>			; WRITE ENABLE SWAP MON
+IFKA <	MOVEI	T1,GTBHST		; adr of HOSTN entry in GTTAB
+	LSH	T1,-^D9			; make it page number
+	PUSH	P,MMAP(T1)		; Save old map entry
+	MOVSI	T2,WRITEB		; write-enable bit
+	IORM	T2,MMAP(T1)		; set it for this page
+	MONCLR	0(T1)
+	MOVEI	T1,GTBNHN		; do same for HSTNAM entry
+	LSH	T1,-^D9			; just in case they're different
+	PUSH	P,MMAP(T1)		; Save old map entry
+	IORM	T2,MMAP(T1)
+	MONCLR	0(T1)
+>	
+	HRRZ	T1,NAMIDX		; get count back
+IFNKA <	HRLM	T1,GTTAB+.HOSTN>	; LENGTH OF HOSTN TABLE
+IFKA <	DPB	T1,[POINT 17,GTBHST,17]>; LENGTH OF HOSTN TABLE
+
+	MOVEI	T1,NHSTN+1		; get length of
+	ADD	T1,NAMSPC		; HSTNAM table
+IFNKA <	HRLM	T1,GTTAB+.HSTNA>	; save
+IFKA <	DPB	T1,[POINT 17,GTBNHN,17]>; save
+
+IFNKA <	CALL	SWPMWP>			; WRITE PROTECT
+IFKA <	MOVEI	T1,GTBNHN		; adr of HSTNAM entry in GTTAB
+	LSH	T1,-^D9			; make it page number
+	POP	P,MMAP(T1)		; Restore map entry for this page
+	MONCLR	0(T1)
+	MOVEI	T1,GTBHST		; do same for HOSTN entry
+	LSH	T1,-^D9			; just in case they're different
+	POP	P,MMAP(T1)
+	MONCLR	0(T1)
+>	
+	MOVE	T1,HTBJFN		; get back JFN
+	CLOSF
+	 JFCL
+	MOVE	P,SAVEP			; Get back stack fence
+	RETSKP				; and return
+
+	ENDTV.
+
+	TNXEND
+	END				; of HSTINI

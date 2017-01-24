@@ -1,0 +1,889 @@
+;[BBNF.ARPA]<5-3-NET>IMPANX.JVD.7, 31-Jul-84 16:57:02, Edit by: JDELSIGNORE
+; Added CALL MNOSRT rather than MNTCALL NTOSRT
+; Count Internet Packets before IMPIOD:
+;[BBNF]<TAPPAN.NEW>ANXPHY.MAC.3,  1-Nov-83 14:28:11, Edit by: TAPPAN
+; Merge with DEC 5.3x
+
+
+;THIS SOFTWARE IS FURNISHED UNDER A LICENSE AND MAY ONLY BE USED
+;  OR COPIED IN ACCORDANCE WITH THE TERMS OF SUCH LICENSE.
+;
+;COPYRIGHT (C) 1978,1979,1980,1981,1982,1983,1984,
+;BY DIGITAL EQUIPMENT CORPORATION, MAYNARD, MASS.
+
+	SEARCH ANAUNV,PROLOG
+	TTITLE (IMPANX,IMPANX,<- AN20 Device Driver>)
+
+IMPCHN==6			; AN20 is on PI level 6
+
+;BITS IN CONI FOR ANI
+
+ANIMRQ==1B27	;MSG REQUEST. IMP STARTING TO SEND TO HOST.
+ANIBSY==1B26	;BUSY. HOST IS ACCEPTING A MESSAGE
+ANIM36==1B25	;MESSAGE BEING ASSEMBLED INTO 36 BIT WDS IF 1,
+ANIM32==0B25	; 32 BIT WORDS IF 0.
+ANIWCO==1B24	;WD COUNT OVERFLOW. MESSAGE PORTION IS DONE.
+ANIDON==1B23	;DONE. IMP SENT LAST BIT.
+ANIIID==1B19	;IMP IS DOWN. (READY LINE OFF)
+ANIIWD==1B18	;IMP WAS DOWN. (READY LINE HAS BEEN OFF)
+
+;BITS IN CONO FOR ANI
+
+ANIRST==1B19	;RESET THE WHOLE AN10 (EXCEPT HOST READY LINE)
+ANICLE==1B18	;CLEAR ERROR FLAGS IN LH OF CONI, CLR IMP WAS DOWN.
+ANXCHS==<IMPCHN>B32+<IMPCHN>B35;TWO ADJACENT PI CHANNELS IN B30-35
+
+;BITS IN CONI FOR ANO
+
+ANOEND==1B27	;END OF MSG. SEND "LAST" WHEN WD CNT RUNS OUT.
+ANOBSY==1B26	;BUSY. SEND WORDS TO THE IMP.
+ANOM36==1B25	;MODE 36. SEND ALL 36 BITS OF DATA WORDS. ELSE,
+ANOM32==0	; MODE 32 is that bit off
+ANOWCO==1B24	;WORD COUNT OVERFLOW. THIS MSG PORTION COMPLETED.
+ANODON==1B23	;ALL BITS INCLUDING "LAST" HAVE BEEN SENT.
+ANOIID==1B19	;IMP IS DOWN, SAME AS IN ANI
+ANOIWD==1B18	;IMP WAS DOWN, SAME AS IN ANI
+
+;BITS IN CONO FOR ANO
+
+ANOCLE==1B18	;CLEAR ERROR BITS, IMP WAS DOWN BIT.
+
+;ANO & ANI CONO register select field. Note these aren't used much because
+;hardware automatically switches to the "right" register most of the time.
+
+ANXVAR==2B29	;VECTOR INTERRUPT ADDRESS REGISTER
+ANXWAR==1B29	;WORD COUNT AND ADDRESS REGISTER
+ANXDR==0B29	;DATA REGISTER.
+
+;Bits in input device vector address register
+
+ANIHRL==1B10	;HOST READY LINE. DATAO A 1 TO BECOME READY.
+
+;Miscellaneous variables
+
+DEFSTR IMWDCT,,12,12		;WORD COUNT FOR WC/ADR REGISTER
+DEFSTR IMBFAD,,35,23		;ADDRESS FOR WC/ADR REGISTER
+
+;NCT extensions for AN20
+
+HSTGDM==NTGEN			; Word for communication with the 1822 driver
+NTNOP==NTGEN+1			; Another
+NTIHDR==NTGEN+2			; Input header buffer, 4 words (IHxxx def'ns)
+
+DEFHDR(<NCT EXTENSIONS>,NCTBAS,0)	; Start after basic NCT
+DEFWRD	NTFLS			; Number of input flush's needed
+DEFWRD	NTIQDB,2		; Starting time information (PLNQD,PLNDB)
+
+DEFWRD	NTINP			; Current input pointer
+DEFWRD	NTOUP			; Current output pointer
+DEFWRD	NTITYP			; Input transfer type (protocol,,mode)
+DEFWRD	NTOTYP			; Output transfer type (mode)
+
+;The following are for the input side
+
+DEFWRD	NTCNSZ			; CONSZ (T1)
+DEFWRD	NTCNSO			; CONSO (T1)
+DEFWRD	NTCONO			; CONO (T1)
+DEFWRD	NTCONI			; CONI (T1)
+DEFWRD	NTDATO			; DATAO T1
+DEFWRD	NTDATI			; DATAI (T1)
+
+;The following are for the output side
+
+DEFWRD	NTOCSZ			; CONSZ
+DEFWRD	NTOCSO			; CONSO
+DEFWRD	NTOCNO			; CONO
+DEFWRD	NTOCNI			; CONI
+DEFWRD	NTODTO			; DATAO
+
+;Input interrupt instructions etc
+
+DEFWRD	NTIINT			; XPCW .+1
+DEFWRD	NTIJSR			; JSR to AC save routine
+DEFWRD	NTIDSP			; Input dispatch
+DEFWRD	NTINCT			; Pointer to NCT
+DEFWRD	NTIIPC,4		; PC/ flag words
+
+;Output interrupt instructions etc.
+
+DEFWRD	NTOINT			; XPCW .+1
+DEFWRD	NTOJSR			; JSR to AC save routine
+DEFWRD	NTODSP			; output dispatch address
+DEFWRD	NTONCT			; Pointer to NCT
+DEFWRD	NTOIPC,4		; PC/ flag words
+NCTLEN==..OFST			; Size of our NCT
+
+	SWAPCD			; This is only called at process level
+
+;AN20 initialization vector
+
+ANXNCT::
+	FLD(NCTLEN,IVLEN)+FLD(NUMINI,IVINI)
+	XWD NTFLAG,[0*RFNMC]
+	XWD NTIJSR,[JSR LV6SAV]
+	XWD NTOJSR,[JSR LV6SAV]
+	XWD NTCONI,[CONI 0,T1]
+	XWD NTCONO,[CONO 0,(T1)]
+	XWD NTCNSO,[CONSO 0,(T1)]
+	XWD NTCNSZ,[CONSZ 0,(T1)]
+	XWD NTDATO,[DATAO 0,T1]
+	XWD NTDATI,[DATAI 0,T1]
+	XWD NTOCSZ,[CONSZ 0,(T1)]
+	XWD NTOCSO,[CONSO 0,(T1)]
+	XWD NTOCNO,[CONO 0,(T1)]
+	XWD NTOCNI,[CONI 0,T1]
+	XWD NTODTO,[DATAO 0,T1]
+	XWD NTPVEC,[XWD MSEC1,NCPVEC]	; Default protocol vector
+	XWD NTHVEC,[XWD MSEC1,ANXVEC]	; Default hardware vector
+	XWD NTORAT,[^D180]
+NUMINI==.-ANXNCT-1			; Number of entries initialized
+
+;Initialization code starts here
+;T1/	# device numbers
+;T2/	Array of device numbers
+;P1/	NCT
+;Ret+1:	If initialization failed
+;Ret+2:	If initialization succeeded
+
+	CAIN T1,2		; Right number of devices?
+	IFSKP.
+	  BUG.(CHK,ANXBDD,IMPANX,SITE,<Bad number of AN20 device codes>,
+<<T1,CNT>,<(T2),DevCod>>,<
+
+Cause:	Exactly 2 device codes are required for an AN20.  The entry in the
+	SYSTEM:SITE-ADDRESS.TXT file contains the number specified.
+
+Action:	Edit the site address file.  The device codes follow the AN20
+	keyword, separated by colons, (eg. AN20:520:524,...).
+
+Data:	Number of device codes specified in the file, first Device Code.
+
+>)
+	  RET
+	ENDIF.
+
+;Create the I/O instructions
+
+	MOVE T1,(T2)		; Input side
+	LSH T1,30		; Create basic instruction
+	MOVE T2,1(T2)		; Output side
+	LSH T2,30
+	IORM T1,NTCONO(P1)	; CONO
+	IORM T2,NTOCNO(P1)
+	IORM T1,NTCONI(P1)	; CONI
+	IORM T2,NTOCNI(P1)
+	IORM T1,NTCNSO(P1)	; CONSO
+	IORM T2,NTOCSO(P1)
+	IORM T1,NTCNSZ(P1)	; CONSZ
+	IORM T2,NTOCSZ(P1)
+	IORM T1,NTDATO(P1)	; DATAO
+	IORM T2,NTODTO(P1)
+	IORM T1,NTDATI(P1)	; DATAI
+
+;Setup the interrupt vector instructions
+
+	XMOVEI T1,NTIJSR(P1)	; Address of JSR instruction
+	MOVEM T1,NTIIPC+3(P1)	; Is new PC on interrupt
+
+	XMOVEI T1,NTOJSR(P1)	; Same for output
+	MOVEM T1,NTOIPC+3(P1)
+
+	MOVEI T1,NTIIPC(P1)	; Create XPCW instruction
+	HRLI T1,(XPCW 0)
+	MOVEM T1,NTIINT(P1)
+
+	MOVEI T1,NTOIPC(P1)	; Same for output side
+	HRLI T1,(XPCW 0)
+	MOVEM T1,NTOINT(P1)
+
+	HRRZM P1,NTINCT(P1)	; Remember NCT for interrupt handler
+	HRRZM P1,NTONCT(P1)	; and output
+
+;Initialize the interrupt dispatches
+
+	XMOVEI T1,IMIN00	; Input PI dispatch to shut off device
+	MOVEM T1,NTIDSP(P1)
+	XMOVEI T1,IMPDO4	; Output PI dispatch to start new msg
+	MOVEM T1,NTODSP(P1)
+
+;Set various other cells
+
+	MOVEI T1,NH.ANX		; Hardware type is AN20
+	STOR T1,NTDEV,(P1)
+
+	MOVEI T1,^D1004		; Default packet max on Arpanet (one too
+	MOVEM T1,NTPSIZ(P1)	; few bits to be ^D1008)
+	RETSKP			; Init complete
+
+	RESCD
+
+;Hardware vector
+
+ANXVEC::
+	NCTVEC(ANXVEC,ANXKIL,NTHKIL)	; Kill the hardware
+	NCTVEC(ANXVEC,ANXRSS,NTRSRT)	; Restart hardware
+	NCTVEC(ANXVEC,ANISRT,NTISRT)	; Start input
+	NCTVEC(ANXVEC,ANOSRT,NTOSRT)	; Start output
+	NCTVEC(ANXVEC,ANXSCK,NTSCHK)	; Check status
+	NCTVEC(ANXVEC,R,NTHRMV)		; Nothing to release
+
+;ANISRT
+;Start input called from process level when input isn't active and from
+;endin processor after completing an input operation.
+
+;P1/	Extended pointer to NCT
+
+ANISRT:	MNTCALL NTSCHK		; Is the IMP up?
+	IFNSK.			; No, can't do anything
+	  SKIPGE T1,NTPSTI(P1)	; Collecting statistics?
+	    AOS CELL(MNMRC,5,(T1)) ; Nothing to do
+	  RET
+	ENDIF.
+
+	PIOFF
+	SKIPN NTIB(P1)		; Already doing input?
+	IFSKP.			; Yes
+	  PION
+	  SKIPGE T1,NTPSTI(P1)	; Collecting statistics?
+	    AOS CELL(MNMRC,4,(T1)) ; Already busy
+	  RET
+	ENDIF.
+
+	XMOVEI T1,NTIHDR(P1)	; First canned word to read into
+	TXO T1,<4B12>		; Read thru leader (and 1st word of data)
+	MOVEM T1,NTINP(P1)	; This is the first DATAO to ANXWAR
+	SETOM NTIB(P1)		; Flag input active
+
+	XMOVEI T1,IMIN0		; Address for next interrupt
+	MOVEM T1,NTIDSP(P1)	; Remember it
+
+	CALL UPDTCK		; Update TODCLK
+	MOVE T1,TODCLK
+	MOVEM T1,NTIQDB(P1)	; Time driver began waiting
+
+	PION
+
+	MOVEI T1,ANICLE+ANXWAR+ANXCHS	; Tell IMP ready to go.
+	MNTXCT NTCONO
+	RET
+
+;Pi service for input
+
+;All ACs have been saved by startup routine, we are dispatched to via
+;the NTIDSP word of the proper NCT.
+
+;The following AC usage conventions are adhered to
+;T1/	Temp - Used to hold I/O instruction arguments
+;T2/	Points to Buffer we're working on
+;T3,T4,CX/ Temp
+;P/	Hold stack pointer
+
+;If ANIDON is on, they go to IMPEI0 for end of input handling.
+
+;Here when input has been idle and IMP starts to send bits.  This first
+;interrupt requires us to send over word count and address.  The first
+;count will read the IMP-to-host leader and a word of padding, in 32-bit mode.
+
+IMIN0:	CALL UPDTCK		; Update TODCLK
+	MOVE T1,TODCLK
+	MOVEM T1,NTIQDB+1(P1)	; Time driver began input
+	ADDI T1,^D30000		; Thirty second timeout
+	MOVEM T1,NTTOUT+1(P1)	; Start timer
+
+	XMOVEI T2,NTIHDR(P1)	; Area for header
+	TXO T2,IPDV%R+IPDV%I+IPDV%B ; Beginning input into canned buffer
+	CALL NTPRNG		; Begin stats
+
+	SKIPGE T1,NTPSTI(P1)	; Collecting statistics?
+	  AOS CELL(MNMRC,0,(T1)) ; Packet being received
+	MOVEI T1,ANIMRQ		; Message Request is only valid bit
+	MNTXCT NTCNSO		; Check if on		
+	  JRST IMIN00		; It wasn't that. Something wierd.
+	SKIPGE NTFLS(P1)	; Flushing messages?
+	  JRST IMIN3A		; Yes, discard it immediately
+
+	XMOVEI T1,IMIN1		; Next interrupt wanted is this
+	MOVEM T1,NTIDSP(P1)	; Set dispatch for reading I-H leader.
+	MOVE T1,NTINP(P1)	; Get pointer		
+	MNTXCT NTDATO		; Tell the IMP		
+	MOVEI T1,ANIM32+ANIBSY+ANXCHS	; Set to read 32 bits, then PI.
+	MNTXCT NTCONO
+	RET
+
+;IMIN00	Input interrupt error routine. If the input side of the ANX has
+;been idle, any interrupt other than MSG REQUEST is an error.
+
+IMIN00:	MNTXCT NTCONI		; Get status for buginf	
+	BUG.(INF,IMINX1,IMPANX,HARD,<Unusual ANI interrupt, CONI ANI is>,
+<<T1,CONI>,<P1,NCT>,<NTNET(P1),Net>>,<
+Cause:	Unexpected input interrupt from IMPBBN device.
+
+Data:	CONI bits, NCT, Network number.
+>)
+	SKIPGE T1,NTPSTI(P1)	; Collecting statistics?
+	  AOS CELL(MNMRC,^D9,(T1)) ; Interrupt errors	
+	SETZM NTTOUT+1(P1)	; Clear any input timeout
+	MOVEI T1,0					
+	MNTXCT NTCONO		; Turn off input	
+	MOVEI T1,ANIRST		; And get bits to	
+	MNTXCT NTCONO		; Reset ANI, leave ANIIWD on, input off
+	RET			; Back to restore	
+
+
+;PI level after IMP leader has been read, ANIDON on means it wasn't that long.
+
+;Type codes used below to indicate what sort of packing to use on the message
+
+.II32==0			; Pack in 32 bit mode
+.II36==1			; Pack in 36 bit mode
+
+IMIN1:	MOVEI T1,ANIDON		; End of message?
+	MNTXCT NTCNSZ
+	  JRST IMPEI0		; Yes, go process short (irreg) msg
+
+	LOAD T1,IHLNK,<+NTIHDR-.NBLD0(P1)>	; Get the message link
+
+;Find out if it's one we want to worry about
+
+	MOVEI T4,.II32		; Assume 32 bit packing
+	MOVEI T3,NP.IP		; Internet protocol
+	CAIN T1,INTLNK		; Internet link?
+	  JRST IMIN1A		; Yes.
+
+;Testing note: by JRST R above, can force IMP to declare host "tardy down"
+
+
+;It's not a message type we handle. For now, throw it away.
+
+	JRST IMIN30
+
+
+IMIN1A:	HRRM T4,NTITYP(P1)	; Save mode
+	HRLM T3,NTITYP(P1)	; Save protocol
+
+;Here also on recovery when couldn't get buffer at PI level
+
+IMIN1B:	HRRZ T4,NTITYP(P1)	; Get the packing type back
+
+;It's a message we may want, get a buffer to read it into
+
+	LOAD T1,IHLEN,<+NTIHDR-.NBLD0(P1)>	; Get message length (bits)
+	CAIE T4,.II32		; 32 bit mode?
+	IFSKP.
+	  ADDI T1,^D<32+31>	; Round up plus one extra word
+	  ;; The extra word is to allow EOM if it occurs on a word boundry.
+	  LSH T1,-5		;  to a word count
+	ELSE.
+	  IDIVI T1,^D36
+	  AOS T1		; Assume round up
+	ENDIF.
+	PUSH P,T1		; Save the size
+	HLRZ T2,NTITYP(P1)	; Get the protocol
+	ADD T1,PROOVH(T2)	; Add in (protocol specific) total overhead
+
+	CALL GETBUF ;(T1:T1,T2)	; Get a buffer to read it into
+	IFE. T1			; Failed
+	  POP P,0(P)		; Flush the size
+	  SKIPGE T1,NTPSTI(P1)	; Collecting statistics?
+	    AOS CELL(MNMRC,6,(T1)) ; No input buffer
+	  XMOVEI T1,IMIN1B	; Recovery instruction
+	  MOVEM T1,NTINRS(P1)	; Input restart routine
+	  CALL MNTWAK
+	  RET			; Give up for now
+	ENDIF.
+
+;T1 has buffer pointer
+
+	SETZM NTINRS(P1)	; No input restart needed
+	MOVEM T1,NTIB(P1)	; Save as the input buffer
+
+				; Initialize global and local net info
+	SETZM PKTFLG(T1)	; Clear flags
+
+	DMOVE T2,NTIQDB(P1)	; Time began waiting, began input
+	STOR T2,PLNQD,(T1)
+	STOR T3,PLNDB,(T1)
+
+	MOVE T2,T1		; Point to buffer 
+	HLRZ CX,NTITYP(P1)	; Get protocol type again
+	ADD T1,PROOVH(CX)	; Add in overhead
+	SUBI T1,.NBHDL		; Correct for our leader
+	STOR T1,PLNDT,(T2)	; Address of local net level leader
+
+	XMOVEI CX,IMIN3		; Address for next interrupt
+	MOVEM CX,NTIDSP(P1)	; Save for next interrupt
+
+;Save the leader
+
+	DMOVE T2,NTIHDR(P1)
+	DMOVEM T2,.NBLD0(T1)
+	DMOVE T2,NTIHDR+2(P1)
+	MOVEM T2,.NBLD2(T1)
+
+;T3 now holds the first data word
+
+	HRRZ T4,NTITYP(P1)	; re-get packing type
+	CAIN T4,.II36		; 36 bit mode?
+	  LSH T3,4		; If so, shift it funny
+	MOVEM T3,.NBLD2+1(T1)	; save as first data word
+
+	POP P,T2		; restore data size (from above)
+	SOS T2			; Minus word already read
+	LSH T2,<^D35-^D12>	; Shift over
+
+	XMOVEI T1,.NBLD2+2(T1)	; Where to continue reading
+	IOR T1,T2		; Merge in byte count
+	MNTXCT NTDATO		; Do DATAO T1		
+
+	MOVE T1,IICNO(T4)	; Get the control bits
+	MNTXCT NTCONO		; and make it go	
+
+	RET			; Done with this interrupt
+
+;Control bits for the two packing modes
+
+IICNO:	ANIM32+ANIBSY+ANXCHS	; Read in 32 bit mode
+	ANIM36+ANIBSY+ANXCHS	; Read in 36 bit mode
+
+;Input body of message interrupt
+
+IMIN3:	MOVEI T1,ANIDON		; I hope it fit in a buffer
+	MNTXCT NTCNSZ
+	IFSKP.			; Did not fit
+	  SKIPGE NTFLS(P1)	; Were we already flushing it?
+	  IFSKP.
+	    SKIPGE T1,NTPSTI(P1) ; Collecting statistics?
+	      AOS CELL(MNMRC,6,(T1)) ; Overruns
+	  ENDIF.
+
+;Join here to start flushing a message
+
+IMIN30:	  SETOM NTFLS(P1)	; Remember this one is garbage
+
+;Join here if NTFLS is on at start of message
+
+IMIN3A:	  MOVE T1,[1B12+PI6STK+NPISK6-1] ;Use stack as bit bucket
+	  MNTXCT NTDATO
+	  MOVEI T1,ANIBSY+ANXCHS ; Get bits		
+	  MNTXCT NTCONO		; Keep reading until end comes along
+	  XMOVEI T1,IMIN3	; Where to come on interrupt
+	  MOVEM T1,NTIDSP(P1)
+	  SKIPGE T1,NTPSTI(P1)	; Collecting statistics?
+	    AOS CELL(MNMRC,2,(T1)) ; Ok to drop if flushing
+	  RET
+	ENDIF.			; End of message and did fit
+
+IMPEI0:	SETZM NTTOUT+1(P1)	; Cancel input timer
+
+	AOSG NTFLS(P1)		; Were we flushing?
+	 SKIPLE NTIB(P1)	; Was there real input?
+	IFSKP.			; Yes and no
+	  SETZM NTIB(P1)	; Clear buffer pointer (flag only)
+	  MNTJRST NTISRT	; Restart input
+	ENDIF.
+
+	CALL UPDTCK		; Update TODCLK
+
+	MOVEI T1,ANXWAR		; Select WC/ADDR reg, clear PIA
+	MNTXCT NTCONO
+	MNTXCT NTDATI		; Get data		
+
+	TXZ T1,-1B12		; Mask off 23 bit address
+	SKIPG T2,NTIB(P1)	; See if had a real buffer
+	IFSKP.
+	  PNTLDR T3,PLNDT,(T2)	; Address of local net level leader
+	  SUB T1,T3		; Gives approximate size
+	  LSH T1,2		; Convert to byte count
+	  STOR T1,PLNBZ,(T2)	; Length at local net level
+	  MOVE T3,TODCLK	; Time ended input
+	  STOR T3,PLNDE,(T2)
+	ENDIF.
+
+	LOAD T1,IHLNK,<+NTIHDR-.NBLD0(P1)>	; Get the message link
+	CAIN T1,INTLNK		; Internet link and
+	 SKIPL T1,NTPSTI(P1)	; Collecting statistics?
+	  TRNA			; No
+	   AOS CELL(MNMRC,1,(T1)) ; Internet packet received
+	MNTJRST NTIDUN		; Perform "input done"
+				; Done successfully	
+
+;Output PI routines.  Start msg going out.  Called at PI level, and at
+;main level if no output in progress (but NTOB is -1).
+
+ANOSRT:	SKIPGE T1,NTPSTI(P1)		; Collecting statistics?
+	  AOS CELL(MNMSC,0,(T1))	; Packets to be sent
+
+	SKIPL NTNOP(P1)			; Any nop's to send?
+	  JRST IOUNOP			; Yes, go send them
+
+	CALL NCPUNQ			; Get the next sendable message
+	IFNSK.				; No skip if nothing can be sent
+	  SKIPLE T2,HSTGDM(P1)		; Need to send host-going-down?
+	    JRST IOUHGD			; Send the host going down msg
+
+	  MOVEI T1,0			; CONO a 0		
+	  MNTXCT NTOCNO
+
+	  XMOVEI T1,IMPDO4		; Dispatch when it is turned on
+          MOVEM T1,NTODSP(P1)
+
+	  SETZM NTOB(P1)		; Driver is now inactive
+
+	  SKIPGE T1,NTPSTI(P1)		; Collecting statistics?
+	    SOS CELL(MNMSC,0,(T1))	; Nothing to send correction
+	  RET
+	ENDIF.
+
+;T1 now has buffer to send
+
+	MOVEM T1,NTOB(P1)		; Flag output active, standard packet
+	MOVMS HSTGDM(P1)		; Enable going-down, if one exists
+	
+	PNTLDR T3,PLNDT,(T1)		; Address of local net level leader
+	MOVE T2,T1			; Buffer address for NTPOSS
+	TXO T2,IPDV%O!IPDV%B		; Beginning of output
+	LOAD T1,IHMTY,(T3)		; Message type
+	LOAD T3,IHSTY,(T3)		; Message subtype
+	HRL T1,T3			; Subtype,,Type
+	CALL NTPOSS			; Statistics and ring
+
+;Decide on packing based on message type
+
+;Assume 32 bit (IP)
+; Only Internet for now...  So REPEAT 0 the unnecessary code
+REPEAT 0,<
+	LOAD T1,IHLNK,(T2)	; Get link type
+	CAIE T1,INTLNK		; Internet?
+	IFSKP.			; Yes...
+>
+	  SKIPGE T1,NTPSTI(P1)		; Collecting Stat?
+	    AOS CELL(MNMSC,1,(T1))	; Yes, Internet packets send
+	  MOVX T4,.II32			; Internet packing mode
+REPEAT 0,<
+	ELSE.
+	  ;;; Other types...
+	ENDIF.
+>
+IMPIOD:
+	MOVEM T4,NTOTYP(P1)	; Remember packing type decision
+
+	MOVEI T1,ANXWAR		; Select WC/ADDR reg
+	MNTXCT NTOCNO		; Do an Output CONO
+
+;The following assumes everything goes out as 32 bit.  If packet is packed
+;36 bit then we should only send 4 words and dispatch to IMOLDR when finished.
+
+;Testing note: IMODN2 -> R and omit ANOEND=400 below to get IMP "Incomplete"
+ 	XMOVEI T1,IMODN2	; Where to go on next interrupt
+	MOVEM T1,NTODSP(P1)
+
+	MOVE T1,NTOB(P1)	; Get buffer back	
+	LOAD T2,PLNBZ,(T1)	; Length at local net level
+	ADDI T2,3		; Round to words
+	LSH T2,-2		; Truncate
+	LSH T2,<^D35-^D12>	; Shift it to bit 12
+
+	PNTLDR T1,PLNDT,(T1)	; Address of local net level leader
+	IOR T1,T2		; Merge in size
+
+	MNTXCT NTODTO		; Do a DATAO
+
+	MOVE T2,TODCLK		; Get time
+	ADDI T2,^D30000		; Timeout in thirty seconds
+	MOVEM T2,NTTOUT(P1)	; Set timeout
+
+	MOVEI T1,ANOM32+ANOBSY+ANOCLE+ANXCHS+ANOEND
+	MNTXCT NTOCNO		; Send in 32-bit mode including end of message
+	RET
+
+REPEAT 0,<
+;Here at PI level when leader has been sent.  This is only reached if body
+;of message is to be sent 36 bit.
+
+;Now send the body of the message
+
+IMOLDR:	XMOVEI T1,IMODN2	; Where to come on next interrupt
+	MOVEM T1,NTODSP(P1)
+
+	MOVE T2,NTOB(P1)	; Buffer we are working on
+	MOVE T4,NTOTYP(P1)	; Get the packing control
+
+	PNTLDR T1,PLNDT,(T2)	; Address of local net level leader
+
+	XMOVEI T2,.NBLD2+2(T1)	; Past stuff already sent
+	
+	LOAD T3,PLNBZ,(T2)	; Length at local net level
+	ADDI T3,3
+	LSH T3,-2		; Convert to words
+	SUBI T3,4		; Minus leader and first word
+	LSH T3,<^D35-^D12>
+	IOR T1,T3		; Merge in word count
+	MNTXCT NTODTO		; Do output DATAO
+
+	MOVE T1,IO1CNO(T4)	; Get end of message plus right word size etc.
+	MNTXCT NTOCNO		; Tell interface
+	RET			; Done with interrupt
+
+>
+IO1CNO:	ANOM32+ANOBSY+ANXCHS+ANOEND	; 32 bit mode + end of message
+	ANOM36+ANOBSY+ANXCHS+ANOEND	; 36 bit mode + end of message
+
+
+;Here to make a Host Going Down message.  T2 has info HSTGDM is 0 if not
+;going down, +N if one needs to be sent, and -N if it has been sent.  Host
+;going down must be the last thing we tell the IMP.  Sending after saying
+;HGD means another HGD is needed.
+
+IOUHGD:	MOVEI T3,0		; Build the message in 2 and 3
+	LSHC T2,-^D8		; Form down-time and reason
+	DMOVEM T2,IIMBUF+1	; Use the special irreg msg buffer
+	MOVE T2,H2IHGD		; Proto Host-Going-Down msg
+	MOVEM T2,IIMBUF		; To the scratch buffer
+	MOVNS HSTGDM(P1)	; Disable subsequent HGDs
+	XMOVEI T2,IIMBUF	; Point to this msg	
+	MOVX T1,<0,,.IHHGD>	; Host-going-down
+	IFSKP.			; (Never) go send it.
+
+;Here to send a NOP
+
+IOUNOP:	  SOS NTNOP(P1)
+	  MOVMS HSTGDM(P1)	; May now need another going down msg
+	  XMOVEI T2,H2INOP	; Point to prototype NOP/padding msg
+	  MOVX T1,<0,,.IHNOP>	; NOP
+	ENDIF.
+
+	TXO T2,IPDV%R		; Set Canned buffer flag
+	MOVEM T2,NTOB(P1)	; Remember which message
+	TXO T2,IPDV%O+IPDV%B	; Beginning output
+
+	CALL NTPOSS		; Statistics and ring
+	TXZ T2,IPDV%R		; Clear the flag
+
+	TXO T2,<3B12>		; Length of the msg
+	MOVEI T1,ANXWAR		; Set for wd ct/addr register
+	MNTXCT NTOCNO		; Do a CONO (T1) Setting WC/ADDR Reg
+
+	MOVE T1,T2		; Get message pointer/count
+	MNTXCT NTODTO		; Do a DATAO ANO,T1
+
+	MOVE T1,IO1CNO+.II32	; Bits for 32 bit packing, EOM, etc.
+	MNTXCT NTOCNO		; ...
+
+	MOVE T1,TODCLK		; Get time
+	ADDI T1,^D1000		; Timeout in one second
+	MOVEM T1,NTTOUT(P1)	; Set timeout
+
+	XMOVEI T1,IMOIR2	; When done, no buffer to release
+	MOVEM T1,NTODSP(P1)	; Set dispatch address
+	RET
+
+; Prototype Host-to-Imp NOP msg, with padding control.
+
+H2INOP:	BYTE (4)0,ITY%LL (16)0 (8).IHNOP
+	EXP 0
+	EXP 0			; No padding
+
+
+;Prototype Host-to-IMP Host-going-down message.
+
+H2IHGD:	BYTE (4)0,ITY%LL (16)0 (8).IHHGD	;1-32
+;	BYTE (32)0				;33-64
+;	BYTE (3)DAY-OF-WK (5)HOUR (4)5MIN, REASON
+
+
+;Here after "out done" interrupt when no buffer to release.
+
+IMOIR2:				; Note NTOB has IPDV%R set
+
+;Here after "out done" interrupt for a regular message
+;Here when all done with buffer
+
+IMODN2:	MOVE T2,NTOB(P1)	; Message completed
+	TXO T2,IPDV%O+IPDV%E	; End of output
+	CALL NTPRNG		; Process into ring
+
+	MOVE T1,NTOB(P1)	; Which message
+	TXZE T1,IPDV%R		; Special?
+	IFSKP.			; No
+	  MOVX T1,PT%SLN	; Standard packet sent out over net
+	  MNTCALL NTODUN	; Do output done stuff
+	ELSE.			; Canned control message
+	  MOVE T2,T1		; Pointer to local leader
+	  TXO T2,1B0		; Pointing to local leader flag
+	  MOVX T3,<FLD(NL.NCP,DTYP)+FLD(NH.ANX,DDEV)> ; FLD(NP.nun,DPRO)
+	  MOVX T1,PT%SLN	; Control packets sent to local net
+	  TDNE T1,MNTRAC	; Want trace?
+	    CALL PRNPKH ;(T1,T2,T3,P1) ; Yes
+	ENDIF.
+
+;Here to begin next message
+
+IMPDO4:	SETZM NTTOUT(P1)	; Clear output hung timeout
+	SETZM NTOB(P1)		; Mark no output in progress
+	CALLRET MNOSRT		; Start next message if any
+
+;Status check subroutines
+
+ANXSCK:
+	PUSH P,T1		; Save an AC
+	SKIPN NTRDY(P1)		; Hardware on?
+	IFSKP.			; Yes
+	  MNTXCT NTCONI		; Get current status	
+	  TXNE T1,<1B4+1B5>	; Is it powered up, with a cable in it?
+	   TXNE T1,<ANIIID+ANIIWD> ; Yes. Is ready line also ok?
+	    SETOM NTERRF(P1)	; Flag an error
+	  SKIPGE NTERRF(P1)	; Error seen now or before?
+	  IFSKP.
+	    POP P,T1		; No
+	    RETSKP
+	  ENDIF.
+
+	  SETZM NTERRF(P1)	; Clear the error flag
+
+	  MOVNI T1,2		; On error, flush first two messages
+	  MOVEM T1,NTFLS(P1)
+
+	  MOVEI T1,10		; Send some NOPs
+	  MOVEM T1,NTNOP(P1)
+
+	  MNTXCT NTCONI		; Get current state of PIA's
+	  ANDI T1,77
+	  MOVEI T1,ANICLE(T1)	; Clear the error flop	
+	  MNTXCT NTCONO
+
+	  CALL MNTWAK		; Wake up hardware fork
+	  CALL MNOSRT		; Start NOP's going
+	ENDIF.
+
+	SKIPGE T1,NTPSTI(P1)	; Collecting statistics?
+	  AOS CELL(MNMRC,2,(T1)) ; Count receive errors
+	POP P,T1
+	RET
+
+;Here from down-sequence processing in maintenance to completely
+;shut off the hardware device
+
+ANXKIL:	MOVEI T1,0		; Turn off output side	
+	MNTXCT NTOCNO
+	MOVEI T1,ANIRST		; Clear device		
+	MNTXCT NTCONO
+	MOVEI T1,ANXVAR		; Have to point to where host ready is
+	MNTXCT NTCONO
+	XMOVEI T1,NTIINT(P1)	; Clear READY, leave interrupt address alone
+	MNTXCT NTDATO
+	RETSKP
+
+
+;Call here from maintainance fork, process level, when IMP is wanted up
+;but net is currently down.
+
+ANXRSS:
+	SETZM NTTOUT(P1)	; Clear output hung timeout
+	SETZM NTTOUT+1(P1)	; Clear input hung timeout
+				; Reinitialize the interrupt dispatches
+	XMOVEI T1,IMIN00	; Input PI dispatch to shut off device
+	MOVEM T1,NTIDSP(P1)
+	XMOVEI T1,IMPDO4	; Output PI dispatch to start new msg
+	MOVEM T1,NTODSP(P1)
+
+	MNTXCT NTCONI		; Get status (into T1)	
+	TXNE T1,<1B4+1B5>	; Power up?		
+	 TXNE T1,<ANIIID>	; IMP ready?		
+	  RET			; No, stop here
+	SETZM NTERRF(P1)	; Clear notices of IMP errors
+	SETZM HSTGDM(P1)	; and down messages
+	HRRES NETON(P1)		; Forget any intervening down requests
+	MOVEI T1,ANIRST		; Clear device		
+	MNTXCT NTCONO
+	MOVEI T1,ANXVAR+ANICLE	; Set vector address words
+	MNTXCT NTCONO
+	XMOVEI T1,NTIINT(P1)	; Point to interrupt instruction
+	TXO T1,ANIHRL		; And Set ready line	
+	MNTXCT NTDATO
+	MOVEI T1,ANOCLE+ANXVAR	; Same for output	
+	MNTXCT NTOCNO
+	XMOVEI T1,NTOINT(P1)	; Set vector int loc for output
+	MNTXCT NTODTO		; Do a DATAO on output device
+
+	MOVNI T1,2
+	MOVEM T1,NTFLS(P1)	; Init flush count
+	MOVEI T1,10
+	MOVEM T1,NTNOP(P1)	; Init NOP count
+
+	MOVEI T1,^D1000
+	DISMS%			; Allow time for ready line to settle
+	AOS NTSTCH(P1)		; Cause change in state to be noted
+	CALL MNTWAK		; by hardware fork
+
+	CALL LGTAD		; Get time of day now
+	MOVEM T1,NTXUPP(P1)	; Save time when it came up
+
+	MOVEI T1,ANOBSY+ANXCHS	; Tell output side to go
+	SKIPE NTOB(P1)		; If there is a buffer in transit
+	  MNTXCT NTOCNO		; Output CONO		
+	SETOM NTRDY(P1)		; Indicate fully up
+	SETOM NTORDY(P1)	; Allow output
+	CALL MNOSRT		; Start output if needed
+	MNTCALL NTISRT		; And input
+	RETSKP
+
+
+
+;This  routine determines if the cause of an IO Page fail was caused by
+;the AN20 accessing a bad address. If the  AN20  caused  this  we  will
+;shoot it
+
+IMPFPF::			; Routine to determine if AN10/20 caused
+				; an iopgf....page number is in T1
+	SAVEAC <P1>		; Don't trash P1
+	MOVE T3,T1		; save the page number
+
+	MOVEI P1,NCTVT-$NTLNK	; Point to the table (sec 0)
+	DO.
+	  LOAD P1,NTLNK,(P1)	; Get the next NCT
+	  JUMPE P1,ENDLP.	; No more in the list
+
+	  LOAD T1,NTDEV,(P1)	; Get device type
+	  CAIE T1,NH.ANX	; AN10/20?
+	    LOOP.		; No
+	
+	  MOVEI T1,ANXWAR+ANXCHS ; Select input side word adr reg.
+	  MNTXCT NTCONO		; Do the proper CONO
+	  MNTXCT NTDATI		; Get the word adr register contents
+	  MOVE T2,T1		; Save
+
+	  MOVEI T1,ANXWAR+ANXCHS ; Select output side word adr reg.
+	  MNTXCT NTOCNO		; Do to output side
+	  MNTXCT NTDATI		; Get the word adr register contents
+
+	  LOAD T2,VPGNO,T2	; Get the page number input working on
+	  LOAD T1,VPGNO,T1	; Get the page number output working on
+	  CAME T1,T3		; Input side cause IOPGF?
+	   CAMN T2,T3		; Output side cause IOPGF?
+	    CAIA		; Yes
+	     LOOP.		; Not this one, check for more
+
+;Here if we found an erring AN20
+
+	  SETZM NETON(P1)	; Turn interface (and all associated) off
+	  SETO T1,		; Do not tell the IMP why
+	  MNTCALL NTHKIL	; We caused IOPGF so shut off device
+	    NOP
+	  BUG.(CHK,ANIOPF,IMPANX,SOFT,<IO Page Fail from AN20>,
+<<P1,NCT>,<NTNET(P1),Net>>,<
+Cause:	AN20 caused IO page failure.
+
+Action:	Device has been shut off.
+
+Data:	NCT, Network number.
+>)
+	  RETSKP		; Skip return to caller
+	ENDDO.
+
+;Here if none found
+
+	MOVE T1,T3		; Restore page number
+	RET
+
+	TNXEND
+	END			; Of ANXPHY

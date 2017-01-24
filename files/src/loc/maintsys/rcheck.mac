@@ -1,0 +1,141 @@
+title 	rcheck - Retrieve request checker
+search	monsym,macsym,qsrmac,glxmac
+
+t1=1
+t2=2
+t3=3
+t4=4
+p=17
+
+opdef	CALL	[pushj p,]
+opdef	RET	[popj p,]
+
+pdlen==40
+
+start:	RESET
+	move p,[iowd pdlen,pdlist]	;Init the stack
+	hrroi t1,[asciz/continue,background
+/]
+	RSCAN				;Put this string into the RSCAN buffer
+	 erjmp error			;Oops
+	setz t1,
+	RSCAN				;Give the string to the system
+	 erjmp error
+	HALTF				;Stop (temporarily)
+loop:	call getpid			;Get some pids
+	call qsrini			;Init QUASAR query
+	call qsread			;Read replies from QUASAR
+	movx t1,^d1000*^d60*^d5		;Wait 5 minutes
+	DISMS
+	jrst loop
+
+;Gets pids for QUASAR and this process
+getpid:	movei t1,3			;Argument block length
+	movei t2,ipcblk			;Argument block address
+	movei t3,.mursp			;Return pid from system pid table
+	movem t3,ipcblk			;Save value in argument block
+	movei t3,.spqsr			;Want pid for QUASAR
+	movem t3,ipcblk+1		;Save value in argument block
+	MUTIL				;Get the pid
+	 erjmp error			;Oops
+	move t3,ipcblk+2		;Retrieve the pid
+	movem t3,qsrpid			;Now save it
+	skipe mypid			;Do we have a pid already?
+	ret				;Yes
+	movei t3,.mucre			;No. Get a pid for this job
+	movem t3,ipcblk			;Save value in argument block
+	movei t3,.fhslf			;Want pid for this fork only
+	movem t3,ipcblk+1		;Save value in argument block
+	MUTIL				;Get the pid
+	 erjmp error			;Oops
+	move t3,ipcblk+2		;Retrieve the pid
+	movem t3,mypid			;Now save it
+	ret
+
+;Tell QUASAR to send us information
+qsrini:	setzm ipcblk			;No flags
+	move t3,mypid			;Put my pid into the argument block
+	movem t3,ipcblk+1
+	move t3,qsrpid			;Put QUASAR's pid into the argument blk
+	movem t3,ipcblk+2
+	move t3,[qsrlen,,qsrmsg]	;Want to send qsrmsg
+	movem t3,ipcblk+3
+	movei t1,.ipcfp+1		;Length of packet descriptor block
+	movei t2,ipcblk			;Argument block address	
+	MSEND				;Send the IPCF message
+	 erjmp error			;Oops
+	setom firstp			;Set first-time-through flag
+	ret
+
+;Read the information QUASAR sends us
+qsread:	movx t3,ip%cfv			;Want one page of data
+	movem t3,ipcblk+.ipcfl
+	setzm ipcblk+.ipcfs		;Sender (system fills this in)
+	move t3,mypid			;My pid is....
+	movem t3,ipcblk+.ipcfr
+	move t3,[1000,,msgpag]		;Put data on message page
+	movem t3,ipcblk+.ipcfp
+	movei t1,.ipcfp+1		;Length of argument block
+	movei t2,ipcblk
+	MRECV				;Receive an IPCF message
+	 erjmp error			;Oops
+	move t3,ipcblk+.ipcfs		;Get pid of sender
+	came t3,qsrpid			;Was it QUASAR?
+	jrst qsread			;No. Try again
+	aosn firstp			;First message?
+	call msgchk			;Yes, check it out
+	move t2,msgloc+.oflag		;Get QUASAR flags
+	txne t2,wt.mor			;Any more messages?
+	jrst qsread			;Yes, read them
+	ret
+
+;Print a message to tty if we have requests
+msgchk:	hrroi t1,msgloc+.ohdrs+1	;Get pointer to text block
+	hlrz t2,msgloc+.ohdrs		;Get block's size
+	add t1,t2			;Point past header message
+	hrroi t2,[asciz/[The queues are empty]
+/]
+	STCMP				;Compare strings
+	skipn t1			;Got a match?
+	ret				;Yeah, so return
+	hrroi t1,[asciz/[The retrieval queue has some requests.]
+/]
+	PSOUT
+	ret
+
+;Prints out the appropriate error message and halts the job.
+ERROR:	hrroi t1,[asciz/Error: /]
+	ESOUT				;Synchronize things
+	movei t1,.priou			;Output to terminal
+	hrloi t2,.fhslf			;This fork. most recent error
+	movei t3,0			;No limit to byte count
+	ERSTR				;Print the error
+	 jfcl				;Don't care about more errors
+	 jfcl
+	hrroi t1,crlf
+	PSOUT
+	HALTF				;Snuff it
+	jrst .-1			;Stay snuffed
+
+crlf:	byte(7)15,12
+qsrpid:	0				;QUASAR's pid
+mypid:	0				;This fork's pid
+firstp:	0
+omsgp:	0				 
+
+ifndef msgpag,msgpag==670
+msgloc=msgpag_^d9
+
+pdlist:	block pdlen			;Stack space	
+
+ipcblk:	block .ipcfp+1			;IPFC argument block
+
+qsrmsg:	qsrlen,,.qolis			;Length of block,,list queues (QSRMAC)
+	0,,'SYS'			;Flags,,3 char mnemonic
+	0				;Acknowledge word
+	LS.FST				;Want a quick listing 
+	1				;One argument following
+	2,,.lsque			;2 words in the argument,,I want queues
+	liqret				;List the retrieval queue
+qsrlen==.-qsrmsg			;Length of message
+end	start

@@ -1,0 +1,922 @@
+; UPD ID= 543, SNARK:<5.MONITOR>IMPANX.MAC.10,  16-Mar-82 20:11:51 by PAETZOLD
+;TCO 5.1755 - Send three NOPs in IMIERR
+; UPD ID= 109, SNARK:<5.MONITOR>IMPANX.MAC.9,  20-Aug-81 15:19:56 by ZIMA
+;TCO 5.1458 - Change title for Autopatch consistency.
+; UPD ID= 77, SNARK:<5.MONITOR>IMPANX.MAC.8,  27-Jul-81 09:06:11 by PAETZOLD
+;UPDATE COPYRIGHT INFORMATION
+; UPD ID= 72, SNARK:<5.MONITOR>IMPANX.MAC.7,  24-Jul-81 05:21:13 by PAETZOLD
+; UPD ID= 70, SNARK:<5.MONITOR>IMPANX.MAC.6,  23-Jul-81 16:03:10 by PAETZOLD
+;TCO 5.1380 - Add IMPFPF routine to determine if AN10 caused IOPGF
+; UPD ID= 2032, SNARK:<5.MONITOR>IMPANX.MAC.5,  19-May-81 13:15:02 by PAETZOLD
+;FIX TYPO IN LAST EDIT IN IMIERR
+; UPD ID= 1991, SNARK:<5.MONITOR>IMPANX.MAC.4,  14-May-81 11:23:27 by PAETZOLD
+;TCO 5.1321 MAKE ARPANET WORK IN RELEASE 5
+;CHANGE ORDER OF FILE NAMES IN SEARCH PSEUDO OP
+;DONT CYCLE NET IN IMIERR IF DEBUGGING
+; UPD ID= 720, SNARK:<5.MONITOR>IMPANX.MAC.3,   1-Jul-80 15:21:22 by LYONS
+; UPD ID= 719, SNARK:<5.MONITOR>IMPANX.MAC.2,   1-Jul-80 15:12:37 by LYONS
+; TCO 5.1088 IMPNII, ILLUUO do to trashed stack in IMIN3
+;   also, if IMIERR is called, punt the network, and reset all connections
+;<4.1.MONITOR>IMPANX.MAC.19,  3-Jan-80 08:39:19, EDIT BY R.ACE
+;CHANGE BBN TO DEC IN COPYRIGHT NOTICE
+;<4.MONITOR>IMPANX.MAC.18, 11-Oct-79 14:40:29, Edit by LCAMPBELL
+; Document BUGHLTs
+;<OSMAN.MON>IMPANX.MAC.1, 10-Sep-79 15:33:19, EDIT BY OSMAN
+;TCO 4.2412 - Move definition of BUGHLTs, BUGCHKs, and BUGINFs to BUGS.MAC
+;<4.MONITOR>IMPANX.MAC.16, 20-Apr-79 14:58:31, Edit by LCAMPBELL
+; Merge in BBN changes
+;<4.MONITOR>IMPANX.MAC.15, 18-Apr-79 12:40:40, Edit by LCAMPBELL
+; Clear IMPOB also after sending irregular messages
+;<4.MONITOR>IMPANX.MAC.14, 13-Apr-79 15:14:40, Edit by LCAMPBELL
+; When done with an output buffer, clear IMPOB to prevent IMPAFB
+;<4.MONITOR>IMPANX.MAC.13, 26-Jan-79 09:48:22, Edit by LCAMPBELL
+;<4.MONITOR>IMPANX.MAC.12,  9-Jan-79 13:53:33, Edit by LCAMPBELL
+; Update copyright notice
+;<4.MONITOR>IMPANX.MAC.11,  5-Jan-79 11:12:55, Edit by LCAMPBELL
+; Change IMPRST to IMPINI, it's more mnemonic
+;<4.MONITOR>IMPANX.MAC.10,  3-Jan-79 13:02:55, Edit by LCAMPBELL
+; Add definition of STY%NP removed from IMPPAR
+;<4.MONITOR>IMPANX.MAC.8, 29-Sep-78 13:58:13, Edit by LCAMPBELL
+; Add dummy entry point IMPRST (is non-dummy for IMP11B)
+;<4.MONITOR>IMPANX.MAC.2,  3-Sep-78 23:26:29, EDIT BY JBORCHEK
+;<3A-JBORCHEK>IMPANX.MAC.3, 24-Aug-78 20:17:44, EDIT BY JBORCHEK
+;<4.MONITOR>IMPANX.MAC.4, 22-Aug-78 14:15:32, EDIT BY JBORCHEK
+;CONDITIONALIZE BBN CODE
+;<BBN-3-MONITOR>IMPANX.MAC.1,  4-Aug-78 14:54:48, EDIT BY CLEMENTS
+; Against my better judgment, introduce conditional on TCP assembly.
+;<3-CLEMENTS>IMPANX.MAC.8, 15-Jun-78 14:25:51, EDIT BY CLEMENTS
+; Note: Internet stuff has been disabled at INETIN until TCP and
+; its buffers get converted to rel 3.
+;<3-CLEMENTS>IMPANX.MAC.2,  8-Jun-78 17:21:55, EDIT BY CLEMENTS
+;<3-CLEMENTS>IMPANX.MAC.1,  8-Jun-78 17:07:00, EDIT BY CLEMENTS
+; Start converting for release 3, extended addressing. Including
+; long leaders, and DEC additions.
+
+;COPYRIGHT (C) 1978,1979,1980,1981 BY DIGITAL EQUIPMENT CORPORATION, MAYNARD, MASS.
+
+TCPF==0	;*** TEMPORARILY, INTRODUCE AN ASS'Y SWITCH, TURNING OFF TCP
+BBNF==0	;*** BBN ONLY CODE ***
+
+SEARCH IMPPAR,PROLOG
+SEARCH MACSYM,MONSYM
+
+	TTITLE (IMPANX,IMPANX,< -  IMP DRIVER FOR AN10 - R CLEMENTS>)
+
+
+; HARDWARE DEFINITIONS FOR AN10 DEVICE INTERFACE
+
+ANI=520		;I/O DEVICE NUMBER FOR INPUT SIDE
+ANO=524		;I/O DEVICE NUMBER FOR OUTPUT SIDE
+
+;BITS IN CONI FOR ANI
+
+ANIMRQ==1B27	;MSG REQUEST. IMP STARTING TO SEND TO HOST.
+ANIBSY==1B26	;BUSY. HOST IS ACCEPTING A MESSAGE
+ANIM36==1B25	;MESSAGE BEING ASSEMBLED INTO 36 BIT WDS IF 1,
+		; 32 BIT WORDS IF 0.
+ANIWCO==1B24	;WD COUNT OVERFLOW. MESSAGE PORTION IS DONE.
+ANIDON==1B23	;DONE. IMP SENT LAST BIT.
+ANIIID==1B19	;IMP IS DOWN. (READY LINE OFF)
+ANIIWD==1B18	;IMP WAS DOWN. (READY LINE HAS BEEN OFF)
+
+;BITS IN CONO FOR ANI
+
+ANIRST==1B19	;RESET THE WHOLE AN10 (EXCEPT HOST READY LINE)
+ANICLE==1B18	;CLEAR ERROR FLAGS IN LH OF CONI, CLR IMP WAS DOWN.
+ANXCHS==6B32+6B35;TWO ADJACENT PI CHANNELS IN B30-35
+
+;BITS IN CONI FOR ANO
+
+ANOEND==1B27	;END OF MSG. SEND "LAST" WHEN WD CNT RUNS OUT.
+ANOBSY==1B26	;BUSY. SEND WORDS TO THE IMP.
+ANOM36==1B25	;MODE 36. SEND ALL 36 BITS OF DATA WORDS. ELSE,
+		; JUST SEND LEFT-HAND 32 BITS.
+ANOWCO==1B24	;WORD COUNT OVERFLOW. THIS MSG PORTION COMPLETED.
+ANODON==1B23	;ALL BITS INCLUDING "LAST" HAVE BEEN SENT.
+ANOIID==1B19	;IMP IS DOWN, SAME AS IN ANI
+ANOIWD==1B18	;IMP WAS DOWN, SAME AS IN ANI
+
+;BITS IN CONO FOR ANO
+
+ANOCLE==1B18	;CLEAR ERROR BITS, IMP WAS DOWN BIT.
+
+;REGISTER SELECT FIELD, IN BOTH ANO AND ANI CONO'S
+; NOTE THESE AREN'T USED MUCH BECAUSE HARDWARE SWITCHES TO
+; THE "RIGHT" REGISTER MOST OF THE TIME BY ITSELF.
+
+ANXVAR==2B29	;VECTOR INTERRUPT ADDRESS REGISTER
+ANXWAR==1B29	;WORD COUNT AND ADDRESS REGISTER
+ANXDR==0B29	;DATA REGISTER.
+
+; BITS IN INPUT DEVICE VECTOR ADDRESS REGISTER
+
+ANIHRL==1B10	;HOST READY LINE. DATAO A 1 TO BECOME READY.
+
+;MISCELLANEOUS VARIABLES
+
+PIMSTK::IOWD NIMSTK,IMSTK	;IMP INTERRUPT STACK POINTER
+
+DEFSTR IMWDCT,,12,12		;WORD COUNT FOR WC/ADR REGISTER
+DEFSTR IMBFAD,,35,23		;ADDRESS FOR WC/ADR REGISTER
+
+;INTERRUPT LOCATION
+
+ANOVIL:	XPCW ANOVI1		;OUTPUT INTERRUPT LOCATION
+
+ANIVIL:	XPCW ANIVI1		;INPUT INTERRUPT LOCATION
+
+;Device-dependent data for leaders
+
+	STY%NP==5		;Number of Padding words, for H2I NOP
+
+;CLOCK LEVEL CHECK ROUTINE
+
+IMPCHK::MOVEI T2,^D1000
+	MOVEM T2,IMPTM2		; Call this every second
+	SKIPN IMPRDY		; Net on?
+	 JRST IMPCKX		; NO.
+	CALL IMPRLQ		; IS IMP DOWN NOW OR RECENTLY?
+	 SKIPL IMPRDT		; And not already noticed?
+	JRST IMPCKX		; NO. NO NEED TO SET ERROR FLAGS
+	CALL IMIERR		; Be sure it's noticed
+	AOS IMPFLG		; cause running of ncp fork
+IMPCKX:
+IFN BBNF,<
+	CALL IM2CHK		; Check second interface, if any
+>
+	RET
+
+; Start input
+; called from process level when buffers made available and input is off
+; and from endin processor if more buffers are available
+
+IMISRT::CALL IMPRLQ		; IS DEVICE UP AND IMP READY?
+	 RET			; No, do nothing
+	SOSL IMPNFI
+	SKIPN T1,IMPFRI
+	 BUG(IMPNII)
+	LOAD T2,NBQUE,(T1)	; Get next free buffer
+	SKIPE T2		; If there's a successor,
+	HRLI T2,ANBSEC		; Set section number
+	MOVEM T2,IMPFRI
+	SETZRO NBQUE,(T1)	; DeQueue it from any others
+	MOVEM T1,IMIB
+   IFN TCPF,<
+	HRRZS TNBFFL		; Remember IMIB is an NCP buffer
+   >
+	HRRI T1,.NBLD0(T1)	; FIRST WORD TO READ INTO
+	TLO T1,(<.NBLD2+1>B12)	; Read thru leader and some padding
+	MOVEM T1,IMPINP		; THIS IS THE FIRST DATAO TO ANXWAR
+	MOVE T1,[MSEC1,,IMIN0]	; SET STATE TO "WAITING FOR IMP TO GO"
+	MOVEM T1,IMIDSP
+	SETZM IMPIOV		; AND CLEAR "INPUT OVERFLOW" FLAG
+	CONSZ ANI,ANIIWD	; HAS IMP BEEN DOWN?
+	 CALL IMIERR		; YES, Be sure it gets noticed
+	CONO ANI,ANICLE+ANXWAR+ANXCHS	;TELL IMP WE ARE READY TO GO.
+	RET			; IT WILL INTERRUPT ON FIRST BIT TO US
+
+; Pi service for input
+; No AC's have been saved!
+; Dispatched via IMIDSP to various routines.
+; IF ANIDON IS ON, THEY GO TO IMPEIN FOR END OF INPUT HANDLING.
+
+;For subsequent interrupts, a field will steer the packing and counts.
+;Values are named .IIxxx for Imp Interrupt dispatch. Store in IMITYP
+; for input and similarly in IMOTYP for output.
+
+.IINC6==0		;This is a 36 bit NCP message
+.IINC2==1		;This is a 32 bit NCP message
+.IITNT==2		;Telenet link
+.IISPQ==3		;Special queue
+.IIINT==4		;Internet packing
+.IIMLC==5		;MLC (Ptip) format
+.IISQ2==6		;False start on Internet -- Handle as spec. Q.
+
+; Here when input has been idle and IMP starts to send bits.
+; This first interrupt requires us to send over word count and
+; address. The first count will read the IMP-to-host leader and
+; a word of padding, in 36 bit mode.
+
+IMIN0:	CONSO ANI,ANIMRQ	;MESSAGE REQUEST IS ONLY VALID BIT
+	JRST IMIN0X		;IT WASN'T THAT. SOMETHING WIERD.
+	MOVEM T1,IMIDSP		;SAVE AC T1, PREPARE TO SET DISPATCH.
+	MOVE T1,[MSEC1,,IMIN1]	;NEXT INTERRUPT WANTED IS THIS
+	EXCH T1,IMIDSP		;SET DISPATCH FOR READING I-H LEADER.
+	DATAO ANI,IMPINP	;TELL IT BUFFER ADDRESS AND COUNT.
+	CONO ANI,ANIM36+ANIBSY+ANXCHS	;SET TO READ 36 BITS, THEN PI.
+	XJEN ANIVI1		;DISMISS INPUT INTERRUPT.
+
+;IMIN0X - Input interrupt error routine. If the input side of the
+; ANX has been idle, any interrupt other than MSG REQUEST is an error.
+
+IMIN0X:	MOVEM T1,IMIDSP		;SAVE T1
+	CONI ANI,T1		;GET STATUS, FOR BUGINF TO SEE
+	CONO ANI,0		;TURN OFF INPUT.
+	BUG (IMINX1,<<T1,CONIAN>>)
+	MOVE T1,[MSEC1,,IMIN0X]	;SET DISPATCH ADDRESS
+	EXCH T1,IMIDSP		;AND RESTORE T1
+	CONO ANI,ANIRST		;RESET ANI, LEAVE ANIIWD ON, IMPUT OFF
+	XJEN ANIVI1		;AND LET CLOCK/NCPFRK FIX IT.
+
+; Here at PI level after IMP leader and a word of padding
+; have been read. ANIDON on means it wasn't that long.
+; If not end of message, decide whether to read some more
+; in 32 or 36 bit mode, based on link and host numbers so far.
+; For NCP, will still have to read H-H leader and then decide again.
+
+IMIN1:	CONSZ ANI,ANIDON	;END OF MESSAGE YET?
+	JRST IMPEIN		;Yes, go process short (irreg) msg
+	DMOVEM T1,IMPIAC+T1	;Save standard interrupt level AC's
+	DMOVEM T3,IMPIAC+T3	; ..
+	DMOVEM CX,IMPICX	; ..
+	MOVE P,PIMSTK		; And set up a local PI level stack
+	MOVE T1,IMIB		;Point to the input buffer
+	LOAD T2,IHLNK,(T1)	;Get the link and host numbers
+	LOAD T3,IHHST,(T1)	; ..
+IFN BBNF,<
+	MOVEI T4,0(T2)		;Shift for MLC field
+	LSH T4,-1		; ..
+	CAMN T4,MLCHLF		;Right link for MLC?
+	JRST IMI1ML		;Yes
+	CAIN T2,TNTLNK		;Is it the TELENET link?
+	JRST IMI1TN		;Yes, pack it differently
+	CAIN T2,INTLNK		;Internet Link?
+	JRST IMI1IN		;Yes.  Mark that in IMIDSP.
+>
+	CAIG T2,LLINK		;Check for NCP or not
+	CAIL T3,FKHOST		; ..
+	JRST IMI1SQ		;Not NCP. Treat special queues.
+IMI1NC:	MOVX T4,.IINC6		;Will want NCP handling
+IMIN1A:	MOVEI T2,.NBLD2+2(T1)	;Where next word in goes.
+	HLL T2,II1WCT(T4)	;Word count
+	TLO T2,ANBSEC		;In right addr space
+	MOVEM T2,IMPINP		;Command for device
+	DATAO ANI,IMPINP	;Load WC and address
+	CONO ANI,@II1CNO(T4)	;Make it go
+	MOVE T3,[MSEC1,,IMIN2]	;Address for next interrupt
+	MOVEM T3,IMIDSP		;Save for next interrupt
+	MOVEM T4,IMITYP		;Save dispatch code
+	JRST IMPUB1		;Done with this int'pt.
+
+IMI1SQ:	MOVX T4,.IISPQ		;Special queues
+	JRST IMIN1A		;Join common code
+
+IFN BBNF,<
+IMI1ML:	MOVX T4,.IIMLC		;MLC link
+	JRST IMIN1A		;Join common code
+
+IMI1IN:	MOVX T4,.IIINT		;Internet code
+	JRST IMIN1A		;Join common code
+
+IMI1TN:	MOVX T4,.IITNT		;Telenet handling code
+	JRST IMIN1A		;And join NCP flavor routine
+>
+
+II1WCT:	EXP 2B12		;TYPE NCP36
+	EXP 2B12		;TYPE NCP32
+	EXP 2B12		;TYPE TELENET
+	EXP 1B12		;TYPE SPECIAL Q
+	EXP 4B12		;TYPE Internet
+	EXP 2B12		;TYPE MLC
+	EXP 2B12		;should not be referenced here
+
+II1CNO:	EXP ANIM36+ANIBSY+ANXCHS	;TYPE NCP36
+	EXP ANIM36+ANIBSY+ANXCHS	;TYPE NCP32
+	EXP ANIM36+ANIBSY+ANXCHS	;TYPE TELENET
+	EXP ANIBSY+ANXCHS		;TYPE SPECIAL Q
+	EXP ANIBSY+ANXCHS		;TYPE Internet
+	EXP ANIM36+ANIBSY+ANXCHS	;TYPE MLC
+	EXP ANIM36+ANIBSY+ANXCHS	;should not be referenced here
+
+IMIN2:	CONSZ ANI,ANIDON	;End of message yet?
+	JRST IMPEIN		;Yes. Go process short message
+	DMOVEM T1,IMPIAC+T1	;Save standard interrupt level AC's
+	DMOVEM T3,IMPIAC+T3	; (Since here by vectored interrupt)
+	DMOVEM CX,IMPICX	; ..
+	MOVE P,PIMSTK		; And set up a local PI level stack
+	MOVE T1,IMIB		;Point to the input buffer
+	MOVE T4,IMITYP		;Get type code for this message
+;Padding removal isn't needed if haven't read that much, but it's
+; cheaper to always remove it than to test for needing to.
+	MOVE T2,.NBLD2+2(T1)	;Crunch out the padding on input
+	STOR T2,IHPD1,(T1)	;Move this partial word
+	MOVE T2,.NBHHL+2(T1)	;And this full one
+	MOVEM T2,.NBHHL(T1)	; ..
+IFN BBNF,<
+	CAIN T4,.IIINT		;Inputting possible Internet msg?
+	 CALL INETIN		;Check further. May change T4,T1.
+>
+	LOAD T2,NBBSZ,(T1)	;Get its size
+	MOVE T3,II2LDT(T4)	;Amount we have used so far
+	SUBI T2,(T3)		; ..
+	ASH T2,^D23		;Position for AN10 word counter
+	HRR T2,T1		;Address of the buffer
+	ADDI T2,(T3)		;Word in buffer that we want to write
+	TLO T2,ANBSEC		;In the right section
+	MOVEM T2,IMPINP		;Feed this to the hardware
+	DATAO ANI,IMPINP	;Tell it.
+	CAIE T4,.IINC6		;NCP links?
+	JRST IMIN2A		;No.
+	LOAD T2,HHSIZ,(T1)	;Yes, see if 32 bit or 36.
+	CAIN T2,^D36		;Check connection byte size
+	JRST IMIN2A		;36 bit connection
+	MOVEI T4,.IINC2		;Change type to 32 bit NCP
+	MOVEM T4,IMITYP		;Remember dispatch type in core
+IMIN2A:	CONO ANI,@II2CNO(T4)	;Make it go
+	MOVE T1,[MSEC1,,IMIN3]	;SET DISPATCH FOR NEXT INTERRUPT
+	MOVEM T1,IMIDSP		; ..
+	JRST IMPUB1		;Restore AC's and dismiss interrupt
+
+;Table of CONO values to read data portion of message, by msg type
+
+II2CNO:	EXP ANIM36+ANIBSY+ANXCHS	;TYPE NCP36
+	EXP ANIBSY+ANXCHS		;TYPE NCP32
+	EXP ANIM36+ANIBSY+ANXCHS	;TYPE TELENET
+	EXP ANIBSY+ANXCHS		;TYPE SPECIAL Q
+	EXP ANIBSY+ANXCHS		;TYPE Internet
+	EXP ANIM36+ANIBSY+ANXCHS	;TYPE MLC
+	EXP ANIBSY+ANXCHS		;TYPE SPECIAL Q - false internet
+
+;Table of next word to read into at IMIN2 time, by message type
+
+II2LDT:	EXP .NBDW0		;Type NCP36
+	EXP .NBDW0		;Type NCP32
+	EXP .NBDW0		;Type TELENET
+	EXP .NBHHL		;Type SPECIAL QUEUES
+	EXP .NBDW0+2		;Type Internet
+	EXP .NBDW0		;Type MLC
+	EXP .NBHHL+3		;Type Special Q - false Internet
+
+;NOTE: This code is disabled for the time being.
+
+; Called from IMIN2 when possible Internet message is coming in.
+; This routine does the following:
+;	1.	Move the 2 remaining H-H words to the right place
+;	2.	Check for right message type and subtype
+;	3.	Check for right Internet message type
+;		(Currently just TCP format is handled)
+;	4.	Check for TCP being on -- TCP fork runs the gateway
+;	5.	Check for a TCP-supplied buffer being available
+; If any of those conditions is lacking, input is resumed and the
+; message is handled as a normal special queue message.
+; If the message is really destined for the gateway (TCP, XNET, ...),
+; it gets copied into a TCP-supplied buffer and input resumes.
+; IMPEIN will then queue it for the gateway.
+
+;T1/	Pointer to current NCP-supplied buffer
+;	CALL INETIN
+;Ret+1:	Always. T4 set to .IIINT if I.N. msg to be completed, or .IISQ2
+;		if it will be given to a special Q
+
+
+IFN BBNF,<
+INETIN:	DMOVE T2,.NBDW0+2(T1)	; Pick up the Internet header
+	DMOVEM T2,.NBDW0(T1)	; Stash in proper place
+   IFN TCPF,<			;Until TCP done for rel 3
+	LOAD T2,IHFTY,(T1)	; ARPANET message format
+	LOAD T3,IHMTY,(T1)	; ARPANET message type
+	CAIN T3,.IHREG		; Regular msg?
+	CAIE T2,ITY%LL		; Long leader?
+   > ; End TCP code
+	 JRST INETIC		; No. Let normal code handle it.
+   IFN TCPF,<			;Until TCP done for rel 3
+	LOAD T2,IHSTY,(T1)	; ARPANET subtype
+	CAIE T2,STY%FC		; Normal, flow-controlled?
+	CAIN T2,STY%UC		; or uncontrolled?
+	SKIPN TCPON		; And TCP is on? (It runs the gateway)
+	 JRST INETIC		; No.  Let normal code handle this.
+	LOAD T2,INETF,(T1)	; Get Internet Format and Version
+	CAIN T2,<.TCPFM_4>+.TCPVR ; OK for TCP (**** Current Limitation)
+	SKIPG TCPNFI		; And there is a TCP buffer around?
+	 JRST INETIC		; No.  Let normal special queue have it.
+
+; All is OK for the switch to a TCP buffer.  Do it, return the NCP buf.
+
+	SOSL TCPNFI		; Count down number of free TCP bufs
+	SKIPN T2,TCPFRI		; Get pointer to buffer to use
+	 BUG(IMPNIT)
+	HRLI T3,.NBLD0(T1)	; "From" pointer for BLT
+	HRRI T3,.NBLD0(T2)	; "To" -- into TCP buffer
+	HLRZ T4,II1WCT+.IIINT	; Get size of second transfer
+	ADDI T4,.NBHHL-2(T2)	; Compute last addr (-2 for fill crunch)
+;;; Figure out where these buffers will live, and call XBLTA here.
+	BLT T3,0(T4)		; Copy ARPANET and Internet headers
+	HLRZ T1,0(T2)		; Next TCP free buffer
+	EXCH T1,TCPFRI		; Becomes head of list
+	EXCH T1,IMIB		; Old head is now current input bfr
+	EXCH T1,IMPFRI		; Old input bfr goes to NCP free list
+	HRLM T1,@IMPFRI		; Old list is off of new head
+	AOS IMPNFI		; There is now another free input bfr
+	HRROS TNBFFL		; The current one is owned by TCP
+	MOVEI T1,0(T2)		; Now think in terms of TCP's buffer
+	MOVEI T4,.IIINT		; Return this to caller
+	RET
+   > ; End TCP code
+
+; Here when current input is to be continued.  Fix to be spec. q. input.
+
+INETIC:	MOVEI T2,.IISPQ		; Mark for special Queue dispatch
+	MOVEM T2,IMITYP		; On next interrupt
+	MOVEI T4,.IISQ2		; Return this to caller
+	RET
+>
+
+
+;HERE ON INTERRUPT LEVEL FOR BODY OF MESSAGE FROM IMP.
+
+IMIN3:	CONSZ ANI,ANIDON	;I HOPE IT FIT IN THE BUFFER.
+	JRST IMPEIN		;GOOD. IT DID.
+	AOS IMPIOV		;IT DIDN'T. FLAG THAT IT'S TOO LONG.
+	DATAO ANI,[1B12+IMSTK+NIMSTK-1] ;Use stack as bit bucket
+	CONO ANI,ANIBSY+ANXCHS	;KEEP READING UNTIL END COMES ALONG.
+	XJEN ANIVI1		;WAIT FOR NEXT INTERRUPT. END, PLEASE?
+
+; Here when end msg recd from imp
+
+IMPEIN:	DMOVEM T1,IMPIAC+T1	;Save standard interrupt level AC's
+	DMOVEM T3,IMPIAC+T3	; ..
+	DMOVEM CX,IMPICX	; ..
+	MOVE P,PIMSTK		; And set up a local PI level stack
+	CONSZ ANI,ANIIWD!ANIIID	; IMP IS OR WAS DOWN?
+	 CALL IMIERR		; Take care of it
+	CONO ANI,ANXWAR		; SELECT WC/ADDR REGISTER, CLEAR PIA
+	DATAI ANI,IMPINP	; READ CURRENT ADDRESS
+	SKIPG T1,IMIB		; Bfr address
+	JRST IMPEI2		; Wasn't one
+	AOSLE IMPFLS		; Flushing msgs?
+	SKIPE IMPIOV		; OR GOT AN OVERFLOW?
+	 JRST IMPEI3		; Yes, return to free list
+	HRRZ T2,IMPINP		; How much was read?
+	CAIGE T2,.NBLD2(T1)	; A full leader?
+	JRST IMPEI3		; No, Discard it as useless
+	LOAD T3,IHFTY,(T1)	; Is this a long leader msg?
+	CAIE T3,ITY%LL		; ..
+	JRST IMPEI3		; No. Just throw it away.
+	LOAD T3,IHMTY,(T1)	; Yes. Get message type.
+	CAIE T3,.IHIGD		; One of the ones that has no msg ID?
+	CAIN T3,.IHDHS		; ..
+	JRST IMPEI4		; Yes. Give it to NCP
+	CAIN T3,.IHNOP		; You also can't believe link on NOPs
+	JRST IMPEI4		; Give them to NCP anyhow
+	LOAD T2,IHHST,(T1)	; See whether it's an NCP irreg msg
+	LOAD T4,IHLNK,(T1)	; Get host and link
+	CAIGE T2,FKHOST		; From IMP fake hosts?
+	CAILE T4,LLINK		; Or non-NCP Link?
+	CAIA			; Yes, not for NCP
+	JUMPN T3,IMPEI4		; Give irreg msg to NCP
+;Falls thru to IMPEI0
+
+;Falls thru
+
+IMPEI0:
+   IFN TCPF,<
+	SKIPGE TNBFFL		; Skip if TCP does not own IMIB
+	 JRST [	HRLM T1,@TCPIBI	; Queue for Gateway
+		HRRZM T1,TCPIBI
+		AOS TCPFLG	; Cause TCP process to notice it
+		JRST IMPEI1]	; Avoid running NCP -- TCP buffer used
+   >
+IFN BBNF,<
+	CAIN T4,TNTLNK		; TELENET LINK
+	 JRST TNTEIN		; YES-PROCESS
+	LSH T4,-1		; Link field for MLC traffic?
+	CAMN T4,MLCHLF		; Is it the MLC link field?
+	 JRST IMPEIP		; YES-DO PTIP STUFF
+>
+	MOVE T3,IMPIBI		; Add to NCP fork's queue
+	JUMPN T3,IMPEIA		; Anything on it already?
+	MOVEM T1,IMPIBO		; No. This is it, then.
+	SKIPA			; Don't chain it
+IMPEIA:	HRLM T1,0(T3)		; Add buffer to input queue for NCPFRK
+	MOVEM T1,IMPIBI		; This is the last guy on queue
+	AOS IMPFLG		; Request job 0 service
+IMPEI1:	LOAD T3,NBBSZ,(T1)	; Make sure not a released buffer
+	CAMLE T3,MAXWPM		; by checking size field for a PC
+	 BUG (IMPAUF)
+   REPEAT 0,<			;DEC DECIDED TO LOCK BUFFERS ONLY ONCE
+	PUSH P,T1		; Save buffer address
+	ADD T1,T3		; Compute tail of bfr
+	MOVEI T1,-1(T1)
+	CALL MULKMP		; Unlock it
+	POP P,T1		; Restore base of buffer
+   > ; End of repeat 0
+	LOAD T3,IMBFAD,IMPINP	; GET LAST LOC WITH DATA +1
+	SUB T3,IMIB		; Less base of the buffer
+	STOR T3,NBBSZ,(T1)	; RECORD ACTUAL COUNT IN BUFFER HEADER
+IMPEI2:	SETZM IMIB
+	SKIPLE IMPNFI		; More buffers available?
+	 CALL IMISRT		; Yes, start new input
+IMPUB1:	DMOVE T1,IMPIAC+T1	; Restore AC's from before PI
+	DMOVE T3,IMPIAC+T3
+	DMOVE CX,IMPICX
+	XJEN ANIVI1		; AND DISMISS INPUT INTERRUPT
+
+
+IFN BBNF,<
+
+IMPEIP:	MOVE T3,MLCIBI		;ANYTHING ON PTIP INPUT QUEUE YET?
+	JUMPN T3,IMPEP2		;JUMP IF SO
+	MOVEM T1,MLCIBO		;NO, SO THIS IS THE FIRST ONE OUT
+	SKIPA			;DON'T TRY TO LINK IT
+IMPEP2:	HRLM T1,0(T3)		;LINK TO PREVIOUS LAST-IN
+	MOVEM T1,MLCIBI		;THIS IS NEW LAST-IN
+	MOVE T3,IMPNIB		; GET INPUT BUFFER THRESHOLD
+	LSH T3,-1		; HALVE
+	CAML T3,IMPNFI		; DO WE HAVE MORE THAN THAT ON TAP?
+	AOS IMPFLG		; NO, GOOSE THE NCP SO IT WILL NOTICE
+	JRST IMPEI1		; THAT MLC STOLE AN INPUT BUFFER
+
+
+;GET A TELENET BUFFER AND XFER FROM ARPANET BUFFER TO IT
+
+TNTEIN:	PUSH P,P1		;TNET'S MESSAGE POINTER
+	MOVE P1,T1		;GET ANBSEC,,ADR OR ARPA BUFF
+	SUBI P1,1		;TAKE CARE OF OFFSET
+	CALL GETMBF		;LET IT BLESS TEXT, GET A BUFFER.
+	JUMPL P1,TNTEIX		;JUMP IF NO BUFFER AVAIL
+	MOVE T2,IMIB		;FROM HERE
+	MOVE T3,P1		;TO HERE
+	ADDI T3,1		;WITH OFFSET
+	HRRZ T1,IMPINP		;ADR OF NEXT WORD TO BE FILLED
+	HRRZ T4,IMIB		;GET ADR OF START OF BUFFER
+	SUBI T1,-1(T4)		;T1/ # WORDS READ
+	HRRZ T4,1(P1)		;GET TELENET BUFFER'S LENGTH
+	CAMGE T4,T1		;BIG ENOUGH FOR FULL BLT?
+	 JRST TNTEIX		;NO - LOSE BUFFER
+	AOS T2			;DON'T GET OVERHEAD WORD
+	AOS T3			;DON'T CLOBBER SIZE WORD IN TEL BUFF
+	SOS T1			;THEREFORE 1 LESS WORD TO DO
+	CALL XBLTA		;YES-DO XFER OF DATA
+	CALL TNTRCV		;P1/ ADR OF TNT BUFF JUST FILLED
+TNTEIX:	MOVE T1,IMIB		;RECOVER POINTER TO ARPANET BUFFER
+	POP P,P1		;RESTORE AC
+	JRST IMPEI6		;NOW FREE ARPA BUF SINCE WAS COPIED
+
+> ;END IFN BBNF
+
+IMPEI4:	CALL IMP8XQ		; Put on irreg msg Q for NCP
+	AOS IMPFLG		; Awaken NCP
+IMPEI3:
+   IFN TCPF,<			; Until TCP done
+	SKIPL TNBFFL		; IMIB owned by NCP?
+	 JRST IMPEI6		; Yes.  Release to normal area
+	EXCH T1,TCPFRI		; Release to TCP
+	HRLM T1,@TCPFRI
+	AOS TCPNFI		; Count another free buffer
+	JRST IMPEI2
+   >
+IMPEI6:	MOVE T2,T1		; Current buffer address
+	EXCH T1,IMPFRI		; Return buffer to Free Input list
+	HRLM T1,0(T2)		; Make it point to old top of list
+	AOS IMPNFI		; Count another free buffer
+	JRST IMPEI2
+
+IMIERR:	PUSH P,T1
+	SETOM IMPRDL		; Be sure this flap gets noticed
+	MOVNI T1,2
+	MOVEM T1,IMPFLS
+	MOVEI T1,3		; GET NUMBER OF NOPs to send
+	MOVEM T1,NOPCNT		; Send some nops
+	CONI ANI,T1		; SEE IF PIA'S ARE NOW ON
+	BUG (IMINX2,<<T1,CONIAN>>)
+	ANDI T1,77
+	CONO ANI,ANICLE(T1)	; CLEAR THE ERROR FLOP
+	MOVE T1,DBUGSW		; GET THE STATE OF DEBUGGING
+	CAIE T1,2		; ARE WE DEBUGGING?
+	 AOS IMPDRQ		; NO SO Cycle the net
+	JRST PA1		; RESTORE AC T1, RETURN.
+
+; Routine to start msg going out. called at pi level, and at
+; Main level if no output in progress
+
+IMPXOU::PIOFF
+	SKIPN IMPOB		; ANY OUTPUT IN PROGRESS?
+	 JRST IMPXO1		; NO
+	PION			; YES, TURN PI BACK ON
+	JRST (T4)		; AND RETURN
+
+IMPXO1:	SETOM IMPOB		; MARK OUTPUT IN PROGRESS
+	PION			; NO IT'S OK TO TURN PI BACK ON
+	PUSH P,T4		; SAVE RETURN
+IMPIOU:	SKIPLE NOPCNT		; Any nop's to send?
+	 JRST IOUNOP		; Yes, go send them
+   IFN TCPF,<
+	HLLZS TNBFFL		; Assume out buf will be NCP owned
+   >
+	MOVE T1,IMPHBO		; Hi priority msg waiting?
+	JUMPE T1,IMPIOT		; No, check lo priority
+	HLRZ T2,0(T1)		; Does it have a successor?
+	JUMPN T2,IMPIO1		; Jump if so
+	SETZM IMPHBI		; If not, say no more to go
+	SKIPA			; And don't add network section
+IMPIO1:	HRLI T2,ANBSEC		; Section buffers are in
+	MOVEM T2,IMPHBO		; For next removal
+IFN BBNF,<SETZM OUTMSG>		; SAY NOT DOING TELENET
+	JRST IMPIOC		; Send buffer in T1
+
+IMPIOT:
+   REPEAT 0,< ;Until TCP done
+	; Select either a TCP buffer or low priority NCP buffer
+	; for output.  Either of these will give credit to the
+	; other.  When both are present, it is the one with the
+	; most credit that is used.  This prevents one from
+	; strangling the other in high traffic situations.
+
+	HLRZ T1,TCPOBO
+	JUMPE T1,IMPIOL		; No TCP waiting.  Go check NCP low pri.
+	HLRZ T1,IMPOBO
+	JUMPE T1,IMPIOO		; Jump if only TCP output waiting
+	SKIPG TCPNCP		; Both waiting.  Which gets it?
+	 JRST IMPIOZ		; NCP
+	HRRZ T1,TNPRIO		; Output from TCP. Credit NCP.
+	MOVNS T1
+	ADDM T1,TCPNCP		; More negative to favor NCP
+IMPIOO:	HLRZ T1,TCPOBO		; TCP message for output
+	HLLZ T2,0(T1)		; Get its successor
+	JUMPN T2,.+3		; Jump if not last one
+	MOVEI T3,TCPOBO
+	MOVEM T3,TCPOBI
+	MOVEM T2,TCPOBO
+	HLLOS TNBFFL		; Remember out buf is TCP owned
+IFN BBNF,<SETZM OUTMSG>		; SAY NOT DOING TELENET
+	JRST IMPIOC
+
+TNPRIO:	1,,3	; Diddlable constant: TCP,,NCP favoritism
+
+IMPIOZ:	HLRZ T1,TNPRIO		; Get amount of credit for TCP
+	ADDM T1,TCPNCP		; More positive to favor TCP next time
+   > ;End repeat 0 for TCP
+
+IMPIOL:	MOVE T1,IMPOBO		; Msg waiting to go out?
+
+IFN BBNF,<JUMPN T1,IMPIOY	; YES - DO IT
+	MOVE T1,OUTREQ>		; NO - TELENET BUFFER TO DO?
+
+	JUMPE T1,[SKIPE T2,HSTGDM ; NO - HOST GOING DOWN?
+		 JRST IOUHGD	; Send the host going down msg
+		CONO ANO,0	; NONE TO SEND. TURN OFF OUTPUT.
+		MOVE T1,[MSEC1,,IMODN2] ; DISPATCH WHEN IT IS TURNED ON
+		MOVEM T1,IMODSP	; ..
+		SETZM IMPOB
+		RET]
+IFN BBNF,<SETZM OUTREQ		; DO TELENET BUFFER, CLEAR REQUEST
+	MOVEM T1,OUTMSG	; IT IS ACTIVE TELENET MSG
+	ADDI T1,1		; TNB.OS, OFFSET TO ARPANET FORMAT
+	JRST IMPIOC>		; SEND IT
+
+IMPIOY:	HLRZ T2,0(T1)		; Get bfr
+	JUMPN T2,IMPIO2
+	SETZM IMPOBI		; None to go after this one
+	SKIPA			; And leave off section number
+IMPIO2:	HRLI T2,ANBSEC		; Set buffer's section
+	MOVEM T2,IMPOBO
+
+IFN BBNF,<SETZM OUTMSG>		; SAY NOT DOING TELENET
+
+IMPIOC:	MOVEM T1,IMPOB
+	SETZRO NBQUE,(T1)	; DeQueue buffer from its old chain
+;Now decide on packing via message type
+IFN BBNF,<
+	LOAD T2,IHLNK,(T1)	;Check for MLC OR TELENET traffic
+	CAIN T2,TNTLNK		;IS IT TELENET LINK?
+	 JRST [ MOVEI T3,.IITNT	;YES. - PACK APPROPRIATELY
+		JRST IMPIOD]
+	LSH T2,-1
+	CAMN T2,MLCHLF		;PTIP link?
+	JRST [	MOVEI T3,.IIMLC	;Yes. pack in 36 bit mode
+		JRST IMPIOD]
+   IFN TCPF,<
+	HRRE T2,TNBFFL		; See who owns the out buffer
+   >
+	JUMPL T2,[MOVEI T3,.IIINT	; TCP.  Set packing mode
+		JRST IMPIOD]
+>
+	LOAD T2,IHHST,(T1)	;Check host and link for NCP range
+	LOAD T3,IHLNK,(T1)	; ..
+	CAIGE T2,FKHOST		;Special to-imp group?
+	CAILE T3,LLINK		;Or link out of range?
+	JRST [	MOVEI T3,.IISPQ	;Yes, special queue formatting.
+		JRST IMPIOD]
+	LOAD T2,HHSIZ,(T1)	;NCP will have set up packing mode
+	CAIE T2,^D36		;Is it 36 bit mode?
+	SKIPA T3,[.IINC2]	;No, it is 8 or 32.
+	MOVEI T3,.IINC6		;Select 36 bit mode
+IMPIOD:	MOVE T2,[MSEC1,,IMOLDR]	;Where to go on next interrupt
+	MOVEM T2,IMODSP		; ..
+	MOVEM T3,IMOTYP		;Remember packing type decision
+	MOVEI T2,.NBLD0(T1)	;First word to send out
+	HRLI T2,(<.NBLD2+1>B12)	;Send first three words and some fills
+	TLO T2,ANBSEC		;From this section
+	CONO ANO,ANXWAR		; Select word-count and addr register
+	DATAO ANO,T2		; Tell it what to send
+	CONO ANO,ANOM36+ANOBSY+ANOCLE+ANXCHS	; Send it in 36-bit mode
+	RET			; Done with start-up-output routine
+
+; Here at PI level when leader and first fill word have been sent.
+; No AC's saved yet. Now re-send some more fill, and send H-H leader.
+
+IMOLDR:	DMOVEM T1,IMPIAC+T1	;Save standard interrupt level AC's
+	DMOVEM T3,IMPIAC+T3	; ..
+	DMOVEM CX,IMPICX	; ..
+	MOVE P,PIMSTK		; And set up a local PI level stack
+	MOVE T1,[MSEC1,,IMOLD3]	;Where to come on next interrupt
+	MOVEM T1,IMODSP		; ..
+	MOVE T1,IMPOB		;Buffer we are working on
+	MOVE T4,IMOTYP		;Get the packing control
+	MOVEI T2,.NBHHL-1(T1)	;Resend another word as pads, then H-H leader
+	HLL T2,II1WCT(T4)	;Set up right count
+	TLO T2,ANBSEC		;In the right section
+	DATAO ANO,T2		;Send those words
+	LOAD T3,NBBSZ,(T1)	;That might be all. Check size of buffer
+	CAILE T3,.NBHHL		;Just that much?
+	TDZA T2,T2		;There's more than that.
+	MOVEI T2,ANOEND		;That's all. Include End of Msg bit
+	IOR T2,IO1CNO(T4)	;Plus the right word size, etc.
+	CONO ANO,0(T2)
+	JRST IMPUBO		;Finished that output interrupt.
+
+IO1CNO:	ANOM36+ANOBSY+ANXCHS	;NCP 36 BIT MODE
+	ANOM36+ANOBSY+ANXCHS	;NCP 32 BIT MODE
+	ANOM36+ANOBSY+ANXCHS	;TELENET MODE
+	ANOBSY+ANXCHS		;SPECIAL QUEUES
+	ANOBSY+ANXCHS		;Internet MODE
+	ANOM36+ANOBSY+ANXCHS	;MLC/PTIP MODE
+	ANOM36+ANOBSY+ANXCHS	;Not referenced here
+
+IO2CNO:	ANOM36+ANOEND+ANOBSY+ANXCHS	;NCP 36 BIT MODE
+	ANOEND+ANOBSY+ANXCHS		;NCP 32 BIT MODE
+	ANOM36+ANOEND+ANOBSY+ANXCHS	;TELENET MODE
+	ANOEND+ANOBSY+ANXCHS		;SPECIAL QUEUES
+	ANOEND+ANOBSY+ANXCHS		;Internet MODE
+	ANOM36+ANOEND+ANOBSY+ANXCHS	;MLC/PTIP MODE
+	ANOM36+ANOEND+ANOBSY+ANXCHS	;Not referenced here
+
+;Here after completing the above, again on PI level. If more
+; words to send, set them up.
+
+IMOLD3:	CONSZ ANO,ANODON	;Was it a short message?
+	JRST IMODN0		;Yes, go wrap up. Release buffer, etc.
+	DMOVEM T1,IMPIAC+T1	;Save standard interrupt level AC's
+	DMOVEM T3,IMPIAC+T3	; ..
+	DMOVEM CX,IMPICX	; ..
+	MOVE P,PIMSTK		; And set up a local PI level stack
+	MOVE T1,IMPOB		;Buffer we have been sending
+	MOVE T4,IMOTYP		;Get the packing control
+	LOAD T2,NBBSZ,(T1)	;How many words in it?
+	MOVE T3,II2LDT(T4)	;How far we have done so far
+	SUBI T2,0(T3)		;Less those sent above
+	LSH T2,^D<35-12>	;Position for AN10 word count
+	HRR T2,T1		;Next word to go out.
+	ADDI T2,0(T3)		; ..
+	TLO T2,ANBSEC		;In the buffer section
+	MOVEM T2,IMPOUP
+	DATAO ANO,IMPOUP	;Tell it what data to send
+	HRRZ T3,IO2CNO(T4)	;Bits for CONO
+	CONO ANO,0(T3)		;And make it go
+	MOVE T3,[MSEC1,,IMODN0]	;When done, we will release the buffer
+	MOVEM T3,IMODSP		; ..
+	JRST IMPUBO		;Now dismiss this interrupt.
+
+;Here to make a Host Going Down message
+
+IOUHGD:	MOVEI T3,0		;Build the message in 2 and 3
+	LSHC T2,-^D8
+	DMOVEM T2,IIMBUF+1	;And use the special irreg msg buffer
+	MOVE T2,H2IHGD		;Pattern for message type
+	MOVEM T2,IIMBUF		; ..
+	MOVEI T2,IIMBUF		;Now send this to IMP
+	JRST IOUIRG		;Go send it
+
+IOUNOP:	SOS NOPCNT
+	MOVEI T2,H2INOP		;Send a NOP message
+IOUIRG:	HRLI T2,(<.NBLD2>B12)	;Length of the msg
+	CONO ANO,ANXWAR		; SET FOR WD CT / ADDR REGISTER
+	TLO T2,MSEC1		;These consts and temps are in mon section
+	DATAO ANO,T2		;Send the irreg message
+	CONO ANO,ANOM36+ANOBSY+ANOEND+ANXCHS	;Start it, 36-bit mode
+	MOVE T1,[MSEC1,,IMODN2]	;When done, no buffer to release
+	MOVEM T1,IMODSP
+	RET
+
+;Prototypes of the two H2I irreg messages we ever send.
+;The NOP message has the padding control in it.
+
+H2INOP:	BYTE (4)0,ITY%LL (16)0 (8).IHNOP (4)0
+	EXP 0
+	BYTE (4)0,STY%NP
+
+H2IHGD:	BYTE (4)0,ITY%LL (16)0 (8).IHHGD (4)0
+;;	BYTE (4)0 (24)0 (3)DayOfWeek (5)Hour
+;;	BYTE (4)5MinPeriod, Reason
+
+; Pi service for output
+
+;HERE AFTER "OUT DONE" INTERRUPT FOR A REAL BUFFER
+
+IMODN0:	DMOVEM T1,IMPIAC+T1	; Save standard interrupt level AC's
+	DMOVEM T3,IMPIAC+T3	; ..
+	DMOVEM CX,IMPICX	; ..
+	MOVE P,PIMSTK		; And set up a local PI level stack
+	CALL IMODUN		; POST COMPLETION, FREE THE BUFFER
+	MOVE T1,IMPOB
+	CALL IMULKB		; Unlock bfr
+
+IMPDO4:	SETZM IMPOB		; Mark no output in progress
+	CALL IMPIOU		; Start next msg if any
+IMPUBO:	DMOVE T1,IMPIAC+T1	; Restore AC's from before PI
+	DMOVE T3,IMPIAC+T3
+	DMOVE CX,IMPICX
+	XJEN ANOVI1		; AND DISMISS INTERRUPT
+
+;HERE AFTER "OUT DONE" INTERRUPT WHEN NO BUFFER TO RELEASE.
+
+IMODN2:	DMOVEM T1,IMPIAC+T1	; Save standard interrupt level AC's
+	DMOVEM T3,IMPIAC+T3	; ..
+	DMOVEM CX,IMPICX	; ..
+	MOVE P,PIMSTK		; And set up a local PI level stack
+	JRST IMPDO4
+
+;STATUS CHECK SUBROUTINES
+
+IMPRLQ::PUSH P,T1		;SAVE AN AC
+	CONI ANI,T1		;GET CURRENT STATUS
+	TLNE T1,(1B4+1B5)	;IS IT POWERED UP, WITH A CABLE IN IT?
+	TRNE T1,ANIIID		;YES. IS READY LINE ALSO OK?
+	SKIPA			;NO, IT ISN'T READY.
+	AOS -1(P)		;ALL IS WELL. SKIP RETURN.
+	JRST PA1		;RESTORE AC1 AND RETURN
+
+;HERE FROM DOWN-SEQUENCE PROCESSING IN NCPFRK TO COMPLETELY
+; SHUT OFF THE HARDWARE DEVICE
+
+IDVKIL::CONO ANO,0		;TURN OFF OUTPUT SIDE
+	CONO ANI,ANIRST		;CLEAR DEVICE
+	CONO ANI,ANXVAR		;HAVE TO POINT TO WHERE HOST READY IS
+	DATAO ANI,[<0*ANIHRL>+MSEC1B+ANIVIL]	;CLEAR READY, LEAVE
+				; LEAVE INTERRUPT ADDRESS ALONE.
+	RET
+
+;CALL HERE FROM IMPIN0 (ONLY FROM NCPFRK) AT INITIALIZATION OF
+; BACKGROUND FORK - NOT ON EVERY RECYCLE OF READY LINE.
+
+IMPRSD::MOVE T1,[MSEC1,,IMIN0X]	;RESET DISPATCHES
+	MOVEM T1,IMIDSP		;INPUT PI DISPATCH TO SHUT OFF DEVICE
+	MOVE T1,[MSEC1,,IMODN2]	;OUTPUT PI DISPATCH TO START NEW MSG
+	MOVEM T1,IMODSP
+	RET
+
+;CALL HERE FROM NCPFRK, PROCESS LEVEL, WHEN IMP IS WANTED UP
+; BUT NET IS CURRENTLY DOWN.
+
+IMPRSS::CALL IMPRLQ		; IS IMP ON AND READY?
+	 RET			; No, stop here
+	CALL IMPRSN		; Reset variables
+	SETZM IMPRDL		; And notices of IMP ERROR
+	CONO ANI,ANIRST		; CLEAR THE DEVICE
+	CONO ANI,ANXVAR+ANICLE	; SET VECTOR ADDRESS WORDS
+	DATAO ANI,[ANIHRL+MSEC1B+ANIVIL]	; SET THE HOST READY LINE
+	CONO ANO,ANOCLE+ANXVAR	; SAME FOR OUTPUT
+	DATAO ANO,[MSEC1,,ANOVIL] ; VECTOR INT LOCATION FOR OUTPUT
+	SETZM IMPDRQ		; Forget any intervening down requests
+	MOVNI T1,2
+	MOVEM T1,IMPFLS		; Init flush count
+	MOVEI T1,3
+	MOVEM T1,NOPCNT
+	MOVEI T1,^D1000
+	DISMS			; Allow time for ready line to settle
+	AOS NETTCH		; Cause change in state to be noted
+	AOS JB0FLG
+	GTAD			; Yes
+	MOVEM T1,NCPUPT		; Save time whe it came up
+	CONO ANO,ANOBSY+ANXCHS	; TELL OUTPUT SIDE TO GO.
+	SKIPLE IMPNFI		; If input bfrs available,
+	 CALL IMISRT		; Start input
+	SETOM IMPRDY
+	SETOM IMPORD		; Allow output
+	MOVE T1,NLHOST		; Local host
+	CALL IMPRRP		; Send ourselves an rrp
+	RET
+
+;Dummy routine to init IMP interface
+
+IMPINI::RET
+
+IMPFPF::			; ROUTINE TO DETERMINE IF AN10/20 CAUSED
+				; AN IOPGF....PAGE NUMBER IS IN T1
+	CONO ANI,ANXWAR		; SELECT INPUT SIDE WORD ADR REG.
+	DATAI ANI,T2		; GET THE WORD ADR REGISTER CONTENTS
+	CONO ANO,ANXWAR		; SELECT OUTPUT SIDE WORD ADR REG.
+	DATAI ANO,T3		; GET THE WORD ADR REGISTER CONTENTS
+	LOAD T2,VPGNO,T2	; GET THE PAGE NUMBER INPUT WORKING ON
+	LOAD T3,VPGNO,T3	; GET THE PAGE NUMBER OUTPUT WORKING ON
+	CAME T1,T2		; INPUT SIDE CAUSE IOPGF?
+	 CAMN T1,T3		; OUTPUT SIDE CAUSE IOPGF?
+	  SKIPA			; YES
+	   RET			; NO WE DID NOT CAUSE IT
+	CALL IDVKIL		; WE CAUSED IOPGF SO SHUT OFF DEVICE
+	BUG(IMPIOP)		; TELL THE WORLD WE CAUSED IT
+	JRST RSKP		; SKIP RETURN TO CALLER
+
+	TNXEND
+	END ; OF IMPPHY
+

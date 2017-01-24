@@ -1,0 +1,181 @@
+;-*-Midas-*-
+
+	Title @OFNS
+
+.DECSAV
+
+A=5
+B=6
+C=7
+T=12
+TT=13
+P=17
+
+PDLen==40
+JCLen==40
+
+STGADR==77,,777777
+
+.INSRT MID:SYMBOLS
+.INSRT MID:MACROS
+
+JFN:	0
+FDBADR:	0
+SPTH:	0
+SPTO:	0
+NOFN:	0
+SSPT:	0
+usSPTH:	Block 10000
+
+PDL:	-PDLen,,.
+	Block PDLen
+
+JCLbuf:	Block JCLen
+
+SymTab:	[.RSQZ 0,SPTH],,SPTH
+	[.RSQZ 0,SPTO],,SPTO
+	[.RSQZ 0,NOFN],,NOFN
+	[.RSQZ 0,SSPT],,SSPT
+nSyms==.-SymTab
+
+CRLF:	Asciz "
+"
+
+.INSRT MID:PRARG
+
+Begin:	RESET%
+	Move P,PDL
+	Movei 1,.FHSLF
+	Seto 3,
+	EPCAP%			;Enable our capabilities
+	Movei 1,.RSINI
+	RSCAN%
+	  .Lose
+	Movei 1,.PRIIN
+	Hrroi 2,JCLbuf
+	Movei 3,JCLen*5-1
+	Movei 4,^J
+	SIN%			;Suck in the JCL
+	Move 2,[440700,,JCLbuf]
+Begin0:	Ildb 1,2
+	Cain 1,^J
+	  Jrst [TypeCR "Usage is:
+@OFNS <filename>"
+		Jrst Die]
+	Caie 1,40
+	  Jrst Begin0
+	Movx 1,GJ%SHT\GJ%OLD
+	GTJFN%
+	  .Lose
+	Movem 1,JFN
+	Type "File = "
+	Movei 1,.PRIOU
+	Move 2,JFN
+	Movx 3,JS%SPC
+	JFNS
+	Type "
+JFN = "
+	Movei 1,.PRIOU
+	Move 2,JFN
+	Movei 3,8.
+	NOUT%
+	  Nop
+	Type "
+Index block disk address = "
+	Move 1,JFN
+	Move 2,[1,,.FBADR]
+	Movei 3,FDBADR		;Put it here
+	GTFDB%
+	  .Lose
+	Movei 1,.PRIOU
+	Hlrz 2,FDBADR
+	Movei 3,8.
+	Jumpe 2,Begin1
+	NOUT%
+	  Nop
+	Type ",,"
+Begin1:	Movei 1,.PRIOU
+	Hrrz 2,FDBADR
+	NOUT%
+	  Nop
+	Type "
+Snooping monitor symbols..."
+	Call GetSym
+	Type "OK
+Grabbing SPTH..."
+	Hrlz 1,SSPT
+	Hrr 1,SPTH
+	Movei 2,usSPTH
+	PEEK%
+	  .Lose
+	TypeCR "OK
+Scanning..."
+	Movs T,NOFN
+	Movns T
+Scan:	Ldb TT,[.BP STGADR,usSPTH(T)]	;Get the index block address
+	Came TT,FDBADR		;Same as for file you gave us?
+	  Jrst Next
+	Type "OFN = "
+	Movei 1,.PRIOU
+	Movei 2,(T)
+	Movei 3,8.
+	NOUT%
+	  Nop
+	Type ", Share count = "
+	Move 1,SPTO
+	Addi 1,(T)
+	Hrli 1,1
+	Movei 2,TT
+	PEEK%
+	  .Lose
+	Movei 1,.PRIOU
+	Hlrz 2,TT
+	Movei 3,10.
+	NOUT%
+	  Nop
+	Move TT,usSPTH(T)	;Get full word
+    IRP ahem,,[1,2,3,4,5,6,7,8.,9.,10.,11.]name,,[FILWB,THAWB,FILNB,SPTLKB,OFNWRB,OFNBAT,OFNERR,OFNDMO,OFNDUD,OFN2XB,SPAREH]
+	Txne TT,Bit(ahem)
+	  Jrst [Type ", !name"
+		Jrst .+1]
+    TERMIN
+	Type "
+Pages: "
+	Move TT,SSPT
+	Sub TT,NOFN
+	Movss TT
+	Movns TT
+	Hrr TT,NOFN
+pagep:	Hlrz 1,usSPTH(TT)
+	Cain 1,(T)		;This OFN?
+	  Jrst [Movei 1,.priou
+		Hrrz 2,usSPTH(TT)
+		Movei 3,8.
+		NOUT%
+		  Nop
+		ctype 40
+		jrst .+1]
+	Aobjn TT,pagep
+
+Next:	Aobjn T,Scan
+
+	Move 1,JFN
+	RLJFN%
+	  Nop
+
+Die:	.Logout
+	Jrst Die
+
+GetSym:	Movsi T,-nSyms
+GetSy0:	Movei 1,.SNPSY
+	Hlrz 2,SymTab(T)
+	Move 2,(2)
+	Setz 3,
+	SNOOP%
+	  .Lose
+	Hrrz 3,SymTab(T)
+	Movem 2,(3)
+	Aobjn T,GetSy0
+	Return
+
+	End Begin

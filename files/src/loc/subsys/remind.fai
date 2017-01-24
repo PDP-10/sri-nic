@@ -1,0 +1,2331 @@
+;[SRI-NIC]SRC:<LOC.SUBSYS>REMIND.FAI.8,  1-Apr-85 19:03:08, Edit by ROODE
+;[1] Replace GTBLT with HANDS
+;SRC:<LOC.SUBSYS>REMIND.FAI.7, 729-Mar-85, Edit by VIVIAN
+; Make Vivian the Wizard, change data file names to be compatible
+; with NIC, send bug messages to BUG-REMIND rather than SATZ
+;<SOURCES>REMIND.FAI.135,  6-Aug-84 14:33:08, Edit by LARSON
+; Increased size of PMAP master file from 3 to 5 pages.  Increased
+; number of entries in master file from 500 (decimal) to 850 (decimal).
+; Moved user file page from 305 to 310.  Fixed comment on usrrmd definition.
+;<BILLW>REMIND.FAI.30, 17-Jan-84 10:46:42, Edit by BILLW
+; implement fancy date parsing using the COMND jsys.  This
+; is largely based on the code from MM, modified to insure
+; that the date is in the future, intead of the past.
+;<BILLW>REMIND.FAI.2,  9-Jan-84 23:46:35, Edit by BILLW
+; write [--queued-mail--].new-12365463256-remind files instead of
+; starting MM in a subfork.  This method is more subject to breakage
+; as the mnail system evolves, but is more efficient and allows the
+; header fields to be set to whatever we like.
+;<SOURCES>REMIND.FAI.133,  1-Mar-83 12:13:54, Edit by MCLURE
+;Use gthst jsys instead of doing our own host table hacking
+;<SOURCES>REMIND.FAI.129,  8-Feb-83 15:19:05, Edit by MCLURE
+;Fix bug related to specifying end of month and monthly for
+;a reminder which caused IDCNV to bomb out if handed the
+;next month but with more days than it actually had
+;<SOURCES>REMIND.FAI.128,  7-Apr-82 12:34:27, Edit by MCLURE
+;Change to SYS:MM.EXE
+;<SOURCES>REMIND.FAI.126,  9-Feb-82 15:32:43, Edit by MCLURE
+;Was MAILing in addition to SENDING even if only the latter was specified
+;<SOURCES>REMIND.FAI.122, 24-Nov-81 14:50:12, Edit by MCLURE
+;Send to tty's only that don't have REFUSE SYSTEM-MESSAGES
+;<SOURCES>REMIND.FAI.121, 19-Jun-81 06:53:20, Edit by MCLURE
+;Up max number of user reminders to 300
+;<SOURCES>REMIND.FAI.120, 19-Mar-81 14:15:43, Edit by MCLURE
+;Ignore files-only dirs with remind.bin when doing build
+;If daemon finds illegal dir num in master file, it flushes
+;the entry
+
+	title	remind
+	subttl	McLure / Spring '79
+	search	monsym
+	.require ultcmd
+	.require sndmai
+	extern	getcmd, subcmd, lstchr, crflg	; Internal to ultcmd
+	extern	SNDMAI
+
+; AC's
+f_0					; Flag for testing switches
+a_1					; Jsys & temp
+b_2
+c_3 
+d_4					; Temp
+e_5
+i_6					; Index into reminder file
+m_7					; SORT & FIRE loop iterative
+t_10					; Temp
+u_11
+v_12
+w_13
+x_15					; Message number reading in
+y_16
+p_17					; Stack
+
+; Opdef's
+opdef	call	[pushj	p, 0]
+opdef	ret	[popj	p, 0]
+opdef	utype	[1B8]
+opdef	uerr	[2B8]
+opdef	unoi	[3B8]
+
+; Flags for how a message can be marked in the person's remind file
+; any one of minute,hour,day,week,month,year and one of mail,send,both
+f%min==1b18
+f%hour==1b19
+f%day==1b20
+f%week==1b21
+f%month==1b22
+f%year==1b23
+f%mail==1b24
+f%send==1b25
+f%both==1b26
+f%biweek==1b27
+
+; Macros
+
+define	type	(x)			; Types message on primary output
+   <	utype	[asciz |x|]
+   >
+
+define	typen	(x)			; Types message crlf
+   <	utype	[asciz |x
+|]
+   >
+
+define	warn	(x)			; Prints error message and returns +1
+   <	uerr	[asciz |x|]
+   >
+
+define	fatal	(x)			; Prints error message and halts
+   <	uerr	1, [asciz |x|]
+   >
+
+define	cerr	(x)			; Prints error message and returns
+   <	uerr	2, [asciz |x|]		; to command input level resetting
+   >					; updl
+
+define	noise	(x)			; Print noise message if command
+   <	unoi	[asciz |x|]		; terminator was not a CR or SP
+   >
+
+define	cmd	' (x,y)			; Builds command,,dispatch entries
+   <	ifidn	<y>,<>,<[asciz |x|],,.'x>
+	ifdif	<y>,<>,<[asciz |x|],,y>
+   >
+	loc	41
+	call	uuoh
+	reloc
+
+	subttl page assignment 
+maxrem	__ =850				; Max of 850 reminders
+npages	__ 5				; 5 pages for master pmap file
+rmindln	__ 4777				; Max length master pmap file (5 pgs)
+
+filpag	__ 300				; First page of master file
+rmindr	__ filpag9			; Start of that data
+
+rempag	__ 310				; User file storage starts here
+rminds	__ rempag9
+usrrmd	__ =300				; Max of 300 reminders for user file
+usrrml	__ usrrmd*1000
+
+; Determine whether to go into daemon or user mode and then dispatch
+; to the right place.
+
+go:	setz	f,
+	setzm	srtflg
+	reset				; Make the world happy
+	move	p, [iowd npdl, pdl]	; Set up stack
+	movsi	a, (rc%emo)		; Exact match please
+	hrroi	b, [asciz/OPERATOR/]	; Want OPERATOR's number
+	rcusr				; Get his user number
+	movem	c, opnum
+	gjinf
+	move	c, opnum
+	move	d, debug		; Get debug variable
+	jumpn	d, daemon		; Go be daemon if in debug mode
+	came	a, c			; Is this the operator
+	 jrst	user			; Nope, then user-mode
+	jrst	daemon			; Yes, then be a daemon
+
+; Come here for daemon mode
+daemon:	setom	daemod			; Say in daemon mode
+	movei	a, .fhslf		; Enable ourselves
+	rpcap
+	ior	c, b
+	epcap
+	call	daeini			; Init tables
+	call	filini			; Init PMAP file
+daemo1:	setz	i,			; Init index into reminder file
+dmnlop:	cail	i, maxrem		; Beyond maximum reminder?
+	 jrst	dmnlo1			; Yep, then go sort maybe, and sleep
+	move	b, rmindr(i)		; Get next firing time
+	call	firtim			; Is it firing time?
+	 jrst	dmnlo1			; Nope, go sort maybe and sleep
+	setom	firflg			; Say we've fired
+	call	fire			; Yes, then fire it!
+	addi	i, 3			; Get next firing
+	 jrst	dmnlop			; Back for next one
+dmnlo1:	skipn	a, firflg		; Fired during this loop?
+	 jrst	sleep			; Nope, go sleep
+	call	sort			; Yep, then must sort
+	setzm	firflg			; Clear fire flag
+	 jrst	sleep			; And sleep some
+
+; Sleep for 1 minute
+sleep:	movei	a, =60000		; Sleep for 60 seconds
+	disms				; Sleep awhile
+	 jrst	daemo1			; Go see if reminders
+
+; Get the TTYJOB table
+daeini:	setom	daeflg			; Say in daemon mode
+	move	a, [sixbit /TTYJOB/]
+	sysgt				; Get table number
+	hrrm	b, ttyjbn		; Save for later
+	ret
+
+; Sort the entries in the PMAP file, and scrunch them
+; removing leading zeroes
+sort:	setz	m,
+sortlp:	cail	m, maxrem		; Still in legal range?
+	 jrst	srtdon			; Done with sort??
+	move	a, m
+	addi	a, 3
+	move	b, rmindr(m)		; Get firing time
+	camg	b, rmindr(a)		; In order?
+ 	 jrst	[addi	m, 3		; On to next entry
+		 jrst	sortlp]
+	setom	exchdn			; Say exchange was done
+	move	d, rmindr(a)		; Nope, then must exchange
+	movem	b, rmindr(a)		; Exchange first values
+	movem	d, rmindr(m)
+	addi	a, 1
+	move	d, rmindr(a)
+	move	t, m
+	addi	t, 1
+	move	e, rmindr(t)		; Exchange second values
+	movem	d, rmindr(t)
+	movem	e, rmindr(a)
+	addi	a, 1
+	move	d, rmindr(a)
+	addi	t, 1
+	move	e, rmindr(t)		; Exchange third values
+	movem	d, rmindr(t)
+	movem	e, rmindr(a)
+	addi	m, 3			; On to next entry
+	 jrst	sortlp
+		 
+srtdon:	skipe	exchdn			; Exchange done?
+	 jrst	[setzm exchdn		; Say no exchanges done
+		  jrst	sort]		; No
+	setz	b,			; Init counter
+	setz	c,			; Init reminder number
+srdnlp:	caile	c, maxrem		; Beyond end of master PMAP file??
+	 ret				; If went through whole, then is full!
+	skipn	a, rmindr(b)		; Got a non-zero entry yet?
+	 jrst	srdadd			; Nope, keep going
+	movei	e, rmindr		; Beginning
+	add	e, b			; Add offset
+	movei	t, rmindr		; Place to put it
+	hrl	a, e			; Place to start
+	hrr	a, t			; Place to put
+	blt	a, rmindr+rmindln	; Move the whole load up
+	ret				; And we're done!
+
+srdadd:	addi	b, 3			; Get to next reminder
+	addi	c, 1			; Gone another reminder
+	 jrst	srdnlp
+
+; Fire off the message indicated in rmindr-rmindr+3 where rmindr(i)
+fire:	call	maksur			; Anyone running REMIND?
+	 jrst	[movei a, =30000	; Yes, then must wait 30 seconds
+		 disms			; Wait awhile
+		 jrst fire]		; Back to try again
+	call	erase			; Erase previous subjcts/txts/etc.
+	move	d, i			; Nope, we're ok
+	move	a, rmindr(d)
+	movem	a, rtim			; Save firing time of this reminder
+	addi	d, 1
+	move	a, rmindr(d)
+	movem	a, rdir			; Save directory wanting to fire
+	addi	d, 1
+	move	a, rmindr(d)
+	movem	a, rmod			; Save last modificaton of reminder
+	move	a, [point 7, usrfil]	; Assemble user's file here
+	hrroi	b, [asciz/PS:</]
+	call	movstr
+	move	b, rdir			; Directory wanting to fire
+	hrrz	c, rdir
+	 jumpe	c, nodir		; This guy zero? If yes, nodir
+	dirst
+	 erjmp	nodir			; If bad directory number, nodir
+	hrroi	b, [asciz/>/]
+	call	movstr
+	hrroi	b, ufilnm		; Users filename
+	call	movst0			; End with terminating null
+	move	b, rdir			; Get firing directory failing
+	hrroi	a, usrnam		; Temp name for speed
+	dirst				; Put his user name here
+	 warn	(Cant construct username!)
+	call	opnfil			; Open his file, read in the reminds
+	setz	m,			; Reset message counter
+	move	y, nummsg		; Get number of messages
+	subi	y, 1			; Decrement
+firelp:	camle	m, y			; Beyond last message?
+	 jrst	 flgone			; Yes, couldn't find it, barf
+	move	c, m			; Save pointer
+	imuli	c, 1000			; Get offset for message page
+	hrroi	a, rminds(c)		; Set up pointer
+	call	rdrmnd			; Read a reminder
+	move	a, firmod		; Get modification of this reminder
+	camn	a, rmod			; Same as one we're searching for?
+	 jrst	firmat			; Yes, got a good match!
+	hrrz	e, rmod			; Get file modification
+	hrrz	d, firmod		; Get our time
+	sub	e, d			; Form difference
+	caig	e, 0			; Positive?
+	movns	e, e			; Nope, take absolute value
+	cail	e, 2			; As close as 1/day?
+	 aoja	m, firelp		; Nope, then keep searching
+firmat:	skipe	a, repcnt		; Got an expired one?
+	caia				; Nope
+	 jrst	flgone			; Yes, tell him then
+	skipg	a, repcnt		; Got a non-perpetual one?
+	 jrst	fire1			; Nope, don't decrement then
+	subi	a, 1			; Decrement count
+	movem	a, repcnt		; Save it
+	cain	a, 0			; Did it just expire?
+	 call	zeroit			; Yes, then zero it out
+fire1:	move	f, switchs		; Get switch settings for this
+	trne	f, f%send		; Wants to SEND it?
+	 jrst	[call	tellse		; Yes, go try to send it
+		 jrst	fire2]
+	trne	f, f%mail		; Want to MAIL it?
+	 jrst	[call	tellma		; Yep, then just go mail
+		 jrst	fire2]
+	trne	f, f%both		; Wants to try both?
+	call	tellbo			; Yep, then try them both
+fire2:	call	update			; Update the firing entry in PMAP file
+	movem	b, firtme		; Save next firing time
+	call	remcpy			; Copy into core
+	move	x, m			; Save message number we're at
+	imuli	x, 1000			; Get page its on
+	move	a, [point 7, rminds(x)]	; Get pointer
+	hrroi	b, usrmsg		; Place to get it from
+	call	movst0			; Move that message!
+	call	ritnew			; Update users remind file
+	ret
+
+;; Come here if found a non-existant directory number in main data file
+
+nodir:	type	<REMIND: Illegal directory in main data file: >
+	movei   a, .priout
+	hrrz	b, rdir
+	movei	c, 10
+	nout
+	 warn	(Couldnt type illegal directory number)
+	move	b, i			; Get reminder we're working on
+	setzm	rmindr(b)		; Zero out first
+	addi	b, 1
+	setzm	rmindr(b)		; Zero out second
+	addi	b, 1
+	setzm	rmindr(b)		; Zero out third
+	call	sort			; Sort resultant of course
+	ret
+
+; Erase the temporary storage bins so we don't get garbage.
+erase:	setzm	rminds
+	move	1, [rminds,,rminds+1]
+	blt	1, rminds+usrrml-1	; Clear it off
+erase1:	setzm	txtmsg
+	move	1, [txtmsg,,txtmsg+1]
+	blt	1, txtmsg+7777		; Clear it off
+	setzm	addrls
+	move	1, [addrls,,addrls+1]
+	blt	1, addrls+1777		; Clear it off
+	setzm	subjct
+	move	1, [subjct,,subjct+1]
+	blt	1, subjct+1777		; Clear it off
+	setzm	usrmsg
+	move	1, [usrmsg,,usrmsg+1]
+	blt	1, usrmsg+13777		; Clear it off
+	ret
+
+;Update the firing entity in the PMAP file
+update:	move	b, rtim			; Get time of this firing
+	setz	d,
+	odcnv				; Convert to weekday/day/month/year
+	hrrzm	b, rmon			; Save month (0=January)
+	hlrzm	b, ryear		; Save year
+	hlrzm	c, rday			; Save day of month (0=first day)
+	hrrzm	c, rweek		; Save day of week (0=Monday)
+	hrrzm	d, rsecs		; Save seconds since midnight
+	trne	f, f%min		; Minutely?
+	 jrst	updmin			; Yes, make fire in a minute
+	trne	f, f%hour		; Hourly?
+	 jrst	updhou			; Yes, make fire in an hour
+	trne	f, f%day		; Daily?
+	 jrst	updday			; Yes, make fire in a day
+	trne	f, f%week		; Weekly?
+	 jrst	updwee			; Yes, make fire in a week
+	trne	f, f%month		; Monthly?
+	 jrst	updmon			; Yes, make fire in a month
+	trne	f, f%year		; Yearly?!
+	 jrst	updyea			; Yes, make fire in a year
+	trne	f, f%biweek		; Biweekly?
+	 jrst	upbiwe			; Yes, make fire in two weeks
+updat1:	hrri	c, 0			; Zero out (incompatibility!)
+	hrli	d, 0
+	idcnv				; Convert back to internal format
+	 fatal	(Couldnt convert back to internal format in UPDATE!)
+	skipe	a, repcnt		; Update time unless expired
+	movem	b, rmindr(i)		; Save it for next time
+	setom	srtflg			; Say must sort
+	ret
+
+; Hairy date routines
+updyea:	move	e, ryear		; Get year back
+	addi	e, 1			; Increment by one
+	hrl	b, e			; Put it back
+	 jrst	updat1			; That was easy
+
+updmon:	move	e, rmon			; Get month back
+	caie	e, =11			; In December?
+	 jrst	[addi e, 1		; No, then just increment
+		 hrr b, e		; Use this new value
+		 call ckday		; Modify day if necessary
+		  jrst updat1]		; No, ok to proceed
+	hrri	b, 0			; Yes, then January is next time
+	call	ckday			; Modify day if necessary
+	 jrst	updyea			; Go say next year
+
+; If reminder is set to fire one month from now, but we're on a month
+; day that doesn't exist because next month is shorter, use the max day
+; of next month. 
+ckday:	move e, rday			; Get day of month back
+	addi e, 1			; Convert to 1-31 format
+	camg e, daymon(b)		; More days than available?
+	 ret				; Nope, return
+	move e, daymon(b)		; Yes, get days of next month
+	subi e, 1			; Convert to 0-30 format
+	movem e, rday			; Save it
+	hrl c, e			; Use it instead
+	ret
+
+upbiwe:	move	e, rday
+	move	u, rmon
+	addi	e, =14			; Two weeks from now
+	 jrst	updwe1
+
+updwee:	move	e, rday			; Get day of month back
+	move	u, rmon			; Get month
+	addi	e, 7			; Make next week
+updwe1:	camge	e, daymon(u)		; Beyond end of this month??
+	 jrst	[hrl c, e		; No, then just use this
+		 jrst updat1]
+	sub	e, daymon(u)		; Yes, get amount overlap
+	hrl	c, e			; Make that the new day then
+	 jrst	updmon			; Go update month perhaps
+
+updday:	move	e, rday			; Get day back
+	move	u, rmon			; Get month
+	addi	e, 1			; Increment to next day
+	camge	e, daymon(u)		; Beyond end of this month??
+	 jrst	[hrl c, e		; No, then just use this
+		 jrst updat1]
+	hrli	c, 0			; First day of next month then
+	 jrst	updmon			; Go update month perhaps
+
+updhou:	move	e, rsecs		; Get seconds back
+	addi	e, ^d<60*60>		; Increment an hour
+updho1:	caige	e, ^d<60*60*24>		; Beyond end of day??
+	 jrst	[hrr d, e		; No, then just use this
+		 jrst updat1]
+	subi	e, ^d<60*60*24>		; Yes, get difference then
+	hrr	d, e			; Make that the new value
+	 jrst	updday			; Go update day perhaps
+
+updmin:	move	e, rsecs		; Get seconds back
+	addi	e, ^d<60>		; Increment a minute
+	 jrst	updho1			; Go update hour perhaps
+
+;Read each entry of addrlst into usernm. See if they are on
+;the system. For each of their logged-in terminal which does not
+;have REFUSE SYSTEM-MESSAGES, send the message to that terminal.
+;If all logged-in terminals have REFUSE SYSTEM-MESSAGES, just mail
+;it to them
+;
+;If they are net people then just mail it.
+tellbo:	hrroi	a, addrls		; Get initial pointer
+bothlp:	hrroi	b, usernm		; Put entry in here
+	movei	c, =20			; Allow this many
+	movei	d, ","			; Terminate on end of string or ,
+	sin
+	 erjmp	[ret]			; No more addresses, we're through
+	movem	a, addpnt		; Save pointer
+	ldb	c, b			; Get last character
+	caie	c, ","			; Terminated on a comma?
+	 jrst	tellb1			; No, then last entry
+	setz	d,			; Yes, then must zap it
+	dpb	d, b			; Zero that comma
+tellb1:	movsi	a, (rc%emo)		; Exact match please
+	hrroi	b, usernm		; Want this person's number
+	rcusr				; Get his user number
+	 erjmp	tellm			; Must be a net person, mail it
+	jumpe	c, [ret]		; Done, return
+	move	w, c			; Save directory number
+	call	locat			; Try to locate the person
+	skipn	nusrjb			; Get number of times he's logged in
+	 jrst	[skipe sndsw		; Is this send-only?
+		 ret			; Yes, no mailing
+		 jrst tellm]		; Must be both, tell by mail
+	move	a, [point 7, usrmsg]	; Assemble the message here
+	hrroi	b, [asciz/
+[REMIND(/]
+	call	movstr
+	seto	b,
+	move	c, [ot%nda!ot%nsc!ot%12H!ot%scl]
+	odtim				; Time of reminder
+	hrroi	b, [asciz/): /]
+	call	movstr
+	hrroi	b, subjct		; And the subject
+	call	movstr
+	hrroi	b, [asciz/ /]
+	call	movstr
+	hrroi	b, txtmsg		; And the text
+	call	movstr
+	hrroi	b, [asciz/]
+/]					; End of message
+	call	movst0			; End of that
+	setzm	didsnd			; Non-zero if we succeed in send
+	setz	t,			; Init counter
+selop:	caml	t, nusrjb		; Beyond table?
+	 jrst	[skipn didsnd		; Did we send at least once?
+		  jrst tellm1		; No, must send by mail
+		 move a, addpnt		; Get pointer into addrlst back
+		 jrst bothlp]		; Process another address
+	move	a, usrlog(t)		; Get where he is
+	call	refsys			; Got refuse system messages?
+	 aoja	t, selop		; Yep, don't send to that one
+	move	a, usrlog(t)		; Get where he is
+	hrroi	b, usrmsg		; Get message to send
+	setz	c,
+	sout				; Send that reminder!
+	setom	didsnd			; Say we did the send
+	 aoja	t, selop		; For all instances of him
+	ret
+
+;Return +1 if terminal in a has REFUSE SYSTEM-MESSAGES, otherwise +2
+refsys:	movei	b, .mornt		; Function code
+	mtopr
+	 jumpn	c, refret		; If messages are supressed, +1
+	aos	(p)			; Otherwise +2
+refret:	ret
+
+; Mail stuff to person in USERNM
+tellm:	skipe	a, sndsw		; In send mode?
+	 ret				; Yes, no mailing allowed
+tellm1:	setom	singsw			; Say sending to single person
+	call	tellma			; Mail it to person in usernm
+	setzm	singsw			; Say not sending to single
+	ret
+
+;Searches for the people in addrlst who are on the system
+;sends them the reminder in subjct and txtmsg via SOUT. For users
+;in addrlst who are net people, it sends them mail. If someone
+;on the list is neither on the system nor a net person, then it
+;skips them
+tellse:	setom	sndsw			; Say in tellse mode
+	call	tellbo			; Go send it, no mailing allowed
+	setzm	sndsw			; Say out of it
+	ret
+
+; BLT the user table into core, and locate person in Y, put
+; number of times the person is logged in in NUSRJB and the
+; terminals he's on in USRLOG table
+locat:	hrroi	a,[.jobpnm,,jobnam]	;[1]
+	hands%				;[1]
+;1	move	a, [-1,,0]		; Want the whole TTYJOB table
+;1	movei	2, ttyjob		; Place to put it
+;1	gtblt				; Move the whole thing
+	 erjmp	uuoh			; Bomb on error
+	setz	t,			; Init counter
+	setzm	nusrjb			; Zero indicator
+loclp:	caile	t, njobs		; Beyond end of table?
+	 ret				; Yes, then done
+	skipg	a, ttyjob(t)		; Got one not attached to a TTY?
+	 aoja	t, loclp		; Yep, then don't bother
+	hlrz	a, a			; Set up for getji
+	addi	a, 400000		; Make terminal designator
+	hrli	b, -2			; Only want one word
+	hrri	b, d			; Put TTY # in d, user # in e
+	movei	c, 1			; Get his user number
+	getji				; Get that info
+	 aoja	t, loclp		; Don't bother with errors
+	came	w, e			; Found an instance of him?
+	 aoja	t, loclp		; Nope, keep searching
+	caig	d, 0			; Detached?
+	 aoja	t, loclp		; Don't bother
+	move	e, nusrjb		; Get current table pointer
+	movem	a, usrlog(e)		; Save terminal he's on
+	addi	e, 1			; Increment table pointer
+	movem	e, nusrjb		; Save new one
+	 aoja	t, loclp		; Search some more
+
+;Sends the reminder via mail to everyone on addrlst or usernm
+tellma:	hrroi	b, addrls		; Get addresses
+	skipe	c, singsw		; Single user in usernm??
+	hrroi	b, usernm		; Yep, then get him instead
+	movem	b, smlblk+2		;[wew] to address into SNDMAI arg blk
+	hrroi	b, subjct		; Get subject
+	movem	b, smlblk+3		;[wew] add subject field
+	hrroi	b, txtmsg-1		; Get text
+	movem	b, smlblk+4		;[wew] pass pointer to SNDMAI
+	hrroi	1,strbuf		;[wew] set up user name of requestor
+	
+	move	b, rdir			;[wew] get directory number
+	trne	b, -1			;[wew] If zero, then not valid.
+	dirst				;[wew]  get directory string
+	 jrst	BADNAM
+	movei	2,"@"			;[wew] add in local host name
+	idpb	2,1
+	move	2,1			;[wew] move byte pointer
+	movei	1,.gthns		;[wew] function to return host name
+	seto	3,			;[wew] use This host.
+	gthst
+BADNAM:	 setzm	strbuf			;[wew] no FROM if error
+	hrroi	b, strbuf		;[wew] use the user name as FROM:
+	movem	b, smlblk+1		;[wew] save in pointer block
+	hrroi	b, [asciz/Remind, the Daemon/]	;[1]
+	movem	b, smlblk+5
+	movei	1,SMLBLK
+	call	SNDMAI			; And mail it off!
+	 ret
+	ret
+
+; Called when the person's remind file has vanished or there is
+; no such entry to send.
+flgone:	move	a, [gj%new!gj%sht!gj%fou] ; His file's gone, tell him
+	hrroi	b, bugfil		; Bug file's name
+	gtjfn
+	 warn	(Cant get a jfn to report person doesnt have remind file!)
+	movem	a, msgjfn
+	move	b, [of%wr+7B5]
+	openf
+	 warn	(Cant open bug file to report person doesnt have remind file!)
+	hrroi	b, [asciz/SEND
+/]
+	setz	c,
+	sout
+	hrroi	b, usrnam
+	setz	c,
+	sout
+	hrroi	b, [asciz/
+
+REMIND failure
+
+Maybe you have accidentally deleted your REMIND.BIN file or one of the
+reminders has expired. If either of the above has happened, please
+recreate the reminder that failed. You can see which one that is by
+noting the time of this message and the one in your REMIND.BIN file
+that is closest to it. Usually that will be the one that lost.  DELETE
+it and then reCREATE it.
+
+	Thankyou,
+	The REMIND daemon
+/]
+	setz	c,
+	sout
+	call	mail			; Send bug mail
+zeroit:	move	c, i			; Get pointer into PMAP file
+	setzm	rmindr(c)		; Zero out this bad entry
+	addi	c, 1			; Get directory number
+	setzm	rmindr(c)		; Zilch it too
+	addi	c, 1			; Get last modification time
+	setzm	rmindr(c)		; Zilch it too
+	setom	srtflg			; Say need to sort PMAP file
+	ret
+
+; Init PMAP file
+filini:	movsi	a, (gj%old!gj%sht)
+	hrroi	b, dmnfil
+	gtjfn				; Get a jfn on daemon pmap file
+	 jrst	filin2			; Can't find it, then make one
+	movem	a, dmnjfn		; Save daemon file jfn
+	movei	b, of%rd+of%wr+of%thw	; Want read/write/thawed access
+	openf
+	 fatal	(Cant open master data file!)
+	hrlz	a, a
+	move	b, [.fhslf,,filpag]	; Put it at filpag
+	move	c, [pm%cnt+pm%rd+pm%wr+npages] ; Map this many, read/write
+	pmap				; Do it!
+	ret
+filin2:	movsi	a, (gj%new!gj%sht!gj%fou)
+	hrroi	b, dmnfil
+	gtjfn				; Get a jfn on daemon pmap file
+	 fatal	(Cant create master data file!)
+	movem	a, dmnjfn		; Save daemon file jfn
+	movei	b, of%wr+of%thw		; Want read/write/thawed access
+	openf
+	 fatal	(Cant open newly created master data file!)
+	setzm	rmindr
+	move	1, [rmindr,,rmindr+1]
+	blt	1, rmindr+rmindln	; Clear it off
+	hrli	a, .fhslf
+	hrri	a, filpag
+	hrlz	b, dmnjfn
+	move	c, [pm%pld+pm%cnt+pm%wr+npages] ; Map this many, read/write
+	pmap				; Create it, the whole thing
+	move	a, dmnjfn
+	closf
+	 fatal	(Cant close newly created master data file!)
+	ret
+
+; See if time to fire a message off
+firtim:	gtad				; Get current time
+	jumpe	b, firti1		; No reminders?
+	camg	a, b			; Past next reminder time?
+	 ret				; Nope, then +1 fail return
+	movem	a, curtim		; Yep, save current time
+	aos	(p)			; +2 success return
+firti1:	ret
+
+; Fork up MM to send off the accumulated message
+; Accumulated message is in file whose jfn is in msgjfn
+mail:	move	a, msgjfn		; Pick up message jfn
+	hrroi	b, termin		; Put in message terminator
+	setz	c,		
+	sout
+	hrli	a, (1b0)		; Close temp file without releasing jfn
+	closf
+	 warn	(Couldnt close temp message file)
+	move	a, msgjfn		; Now open it
+	move	b, [7b5+of%rd]		; Ascii mode, read
+	openf
+	 warn	(Couldnt open temp message file)
+	move	a, [gj%sht+gj%old]	; Short form, old file
+	hrroi	b, [asciz/SYS:MM.EXE/]	; Want MM to send it off
+	gtjfn
+	 jrst [ warn (Couldnt get a jfn for mail sender program)
+		jrst mail1]		; Forget it
+	move	b, a			; Ok, save jfn
+	move	a, [cr%cap]		; Enable so he can send netmail
+	cfork
+	 jrst [ warn (Couldnt create a fork for mail sender program)
+		move	a, b		; Release MM jfn and punt
+		rljfn
+		 warn	(Couldnt release jfn of mail sender)
+		jrst mail1]
+	exch	a, b			; Fork handle to b, jfn to a
+	hrl	a, b			; Handle to lh for get
+	get				; Get MM into the fork
+	move	a, b			; Fork handle
+	hrlz	b, msgjfn		; Primary input from temp file
+	hrri	b, .nulio		; Primary output to the bit bucket
+	spjfn
+	setz	b,			; Fire up MM
+	sfrkv
+	wfork				; Wait for it to terminate
+	kfork				; Kill it off
+mail1:	move	a, msgjfn		; Jfn of temp message file
+	delf				; Delete the file
+	 warn	(Couldnt delete temp message file)
+	move	a, msgjfn
+	closf
+	 warn	(Couldnt close temp message file)
+	ret
+
+; Come here for user portion of REMIND
+user:	setzm	daemod			; Say not daemon mode
+	call	uinit			; Init user variables
+	call	opnfil			; Open his user file
+	call	filini			; Init PMAP file
+
+commd:	movem	p, cpp			; Command pdl pointer
+ 	call	pcrlf			; Get command
+	movei	a, cmdtab
+	call	getcmd
+
+dsptch:	hrrz	a, (1)			; Get place to go
+	call	(1)			; Go there
+	jrst	commd			; Back for another command
+
+cmdtab:	[asciz "REMIND>"],,-cmdsiz
+	[asciz //],,nulcmd
+	[asciz /;/],,eatcmt
+	cmd	bug
+	cmd	create
+	cmd	delete
+	cmd	debug
+	cmd	exit
+	cmd	headers
+	cmd	help
+	cmd	modify
+	cmd	type
+cmdsiz	__ .-cmdtab-1
+
+; Make sure not too many people are running it
+; If not ok return +1 failure, otherwise +2
+maksur:	hrroi	a,[.jobpnm,,jobnam]	;[1]
+	hands%				;[1]
+;1	move	a, [sixbit/JOBPNM/]	; Table to get
+;1	sysgt
+;1	hrr	a, b			; Get table number
+;1	hrli	a, -1			; Transfer whole table
+;1	movei	b, jobnam		; Put it here
+;1	gtblt				; Move the whole thing
+;1	 fatal	(Couldnt get JOBPNM table!)
+	move	d, [sixbit/REMIND/]
+	setz	c,			; Init counter
+	setz	e,
+maklop:	caile	c, 300			; Beyond table end?
+	 jrst	makend
+	came	d, jobnam(c)		; Someone running REMIND?
+	 aoja	c, maklop		; Nope, on to next guy
+	addi	e, 1			; Yep, add 1
+	 aoja	c, maklop		; Back for more
+makend:	skipn	daeflg			; Daemon doing this?
+	 jrst	[caig e, 2		; More than one user?
+		 aos (p)		; Nope, success
+		 ret]			; Fail
+	caig	e, 1			; More than the daemon running?
+	aos	(p)			; Nope, success
+	ret				; Fail
+
+uinit:	hrroi	a, versio		; Say version
+	psout
+	gjinf				; Get his user number
+	movem	a, userno		; Save user number
+	move	b, a			; For translating it
+	hrroi	a, usrnam		; Temp name for speed
+	dirst				; Put his user name here
+	 fatal	(Couldnt DIRST user name in UINIT)
+	move	a, [point 7, usrfil]	; Construct file to mung
+	hrroi	b, [asciz/PS:</]
+	call	movstr
+	hrroi	b, usrnam
+	call	movstr			; Copy username to filename buffer
+	hrroi	b, [asciz/>/]
+	call	movstr
+	hrroi	b, ufilnm		; Filename to mung
+	call	movst0			; And append ending null
+	ret
+
+; Look for a remind file for the person
+opnfil:	move	a, [gj%sht!gj%old]	; Short call, look for an old file
+	hrroi	b, usrfil		; See if his remind file is there
+	gtjfn
+	 jrst	opnfi1			; No remind file, make one
+	movem	a, usrjfo		; Save jfn of old remind file
+opnfi2:	move	b, [of%rd+7B5]		; Read, ascii mode access
+	openf
+	 fatal	(Cant open your remind file!)
+opnrd:	setz	x,
+opnlop:	hrroi	b, rminds(x)		; Put the reminder here
+	movei	c, 1000			; Read in this many
+	movei	d, ""			; Go till <esc>
+	sin				; Read next reminder in
+	gtsts				; Get file status
+	tlnn	b, (gs%eof)		; Null, did we hit eof?
+	 jrst	opncon			; No, spurious
+	idivi	x, 1000
+	movem	x, nummsg		; Save number of messages
+	ret
+opncon:	addi	x, 1000			; Increment word count
+	 jrst	opnlop			; Go read in next one
+
+; No remind file, make one
+opnfi1:	skipe	a, daemod		; If in daemon mode
+	 jrst	opnfi3			; No error message if he has no file
+	hrroi	a, [asciz/
+%You have no remind file. Creating one for you.../]
+	psout
+opnfi3:	move	a, [gj%sht!gj%new!gj%fou]
+	hrroi	b, usrfil
+	gtjfn
+	 fatal	(Cant create you a remind file!)
+	move	b, [of%wr+7B5]
+	openf
+	 fatal	(Cant open your newly created remind file!)
+	closf
+	 ret
+	setzm	nummsg			; Say 0 messages
+	 jrst	opnfil
+
+; Verify person is the wizard in question
+wizard:	movei	1,.fhslf
+	rpcap
+	trne	3,SC%WHL
+	 ret
+	hrrz	a, userno		; Get user number
+	cain	a, 234			; Is it Vivian?
+	 ret				; Yep, he's ok
+	type	<Sorry that command is reserved for REMIND wizards>
+	 jrst	commd
+	ret
+
+; Build up the entire master database
+.build:	type	<
+Building...
+>
+	move	a, [gj%old+gj%sht+gj%ifg]
+	hrroi	b, buifil		; Files to get
+	gtjfn
+	 fatal	(GTJFN of buifil failed)
+	movem	a, buijfn		; Save for gnjfn
+build0:	type	< >
+	hrroi	a, nambuf		; Put it here
+	hrrz	b, buijfn
+	move	c, [js%dir]
+	jfns
+	movei	a, .priou
+	hrrz	b, buijfn
+	move	c, [js%dir]
+	jfns
+	hrroi	b, nambuf
+	movsi	a, (rc%emo)		; Exact match please
+	setz	c,
+	rcusr				; Get his user number
+	 jumpe	c, buinxt		; If files-only dir, with remind.bin
+					; just ignore him
+	movem	c, buinum		; Save dir he's going to build
+	hrrz	a, buijfn
+	call	opnfi2			; Open and read in
+	call	builo0			; Insert it in the database
+	move	a, [co%nrj]
+	hrr	a, buijfn
+	closf
+	 fatal	(CLOSF of buijfn failed)
+buinxt:	move	a, buijfn
+	gnjfn				; Get next file perhaps
+	 jrst	[call sort
+		 ret]			; We're done
+	jrst	build0			; Still one more to go
+
+; Insert a single user's reminders into the master database
+.singl:	type	< directory: >
+	call	rdtxtl			; Get name he wants to build
+	hrroi	b, strbuf
+	movsi	a, (rc%emo)		; Exact match please
+	rcusr				; Get his user number
+	movem	c, buinum		; Save dir he's going to build
+	move	a, [point 7, usrfil]	; Place to assemble it
+	hrroi	b, [asciz/PS:</]
+	call	movstr
+	hrroi	b, strbuf
+	call	movstr
+	hrroi	b, [asciz/>REMIND.BIN/]
+	call	movst0			; End it all
+	call	opnfil			; Open and read it in
+builo0:	setz	x,
+builop:	move	y, x
+	addi	y, 1
+	camle	y, nummsg		; Still less than max in his file?
+	 ret				; Back for more debugging
+	move	c, x
+	imuli	c, 1000			; Get offset for message page
+	hrroi	a, rminds(c)		; Set up pointer
+	call	rdrmnd			; Read a reminder
+;Insert in database
+	setz	d,			; Init counter
+	movei	e, 1
+buibui:	caile	e, maxrem		; Beyond end of master PMAP file?
+	 jrst	[type <
+Master PMAP file full!>
+		 ret]
+	skipe	a, rmindr(d)		; In free space yet?
+	 jrst	[addi d, 3
+		 aoja e, buibui]	; Go search for some then
+	move	a, firtme		; Get next firing time
+	movem	a, rmindr(d)		; Save it
+	move	a, buinum		; Get his user number
+	addi	d, 1			; Point to next word
+	movem	a, rmindr(d)		; Save it
+	move	a, firmod		; Get last modification time
+	addi	d, 1			; Point to next word
+	movem	a, rmindr(d)		; Save it
+	 aoja	x, builop
+
+; Count number of reminders in database
+.howma:	setz	d,			; Init counter
+	movei	e, 1
+howma1:	caile	e, maxrem		; Beyond end of master PMAP file?
+	 jrst	[type <
+Master PMAP file full!>
+		 jrst debcmd]
+	skipe	a, rmindr(d)		; In free space yet?
+	 jrst	[addi d, 3
+		 aoja e, howma1]	; Keep counting
+	type	<
+Total of >
+	movei	a, 101
+	move	b, e
+	movei	c, 12
+	sos	b			; Make actual number
+	nout
+	 warn	(BOMBED NOUTing number of reminders in database)
+	typen	< reminders.>
+	 jrst	debcmd
+	
+; List the entries to be fired
+.list:	setz	x,			; Set counter
+	setz	y,			; And number of reminder seen
+	type	<
+#	Next firing		Last modification	User
+------------------------------------------------------------>
+lstlop:	caile	y, maxrem		; Past end of table?
+	 jrst	[type <
+>
+		 jrst debcmd]
+	skipg	e, rmindr(x)		; Get first entry
+	 jrst	[type <
+>
+		 jrst debcmd]
+	type	<
+>
+	movei	a, .priou
+	move	b, y			; Get reminder we're at
+	addi	b, 1			; Fake it out
+	movei	c, =10
+	nout
+	 erjmp	 [type <
+>
+		  warn	(Bombed on NOUTing reminder number!)
+		  ret]
+	type	<	>
+	addi	x, 1
+	move	d, rmindr(x)
+	movei	a, .priou
+	move	b, e
+	setz	c,
+	odtim				; Say when it fires
+	type	<	>
+	addi	x, 1
+	movei	a, .priou
+	move	b, rmindr(x)
+	setz	c,
+	odtim
+	type	<	>
+	movei	a, .priou
+	move	b, d
+	dirst
+	 erjmp	[type <
+>
+		 warn	(Bombed on DIRSTing user!)
+		 ret]
+	addi	x, 1			; Bring it round
+	addi	y, 1			; It too
+	 jrst	lstlop			; Back on through
+
+; Delete an entry in the master PMAP database
+bdelet:	type	< entry number: >
+	call	rdtxtl			; Get the number
+	hrroi	a, strbuf
+	movei	c, =10
+	nin
+	 jrst	[type <
+%Illegal number! Please respecify. >	; Bomb on errors
+		 jrst bdelet]
+	subi	b, 1			; Make actual
+	imuli	b, 3
+	setzm	rmindr(b)		; Zero out first
+	addi	b, 1
+	setzm	rmindr(b)		; Zero out second
+	addi	b, 1
+	setzm	rmindr(b)		; Zero out third
+	call	sort			; Sort resultant of course
+	 jrst	debcmd			; Back to debug some commands
+
+; Zap the master PMAP database
+.zap:	call	wizard			; Is he the wizard?
+	type	<
+Really? >
+	pbin
+	trz	a, 40			; Convert to uppercase
+	caie	a, "Y"			; YES?
+	 jrst	[type <
+>
+		 jrst debcmd]
+	type	<
+Zapping database...>
+	setzm	rmindr			; Zero first word
+	hrli	a, rmindr		; Move to here
+	hrri	a, rmindr+1		; Move them here
+	blt	a, rmindr+rmindln	; Zap the whole thing
+	type	<
+>
+	 jrst	debcmd			; Back for more debugging
+
+.debug:	type	<
+>
+	call	wizard			; Is he the wizard?
+debcmd:	movei	a, decmds		; Get command table
+	call	subcmd
+	 jrst	dsptch
+
+decmds:	[asciz "DEBUG>"],,-desiz
+	cmd	build
+	cmd	delete,bdelet
+	cmd	exit,commd
+	cmd	howmany
+	cmd	list
+	cmd	single
+	cmd	zap
+desiz	__ .-decmds-1
+
+; Command handling routines
+.bug:	type	<
+(Type the text of your bug report and end with ^Z)
+>
+	move	a, [point 7, bugrpt]
+	hrroi	b, bugrmg		; Get starting stuff
+	call	movstr
+	move	b, [rd%brk+10000]	; This much available, break on ^Z
+	setz	c,
+	rdtty
+	 warn	(Cant get text of bug report!)
+	move	b, a			; String pointer to ac2
+       	setz    a, 			; Zero ac1
+	dpb	a, b			; Dep zero to null ^Z
+	move	a, b			; Bring back
+ 	move	a, [gj%new!gj%sht!gj%fou]
+	hrroi	b, [asciz/BUG-REMIND.REPORT;T/]
+	gtjfn
+	 warn	(Cant get bug report file to mail)
+	movem	a, msgjfn
+	move	b, [of%wr+7B5]
+	openf
+	 warn	(Cant open bug report file to mail)
+	hrroi	b, bugrpt
+	setz	c,
+	sout
+	type	<
+(Sending your bug report)>
+	call	mail			; Mail off the bug report
+	ret
+
+; Come here to create a new reminder
+.creat:	noise	(a new reminder)
+	move	a, nummsg		; Get number there already
+	cail	a, usrrmd		; Does he have max already?
+	 cerr	<You already have the maximum number of reminders.>
+	setz	f,			; Say no flags
+	call	erase1			; Erase appropriate fields
+crtim:	hrroi	1,[asciz/First time of reminder? /]
+	movem	1,CSB+.CMRTY		;[wew] supply prompt
+	call	gettim			;[wew] get fancy time
+
+crtim3:	gtad
+	camg	b, a			; His date < now?
+	 jrst	[type <
+%Cant specify date that is already passed!>
+		 jrst crtim]
+	movem	a, firmod		; Save modification time
+	movem	b, firtme		; Save next firing time
+crexp:	type	<Expiration count? >
+	call	rdtxtl			; Get the number
+	hrroi	a, strbuf		; Get number from here
+	movei	c, =10			; Radix 10
+	nin
+expbad:	 jrst	[type <
+%Bad expiration count
+Give a number representing the number of times you want the
+reminder sent before expiring.>
+		 jrst crexp]
+	movem	b, repcnt		; Save repetition count
+	 jumple	b, expbad
+crsnd:	type	<How should I send it? >
+	movei	a, crmod		; Address to return to
+	movem	a, retadd		; Save it so can come back
+	movei	a, sndcmd		; Get way of sending it
+	call	subcmd			; Get command
+	 jrst	dsptch			; Go do it
+crmod:	move	b, repcnt		; Get repetition count back
+	cain	b, 1			; Wants just once?
+	 jrst	[tro f, f%hour		; Look like hou
+	 	 jrst	craddr]		; Yep, then don't ask how often
+	type	<
+How often should it be sent? >
+	movei	a, craddr		; Address to come back to
+	movem	a, retadd		; Save it
+	movei	a, swcmds		; Want the available modes
+	call	subcmd			; Get it from him
+	 jrst	dsptch			; Go do it
+craddr:	movem	f, switchs		; Save switch settings
+cradd1:	type	<
+Addresses? >
+	call	rdtxtl			; Get the list
+	move	a, [point 7, strbuf]
+	ildb	b, a			; Get first char
+	cain	b, "@"			; Addresses from file?
+	 jrst	cradd2			; Yes,don't bother with address hacking
+	call	verify			; Any obviously illegal addresses?
+	 jrst	cradd1			; Yes, reprompt
+cradd2:	move	a, [point 7, addrls]	; Ready for copying
+	hrroi	b, strbuf		; Get his address list
+	call	movst0			; Copy with appending null
+	type	<Subject? >
+	call	rdtxtl			; Get subject
+	move	a, [point 7, subjct]	; Ready for copying
+	hrroi	b, strbuf		; Get his subject
+	call	movst0			; Do the copy
+	type	<Text (end with ^Z)
+>
+	call	rdtxtz			; Get text
+	move	a, [point 7, txtmsg]	; Ready for copying
+	hrroi	b, strbuf		; Get his text
+	call	movst0			; Do the copy
+	call	remcpy			; Into core too
+	move	x, nummsg		; Get number of messages
+	imuli	x, 1000			; Get page offset
+	move	a, [point 7, rminds(x)]	; Get pointer
+	hrroi	b, usrmsg		; Get user message pointer
+	call	movst0			; Move that message!
+	move	x, nummsg
+	addi	x, 1
+	movem	x, nummsg		; Save new number of messages
+	setz	x,			; Init counter
+	movei	y, 1
+crsrlp:	caile	y, maxrem		; Beyond end of master PMAP file?
+	 jrst	crfail			; Master PMAP file full!!!
+	skipe	a, rmindr(x)		; In free space yet?
+	 jrst	cradd			; Nope, must increment then
+	move	a, firtme		; Get next firing time
+	movem	a, rmindr(x)		; Save it
+	move	a, userno		; Get his user number
+	addi	x, 1			; Point to next word
+	movem	a, rmindr(x)		; Save it
+	move	a, firmod		; Get last modification time
+	addi	x, 1			; Point to next word
+	movem	a, rmindr(x)		; Save it
+
+;	type	<
+; Modifying master pmap file...>
+;	call	sort			; Sort that file of course
+	setom	srtflg			; Say must sort
+	ret
+
+cradd:	addi	x, 3			; Point to next one
+	addi	y, 1			; Increment number found so far
+	 jrst	crsrlp			; Keep searching
+crfail:	type	<
+%Master REMIND file is full - can't create any more reminders!!>
+	ret				; Bomb
+
+timnog:	type	<
+%Illegal date and/or time entered.
+A legal date/time would be  4-Apr-76 15:00:00.  Please respecify.>
+	 jrst	crtim
+
+; Verify that address list in strbuf is kosher
+verify:	move	a, [point 7, strbuf]
+verif1:	move	b, [point 7, verbuf]
+verif2:	ildb	c, a
+	 jumpe	c, verif3
+	caie	c, ","
+	 jrst	[cail	c,"a"
+		 caile	c,"z"
+		  skipa
+		   subi c,"a"-"A"	; If lowercase convert to uppercase
+		 idpb c, b
+		  jrst verif2]
+verif3:	setz	d,
+	idpb	d, b			; Zero last byte
+	call	vertok			; Try to verify it
+	 ret				; If not good, then we're through
+	jumpg	c, verif1		; If "," try another token
+verok:	aos	(p)
+	ret
+
+vertok:	push	p, a
+	push	p, b
+	push	p, c
+	move	a, [point 7, verbuf]
+verto1:	ildb	b, a			; Get next char
+	 jumpe	b, verloc		; If at end & not seen @, test local
+	caie	b, "@"			; Is it a remote address?
+	 jrst	verto1			; Not necessarily, get next char
+
+	move	b, a
+	movei	a, .gthsn
+	gthst
+	 jrst	vernok
+	jrst	verokk
+
+verloc:	movsi	a, (rc%emo)
+	hrroi	b, verbuf
+	setz	c
+	rcusr				; See if local
+	tlne	a, (rc%nom!rc%amb)	; Bad local user?
+	 jrst	vernok			; Yes
+	jrst	verokk			; Local, and legal
+
+vernok:	type	<%Illegal address: >
+	hrroi	a, verbuf
+	psout
+	type	<
+>
+	pop	p, c
+	pop	p, b			; Illegal token
+	pop	p, a
+	ret
+verokk:	pop	p, c
+	pop	p, b			; Not obviously illegal token
+	pop	p, a
+	aos	(p)
+	ret
+	
+; Copy a reminder in variables to core area for subsequent writing out
+remcpy:	move	a, [point 7, usrmsg]	; Assemble here
+	move	b, firmod		; Put last modificaton time
+	skipe	c, modsw		; In modification?
+	 move	b, tmpmod		; Yes, then use saved modification
+	setz	c,
+	odtim				; Put it there
+	hrroi	b, [asciz//]
+	call	movstr			; Delimit it
+	move	b, firtme		; Get fire time
+	setz	c,
+	odtim
+	hrroi	b, [asciz//]
+	call	movstr
+	move	b, repcnt		; Get repeat count
+	movei	c, =10
+	nout
+	 fatal	(Failed to write repeat count to temporary copy)
+	hrroi	b, [asciz//]
+	call	movstr
+	hrrz	b, switchs		; Get switches
+	movei	c, 10			; Octal
+	nout				; Send it
+	 fatal	(Failed to write switch number to temporary copy)
+	hrroi	b, [asciz//]
+	call	movstr
+	hrroi	b, subjct		; Get subject
+	call	movstr
+	hrroi	b, [asciz//]
+	call	movstr
+	hrroi	b, addrls		; Get addresses
+	call	movstr
+	hrroi	b, [asciz//]
+	call	movstr
+	hrroi	b, txtmsg		; Get text
+	call	movstr
+	hrroi	b, [asciz//]
+	call	movst0			; Terminator and null
+	ret
+
+sndcmd:	[asciz " "],,-sndsiz
+	cmd	both
+	cmd	mail
+	cmd	send
+sndsiz	__ .-sndcmd-1
+
+.both:	tro	f, f%both		; Make it get sent both
+	jrst	@retadd			; Place to go back to
+.mail:	tro	f, f%mail		; Make it get sent mail
+	jrst	@retadd			; Go back there
+.send:	tro	f, f%send		; Make it get send by send
+	jrst	@retadd			; Back to appropriate place
+
+swcmds:	[asciz " "],,-swsiz
+	cmd	biweekly
+	cmd	daily
+	cmd	hourly
+	cmd	minutely
+	cmd	monthly
+	cmd	weekly
+	cmd	yearly
+swsiz	__ .-swcmds-1
+
+.daily:	tro	f, f%day		; Make get sent daily
+	 jrst	@retadd			; Go back to proper place
+.hourl:	tro	f, f%hour		; Make get sent hourly
+	 jrst	@retadd
+.minut:	tro	f, f%min		; Make get sent minutely
+	 jrst	@retadd
+.month:	tro	f, f%month		; Make get sent monthly
+	 jrst	@retadd
+.weekl:	tro	f, f%week		; Make get sent weekly
+	 jrst	@retadd
+.biwee:	tro	f, f%biweek		; Make get sent biweekly
+	 jrst	@retadd
+.yearl:	tro	f, f%year		; Make get sent yearly
+	 jrst	@retadd
+
+; Delete an existing entry
+.delet:	type	< >
+	call	rdtxtl
+	hrroi	a, strbuf		; Get number from here
+	movei	c, =10			; Radix 10
+	nin
+	 jrst	baddel
+	 jumple	b, baddel
+	camle	b, nummsg		; Trying to specify non-extant?
+	 jrst	baddel
+	move	e, b			; Save message number
+	subi	b, 1			; Get page offset
+	imuli	b, 1000			; And pointer
+	hrroi	a, rminds(b)		; Set up pointer
+	call	rdrmnd			; Read it in
+	setzm	repcnt			; Zero it out
+	call	remcpy			; Copy the reminder into core
+	move	x, e			; Get number of messages
+	subi	x, 1			; Make actual
+	imuli	x, 1000			; Get page offset
+	move	a, [point 7, rminds(x)]	; Get pointer
+	hrroi	b, usrmsg		; Get user message pointer
+	call	movst0			; Move that message!
+
+modmap:	setz	x,			; Init counter
+	movei	y, 1			; 1 reminder
+srchlp:	caile	y, maxrem		; Beyond end of master file??
+	 jrst	nofind			; Couldn't find the entry!
+	move	a, userno		; Get user number
+	move	b, x
+	addi	b, 1			; Get pointer to user number
+	came	a, rmindr(b)		; Got a match?
+	 jrst	srchad			; No, go increment, keep searching
+	addi	b, 1			; Get pointer to modification date
+	hrrz	e, firmod		; Get file modification
+	hrrz	d, rmindr(b)		; Get our time
+	sub	e, d			; Form difference
+	caig	e, 0			; Positive?
+	movns	e, e			; Nope, take absolute value
+	cail	e, 2			; As close as 1/day?
+	 jrst	srchad			; No, go increment, keep searching
+	move	a, firtme		; Get firing time
+	movem	a, rmindr(x)		; Save it
+	skipn	a, modsw		; In modification?
+	setzm	rmindr(x)		; No, zero out firing time
+	skipn	a, modsw		; In modification?
+	setzm	rmindr(b)		; Zero out user number
+	move	a, firmod		; Get modification time
+	move	b, x			; Get current index
+	addi	b, 2			; Get pointer to last modification
+	skipe	c, modsw		; In modification?
+	move	a, tmpmod		; Yes, get back new mod time
+	movem	a, rmindr(b)		; Save it
+	skipn	a, modsw		; In modification?
+	setzm	rmindr(b)		; No, zero out last modification
+
+;	type	<
+; Modifying master pmap file...>
+;	call	sort			; Sort master file, and we're done
+	setom	srtflg
+	ret
+
+srchad:	addi	y, 1			; Increment number of reminders found
+	addi	x, 3			; Increment to next one
+	 jrst	srchlp			; Back to searching
+
+nofind:	type	<
+%Cant find your entry in the master PMAP file!
+Deleting it anyway>
+	ret
+
+baddel:	typen	<%Bad message number>
+	ret
+
+; Exit the program, sort master file if necessary, unmap appropriate stuff
+.exit:	skipn	srtflg			; Must sort?
+	 jrst	.exit1			; Nope, no changes were made
+	type	<
+[Entering your changes...]>
+	call	sort			; Yes, then do it
+	call	ritnew			; Write the new file out
+.exit1:	seto	a,			; And unmap the daemon file
+	move	b, [.fhslf,,filpag]
+	move	c, [pm%cnt+npages]	; Unmap this many
+	pmap				; Map them out
+	move	a, dmnjfn
+	closf
+	 warn	(Couldnt close master data file!)
+.exit2:	haltf				; Exit the program
+	type	(Continuing not permitted!)
+	 jrst	.exit2
+
+.heade:	noise	(of all reminders)
+	typen	<
+Number	 Last modified	   Next firing	      Subject
+----------------------------------------------------->
+	setz	x,			; Reset message counter
+	move	y, nummsg
+	subi	y, 1			; Decrement
+headlp:	camle	x, y			; Beyond last message?
+	 ret				; Yep, then we're through
+	move	c, x
+	imuli	c, 1000			; Get offset for message page
+	hrroi	a, rminds(c)		; set up pointer
+	call	rdrmnd			; read a reminder
+	movei	a, .priou		; To terminal
+	move	b, x
+	addi	b, 1			; Fool it
+	movei	c, =10
+	nout
+	 warn	(Cant nout header number!)
+	skipe	d, repcnt		; Deleted?
+	 jrst	tabit
+	hrroi	b, [asciz/ DEL/]	; Then say so
+	setz	c,
+	sout
+tabit:	movei	b, 11			; Tab for good measure
+	bout
+	move	b, firmod		; Last modification
+	setz	c,
+	odtim
+	movei	2, 40			; Space for good measure
+	bout
+	move	b, firtme		; Next firing time
+	setz	c,
+	odtim
+	movei	b, 40
+	bout				; Space for good measure
+	hrroi	b, subjct		; Get subject
+	setz	c,
+	sout
+	hrroi	a, [byte (7) 15, 12, 0]
+	psout
+	 aoja	x, headlp		; Back for next one
+
+; Give the guy some help
+.help:	hrroi	b, [asciz /DOC:REMIND.DOC/]	; The help file
+	move	a, [gj%old!gj%sht]
+	gtjfn
+	 jrst nohelp
+	movem	a, tmpjfn		; Save jfn for later
+	move	b, [7b5+of%rd]		; Ascii, read access
+	openf
+	 jrst nohlp0
+	type	<
+>
+help1:	move	a, tmpjfn
+	bin
+	jumpe   b, help2
+	movei   a, .priou
+	bout
+	jrst help1
+
+help2:	gtsts
+	tlnn	b, (gs%eof)		; Null, did we hit eof?
+	 jrst help1			; No, spurious
+clstmp:	skipg	a, tmpjfn
+	 ret
+	closf
+clstm0:	 skipa	a, tmpjfn
+	 jrst	clstm1
+clstm1:	setom tmpjfn
+	ret
+
+nohlp0:	call clstm0
+nohelp:	warn (No help available)
+	ret
+
+; Modify an already existing entry
+.modif:	type	< >
+	call	erase1			; Erase appropriate fields
+	call	rdtxtl
+	hrroi	a, strbuf		; Get number from here
+	movei	c, =10			; Radix 10
+	nin
+	 jrst	badmod
+	jumple	b, badmod
+	camle	b, nummsg		; Trying to specify non-extant?
+	 jrst	badmod
+	move	e, b			; Save message number
+	subi	b, 1			; Get page offset
+	imuli	b, 1000			; And pointer
+	hrroi	a, rminds(b)		; Set up pointer
+	call	rdrmnd			; Read it in
+	hrroi	a, [asciz/What would you like to modify? /]
+	psout
+	movei	a, mocmds		; Table address
+	call	subcmd			; Get the command
+	 jrst	dsptch			; Go do it
+modif1:	setom	modsw			; Say in modification
+	gtad				; Get current time
+	movem	a, tmpmod		; Save as modification time
+	call	remcpy			; Copy modified one into core
+	move	x, e			; Get message number back
+	subi	x, 1			; Get appropriate pointer
+	imuli	x, 1000			; Get page offset
+	move	a, [point 7, rminds(x)]	; Get pointer
+	hrroi	b, usrmsg		; Get user message pointer
+	call	movst0			; Move that message!
+	call	modmap			; Modify the master PMAP file
+	setzm	modsw			; Say not in modification
+	ret
+
+badmod:	typen	<%Bad message number>
+	ret
+
+.moadd:	type	<
+New addresses? >
+	call	rdtxtl			; Get the list
+	move	a, [point 7, addrls]	; Ready for copying
+	hrroi	b, strbuf		; Get his address list
+	call	movst0			; Copy with appending null
+	 jrst	modif1			; Join main code
+.moexp:	type	<
+New expiration count? >
+	call	rdtxtl			; Get the number
+	hrroi	a, strbuf		; Get number from here
+	movei	c, =10			; Radix 10
+	nin
+badex:	 jrst	[type <
+%Bad expiration count
+Give a number representing the number of times you want the
+reminder sent before expiring.>
+		 jrst .moexp]		; Bomb on error
+	movem	b, repcnt		; Save repetition count
+	 jumple	b, badex
+	 jrst	modif1
+.momod:type	<
+How often should it be sent now? >
+	move	t, f			; Save flag status
+	setz	f,			; Zero it
+	movei	a, momod1		; Place to return to
+	movem	a, retadd		; Save it so we get there
+	movei	a, swcmds		; Switch commands
+	call	subcmd			; Get command
+	 jrst	dsptch			; Do it
+momod1:	trne	t, f%send		; Wanted it sent?
+	tro	f, f%send		; Then say that too
+	trne	t, f%mail		; Wanted it mailed?
+	tro	f, f%mail		; Say that then
+	trne	t, f%both		; Wanted both?
+	tro	f, f%both		; Then say that
+	movem	f, switchs		; Save new switch settings
+	 jrst	modif1			; We're through
+
+.mosty:	type	<
+How should it be sent? >
+	move	t, f			; Save flag status
+	setz	f,			; Zero it
+	movei	a, mosty1		; Place to return to
+	movem	a, retadd		; Save so can come back
+	movei	a, sndcmd		; Send commands
+	call	subcmd			; Get which one
+	 jrst	dsptch			; Go do it
+mosty1:	trne	t, f%min		; Wanted sent minutely?
+	tro	f, f%min		; Then say it
+	trne	t, f%hour		; Wanted sent hourly?
+	tro	f, f%hour		; Then say it
+	trne	t, f%day		; Wanted daily
+	tro	f, f%day		; Then say that
+	trne	t, f%week		; Weekly?
+	tro	f, f%week		; Say it
+	trne	t, f%biweek		; bi-Weekly?
+	tro	f, f%biweek		; Say it
+	trne	t, f%month		; Monthly?
+	tro	f, f%month		; Say it
+	trne	t, f%year		; Yearly?
+	tro	f, f%year		; Say it
+	movem	f, switchs		; Save new settings
+	 jrst	modif1			; Join main code
+
+.mosub:	type	<
+New subject of reminder? >
+	call	rdtxtl			; Get subject
+	move	a, [point 7, subjct]	; Ready for copying
+	hrroi	b, strbuf		; Get his subject
+	call	movst0			; Do the copy
+	 jrst	modif1			; Join main code
+
+.motex:	type	<
+New text of reminder (end with ^Z)
+>
+	call	rdtxtz			; Get text
+	move	a, [point 7, txtmsg]	; Ready for copying
+	hrroi	b, strbuf		; Get his text
+	call	movst0			; Do the copy
+	 jrst	modif1
+
+.motim:	hrroi	1,[asciz/New time of reminder? /]
+	movem	1,CSB+.CMRTY		;[wew] supply prompt
+	call	gettim
+motim3:	gtad
+	camg	b, a			; His date > now?
+	 jrst	[type <
+%Cant specify date thats already passed!>
+		 jrst .motim]
+	movem	b, firtme		; Save next firing time
+	setom	srtflg			; Say must sort
+	 jrst	modif1			; Join main code
+
+DATERR:	type	<
+%Illegal date and/or time entered.
+A legal date/time would be  4-Apr-76 15:00:00.  Please respecify.>
+	 jrst	GETTIM			; Bomb on time/date input error
+
+GETTIM:	movei	1,CSB
+	movei	2,[flddb. .cmini]
+	comnd
+REPARS:	movei	2,CMDATE
+	comnd				;[wew] get date, day, and/or time
+	tlne	1,(CM%NOP)
+	 jrst	DATERR
+	hrrz	3,3			;[wew] isolate type of input
+	cain	3,CMDATE		;[wew] both DATE and TIME specified?
+	 jrst	GETCNF			;[wew]  yes, then continue
+	cain	3,DAONLY		;[wew] date only specified ?
+	 jrst	WNOTIM			;[wew]  yes, say assuming midnight
+	cain	3,TMONLY		;[wew] Time only specified
+	 jrst	WNODAT			;[wew]  yes, say assuming today
+	hrrz	b,(b)			;[wew] must have been a keyword
+	move	t,(b)			;[wew] so call the
+	call	(t)			;[wew]  apprpriate special routine
+	push	P,B			;[wew] save time and date
+	movei	1,csb
+	movei	2,CMTIME
+	comnd
+	tlne	a,(CM%NOP)
+	 jrst	[pop	P,(P)
+		 jrst	DATERR]
+	ldb	C,[point 9,(C),8]
+	cain	C,.CMCFM
+	 jrst	[pop	P,B
+		 jrst	WNOTIM]		;[wew] confirmed, use old date.
+	pop	P,B
+	setz	D,			;[wew] no special formatting.
+	odcnv				;[wew] novert to sepearte pieces
+	move	4,WEWTIM+2		;[wew] use this time
+	idcnv				;[wew] use previous date, new time
+	 jrst	DATERR			;[wew] cvt bak to internal format
+GETCNF:	push	P,B
+	ldb	C,[point 9,(C),8]
+	movei	1,CSB
+	movei	2,[flddb. .cmcfm]
+	caie	3,.cmcfm		;[wew] dont confirm is already done
+	comnd
+	pop	P,B
+	tlnn	1,(CM%NOP)
+	 ret
+NOCNF:	type	<
+?Not Confirmed.  Please reenter.>
+	jrst	GETTIM
+
+WNOTIM:	type	<No time input - assuming 1 second past midnight.
+>
+	caie	3,.cmcfm
+	 jrst	GETCNF
+	ret
+
+WNODAT:	push	P,2
+	setz	4,			;[wew] well try for a date AFTER
+	odcnv				;[wew] the time (eg: 1100 monday)
+	movem	4,WEWTIM+2		;[wew] save the time specified
+	movei	2,CMCONF
+	comnd
+	tlne	1,(CM%NOP)
+	 jrst	[DATER1: pop	P,(P)
+		 jrst	DATERR]
+	hrrz	3,3			;[wew] isolate field type
+	cain	3,CMCONF		;[wew] end of line ?
+	 jrst	WNODA1			;[wew]  yes, then no date was specified
+	pop	P,(P)			;[wew] old date no longer needed.
+	caie	3,DAYNAM
+	cain	3,HDYNAM		;[wew] keyword specified ?
+	 jrst	WDAKEY			;[wew]  yes, handle it specially
+	caie	3,DAONLY		;[wew]  date only ?
+	 jrst	DATERR			;[wew] not one of those means error
+	setz	4,
+	odcnv				;[wew] convert formats
+	move	4,WEWTIM+2		;[wew] get previous time
+	idcnv				;[wew]  and convert back
+	 jrst	DATERR
+	jrst	GETCNF
+
+WDAKEY:	hrrz	b,(b)			;[wew] must have been a keyword
+	move	t,(b)			;[wew] so call the
+	call	(t)			;[wew]  apprpriate special routine
+	setz	4,
+	odcnv
+	move	4,WEWTIM+2		;[wew] use previous time
+	idcnv
+	 jrst	DATERR
+	jrst	GETCNF
+
+WNODA1:	pop	P,B
+	type	<No date input - assuming today.
+>
+	jrst	GETCNF
+
+DATDOW:	SETO B,
+	SETZ D,
+	ODCNV
+	movei	C,(C)			; get day of week (today)
+	hlrz	T,T			; and day of week we want
+	subi	T,(C)			; number of days difference
+	caig	T,0			; wrap around ?
+	addi	T,7			;  fix it
+	hrlzi	T,(T)
+
+DATDAY:	HLLZ B,T			;Get number of days to offset
+	GTAD
+	ADDM A,B
+	SETZ D,
+	ODCNV
+	SETZ D,			;Midnight of that day
+	IDCNV
+	 SETO B,
+	RET
+	POPJ	P,
+
+DATTOD:	gtad
+	addi	1,3*^D60		;now + 1 minute
+	move	2,1
+	ret
+
+DATHDY:	GTAD				;Get now for later
+	SETO B,
+	SETZ D,
+	ODCNV
+	HLRZ E,B			;Save year
+DATHD1:	LDB B,[POINT 9,T,8]		;Get month
+	HRLI B,(E)			;Get year
+	HLLZ C,T
+	TLZ C,777000			;Get day of month
+	SETZ D,
+	IDCNV
+	 SETO B,
+	CAMG B,A			;Must be after today
+	 AOJA E,DATHD1			;Else try next year
+	POPJ	P,
+
+mocmds:	[asciz " "],,-mosiz
+	cmd	addresses,.moadd
+	cmd	expiration,.moexp
+	cmd	mode,.momod
+	cmd	style,.mosty
+	cmd	subject,.mosub
+	cmd	text,.motex
+	cmd	time,.motim
+mosiz	__ .-mocmds-1
+
+; Type out a reminder
+.type:	type	< >
+	call	rdtxtl
+	hrroi	a, strbuf		; Get number from here
+	movei	c, =10			; Radix 10
+	nin
+	 jrst	badtyp
+	 jumple	b, badtyp
+	camle	b, nummsg		; Trying to specify non-extant?
+	 jrst	badtyp
+	move	e, b			; Save message number
+	subi	b, 1			; Get page offset
+	imuli	b, 1000			; And pointer
+	hrroi	a, rminds(b)		; Set up pointer
+	call	rdrmnd			; Read it in
+	type	<(Reminder #>
+	movei	a, .priou
+	move	b, e
+	movei	c, =10
+	nout
+	 warn	(Couldnt output reminder number in type)
+	type	<) expires in >
+	movei	a, .priou
+	move	b, repcnt
+	movei	c, =10			; Expiration count
+	nout
+	 warn	(Couldnt output expiration count in type)
+	jumpe	b, [type < firings -- marked deleted!>
+		    jrst typchg]
+	caig	b, 1			; More than one firing left?
+	 jrst	[type < firing>
+		 jrst typchg]
+	type	< firings>
+typchg:	type	<
+Last modification: >
+	movei	a, .priou
+	move	b, firmod		; Time of last mod
+	setz	c,
+	odtim
+	type	<
+Next firing: >
+	move	a, repcnt		; Get repeat count
+	jumpe	a, [type <None since deleted!>
+		    jrst typswi]
+	movei	a, .priou
+	move	b, firtme		; Time of next fire
+	setz	c,
+	odtim
+typswi:	typen	< >
+	move	f, switchs
+	trne	f, f%min		; Minutely?
+	 jrst	[type <Sent minutely>
+		 jrst typmod]
+	trne	f, f%hour		; Hourly?
+	 jrst	[type <Sent hourly>
+		 jrst typmod]
+	trne	f, f%day		; Daily?
+	 jrst	[type <Sent daily>
+		 jrst typmod]
+	trne	f, f%week		; Weekly?
+	 jrst	[type <Sent weekly>
+		 jrst typmod]
+	trne	f, f%biweek		; bi-weekly?
+	 jrst	[type <Sent biweekly>
+		 jrst typmod]
+	trne	f, f%month		; Monthly?
+	 jrst	[type <Sent monthly>
+		 jrst typmod]
+	trne	f, f%year		; Yearly?
+	 jrst	[type <Sent yearly>
+		 jrst typmod]
+	type	<Illegal mode setting>	; Warn of lossage
+typmod:	trne	f, f%mail		; By mail?
+	 jrst	[type < by mail only>
+		 jrst typsub]
+	trne	f, f%send		; By send?
+	 jrst	[type < by send only>
+		 jrst typsub]
+	trne	f, f%both		; By both?
+	 jrst	[type < by both mail and send>
+		  jrst typsub]
+	type	<This message has an illegal switch setting!>
+typsub:	type	<
+Subject: >
+	hrroi	a, subjct
+	psout
+	type	<
+Addresses: >
+	hrroi	a, addrls
+	psout
+	typen	<
+Text: >		
+	hrroi	a, txtmsg
+	psout
+	ret
+
+badtyp:	typen	<%Bad message number please respecify>
+	type	<Message number? >
+	 jrst	.type
+	ret
+
+; Write out a new user file
+ritnew:	move	a, [gj%new!gj%sht!gj%fou] ; Make a new one
+	hrroi	b, usrfil
+	gtjfn
+	 fatal	(Cant write you a new remind file!)
+	movem	a, usrjfn		; Save new jfn
+	move	b, [of%wr+7B5]		; Write, ascii modes
+	openf
+	 fatal	(Cant open you a new remind file!)
+	setz	x,			; Reset message counter
+	move	y, nummsg		; Get number of messages
+	subi	y, 1			; Make actual
+ritlop:	camle	x, y			; Finished last one?
+	 jrst	ritend			; Yes, then done go close it
+	move	e, x			; Save counter
+	imuli	e, 1000			; Make memory offset
+	hrroi	a, rminds(e)		; Get pointer
+	call	rdrmnd			; Convert to variables
+	skipn	d, repcnt		; Got an expired reminder?
+	 jrst	 [move a, usrjfn	; Get jfn back
+		  aoja x, ritlop]	; Yes, increment counter
+	move	a, usrjfn		; Get jfn back
+	hrroi	b, rminds(e)
+	setz	c,			; Terminate on null
+	sout
+	 aoja	x, ritlop		; Write out all messages
+ritend:	move	a, usrjfn
+	closf
+	 warn	(Couldnt close new remind file!)
+	move	a, usrjfo		; Get old file
+	delf
+	 warn	(Couldnt flush old remind file)
+	move	a, usrjfo		; In case he has a perpetual file
+					; or somesuch
+	closf
+	 warn	(Couldnt close old remind file)
+	ret
+
+; Read a reminder from designator in A; mungs A, B, C, D freely
+; format of the file:
+; <last mod><next fire><expiration count><switches>
+; <subject><address><text>$
+rdrmnd:	setz	b,
+	idtim				; Get last mod
+	 ret				; Done with file
+	movem	b, firmod		; Save last mod
+	setz	b,
+	idtim				; Get next fire
+	 fatal	(Couldnt read next firing time from user file!)
+	movem	b, firtme		; Save fire time
+	movei	c, =10			; Decimal
+	nin				; Get repeat count
+	 fatal	(Couldnt read expiration count from user file!)
+	movem	b, repcnt		; Save repeat count
+	movei	c, 10			; Octal!!
+	nin				; Get switches
+	 fatal	(Couldnt read switches from user file!)
+	movem	b, switchs		; Save the switches
+	hrroi	b, subjct		; Put subject here
+	movei	c, =1000		; Arbritrary
+	movei	d, "V"-100		; Break on control-V
+	sin				; Read subject
+	setz	d,
+	dpb	d, b			; Terminate with null
+	hrroi	b, addrls		; Put addresses here
+	movei	c, =1000
+	movei	d, "V"-100		; Break on control-V
+	sin				; Read addresses
+	setz	d,
+	dpb	d, b			; Terminate with null
+	hrroi	b, txtmsg		; Put text here
+	movei	c, =5000		; Arbritrary
+	movei	d, ""			; Break on terminating escape
+	sin				; Read text
+	setz	d,
+	dpb	d, b			; Terminate with null
+	ret				; Whew!
+
+; See if last character was a line-feed
+nulcmd:	move	1, lstchr
+	cain	1, 12			; If not LF
+	 skipe	crflg			; Or CR preceded the LF,
+	 ret				; Do nothing
+
+; Let make comments, eat a comment
+eatcmt:	type	( )
+	hrroi	a, strbuf
+	move	b, [rd%rnd+strbsz*5]
+	setz	c,
+	rdtty
+	 jfcl
+	ret
+
+crif:	push	p, 1
+	push	p, 2
+	movei	1, .priou
+	rfpos
+	hrroi	1, crlf0
+	trne	2, -1			; If not at start of line,
+	 psout				; Type crlf
+pop21j:	pop	p, 2
+cpop1j:	pop	p, 1
+cpopj:	ret
+crlf0:	byte (7) 15, 12, 0
+
+;;; UUO handler
+uuoh:	jsr	savacs
+	ldb	1, [point 6, 40, 8]	; Get opcode
+	caile	1, maxuuo
+	 fatal	(Illegal UUO)
+	call	@uuos(1)
+	jsr	resacs
+	ret
+
+uuos:	0
+	%type
+	%error
+	%noise
+maxuuo	__ .-uuos-1
+
+
+;;; UUO routines
+; Type a message onto the primary output
+%type:	hrro	1, 40
+	psout
+	ret
+
+
+; Print error message on priout, then halt or whatever
+%error:	call	pcrlf
+	ldb	t, [point 4, 40, 12]	; Get AC field
+	hlrz	1, $errtb(t)		; Print prefix char
+	pbout
+	hrro	1, 40			; Print message
+	psout
+	hrroi	a, [asciz/	/]
+	psout
+	movei	a, .priou
+	move	b, [.fhslf,,-1]
+	erstr				; Last error of this process
+	 jfcl
+	 jfcl
+	call	pcrlf
+	hrrz	1, $errtb(t)		; Dispatch to handler
+	jrst	(1)
+
+$errtb:	"%",,[ret]			; AC=0 warning error
+	"?",,$fatal			; AC=1 fatal error
+	"?",,$cerr			; AC=2 command error
+
+$fatal:	move	1, $errtb(t)		; Print prefix char
+	pbout
+	movei	1, .priout		; Print last process error
+	hrloi	2, .fhslf
+	setz	3,
+	erstr
+	 tdn
+	 tdn
+	call	pcrlf
+	haltf				; Halt process
+	typen	< (continuing)>		; Oh well, loser wants to continue
+	ret
+
+$cerr:	movei	1, .priout		; Clear input buffer
+	cfibf
+	move	p, cpp			; Restore command pdl pointer
+	jrst	commd			; And dispatch back to commd
+
+%noise:	move	1, lstchr
+	cain	1, 33			; Noise word if <esc> input
+	 jrst	nse
+	cain	1, 40			; Or a space
+	 jrst	nse	
+	ret
+nse:	hrroi	1, [asciz | (|]
+	psout
+	call	%type			; Print noise message
+	movei	1, ")"
+	pbout
+	ret
+
+;;; Sundry routines
+; Pcrlf prints a crlf onto the primary output file, while crlf prints
+; onto the current output file
+pcrlf:	push	p, 1
+	movei	1, .priout
+	caia
+crlf:	 push	p, 1
+	push	p, 2
+	movei	2, 15
+	bout
+	movei	2, 12
+	bout
+	pop	p, 2
+	pop	p, 1
+	ret
+
+; Print a space on primary output
+space:	movei	1, " "
+	pbout
+	ret
+
+; Read arbitrary text into strbuf, flush terminating CR & LF
+rdtxtz:	move	b, [rd%brk+strbsz*5]	; This much available, break on ^Z
+	caia
+rdtxtl:	move	b, [rd%crf+rd%bel+strbsz*5] ; Break on eol
+	hrroi	a, strbuf		; Place to put input
+	setz	c,
+	rdtty
+	 warn	(Cant get text of bug report!)
+	move	b, a			; String pointer to ac2
+       	setz    a, 			; Zero ac1
+	dpb	a, b			; Dep zero to null ^Z
+	move	a, b			; Bring back
+	ret
+
+; Move a string from b to a
+movstr:	hrli b,(<point 7,0>)
+movst1:	ildb c,b
+	jumpe c,movst3
+	idpb c,a
+	jrst movst1
+
+; Move string and terminating null
+movst0:	hrli b,(<point 7,0>)
+movst2:	ildb c,b
+	idpb c,a
+	jumpn c,movst2
+movst3:	ret
+
+; Pure Storage
+lits:	lit
+versio:	asciz	/REMIND Version 5, 10-Jan-84/]
+bugfil:	asciz	/remind-bugfile.msg;T/
+ufilnm:	asciz	/remind.bin/		; User's file to mung
+dmnfil:	asciz	/PS:<system>remind.database/ ; Daemon file, with firing times
+msgfil:	asciz	/remind.tmp;T/		; Place to put temporary message
+buifil:	asciz	/PS:<*>remind.bin/
+bugrmg:	asciz	/
+SEND
+bug-remind
+
+REMIND bug report
+
+/
+	byte (7) 15,12,40,15,12
+txtmsg:	block	10000			; Put text here
+addrls:	block	2000			; Addresses here
+subjct:	block	2000			; Subject here
+bugrpt:	block	2000			; Bug report goes here
+usrmsg:	block	14000			; Assemble a reminder here
+usrfil:	block	100			; Assemble user file here
+usrnam:	block	30			; His directory name here
+termin:	asciz	/
+
+
+
+quit
+/					; Message terminator
+
+
+; Impure Storage and code
+; Save acs0-16 on the stack
+savacs:	0				; Return address gets stuffed here
+	adjsp	p, 17			; Make some local storage
+	movem	16, (p)			; Save ac16
+	movei	16, -16(p)		; Create blt pointer
+	blt	16, -1(p)		; Save acs
+	jrst	@savacs			; Return
+
+; Restore acs0-16 from the stack
+resacs:	0				; Return address gets stuffed here
+	movsi	16, -16(p)		; Create blt pointer
+	blt	16, 16			; Restore acs
+	adjsp	p, -17			; Pop off local storage
+	jrst	@resacs			; Return
+
+; Days in each month, leap year is not handled!
+; Word 0 = number days in January ... Word 11 = number days in December
+daymon:	=31  =28  =31  =30  =31  =30 
+	=31  =31  =30  =31  =30  =31
+
+njobs	__ =300				; Max number of jobs we can handle
+ttyjob:	block	njobs			; TTYJOB table
+strbsz	__ 1000
+strbuf:	block	strbsz			; Temporary string space
+verbuf:	block	20			; Temp storage for verification hack
+nambuf:	block	20			; Temp storage for username in build
+npdl	__ =50				; Nice number
+pdl:	block	npdl			; Push down list
+usernm:	block	40			; Put user name from address list here
+nusrjb	__ 50				; Max times person can be logged in
+usrlog:	block	nusrjb			; TTYS where person is logged in
+jobnam:	block	300			; Program name table
+repcnt:	0				; Repetition count goes here
+switch:	0				; Switches go here
+opnum:	0				; Operator's number
+usrjfn:	0				; Jfn for users remind file made
+usrjfo:	0				; Jfn for users old remind file
+dmnjfn:	0				; Jfn for daemon remind file
+msgjfn:	0				; Place for jfn of msgfil
+bugjfn:	0				; Bugjfn for putting jfns of bug files
+tmpjfn:	0				; Temp jfn for help file
+buijfn:	0				; Jfn for directory being built
+cpp:	0				; Command level pointer
+curtim:	0				; Current time stuffed here
+debug:	0				; Nonzero => debug mode for daemon
+firflg:	0				; Nonzero => we've fired this loop
+srtflg:	0				; Must sort, nonzero =>sort fil on exit
+firtme:	0				; Firing time
+firdir:	0				; Directory making the firing
+firmod:	0				; Last modification to firing
+nummsg:	0				; Number of messages in user file
+rtim:	0				; Next firing time
+rdir:	0				; Directory wanting to fire next
+rmod:	0				; Last modification of this firing
+rsecs:	0				; Seconds since midnight for firing
+rhour:	0				; Hour of firing
+rday:	0				; Day of month of firing
+rweek:	0				; Day of week of firing
+rmon:	0				; Month of firing
+ryear:	0				; Year of firing
+ttyjbn:	0				; Place for TTYJOB table number
+retadd:	0				; Return address for switch cmds
+singsw:	0				; Nonzero => Mail to user in usernm
+sndsw:	0				; Nonzero => In send mode only
+modsw:	0				; Nonzero => In modification command
+addpnt:	0				; Temporary pointer to addrlst
+userno:	0				; Number of user running REMIND
+tyear:	0				; Temporary year
+tmonth:	0				; Temporary month
+tday:	0				; Temporary day of month
+tdowk:	0				; Temporary day of week
+tsecs:	0				; Temporary secs since midnight
+tmpmod:	0				; Temporary modification date
+daeflg:	0				; Nonzero => daemon mode
+buinum:	0				; Builded directory number
+exchdn:	0				; -1 => exchange done
+daemod:	0				; -1 => daemon mode, 0 for user mode
+didsnd:	0				; -1 => sent msg to at least one tty
+
+smlblk:	6				;[wew] length of SNDMAI block
+	0				;[wew] FROM field pointer
+	0				;[wew] TO field pointer
+	0				;[wew] SUBJECT field pointer
+	0				;[wew] message body pointer
+	0
+
+WEWTIM:	block 3				;[wew] idtnc data from time call
+
+CMTIME:	flddb. .cmcfm,,,,,<[
+	flddb. .cmtad,,CM%ITM!CM%NCI!WEWTIM]>	;[wew] dont convert to intenal
+
+CMCONF:	flddb. .cmcfm,cm%sdh,,,,<[
+CMDATE:	FLDDB. .CMTAD,,CM%IDA!CM%ITM,,,<[
+DAONLY:	FLDDB. .CMTAD,cm%sdh,CM%IDA,,,<[
+TMONLY:	FLDDB. .CMTAD,cm%sdh,CM%ITM,,,<[
+DAYNAM:	FLDDB. .CMKEY,,DATTAB,,,<[
+HDYNAM:	FLDDB. .CMKEY,,HOLDAY]>]>]>]>]>
+
+;;;Date keywords
+
+DEFINE VAR (X,Y,Z) <
+	[ASCIZ/X/],,[Z,,Y]
+>;DEFINE VAR
+
+DEFINE HDY (X,Y,Z) <
+	RADIX 5+5
+	[ASCIZ/X/],,[<Y-1>*512+<Z-1>,,DATHDY]
+	RADIX 8
+>;DEFINE HDY
+
+DATTAB:	NDATBS,,NDATBS
+	VAR Friday,DATDOW,4
+	VAR Monday,DATDOW,0
+	VAR Saturday,DATDOW,5
+	VAR Sunday,DATDOW,6
+	VAR Thursday,DATDOW,3
+	VAR Today,DATTOD,0
+	var Tomorrow,DATDAY,1
+	VAR Tuesday,DATDOW,1
+	VAR Wednesday,DATDOW,2
+NDATBS==.-DATTAB-1
+
+;;;Holiday keywords
+
+HOLDAY:	NHLDYS,,NHLDYS
+	HDY April-Fools,4,1
+	HDY Bastille-Day,7,14
+	HDY Beethovens-Birthday,12,16
+	HDY Bilbos-Birthday,9,22
+	HDY Christmas,12,25
+	HDY Columbus-Day,10,12
+	HDY Flag-Day,6,14
+	HDY Frodos-Birthday,9,22
+	HDY Gondorian-New-Year,3,25
+	HDY Ground-Hogs-Day,2,2
+	HDY Guy-Fawkes-Day,11,5
+	HDY Halloween,10,31
+	HDY Independence-Day,7,4
+	HDY Leap-Day,2,29
+	HDY Lincolns-Birthday,2,12
+	HDY May-Day,5,1
+	HDY New-Years,1,1
+	HDY Saint-Patricks-Day,3,17
+	HDY Sherlock-Holmes-Birthday,1,6
+	HDY Valentines-Day,2,14
+	HDY Washingtons-Birthday,2,22
+NHLDYS==.-HOLDAY-1
+
+CSB:	CM%XIF ! REPARS
+	.priin,,.priou
+	0
+	POINT 7,CSBUF
+	POINT 7,CSBUF
+	120*5
+	0
+	POINT 7,STRBUF
+	100*5
+	0
+
+CSBUF:	block 120
+
+
+	end	go
+

@@ -1,0 +1,562 @@
+
+
+; CLUDGR.NEW.1 & <MONITOR>CLUDGR.MAC.2 31-Mar-89 2322	PAGE 1
+
+
+
+LINE 1, PAGE 1
+1)	; Edit= 8972 to CLUDGR.MAC on 27-Sep-88 by RASPUZZI
+1)	;Place CLUEIN BUGINFs under CIBUGX. Heavy sigh over this SCA bug.
+1)	; Edit= 8964 to CLUDGR.MAC on 8-Sep-88 by RASPUZZI
+1)	;Add CLUDGR joining sequence to occur after CFSJYN has finished.
+1)	;Add CLUJYN routine to be called during system initialization. This routine
+1)	;will make sure that we have connected to all nodes lower than us.
+1)	; Edit= 8885 to CLUDGR.MAC on 12-Aug-88 by RASPUZZI
+1)	;Prevent CLUHST from filling up with stale entries by handling the -1 .SSPBC
+1)	;callback from SCA. Also, be CIOFF in CLUVAC.
+1)	; Edit= 8876 to CLUDGR.MAC on 10-Aug-88 by RASPUZZI
+1)	;Update BUG. documentation.
+1)	; Edit= 8867 to CLUDGR.MAC on 22-Jul-88 by RASPUZZI
+1)	;Make a mnemonic for 2*NFKS called MAXBUF.
+1)	; Edit= 8866 to CLUDGR.MAC on 21-Jul-88 by RASPUZZI
+1)	;Make the CLUDGR SYSAP correctly handle CLUBUF (SYSAP buffer count) and also
+1)	;make CLNEED handle little credit left situations.
+1)	;[SRI-NIC]SRC:<MONITOR>CLUDGR.MAC.2, 30-Nov-88 00:24:40, Edit by MKL
+LINE 1, PAGE 1
+2)	;[SRI-NIC]SRC:<MONITOR>CLUDGR.MAC.2, 30-Nov-88 00:24:40, Edit by MKL
+
+
+LINE 6, PAGE 2
+1)		EXTERN HSTSIZ,NFKS		;[8867]
+1)		SALL
+LINE 6, PAGE 2
+2)		EXTERN HSTSIZ
+2)		SALL
+
+
+LINE 11, PAGE 3
+1)	;        2.2    CLUJYN (Check all nodes for connections) . . .   7
+1)	;    3. Connection Management
+1)	;        3.1    CLULSN (Make CLUDGR listener)  . . . . . . . .   9
+1)	;        3.2    BADSCA (Bad SCA callback)  . . . . . . . . . .  11
+1)	;        3.3    NEWCLU (New node in cluster) . . . . . . . . .  12
+1)	;        3.4    CLUVAC (Remote system left cluster)  . . . . .  14
+1)	;        3.5    GOTCLU (Message arrived for CLUDGR)  . . . . .  15
+1)	;        3.6    CONLSN (Connect to listener) . . . . . . . . .  20
+1)	;        3.7    CLWHAT (Connect response here) . . . . . . . .  22
+1)	;        3.8    OKCLU (OK to send) . . . . . . . . . . . . . .  24
+1)	;    4. Buffer Management
+1)	;        4.1    GIVBCK (Return an SCA buffer)  . . . . . . . .  25
+1)	;        4.2    CLUCRD (Credit is available) . . . . . . . . .  26
+1)	;        4.3    CLNEED (CLUDGR needs buffers)  . . . . . . . .  27
+1)	;    5. SYSAP Entry Point
+1)	;        5.1    CL.SCA . . . . . . . . . . . . . . . . . . . .  28
+1)	;    6. CLUDGR SYSAP Work Routines
+1)	;        6.1    CLWAKE (Wake up sleeping forks)  . . . . . . .  29
+
+; CLUDGR.NEW.1 & <MONITOR>CLUDGR.MAC.2 31-Mar-89 2322	PAGE 2
+
+
+1)	;        6.2    FILLIN (To fill in a chain of SCA buffers) . .  30
+1)	;    7. INFO%
+1)	;        7.1    The JSYS that does it all  . . . . . . . . . .  31
+1)	;        7.2    RESACS (Restore ACs) . . . . . . . . . . . . .  34
+1)	;        7.3    INFCIN (Get all CI nodes doing INFO%)  . . . .  37
+1)	;        7.4    LCLDVT (Local DEVST%)  . . . . . . . . . . . .  39
+1)	;        7.5    LCLSTV (Local STDEV%)  . . . . . . . . . . . .  40
+1)	;        7.6    LCLNTF (Local NTINF%)  . . . . . . . . . . . .  41
+1)	;        7.7    LCLDVC (Local DVCHR%)  . . . . . . . . . . . .  42
+1)	;        7.8    LCLXPK (Local XPEEK%)  . . . . . . . . . . . .  43
+1)	;        7.9    LCLTMN (Local TMON%) . . . . . . . . . . . . .  44
+1)	;        7.10   LCLSGT (Local SYSGT%)  . . . . . . . . . . . .  45
+1)	;        7.11   LCLSNP (Local SNOOP%)  . . . . . . . . . . . .  46
+1)	;        7.12   LCLSKD (Local SKED%) . . . . . . . . . . . . .  47
+1)	;        7.13   LCLRCR or LCLRCD (Local RCUSR% or RCDIR%)  . .  48
+1)	;        7.14   LCLMUT (Local MUTIL%)  . . . . . . . . . . . .  49
+1)	;        7.15   LCLMTO (Local MTOPR%)  . . . . . . . . . . . .  50
+1)	;        7.16   LCLLNM (Local LNMST%)  . . . . . . . . . . . .  51
+1)	;        7.17   LCLINL (Local INLNM%)  . . . . . . . . . . . .  52
+1)	;        7.18   LCLGTY (Local GTTYP%)  . . . . . . . . . . . .  53
+1)	;        7.19   LCLGTB (Local GETAB%)  . . . . . . . . . . . .  54
+1)	;        7.20   LCLDST (Local DIRST%)  . . . . . . . . . . . .  55
+1)	;        7.21   LCLCFG (Local CNFIG%)  . . . . . . . . . . . .  56
+1)	;        7.22   LCLSYS (INFO%'s SYSTAT function) . . . . . . .  57
+1)	;        7.23   LCLJOB (Get username's job numbers)  . . . . .  61
+1)	;        7.24   LCLGJI (Local GETJI%)  . . . . . . . . . . . .  63
+1)	^L	Subttl	Table of Contents (page 2)
+LINE 11, PAGE 3
+2)	;    3. Connection Management
+2)	;        3.1    CLULSN (Make CLUDGR listener)  . . . . . . . .   7
+2)	;        3.2    BADSCA (Bad SCA callback)  . . . . . . . . . .   9
+2)	;        3.3    NEWCLU (New node in cluster) . . . . . . . . .  10
+2)	;        3.4    CLUVAC (Remote system left cluster)  . . . . .  12
+2)	;        3.5    GOTCLU (Message arrived for CLUDGR)  . . . . .  13
+2)	;        3.6    CONLSN (Connect to listener) . . . . . . . . .  18
+2)	;        3.7    CLWHAT (Connect response here) . . . . . . . .  20
+2)	;        3.8    OKCLU (OK to send) . . . . . . . . . . . . . .  22
+2)	;    4. Buffer Management
+2)	;        4.1    GIVBCK (Return an SCA buffer)  . . . . . . . .  23
+2)	;        4.2    CLUCRD (Credit is available) . . . . . . . . .  24
+2)	;        4.3    CLNEED (CLUDGR needs buffers)  . . . . . . . .  25
+2)	;    5. SYSAP Entry Point
+2)	;        5.1    CL.SCA . . . . . . . . . . . . . . . . . . . .  26
+2)	;    6. CLUDGR SYSAP Work Routines
+2)	;        6.1    CLWAKE (Wake up sleeping forks)  . . . . . . .  27
+2)	;        6.2    FILLIN (To fill in a chain of SCA buffers) . .  28
+2)	;    7. INFO%
+2)	;        7.1    The JSYS that does it all  . . . . . . . . . .  29
+2)	;        7.2    RESACS (Restore ACs) . . . . . . . . . . . . .  32
+2)	;        7.3    INFCIN (Get all CI nodes doing INFO%)  . . . .  35
+2)	;        7.4    LCLDVT (Local DEVST%)  . . . . . . . . . . . .  37
+
+; CLUDGR.NEW.1 & <MONITOR>CLUDGR.MAC.2 31-Mar-89 2322	PAGE 3
+
+
+2)	;        7.5    LCLSTV (Local STDEV%)  . . . . . . . . . . . .  38
+2)	;        7.6    LCLNTF (Local NTINF%)  . . . . . . . . . . . .  39
+2)	;        7.7    LCLDVC (Local DVCHR%)  . . . . . . . . . . . .  40
+2)	;        7.8    LCLXPK (Local XPEEK%)  . . . . . . . . . . . .  41
+2)	;        7.9    LCLTMN (Local TMON%) . . . . . . . . . . . . .  42
+2)	;        7.10   LCLSGT (Local SYSGT%)  . . . . . . . . . . . .  43
+2)	;        7.11   LCLSNP (Local SNOOP%)  . . . . . . . . . . . .  44
+2)	;        7.12   LCLSKD (Local SKED%) . . . . . . . . . . . . .  45
+2)	;        7.13   LCLRCR or LCLRCD (Local RCUSR% or RCDIR%)  . .  46
+2)	;        7.14   LCLMUT (Local MUTIL%)  . . . . . . . . . . . .  47
+2)	;        7.15   LCLMTO (Local MTOPR%)  . . . . . . . . . . . .  48
+2)	;        7.16   LCLLNM (Local LNMST%)  . . . . . . . . . . . .  49
+2)	;        7.17   LCLINL (Local INLNM%)  . . . . . . . . . . . .  50
+2)	;        7.18   LCLGTY (Local GTTYP%)  . . . . . . . . . . . .  51
+2)	;        7.19   LCLGTB (Local GETAB%)  . . . . . . . . . . . .  52
+2)	;        7.20   LCLDST (Local DIRST%)  . . . . . . . . . . . .  53
+2)	;        7.21   LCLCFG (Local CNFIG%)  . . . . . . . . . . . .  54
+2)	;        7.22   LCLSYS (INFO%'s SYSTAT function) . . . . . . .  55
+2)	;        7.23   LCLJOB (Get username's job numbers)  . . . . .  59
+2)	;        7.24   LCLGJI (Local GETJI%)  . . . . . . . . . . . .  61
+2)	;        7.25   LCLMSR (Local MSTR%) . . . . . . . . . . . . .  62
+2)	^L	Subttl	Table of Contents (page 2)
+
+
+LINE 8, PAGE 4
+1)	;        7.25   LCLMSR (Local MSTR%) . . . . . . . . . . . . .  64
+1)	;        7.26   LCLTIM (Local TIME% JSYS)  . . . . . . . . . .  65
+1)	;        7.27   INFSYS (Remote SYSTAT information) . . . . . .  66
+1)	;        7.28   INFCFG (Remote CNFIG%) . . . . . . . . . . . .  69
+1)	;        7.29   INFDST (Remote DIRST%) . . . . . . . . . . . .  72
+1)	;        7.30   INFGTB (Remote GETAB%) . . . . . . . . . . . .  73
+1)	;        7.31   INFGTY (Remote GTTYP%) . . . . . . . . . . . .  74
+1)	;        7.32   INFINL (Remote INLNM%) . . . . . . . . . . . .  75
+1)	;        7.33   INFLNS (Remote LNMST%) . . . . . . . . . . . .  76
+1)	;        7.34   INFJOB (Get jobs of user on remote system) . .  78
+1)	;        7.35   INFMTO (Remote MTOPR%) . . . . . . . . . . . .  79
+1)	;        7.36   INFMUT (Remote MUTIL%) . . . . . . . . . . . .  80
+1)	;        7.37   INFRCR/INFRCD (Remote RCUSR%/RCDIR%) . . . . .  82
+1)	;        7.38   INFSKD (Remote SKED%)  . . . . . . . . . . . .  84
+1)	;        7.39   INFSNP (Remote SNOOP%) . . . . . . . . . . . .  86
+1)	;        7.40   INFSGT (Remote SYSGT%) . . . . . . . . . . . .  87
+1)	;        7.41   INFTMN (Remote TMON%)  . . . . . . . . . . . .  88
+1)	;        7.42   INFXPK (Remote XPEEK%) . . . . . . . . . . . .  89
+1)	;        7.43   INFDVC (Remote DVCHR%) . . . . . . . . . . . .  91
+1)	;        7.44   INFSTV (Remote STDEV%) . . . . . . . . . . . .  92
+1)	;        7.45   INFDVT (Remote DEVST%) . . . . . . . . . . . .  94
+1)	;        7.46   INFNTF (Remote NTINF%) . . . . . . . . . . . .  95
+1)	;        7.47   INFGJI (Remote GETJI%) . . . . . . . . . . . .  97
+1)	;        7.48   INFMSR (Remote MSTR%)  . . . . . . . . . . . .  99
+1)	;        7.49   INFGTB (Remote GETAB%) . . . . . . . . . . . . 104
+1)	;        7.50   CL.ENT (Entry point to CLUDGR from user level) 105
+
+; CLUDGR.NEW.1 & <MONITOR>CLUDGR.MAC.2 31-Mar-89 2322	PAGE 4
+
+
+1)	;        7.51   CLURSM (Reassemble SCA buffers into free space 113
+1)	;        7.52   REMQ (Remove from receive queue) . . . . . . . 115
+1)	;        7.53   CLUWAT (Wait routine)  . . . . . . . . . . . . 116
+1)	;        7.54   LCLWAT (Little credit, so we wait) . . . . . . 117
+1)	;        7.55   INFALO (Remote node allowing?) . . . . . . . . 118
+1)	;        7.56   CLGOOD (All is well) . . . . . . . . . . . . . 119
+1)	;        7.57   CLFAIL (CL.ENT failed) . . . . . . . . . . . . 120
+1)	;        7.58   CLREMR (Remote error)  . . . . . . . . . . . . 121
+1)	;        7.59   DOACS (Fill in fake ACs) . . . . . . . . . . . 122
+1)	;        7.60   CHKGAL (Check to see if we are GALAXY) . . . . 123
+1)	;        7.61   CHKPID (Check for GALAXY PID)  . . . . . . . . 125
+1)	;    8. Cluster Sendall
+1)	;        8.1    CLTMSG . . . . . . . . . . . . . . . . . . . . 126
+1)	;        8.2    CHKSND (Check to see if OK to send to remote)  130
+1)	;    9. SMON% Functions
+1)	;        9.1    SETCLU (Disable CLUDGR)  . . . . . . . . . . . 131
+1)	;        9.2    CLRCLU (Enable CLUDGR) . . . . . . . . . . . . 132
+1)	;        9.3    SETTMG (Disable Cluster sendalls)  . . . . . . 133
+1)	;        9.4    CLRTMG (Enable Cluster sendalls) . . . . . . . 134
+1)	;        9.5    CLNTFY (Notify all nodes)  . . . . . . . . . . 135
+1)	;   10. End of CLUDGR  . . . . . . . . . . . . . . . . . . . . 136
+1)	^L	SUBTTL CLUDGR Storage
+LINE 8, PAGE 4
+2)	;        7.26   LCLTIM (Local TIME% JSYS)  . . . . . . . . . .  63
+2)	;        7.27   INFSYS (Remote SYSTAT information) . . . . . .  64
+2)	;        7.28   INFCFG (Remote CNFIG%) . . . . . . . . . . . .  67
+2)	;        7.29   INFDST (Remote DIRST%) . . . . . . . . . . . .  70
+2)	;        7.30   INFGTB (Remote GETAB%) . . . . . . . . . . . .  71
+2)	;        7.31   INFGTY (Remote GTTYP%) . . . . . . . . . . . .  72
+2)	;        7.32   INFINL (Remote INLNM%) . . . . . . . . . . . .  73
+2)	;        7.33   INFLNS (Remote LNMST%) . . . . . . . . . . . .  74
+2)	;        7.34   INFJOB (Get jobs of user on remote system) . .  76
+2)	;        7.35   INFMTO (Remote MTOPR%) . . . . . . . . . . . .  77
+2)	;        7.36   INFMUT (Remote MUTIL%) . . . . . . . . . . . .  78
+2)	;        7.37   INFRCR/INFRCD (Remote RCUSR%/RCDIR%) . . . . .  80
+2)	;        7.38   INFSKD (Remote SKED%)  . . . . . . . . . . . .  82
+2)	;        7.39   INFSNP (Remote SNOOP%) . . . . . . . . . . . .  84
+2)	;        7.40   INFSGT (Remote SYSGT%) . . . . . . . . . . . .  85
+2)	;        7.41   INFTMN (Remote TMON%)  . . . . . . . . . . . .  86
+2)	;        7.42   INFXPK (Remote XPEEK%) . . . . . . . . . . . .  87
+2)	;        7.43   INFDVC (Remote DVCHR%) . . . . . . . . . . . .  89
+2)	;        7.44   INFSTV (Remote STDEV%) . . . . . . . . . . . .  90
+2)	;        7.45   INFDVT (Remote DEVST%) . . . . . . . . . . . .  92
+2)	;        7.46   INFNTF (Remote NTINF%) . . . . . . . . . . . .  93
+2)	;        7.47   INFGJI (Remote GETJI%) . . . . . . . . . . . .  95
+2)	;        7.48   INFMSR (Remote MSTR%)  . . . . . . . . . . . .  97
+2)	;        7.49   INFGTB (Remote GETAB%) . . . . . . . . . . . . 102
+2)	;        7.50   CL.ENT (Entry point to CLUDGR from user level) 103
+2)	;        7.51   CLURSM (Reassemble SCA buffers into free space 111
+2)	;        7.52   REMQ (Remove from receive queue) . . . . . . . 113
+2)	;        7.53   CLUWAT (Wait routine)  . . . . . . . . . . . . 114
+
+; CLUDGR.NEW.1 & <MONITOR>CLUDGR.MAC.2 31-Mar-89 2322	PAGE 5
+
+
+2)	;        7.54   LCLWAT (Little credit, so we wait) . . . . . . 115
+2)	;        7.55   INFALO (Remote node allowing?) . . . . . . . . 116
+2)	;        7.56   CLGOOD (All is well) . . . . . . . . . . . . . 117
+2)	;        7.57   CLFAIL (CL.ENT failed) . . . . . . . . . . . . 118
+2)	;        7.58   CLREMR (Remote error)  . . . . . . . . . . . . 119
+2)	;        7.59   DOACS (Fill in fake ACs) . . . . . . . . . . . 120
+2)	;        7.60   CHKGAL (Check to see if we are GALAXY) . . . . 121
+2)	;        7.61   CHKPID (Check for GALAXY PID)  . . . . . . . . 123
+2)	;    8. Cluster Sendall
+2)	;        8.1    CLTMSG . . . . . . . . . . . . . . . . . . . . 124
+2)	;        8.2    CHKSND (Check to see if OK to send to remote)  128
+2)	;    9. SMON% Functions
+2)	;        9.1    SETCLU (Disable CLUDGR)  . . . . . . . . . . . 129
+2)	;        9.2    CLRCLU (Enable CLUDGR) . . . . . . . . . . . . 130
+2)	;        9.3    SETTMG (Disable Cluster sendalls)  . . . . . . 131
+2)	;        9.4    CLRTMG (Enable Cluster sendalls) . . . . . . . 132
+2)	;        9.5    CLNTFY (Notify all nodes)  . . . . . . . . . . 133
+2)	;   10. End of CLUDGR  . . . . . . . . . . . . . . . . . . . . 134
+2)	^L	SUBTTL CLUDGR Storage
+
+
+LINE 18, PAGE 5
+1)	RS (BUFMAX,1)			;[8866] Maximum buffers for SYSAP to use
+1)	MAXBUF==2*NFKS			;[8867] Maximum buffers per connect ID
+1)	
+1)		XRESCD
+LINE 19, PAGE 5
+2)		XRESCD
+
+
+LINE 1, PAGE 7
+1)	^L	SUBTTL CLUDGR Initialization -- CLUJYN (Check all nodes for connections)
+1)	;[8964]
+1)	;CLUJYN - Routine called by CHKR at system startup after CFS joining. This
+1)	;routine is called to make sure that CLUDGR has connected to all TOPS-20,
+1)	;version 7.0 nodes (or higher) in the cluster). If not, then establish
+1)	;any missing connections.
+1)	;
+1)	; Called with:
+1)	;	No arguments
+1)	;	CALL CLUJYN
+1)	;
+1)	; Returns:
+1)	;	+1 - Always, with full cluster connectivity
+1)	
+1)		XSWAPCD			;Called from fork level
+1)	
+1)	CLUJYN::TRVAR <<CLUNOD,C%SBLL>> ;Temp storage table
+1)		SAVEQ			;These are used for storage
+1)		SETZM CLUNOD		;Zero the first location
+1)		MOVSI T1,CLUNOD		;Get source of BLT
+
+; CLUDGR.NEW.1 & <MONITOR>CLUDGR.MAC.2 31-Mar-89 2322	PAGE 6
+
+
+1)		HRRI T1,1+CLUNOD	;And beginning of destination
+1)		BLT T1,C%SBLL-1+CLUNOD	;Zero out this table
+1)		CIOFF			;Don't bother me while I check the cluster
+1)		MOVSI Q1,-HSTSIZ	;Initialize that funky loop counter
+1)		DO.			;Get all CLUDGR connect IDs
+1)		  SKIPG T1,CLUHST(Q1)	;Do we have a connect ID here?
+1)		  IFSKP.		;If so,
+1)		    CALL <XENT SC.NOD>	;(T1/T1,T2) Get the node number for this
+1)		    IFGE. T2		;Do we have a good node number?
+1)		      ADDI T2,CLUNOD	;Find a spot in this table to...
+1)		      MOVEM T1,(T2)	;...store the connect ID
+1)		    ENDIF.
+1)		  ENDIF.
+1)		  AOBJN Q1,TOP.		;Do next table entry
+1)		OD.
+1)		MOVE Q1,MYPOR4		;Initialize counter
+   {Skipped 1 page and 1 line}
+1)	;Note - We only need to check all CI nodes that are lower than us. Therefore,
+1)	;our loop counter starts at our node number and counts down to 0. This will
+1)	;save some looping time.
+1)	
+1)		DO.			;Loop over all nodes
+1)		  SOJL Q1,ENDLP.	;Step to next lowest CI node
+1)		  SKIPN SBLIST(Q1)	;Is there a CI node here?
+1)		  IFSKP.		;If so,
+1)		    MOVE T2,Q1		;Put node number in a good AC
+1)		    CALLX (MSEC1,IS7020) ;(T2/) Is this TOPS-20, 7.0?
+1)		    IFSKP.		;If so,
+1)		      MOVEI Q2,CLUNOD	;Use this table to check on CID
+1)		      ADD Q2,T2		;Find node's place in the sun
+1)		      SKIPE (Q2)	;Do we have a connect ID?
+1)		      JRST TOP.		;Yes, do next node
+1)		      CALL NEWCLU	;(T2/) No CID, establish a connection
+1)		       NOP		;Ignore this. Error has been reported
+1)		      SKIPE CIBUGX	;[8972] Wanna see this?
+1)		      BUG.(INF,CLUEIN,CLUDGR,SOFT,<CLUDGR - Establishing initial connection>,<<Q1,NODE>>,<
+1)	
+1)	Cause:	This BUG. appears when the CLUDGR joining code stumbles on a CI node
+1)		that a CLUDGR connection has not been established for. CLUJYN then
+1)		attempts to make a CLUDGR connection to this node. Theoretically,
+1)		SCA should have notified CLUDGR of all nodes that are online. This
+1)		BUG. is simply telling you that one of them has been missed by SCA
+1)		and CLUDGR noticed it.
+1)	
+1)	Action:	CLUJYN will attempt to establish a connection to the missing node.
+1)		There is no manual intervention required.
+1)	
+1)	Data:	NODE - CI node that SCA didn't tell us about
+1)	>)				;Let someone know what we are doing
+1)		    ENDIF.
+1)		  ENDIF.
+
+; CLUDGR.NEW.1 & <MONITOR>CLUDGR.MAC.2 31-Mar-89 2322	PAGE 7
+
+
+1)		  JRST TOP.		;Loop over all nodes
+1)		OD.
+1)		CION			;Turn this back on
+1)		RET			;And done
+1)	
+1)	^L	SUBTTL Connection Management -- CLULSN (Make CLUDGR listener)
+LINE 1, PAGE 7
+2)	^L	SUBTTL Connection Management -- CLULSN (Make CLUDGR listener)
+
+
+LINE 14, PAGE 13
+1)	NEWCLU:	CAML T2,MYPOR4		;[8964] Should we try to talk to this guy?
+1)		RET			;No, he has a higher CI node than us
+1)		SAVEQ			;Don't trash good things
+1)		MOVE Q2,T2		;Put node here.
+1)		CALLX (MSEC1,IS7020)	;(T2/) Do we want to talk to this node?
+LINE 14, PAGE 11
+2)	NEWCLU:	SAVEQ			;Don't trash good things
+2)		MOVE Q2,T2		;Put node here.
+2)		CALLX (MSEC1,SC.PRT)	;(/T1) Get our port number
+2)		 RETBAD()		;Failed
+2)		CAMG T1,Q2		;Should we try to talk to this guy?
+2)		RET			;No, he has a higher CI node than us
+2)		CALLX (MSEC1,IS7020)	;(T2/) Do we want to talk to this node?
+
+
+LINE 30, PAGE 14
+1)		MOVEI T1,MAXBUF		;[8867] Get max buffers for this CID
+1)		ADDM T1,BUFMAX		;[8866] And add to overall max count
+1)		RETSKP			;Done
+LINE 30, PAGE 12
+2)		RETSKP			;Done
+
+
+LINE 15, PAGE 15
+1)	CLUVAC:	CIOFF			;[8885] Turn this darn thing off
+1)		SAVEQ			;[8885] Used here
+1)		JUMPL T2,CLUVC2		;[8885] Smiles and giggles callback?
+1)		LOAD T3,SID,T2		;Get index into CLUHST table
+1)		SKIPN T1,CLUHST(T3)	;Is this node active?
+1)		IFSKP.			;If so,
+1)		  CAME T1,T2		;[8885] Is this the CID we want?
+1)		  JRST CLUVC3		;[8885] No, return now
+1)		  CALL <XENT SC.NOD>	;(T1/T1,T2) Get node number
+LINE 15, PAGE 13
+2)	CLUVAC:	JUMPL T2,R		;Is this an extraneous callback? If so, return
+2)		LOAD T3,SID,T2		;Get index into CLUHST table
+2)		SKIPN T1,CLUHST(T3)	;Is this node active?
+2)		IFSKP.			;If so,
+2)		  CALL <XENT SC.NOD>	;(T1/T1,T2) Get node number
+
+
+; CLUDGR.NEW.1 & <MONITOR>CLUDGR.MAC.2 31-Mar-89 2322	PAGE 8
+
+
+
+LINE 33, PAGE 15
+1)	CLUVC1:	  MOVE T1,CLUSTS(T3)	;[8885] Get status
+1)		  TXNE T1,CL%RDY	;[7.1273] If it was ready to receive stuff
+1)		  CALL CLWAKE		;[7.1273] (T2/) Wake up outstanding forks
+1)		  LOAD T1,CIDBUF,(T3)	;Get number of buffers in use by this CID
+1)		  MOVNS T1		;[8866] Make it negative
+1)		  ADDM T1,CLUBUF	;[8866] Discount them from SYSAP
+1)		  MOVNI T1,MAXBUF	;[8867] Overall maximum will now be less
+1)		  ADDM T1,BUFMAX	;[8866] Subtract out this vanquished CID
+1)		  SETZM CLUHST(T3)	;[8885] Indicate this entry is now gone
+1)		  SETZM CLUSTS(T3)	;[8885] No status on null entry
+1)		ENDIF.
+1)	CLUVC3:	CION			;[8885] Turn this back on
+1)		RET			;And back to caller
+1)	
+1)	;[8885] Here when SCA gives us the -1 callback. We must loop through
+1)	;the CLUHST table and see if the entry is still there. If it is, get
+1)	;rid of it.
+1)	CLUVC2:	SKIPL Q1,T3		;Get node number
+1)		CAIL Q1,C%SBLL		;Is it in range?
+1)		JRST CLUVC3		;No, ignore this callback
+1)		MOVSI Q2,-HSTSIZ	;Get table length
+1)		DO.			;Loop over all table entries
+1)		  SKIPG T1,CLUHST(Q2)	;Is there something in this spot?
+1)		  IFSKP.		;If so,
+1)		    CALL <XENT SC.NOD>	;(T1/T1,T2) Get the node number
+1)		    CAME T2,Q1		;Is this the one?
+1)		    IFSKP.		;If so,
+1)		      LOAD T3,SID,T1	;Get index into data tables
+1)		      JRST CLUVC1	;And get rid of this entry
+1)		    ENDIF.
+1)		  ENDIF.
+1)		  AOBJN Q2,TOP.		;Loop over all entries
+1)		OD.
+1)		JRST CLUVC3		;Couldn't find one, that's OK, return
+1)	
+1)	^L	SUBTTL Connection Management -- GOTCLU (Message arrived for CLUDGR)
+LINE 29, PAGE 13
+2)		  MOVE T1,CLUSTS(T3)	;[7.1273] Get status
+2)		  TXNE T1,CL%RDY	;[7.1273] If it was ready to receive stuff
+2)		  CALL CLWAKE		;[7.1273] (T2/) Wake up outstanding forks
+2)		  LOAD T1,CIDBUF,(T3)	;Get number of buffers in use by this CID
+2)		  SUBM T1,CLUBUF	;Discount them here
+2)		ENDIF.
+2)		SETZM CLUHST(T3)	;Indicate this entry is now gone
+2)		SETZM CLUSTS(T3)	;No status on null entry
+2)		RET			;And back to caller
+2)	
+2)	^L	SUBTTL Connection Management -- GOTCLU (Message arrived for CLUDGR)
+
+; CLUDGR.NEW.1 & <MONITOR>CLUDGR.MAC.2 31-Mar-89 2322	PAGE 9
+
+
+
+
+LINE 21, PAGE 16
+1)		SOS CLUBUF		;[8866] And overall SYSAP buffer useage
+1)		MOVE Q3,T2		;Save connect ID
+LINE 21, PAGE 14
+2)		MOVE Q3,T2		;Save connect ID
+
+
+LINE 48, PAGE 17
+1)	>)				;[7.1121] Could not find request
+LINE 49, PAGE 15
+2)	Cure:	If this becomes a problem, then take a dump and try to determine
+2)		what happened to the orphaned request.
+2)	>)				;[7.1121] Could not find request
+
+
+LINE 9, PAGE 22
+1)		MOVEI T2,MAXBUF		;[8867] Get maximum for this CID
+1)		ADDM T2,BUFMAX		;[8866] And count this for overall SYSAP
+1)		MOVX T2,CL%DNY		;Find out remote node's CLUDGR setting
+LINE 9, PAGE 20
+2)		MOVX T2,CL%DNY		;Find out remote node's CLUDGR setting
+
+
+LINE 24, PAGE 23
+1)		  MOVNI T1,BUFINI	;[8866] Get count of buffers we initally queued
+1)		  ADDM T1,CLUBUF	;[8866] And discount them
+1)		  MOVNI T1,MAXBUF	;[8867] Remove this much from max count
+1)		  ADDM T1,BUFMAX	;[8866] Take it out
+1)		  RET			;No more to do
+LINE 24, PAGE 21
+2)		  MOVEI T1,BUFINI	;Get count of buffers we initally queued
+2)		  SUBM T1,CLUBUF	;And discount them
+2)		  RET			;No more to do
+
+
+LINE 28, PAGE 26
+1)	GIVSCA:	  MOVE T1,T3		;Get buffer address
+1)		  CALLX (MSEC1,SC.RBF)	;(T1/) Return buffer to SCA
+1)		ELSE.			;Else, requeue this buffer
+1)		  AOS CLUSTS(T1)	;Increment the receive credit here
+1)		  AOS CLUBUF		;[8866] Increment overall SYSAP count
+1)		  BLCAL. (<XENT SC.RMG>,<T2,[1],T3>) ;Requeue this buffer
+LINE 28, PAGE 24
+2)	GIVSCA:	  SOS CLUBUF		;And now discount from overall picture
+2)		  MOVE T1,T3		;Get buffer address
+2)		  CALLX (MSEC1,SC.RBF)	;(T1/) Return buffer to SCA
+2)		ELSE.			;Else, requeue this buffer
+2)		  AOS CLUSTS(T1)	;Increment the receive credit here
+2)		  BLCAL. (<XENT SC.RMG>,<T2,[1],T3>) ;Requeue this buffer
+
+; CLUDGR.NEW.1 & <MONITOR>CLUDGR.MAC.2 31-Mar-89 2322	PAGE 10
+
+
+
+
+LINE 15, PAGE 28
+1)	CLNEED: MOVE T3,CLUBUF		;[8866] Get SYSAP buffer count
+1)		CAMG T3,BUFMAX		;[8866] Is it less than the max?
+1)		IFSKP.
+LINE 15, PAGE 26
+2)	CLNEED: LOAD T1,SID,T2		;Get index
+2)		LOAD T3,CIDBUF,(T1)	;Get buffer count for this CID
+2)		CAIG T3,BUFMAX		;Is it less than the max?
+2)		IFSKP.
+
+
+LINE 14, PAGE 30
+1)	;	     Preserves the Temps
+1)	
+1)		XRESCD			;Called at PI level
+1)	
+1)	CLWAKE:	CIOFF			;Shut things off when touching the queues
+1)		SAVET			;[8866] Save these
+1)		STKVAR <DISNOD>		;[7.1273] Save these
+LINE 15, PAGE 28
+2)		XRESCD			;Called at PI level
+2)	
+2)	CLWAKE:	CIOFF			;Shut things off when touching the queues
+2)		STKVAR <DISNOD>		;[7.1273] Save these
+
+
+LINE 15, PAGE 109
+1)		MOVEM T3,RETADR		;Return the SCA buffers by calling here
+LINE 15, PAGE 107
+2)		ADDM T2,CLUBUF		;Count these buffers in the overall picture
+2)		MOVEM T3,RETADR		;Return the SCA buffers by calling here
+
+
+LINE 27, PAGE 111
+1)		    CALL @RETADR	;(T1/) And give it back to SCA
+LINE 27, PAGE 109
+2)		    SOS CLUBUF		;Discount it from overall SYSAP
+2)		    CALL @RETADR	;(T1/) And give it back to SCA
+
+
+LINE 10, PAGE 113
+1)		CALL @RETADR		;(T1/) And give it back to SCA
+LINE 10, PAGE 111
+2)		SOS CLUBUF		;Discount it from overall SYSAP
+2)		CALL @RETADR		;(T1/) And give it back to SCA
+
+
+; CLUDGR.NEW.1 & <MONITOR>CLUDGR.MAC.2 31-Mar-89 2322	PAGE 11
+
+
+
+LINE 13, PAGE 125
+1)	Action:	If this BUGCHK appears, use the DOB% facility to take a
+1)		dump and submit an SPR about this problem.
+1)	
+1)	Data:	ERROR - Error code returned from MUTIL% or ASGRES.
+LINE 12, PAGE 123
+2)		If this BUGCHK appears, software engineering should be
+2)		notified.
+2)	
+2)	Data:	ERROR - Error code returned from MUTIL% or ASGRES.
+

@@ -1,0 +1,219 @@
+;-*-Midas-*-
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	TCP JSYS #'s, flags, offsets, etc are defined manually here
+;;	until a new MIDAS is built that contains them
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;
+;;  JSYSs
+;;
+
+ATNVT=<JSYS 274>
+ SEND=<JSYS 740>
+ RECV=<JSYS 741>
+ OPEN=<JSYS 742>
+CLOSE=<JSYS 743>
+SCSLV=<JSYS 744>
+ STAT=<JSYS 745>
+CHANL=<JSYS 746>
+ABORT=<JSYS 747>
+
+;;
+;;	Arpanet --> Internet address mapping (class A):
+;;	<net>|<host>|<lh>|<imp>, each 8 bits wide.
+;;
+
+ IP$NET==300800,,0	;Network#
+IP$HOST==200800,,0	;Host#
+  IP$LH==100800,,0	;Logical host (currently always 0)
+ IP$IMP==000800,,0	;Imp#
+
+;;
+;;  Flag bits
+;;
+
+TCP%JS==1_35.	; JCN Supplied in RH instead of connection block adr
+		; This bit must be zero for OPEN
+TCP%WT==1_34.	; Wait for completion
+TCP%FS==1_30.	; Force Synchronization (active OPEN)
+TCP%PS==1_29.	; Persistent open (retry on error) (OPEN)
+TCP%ST==1_28.	; Return statistics (STAT)
+TCP%SC==1_27.	; Secure connection (OPEN, SEND)
+TCP%HP==1_26.	; High priority (OPEN, SEND) (OBSOLETE)
+TCP%SY==1_26.	; Symbolic name list given (STAT)
+TCP%VT==1_25.	; TCP Virtual Terminal (OPEN)
+TCP%TV==1_24.	; TVT Supplied (STAT)
+TCP%NT==1_23.	; Return AOBJN pointer over TVTs (STAT)
+TCP%IX==1_22.	; Connection index supplied (STAT)
+TCP%NI==1_21.	; Return AOBJN pointer over connections (STAT)
+TCP%SD==1_20.	; Return STAT definitions instead of values (STAT)
+TCP%ET==1_19.	; ERROR info flag
+TCP%PT==1_18.	; Packet trace flag
+
+;;
+;; Connection block format
+;;
+
+.TCPLH==0	;reserved Local host (internet format) in right 32 bits
+.TCPLP==1	; Local port in right 16 bits
+.TCPFH==2	; Foreign host (internet format) in right 32 bits
+.TCPFP==3	; Foreign port in right 16 bits
+.TCPOP==4	; LH - Address of IP options, or 0 if none
+		; RH - Address of TCP options, or 0 if none
+  .TCPOW==10.	; Size (w) of each.  Both are read with a POINT 8,adr
+.TCPIP==5	; IP parameters (Flag=3B1, TTL=377B17, TOS=377B35)
+.TCPCS==6	; Size of connection block
+
+;;
+;;  RCVIN - IP receive datagram
+;;
+;;  AC1 flags:
+;;
+
+RIQ%NW==1_35.	; Return with Error code -1 if no message is waiting
+		; Otherwise wait for a message
+
+;;
+;;  Message buffer format
+;;
+
+.INQBH==0	; Buffer head, LH set to actual length, RH max length
+		; Lengths include buffer header (IP + message + .INQIH)
+.INQIH==1	; First word of IP header and message
+
+;;
+;;  RECV - TCP buffer receive
+;;
+;;  Header block format
+;;
+
+.TCPBF==0	; Buffer flag word, RH for use by user
+  TCP%ER==1_35.	; ERROR
+  TCP%LE==1_34.	; Local error flag (0 is remote)
+  TCP%PE==1_33.	; Permanent error (0 is temporary)
+  TCP%EC==37_28.; Error code w/o flags
+  TCP%DN==1_23	; DONE
+  TCP%UR==1_20.	; URGENT data
+  TCP%PU==1_19.	; PUSH buffered data
+  TCP%WM==1_18.	; WORD mode (unimplemented)
+.TCPBA==1	; Buffer address, data in bits 0-31
+.TCPBC==2	; Buffer octet count
+		; Octets to send, octets unsent (SEND)
+		; Octets available, octets unused (RECV)
+.TCPBO==3	; Buffer option addresses
+ .TCPOW==10.	; Buffer option address word count
+.TCPBI==4	; Buffer IP info
+.TCPBS==5	; Size of buffer header
+
+;;
+;;	CHANL 6-bit fields
+;;
+
+TC$INT==770000,,000000		;INTRP channel (there is urgent data)
+TC$REC==007700,,000000		;RECV buffer done
+TC$SEN==000077,,000000		;SEND buffer done
+TC$ERR==000000,,770000		;Error
+TC$STA==000000,,007700		;State change (open or close)
+TC$RES==000000,,000077		;Reserved
+
+;;
+;;  Error codes are
+;;
+
+TEC$BP==000500,,0	;Byte Pointer (LH) to error#
+TEC$BM==37,,0		;Bit-Mask to error-code field
+
+TE$ERR==200
+TE$LOC==100
+TE$FRN==TE$LOC
+TE$TMP==40
+TE$PRM==TE$TMP
+
+TE$NOE==0	;No error
+TE$ARG==1	;Argument error in JSYS (no access, bad JCN, no TCB, etc)
+TE$CNO==3	;Connection Not Open
+TE$TOR==4	;Temporarily Out of Resources (JCNs, free storage)
+TE$WNA==5	;Wild foreign host/port only allowed if listening
+TE$CAE==6	;Connection Already Exists (or use of TCP%JS with OPEN)
+TE$CER==7	;Connection Error or Rejected (No such TCB either here
+		;or there)
+TE$TTO==9.	;Transmission Time-Out
+TE$CCC==12.	;Connection Closed or Closing (Closed remotely, cannot
+		;activate TCB)
+TE$WPI==13.	;Wild local Port is Illegal (OPEN).
+TE$CR==14.	;Connection Reset
+TE$BBA==15.	;Bad Buffer Argument
+TE$NSN==16.	;No Space right Now
+TE$BAC==17.	;Bad Argument to CHANL
+TE$FPS==20.	;Funny Pointer to STAT (wraps around memory, etc)
+TE$BTS==21.	;Bad Transfer Size to STAT
+TE$ISN==22.	;Invalid Symbolic Name given to STAT
+TE$CSL==29.	;Cannot change Security Level (SCSLV)
+TE$OIF==30.	;Only Internet Fork can run TVTs (OPEN with TCP%VT)
+TE$TNA==31.	;TCP Not Available (nor on or initialized)
+
+;;
+;;  Error strings
+;;
+
+TCPERR:	Push P,1
+	Push P,2		;Print error string from error code in AC1
+	Trnn 1,TE$TMP
+	  Skipa 1,["?]		;Permanent gets a "?",
+	    Movei 1,"%		;Temporary a "%"
+	PBOUT
+	Ldb 2,[TEC$BP -1(P)]
+	Hrro 1,TERSTR(2)
+	PSOUT
+	Move 1,-1(P)
+	Trnn 1,TE$ERR		;Really an error?
+	  Jrst [Type " (No error)"
+		Jrst .+1]
+IFN 0,[
+	Hrroi 1,[Asciz " ["]	;[ balance these out!
+	PSOUT
+	Move 2,-1(P)		;Get back a copy of the full error code
+	Hrroi 1,[Asciz "Foreign]"]		;Foreign error
+	Trne 2,TE$LOC
+	  Hrroi 1,[Asciz "Local]"]		;Local error
+	PSOUT
+];Local/Foreign typeout
+	Pop P,2
+	Pop P,1
+	Return
+
+TERSTR:	[Asciz "No error"]
+	[Asciz "Argument error in JSYS"]
+	[Asciz "No string for error #2"]
+	[Asciz "Connection not open"]
+	[Asciz "Temporarily out of resources"]
+	[Asciz "Wild foreign host/port only allowed if listening"]
+	[Asciz "Connection already exists"]
+	[Asciz "Connection error or rejected"]
+	[Asciz "No string for error #8"]
+	[Asciz "Transmission time-out"]
+	[Asciz "No string for error #10"]
+	[Asciz "No string for error #11"]
+	[Asciz "Connection closed or closing"]
+	[Asciz "Wild local port is illegal"]
+	[Asciz "Connection reset"]
+	[Asciz "Bad buffer argument"]
+	[Asciz "No space right now"]
+	[Asciz "Bad argument to CHANL"]
+	[Asciz "No string for error #18"]
+	[Asciz "No string for error #19"]
+	[Asciz "Funny pointer to STAT"]
+	[Asciz "Bad transfer size to STAT"]
+	[Asciz "Invalid symbolic name given to STAT"]
+	[Asciz "No string for error #23"]
+	[Asciz "No string for error #24"]
+	[Asciz "No string for error #25"]
+	[Asciz "No string for error #26"]
+	[Asciz "No string for error #27"]
+	[Asciz "No string for error #28"]
+	[Asciz "Cannot change security level"]
+	[Asciz "Only Internet fork can run TVTs"]
+	[Asciz "TCP not available"]

@@ -1,0 +1,189 @@
+< IJOURNAL, 27680.NLS;1, >, 1-MAR-76 15:33 XXX ;;;;  .HJOURNAL="RLB2 1-MAR-76 
+11:11  27680"; Title: .H1="Updated Specification Document for Virtual COM 
+Tapes"; Author(s): Robert Louis Belleville/RLB2; Distribution: /DPCS( [ ACTION 
+] ) SRI-ARC( [ INFO-ONLY ] ) ; Sub-Collections:  SRI-ARC DPCS; Clerk: RLB2;  
+.IGD=0; .SNF=HJRM; .RM=HJRM-7;  .PN=-1; .YBS=1; .PES; Origin: < BELLEVILLE, 
+VIRTUAL-COM.NLS;5, >, 1-MAR-76 10:14 RLB2 ;;;;####;
+
+.PEL;  .PN=PN-1; .GCR;REF: 11382 and 14093.  Change include clarification of 
+the language use to describe the measurement of characters and fonts and the 
+inclusion on the graphics specification.
+INTRODUCTION
+   This document describes the format of the information supplied on tape to 
+   the various photocomposition Service Bureaus.  The information consists of:
+      Specifications for the language interfacing the Output Processor to the 
+      photocomposition machine.
+      Specifications for the measurement of characters, and the specification 
+      of fonts.
+      Standards for magnetic tape formatting.
+   This is a revised version of 11382 and 14093, updated to reflect changes to 
+   the interchange convention actually in use at this time.
+USER INTERFACE
+   The photocomposition machine provides a great deal of flexibility for 
+   specifying positions, character sizes and spacings, fonts, spot size and 
+   intensity, etc.  Giving all this "power" to the general user would be 
+   counterproductive in that the user would be likely to end up getting 
+   involved in long design cycles, trying to optimize all the variables so as 
+   to produce a sought-after document format.
+   What we have tried to do is to specify for the user a simplified subset of 
+   the full photocomposition machine capability which will enable users to 
+   easily and reliably get documents produced without extensive debugging of 
+   Output Processor directives.  This simplified subset has the following 
+   characteristics:
+   The user will view the photocomposition machine as a machine for composing 8
+   1/2 X 11" pages of text and graphics.
+   The user will specify physical dimensions such as character size and margin 
+   settings in units of one-thousandth inch, and the page will have a 
+   coordinate system in which (0, 0) is the upper left corner of the page and 
+   (8500, 11000) is the lower right corner.
+OUTPUT PROCESSOR / PHOTOCOMPOSITION MACHINE INTERFACE
+   The Output Processor (OP) will produce a sequential file consisting of 7-bit
+   bytes, packed 5 to a 36 bit word, left-justified (low-order bit is wasted). 
+   This sequential file will be copied to tape as per the specifications in the
+   following section.
+   The byte stream will be punctuated by command bytes, each of which may be 
+   followed by argument bytes when appropriate.  Command bytes are preceeded by
+   two DEL bytes (177 octal) which can be ignored.  The commands are:
+      = 1 : Output Line Segment (Text)
+      = 2 : New Page (Advance Frame)
+      = 3 : Insert Figure
+      = 4 : End of Document (Any bytes between this and the EOF mark on the 
+      tape are to be ignored)
+      = 5 : Output Linework
+   COMMAND (001) - The Output Line Segment command byte is followed by these 
+   arguments:
+      y-coordinate of line segment (2 bytes)
+         This is the y-coordinate (in thousandths) of the base-line of the 
+         characters to be printed in the line-segment -- i.e., the line on 
+         which the upper case letters rest.  (The first byte is the most 
+         significant 7 bits of a 14 bit coordinate in all cases.)
+      x-coordinate of left margin of line segment (2 bytes)
+         This is the x-coordinate (in thousandths) of the left edge of the 
+         leftmost character position in the line segment.
+      x-coordinate of right margin of line segment (2 bytes)
+         This is the x-coordinate (in thousandths) of the right edge of the 
+         rightmost character position in the line segment.
+         The x-coordinates will actually address the position which lies 
+         between two adjacent character positions -- i.e., the x-right of one 
+         line segment may have the same value as the x-left of the following 
+         line segment.
+      Justification Code (one byte)
+         = 0 : Set Line Segment Left Flush (ragged right)
+         = 1 : Set Line Segment Right Flush (ragged left)
+         = 2 : Center Line Segment Between Left and Right Margins
+         = 3 : Full Justification (insert space between words [and maybe 
+         characters within a word] to make both right and left edges of line 
+         segment flush with margins)
+      Number of text segments in this line segment (one byte)
+         A line segment may contain up to 126 text segments, each of which may 
+         be in a different face, size, boldness, etc.  These text segments are 
+         combined into a single line segment so as to permit them to be 
+         consistently justified by the photocomposition machine.
+         Each text segment consists of the following information:
+            Type Face (one byte)
+               = 0 : Courrier
+               = 1 : Directory
+               = 2 : Film
+               = 3 : OCR-B
+               = 4 : NMA Microfont
+               = 5 : News Gothic 
+               = 6 : Times Roman
+            Type Size (two bytes)
+               The character height.  (See the section on character measure.)
+            Type Style (one byte = b1 b2 b3 b4 b5 b6 b7)
+               Boldness (b6 b7)
+                  = 00 : medium (normal)
+                  = 01 : light
+                  = 10 : bold
+               Slant (b5) [italics]
+                  If b5 is on, slant the characters in this text segment.
+               Underlining (b4)
+                  If b4 is on, draw a line under the text in this string, using
+                  a boldness to complement that of the text.
+               Monospacing (b3)
+                  If b3 is on, monospace the characters in the text segment; 
+                  otherwise, set the characters proportionally spaced (if 
+                  allowed in that font) or monospaced as appropriate.
+            Character Count (two bytes)
+            Characters (one byte per character)
+   COMMAND (002) - Advance to the next page.  No Arguments. 
+   COMMAND (003) - The insert figure commad byte is followed by these 
+   arguments: 
+      Figure Number (three bytes)
+         This is the unique (ARC Catalog) number assigned to a photograph or 
+         drawing which will be submitted to the vendor in hardcopy.  the vendor
+         is to merge this figure into offset-printed copy by the most 
+         practicable method.
+      y-coordinate of center of figure on page (two bytes)
+      x-coordinate of left edge of figure (two bytes)
+      x-coordinate of right edge of figure (two bytes)
+   COMMAND (004) - Advance to the next page.  This is the end of this document,
+   advance to the EOF to start the next document.  No Arguments. 
+   COMMAND (005) - The Output Linework command is followed by these arguments: 
+      Line Type (one byte)
+         = 1 : Solid
+         = 2 : Dotted
+         = 3 : Dot-Dashed (.-.-.-.-.)
+         = 4 : Short-Dashed
+         = 5 : Long-Dashed
+      Intensity (one byte)
+         = 0 : Blank
+         ...
+         =15 : Most distinct
+      Broadness (one byte)
+         = 0 : Narrowest
+         ...
+         = 15 : Broadest
+      (In the current system, only 5 line 'styles' are used:
+         DESCRIPTION    INTENSITY  BROADNESS
+         Extra Fine         8          0
+         Fine               8          3 
+         Regular            8          5
+         Bold               8          8
+         Very Bold          8         11        )
+      The coordinates of the two endpoints of the line are given in the next 8 
+      bytes.
+      x1  (two bytes)
+         x-coordinate of the first endpoint
+      y1  (two bytes)
+         y-coordinate of the first endpoint
+      x2  (two bytes)
+         x-coordinate of the second endpoint
+      y2  (two bytes)
+         y-coordinate of the second endpoint
+      (In all, each linework command has 11 bytes of data.)
+CHARACTER MEASUREMENTS
+   Traditionally, COM has been used for the production of high speed, low 
+   quality printed and microfilm material.  As a result, the measurement of 
+   character height has diverged from the traditional printers method of 
+   measuring from the top of the ascenders to the bottom of the descenders.  
+   Our objective in the use of photocomposition is to produce publication 
+   quality documents.  Since the layout function for the document is performed 
+   by our Output Processor it is essential that the measurement and placement 
+   of characters is carefully specified.
+   Although justification is actually performed by the vendor, the Output 
+   Processor must know the width of the characters so that the correct number 
+   of words to fill the line is selected and passed in the Output Line Segment 
+   Command.  The vendor must supply the exact aspect ratio of each character in
+   each font.
+   Character heights are measured from the top of the ascenders to the bottom 
+   of the descenders.
+   Character widths are measured in such a way as to include the normal 
+   intercharacter spacing.
+   In all cases, the y-coordinates for text are specified to the base line of 
+   the text.  The base line is, of course, the line on which the capital 
+   letters rest.
+   Leading is never specified in this interface because the base lines of the 
+   text are passed as the y coordinates.  Leading is controlled by the Output 
+   Processor and cannot (and should not) be inferred from the data on the tape.
+MAGNETIC TAPE FORMAT
+   7 track format
+   One file per document
+      Files seperated by EOF tape marks
+      End of tape indicated by two EOF marks in a row
+   A file consists of any number of fixed length records
+      The last record in a file is the same length as all the others, hence may
+      contain garbage.
+   Each record consists of 512 36-bit words
+   Each word is broken into 6 6-bit packets, each of which has one parity bit 
+   (using odd parity).

@@ -1,0 +1,236 @@
+;; COMND% jsys routines.  These are roughly modeled after the DEC
+;; CMD package, at several removes and with some extra functions.
+;; MACSYM.MID must be included for this to assemble correctly.
+;; Temporary storage all comes off the stack, static storage via .SCALAR.
+;;
+;; This code isn't inside a block, because I was trying to make the calls
+;; mostly resemble those used in MACRO programs.  If this causes problems,
+;; well, put the block statements around the .INSRT.
+;;
+;; --sra 28 May 1985
+
+
+Ifndef cmdbln, Cmdbln==:<<80.*6>/5>+1	; Length of command buffer - 6 lines
+Ifndef atmbln, Atmbln==:cmdbln		; Length of atom buffer - same
+Ifndef cjfnln, Cjfnln==:20		; Length of block for long form GTJFN
+Ifndef cmdpln, Cmdpln==:200		; Amount of stack CMD can save
+
+.Scalar	Cmdbuf(cmdbln)			; Command buffer
+.Scalar	Atmbuf(atmbln)			; Last parsed field
+.Scalar	Cmdacs(20)			; Stored acs for reparse
+.Scalar	Sbk(20)				; Comnd jsys state block
+.Scalar	Cjfnbk(cjfnln)			; Gtjfn block for comnd
+.Scalar	Repara				; Reparse address for comnd
+.Scalar	Cmdorg				; Bottom of saved stack
+.Scalar	Cmdpdl(cmdpln)			; Where to save the stack
+
+
+Define	Cmd	Key, Dispatch, #Flags=0
+	[Ifn flags, flags\cm%fw
+	 Asciz key
+	],, Ifb Dispatch,[.!Key] .Else [Dispatch]
+Termin
+
+
+;Initial state block for cmdini
+Inisbk: repars				; .cmflg -- no flags,, where to reparse
+	.priin,,.priou			; .cmioj -- i/o
+	-1,,[0]				; .cmrty -- default is null prompt
+	-1,,cmdbuf			; .cmbfp -- where our buffer is
+	-1,,cmdbuf			; .cmpnt -- first input field
+	cmdbln*5			; .cmcnt -- max number of chars
+	0				; .cminc -- no unparsed chars yet
+	-1,,atmbuf			; .cmabp -- where atom buffer is
+	atmbln*5			; .cmabc -- size of atom buffer
+	cjfnbk				; .cmgjb -- location of gtjfn block
+
+
+;Cmdini -- initialize CMD routines
+
+cmdini:	push	p,1			; Can't do saveac, have to hack stack
+	move	1,[inisbk,,sbk]		; Blt pointer
+	blt	1,sbk+.cmgjb		; Set up state block
+	movei	1,-1(p)			; Get stack pointer
+	movem	1,cmdorg		; Save bottom of stack to preserve
+	pop	p,1			; Get ac1 back
+	ret				; Done
+
+;Prompt -- start new command line
+;1/ 0  to use null prompt,
+;   -1 to reuse last prompt (null, initially),
+;   or pointer to string.
+
+define	prompt	&string
+	hrroi	1,[asciz string]
+	call	dpromp
+termin
+
+Dpromp:	dmovem	0,cmdacs+0		; Save two acs
+	skipn	1			; If argument is zero
+	 hrroi	1,[0]			; Then prompt is a null string
+	came	1,[-1]			; If argument isn't minus one
+	 movem	1,sbk+.cmrty		; Then save new prompt
+	move	1,[2,,cmdacs+2]		; Blt pointer
+	blt	1,cmdacs+16		; Save most of the acs
+	pop	p,repara		; Save reparse address
+	movem	p,cmdacs+p		; Save last ac
+	movn	2,cmdorg		; Bottom of saved stack
+	addi	2,cmdpdl(p)		; Top of saved stack plus where it goes
+	caig	2,cmdpdl+cmdpln		; Too much?
+	ifskp.				; Yup, lose loudly
+	  emsg	"Increase CMDPLN and recompile"
+	  haltf%			; Stop
+	  jrst .-1			; Can't continue
+	endif.				; Ok if we get here
+	movs	1,cmdorg		; Origin
+	hrri	1,cmdpdl		; Destination
+	blt	1,(2)			; Save the stack
+	movei	1,[flddb. .cmini]	; Send the prompt
+	call	rfield			; Go type the prompt
+	dmove	1,cmdacs+1		; Restore acs for finiky users
+	move	3,cmdacs+3
+	jrst	@repara			; And return
+
+;Field parsing routines
+; 1/ descriptor block
+; returns ac1, ac2, and ac3 with results from COMND%
+
+;rflde -- parse a field, skip iff successful
+
+RFldE:	move	2,1			; Copy function block
+	movei	1,sbk			; State block
+	comnd%				; Do it
+	ifnje.				; If we won
+	andxe.	1,cm%nop		; And we really won
+	  aos	(p)			; Then skip return
+	endif.
+	ret
+
+;rfield -- parse a field, return +1 on success, otherwise reparse
+
+RField: call	rflde			; Parse the field
+	 jrst	cmderr			; Failed, go proccess error
+	ret				; Won, return to caller
+
+;cfield -- same as rfield, but confirm afterwards
+
+CField: call	rflde			; Parse the field
+	 jrst	cmderr			; Failed, go process error
+	jrst	confrm			; Won, confirm and return
+
+;noise -- parse (generate) a noise word
+
+define	noise	&string
+	push	p,[-1,,[asciz string]]
+	call	$noise			; Save arg on stack and call routine
+termin
+
+$Noise:	exch	3,(p)			; Get calling address
+	exch	3,-1(p)			; Exchange it for argument pointer
+	adjsp	p,6			; Need six words of stack
+	dmovem	1,-5(p)			; Save acs we trash
+	movx	2,fld(.cmnoi,cm%fnc)
+	movei	1,-3(p)			; Where our function block goes
+	dmovem	2,(1)			; Store first two words
+	setzm	2(1)			; No help message
+	setzm	3(1)			; Or default
+	call	rfield			; Go do the noise
+	dmove	1,-5(p)			; Get back some acs
+	move	3,-6(p)			; Another
+	adjsp	p,-7			; Fix the stack
+	ret				; Done, go home
+
+;confrm -- get confirmation
+
+Confrm:	saveac	[1,2,3]			; Save acs we trash
+	movei	1,[flddb. .cmcfm]
+	jrst	rfield			; Get confirmation and return
+
+
+;cmderr -- handles cmd errors
+
+cmderr:	emsg	" "
+	movei	1,.priou		; To primary output
+	hrloi	2,.fhslf		; Most recent error
+	setz	3,			; Any length
+	erstr%				; Standard error message
+	 jfcl
+	 jfcl				; (fall through to cmder1)
+
+; jump here if doing own error handling but want error reparse
+
+cmder1:	sos	repara			; Make reprompt happen
+					; (fall into repars)
+
+;repars -- where COMND% jsys jumps to for reparse
+repars: move	p,cmdacs+p		; Get old stack pointer
+	move	1,cmdorg		; Where the stack belongs
+	hrli	1,cmdpdl		; Where we stuffed it
+	blt	1,(p)			; Put it back
+	movsi	16,cmdacs		; Restore rest of the acs
+	blt	16,16
+	jrstf	@repara			; Go reparse or reprompt
+
+
+;jclcmd -- read a command from the RSCAN% buffer
+; returns
+;
+; +1	if it didn't parse a jcl argument or the jcl was bogus
+; +2	if it parsed a jcl argument up to the confirmation
+;
+; The first field of the jcl (sometimes known as the jane) will be end
+; up in atmbuf, in case your program needs it for something.  Note
+; that, like the DPROMP routine, this code will cause a jump back to
+; the location that issued the jclcmd call if there was a parse
+; failure.  Thus if there is a partial command in the rscan buffer, we
+; will return +2, parse along until we realize it isn't a valid
+; command, then will jump back, restore stack and acs, and return +1.
+; Note also that we assume the jcl has been normalized the way the exec
+; would do it, ie, first field looks like a keyword, and is terminated
+; by a space or a line feed.  You may win anyway if you insist on being
+; different, but don't say you haven't been warned....
+;
+; Example of use (since the above may sound a little weird):
+;
+;	CALL	JCLCMD			; Parse the JCL
+;	IFSKP.				; Did we win?
+;	 TXO	F,F%JCL			; Yes, remember to exit at end
+;	ELSE.				; No
+;	 PROMPT	"Foobar>"		; Prompt the user
+;	 TXZ	F,F%JCL			; Remember that we lost the JCL
+;	ENDIF.				; Done initializing line parse
+;	MOVEI	1,[FLDDB. .CMIFI]	; Get the input file
+;	CALL	CFIELD			; Parse and confirm
+;	.......				; Do something with it.....
+;
+
+jclcmd:	adjsp	p,4			; save jsys acs (will be stack hacking)
+	dmovem	1,-3(p)
+	dmovem	3,-1(p)
+	movei	1,.rsini		; try to snarf some jcl
+	rscan%
+	ifnje.				; if we won
+	andn.	1			; and there was some
+	caile	1,atmbln		; and it isn't ridiculously huge
+	anskp.
+	  move	3,1			; save count
+	  movei	1,.priin		; from tty
+	  hrroi	2,atmbuf		; to where user wants it (maybe)
+	  movei	4,40			; until encounter space
+	  sin%				; copy the string
+	annje.				; that better win too
+	  setz	1,			; zero last char, probably lf or space
+	  dpb	1,2
+	andn.	3			; anything left?
+	  call	dpromp			; yup, initialize for parse, no prompt
+	  aos	1,-4(p)			; skip return (figure it out)
+	  movem	1,repara		; is also where to reparse
+	  movei	1,-4(p)			; also fix saved copy of stack pointer
+	  movem	1,cmdacs+p
+	endif.				; done with this silliness
+	dmove	1,-3(p)			; get back acs
+	dmove	3,-1(p)
+	adjsp	p,-4			; fix stack
+	ret				; done
+
+;; end of CMD.MID

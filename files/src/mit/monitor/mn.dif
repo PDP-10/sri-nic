@@ -1,0 +1,165 @@
+
+;COMPARISON OF PS:<BBNSW.TAPPAN>MNETDV.MAC.1 AND SSY:<BERLIN.M5>MNETDV.MAC.5
+;OPTIONS ARE    /3
+
+**** FILE PS:<BBNSW.TAPPAN>MNETDV.MAC.1, 1-1 (0)
+**** FILE SSY:<BERLIN.M5>MNETDV.MAC.5, 1-1 (0)
+;1011 Load MNET even if DBUGSW = 2
+***************
+
+**** FILE PS:<BBNSW.TAPPAN>MNETDV.MAC.1, 2-42 (3951)
+	MOVE T1,[XWD ITFPC,MNTUXI]
+	MOVEM T1,MONBK		; Trap any interrupts
+	MOVE T1,CHNSON		; Trap all these channels
+	MOVEM T1,MONCHN
+**** FILE SSY:<BERLIN.M5>MNETDV.MAC.5, 2-40 (3983)
+***************
+
+**** FILE PS:<BBNSW.TAPPAN>MNETDV.MAC.1, 2-70 (4946)
+	MOVE T1,DBUGSW		; Get system switch
+	CAIG T1,1		; System normal?
+	 SKIPN DEFADR		; Did addresses initialize properly?
+	  CAIA
+	   CALL	MNETON		; Yes, Yes, start things up
+	JRST MNETLP		; Go to main fork loop
+**** FILE SSY:<BERLIN.M5>MNETDV.MAC.5, 2-61 (4841)
+;1011	MOVE T1,DBUGSW		; Get system switch
+;1011	CAIG T1,1		; System normal?
+	 SKIPN DEFADR		; Did addresses initialize properly?
+	  JRST MNTINX		; No, return now
+MNTINA:	SKIPA P1,NCTVT		; Point to vector table
+MNTIN2:	LOAD P1,NTLNK,(P1)	; get next in list
+	JUMPE P1,MNTINY		; Return when done
+	SETOM NETON(P1)		; Turn it on
+	MNTCALL NTPINI		; Do protocal specific initialization
+	SKIPE NTPHY(P1)		; If not physical
+	 JRST [ SETOM NTRDY(P1)	; don't init hardware
+		SETOM NTORDY(P1) ; But do bring it up
+		JRST MNTIN2]	; Loop
+	MNTCALL NTHINI		; Initialize network device
+	SETZM NTDCLK(P1)	; Init "down timeout" clock
+	SETZM NTPRIO(P1)	; Clear priority cell
+	MNTCALL NTRSRT		; get it going
+	JRST MNTIN2		; and loop
+MNTINY:	SETOM NETSUP		; Networks are now initialized
+MNTINX:	JRST MNETLP		; Go to main fork loop
+***************
+
+**** FILE PS:<BBNSW.TAPPAN>MNETDV.MAC.1, 2-84 (5289)
+	SKIPA P1,NCTVT		; Point to vector table
+MNTIN2:	LOAD P1,NTLNK,(P1)	; get next in list
+	JUMPE P1,MNTIN3		; Return when done
+	SETOM NETON(P1)		; Turn it on
+	MNTCALL NTPINI		; Do protocal specific initialization
+	SKIPN NTPHY(P1)		; If not physical
+	IFSKP.
+	 SETOM NTRDY(P1)	; don't init hardware, but do bring it up
+	ELSE.
+	 MNTCALL NTHINI		; Initialize network device
+	 SETZM NTDCLK(P1)	; Init "down timeout" clock
+	 SETZM NTPRIO(P1)	; Clear priority cell
+	 MNTCALL NTRSRT		; get it going
+	ENDIF.
+	JRST MNTIN2		; and loop
+MNTIN3:	SETOM	NETSUP		; Flag networks on
+	RET
+;;; Unexpected interrupt trap
+MNTUXI:	MNTBUG(CHK,MNTUX0,<NET HARDWARE FORK - UNEXPECTED INTERRUPT>)
+	SE1ENT			; Make sure in section one
+	MCENTR
+	JRST MNETLP		; Recover processing
+**** FILE SSY:<BERLIN.M5>MNETDV.MAC.5, 2-89 (5798)
+	JRST MNTINA		; And join above
+***************
+
+**** FILE PS:<BBNSW.TAPPAN>MNETDV.MAC.1, 5-84 (12216)
+CHKIND:	SKIPE NTRDY(P1)		; Already down?
+	IFSKP.	
+	 SKIPN NETON(P1)	; Should it be up?
+	 IFSKP.			; Yes
+	  SKIPN T1,NTPHY(P1)	; Virtual?
+	  IFSKP.
+	   SKIPGE NTRDY(P1)	; Is real one usable?
+	    SKIPL NTORDY(P1)	; ?
+	    IFSKP.
+	     SETOM NTRDY(P1)	; Mark this one ready
+	     SETOM NTORDY(P1)	;...
+	    ENDIF.
+	  ELSE.			; Physical
+	   MNTCALL NTRSRT	; Try to restart it
+	  ENDIF.		; end of SKIPN NTPHY
+	 ENDIF.			; end of SKIPN NETON
+	 RET			; Return now
+	ENDIF.			; End of SKIPE NTRDY
+**** FILE SSY:<BERLIN.M5>MNETDV.MAC.5, 5-84 (11988)
+CHKIND:	SKIPN NTRDY(P1)		; Already down?
+	 JRST [	SKIPN NETON(P1)	; Should it be up?
+		 RET		; No, leave down
+		SKIPE T1,NTPHY(P1) ; Virtual?
+		 JRST [ SKIPGE NTRDY(P1) ; Is real one usable?
+			 SKIPL NTORDY(P1) ; ?
+			  RET		; No, This one can't be
+			SETOM NTRDY(P1)	; Mark this one ready
+			SETOM NTORDY(P1) ;...
+			RET]
+		MNTCALL NTRSRT	; Try to restart it
+		RET]		; and go back
+***************
+
+**** FILE PS:<BBNSW.TAPPAN>MNETDV.MAC.1, 5-114 (13114)
+	IFSKP.
+	 SETZM NTRDY(P1)	; Done now
+	 RET
+	ENDIF.
+**** FILE SSY:<BERLIN.M5>MNETDV.MAC.5, 5-104 (12766)
+	 JRST [	SETZM NTRDY(P1)	; Done now
+		RET]
+***************
+
+**** FILE PS:<BBNSW.TAPPAN>MNETDV.MAC.1, 5-189 (15264)
+	MNTCALL	NTIDUN		; Simulate end of input
+**** FILE SSY:<BERLIN.M5>MNETDV.MAC.5, 5-174 (14900)
+	SETZ T2,
+	EXCH T2,NTIB(P1)	; Get current input buffer
+	CALL MNTCLB		; return it
+***************
+
+**** FILE PS:<BBNSW.TAPPAN>MNETDV.MAC.1, 5-220 (15892)
+MNTCLB:	JUMPLE T2,R		; No buffer
+	HLRZ CX,T2		; Get section number
+	CAIE CX,INTSEC		; Internet?
+	 JRST MNTCLL		; Non-Internet
+**** FILE SSY:<BERLIN.M5>MNETDV.MAC.5, 5-207 (15570)
+MNTCLB:	JUMPE T2,R		; No buffer
+	CAML T2,[XWD INTSEC,0]	; Internet?
+	 CAML T2,[XWD INTSEC,-1]	; ?
+	  JRST MNTCLL		; Non-Internet
+***************
+
+**** FILE PS:<BBNSW.TAPPAN>MNETDV.MAC.1, 6-13 (16459)
+	HLRZ CX,T1		; Get section number
+	CAIE CX,INTSEC		; ?
+	 RET
+	  RETSKP
+**** FILE SSY:<BERLIN.M5>MNETDV.MAC.5, 6-13 (16140)
+	CAML T1,[XWD INTSEC,0]
+	 CAMLE T1,[XWD INTSEC,-1]
+	  RET
+	   RETSKP
+***************
+
+**** FILE PS:<BBNSW.TAPPAN>MNETDV.MAC.1, 6-34 (16987)
+	MNTCALL NTISRT		; Keep input moving if needed
+**** FILE SSY:<BERLIN.M5>MNETDV.MAC.5, 6-34 (16666)
+***************
+
+**** FILE PS:<BBNSW.TAPPAN>MNETDV.MAC.1, 6-44 (17185)
+INTFB0:
+	CAML T2,[XWD INTSEC,1000] ; Valid buffer?
+	 CAMLE T2,[XWD INTSEC,-1] ; ?
+	  MNTBUG(HLT,INTRBB,<Releasing bad Internet buffer>)
+	LOAD T1,NBQUE,(T2)	; get next buffer in list
+**** FILE SSY:<BERLIN.M5>MNETDV.MAC.5, 6-43 (16816)
+INTFB0:	LOAD T1,NBQUE,(T2)	; get next buffer in list
+***************
+

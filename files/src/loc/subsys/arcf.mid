@@ -1,0 +1,1270 @@
+	Title @Arcf -- get/set archival/migration status of files
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;                        EDIT HISTORY                        ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;  2-27-83: [ZZZ] -- Creation
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;  2-28-83: [ZZZ] -- Added time constraint for files in requests,
+;;		cancellations, and status listings.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;  6-5-83: [ZZZ] -- Added stuff to communicate with QUASAR to
+;;		manipulate the retrieval queue (list and delete).
+;;
+;;		Added constraints on changing and listings of
+;;		files to lessen output and failure. Changed output
+;;		format of status command to take one line per-file.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; Sunday, 6 November 1983 ZZZ
+;;		Added SHOW command to list files awaiting archival
+;;		or migration runs.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+.decsav
+
+	A=1
+	B=2
+	C=3
+	D=4
+	V=5
+	X=10
+	Y=11
+	W=12
+
+	F=13			;flag bits for FDB
+	FW=14			;flag word for FDB
+
+	N=15			;IPCF attempts counter
+	P=17			;stack pointer
+;;
+;; GTJFN Block for COMND. This needs to be here to preempt the one
+;;    in SYSTEM:COMND.MID.
+;;
+JFNBlk:	0			;.gjgen
+	0			;.gjsrc (COMND fills this in)
+	0			;.gjdev (defaults to connected)
+	0			;.gjdir (defaults to connected)
+	-1,,DefNam		;.gjnam
+	-1,,DefTyp		;.gjext
+	Block 20
+
+.insrt system:symbols
+.insrt system:macros
+.insrt system:prarg
+.insrt system:comnd
+
+Define CMD string
+	[Asciz string],,.kark.
+	.kark.==.kark.+1
+Termin
+
+;;
+;;================================================================
+;;	STORAGE ADDRESSES AND GLOBALS
+;;================================================================
+;;
+DefNam:	Asciz "*"
+DefTyp:	Asciz "*"
+
+TopFDB:	Field(.cmkey,CM%FNC) ? CmdTbl ? 0 ? 0
+ChgFDB:	Field(.cmkey,CM%FNC) ? WhichT ? 0 ? 0
+HlpFDB:	Field(.cmcfm,CM%FNC) + HTFDB ? 0 ? 0 ? 0
+HTFDB:	Field(.cmkey,CM%FNC)\CM%HPP
+	CmdTbl
+	-1,,[Asciz "Help topic,"]
+	0
+FilFDB:	Field(.cmfil,CM%FNC)\CM%SDH\CM%HPP
+	0
+	-1,,[Asciz "file"]
+	0
+
+AttFDB:	Field(.cmcfm,CM%FNC) + PPFFDB ? 0 ? 0 ? 0
+PPFFDB:	Field(.cmkey,CM%FNC) ? PPFTbl ? 0 ? 0
+DatFDB:	Field(.cmtad,CM%FNC)\CM%SDH\CM%HPP + Tk3FDB
+	CM%IDA+DatBlk
+	-1,,[Asciz "Date, (e.g. 1-2-34 for Jan 2, 1934)"]
+	0
+Tk3FDB:	Field(.cmtok,CM%FNC)\CM%SDH\CM%HPP
+	-1,,[Asciz "-"]
+	-1,,[Asciz "-" number of days ago]
+	0
+NumFDB:	Field(.cmnum,CM%FNC)\CM%SDH\CM%HPP
+	10.
+	-1,,[Asciz "Number of days ago"]
+	0
+
+
+ReqFDB:	Field(.cmnum,CM%FNC)\CM%SDH\CM%HPP + AllFDB
+	10.
+	-1,,[Asciz "decimal request number"]
+	0
+AllFDB:	Field(.cmtok,CM%FNC)\CM%SDH\CM%HPP + NamFDB
+	-1,,[Asciz "*"]
+	-1,,[Asciz "*" for all requests]
+	0
+NamFDB:	Field(.cmfld,CM%FNC)\CM%SDH\CM%HPP ? 0
+	-1,,[Asciz "request name"] ? 0
+USwFDB:	Field(.cmswi,CM%FNC)\CM%SDH\CM%HPP + CfmFDB ? USwTab
+	-1,,[Asciz "/USER:"] ? 0
+UsrFDB:	Field(.cmusr,CM%FNC)\CM%SDH\CM%HPP\CM%DPP ? 0
+	-1,,[Asciz "user whose requests to cancel"]
+	-1,,UsrDef
+CfmFDB:	Field(.cmcfm,CM%FNC) ? 0 ? 0 ? 0
+
+UsrDef:	Block 10		;default username for requests
+ReqNam:	Block 10		;request name
+
+.kark.==0
+USwTab:	USLen,,USLen
+	CMD user:
+USLen==.-USwTab-1
+
+
+.kark.==0
+CmdTbl:	CBLen,,CBLen
+	CMD cancel
+	CMD exit
+	CMD help
+	CMD queue
+	CMD request
+	CMD show
+	CMD status
+CBLen==.-CmdTbl-1
+
+Action:	cancel			;CANCEL
+	exit			;EXIT
+	help			;HELP
+	queue			;QUEUE
+	reqest			;REQUEST
+	showq			;SHOW
+	showit			;STATUS
+
+HText:	[Asciz Cancel an archival, migration, or restore request, or
+turn off migration-related bits]
+	[Asciz Exit the program]
+	[Asciz Get help on program or command]
+	[Asciz Show retrieval queue listing]
+	[Asciz Request an archival, migration, or restore, or turn on
+migration-related bits]
+	[Asciz Show files queued for archival or migration]
+	[Asciz Show archival/migration information on file]
+
+DefHlp:	Asciz Give a command name as an argument to the HELP command to
+get information on what does what in this program. Use "?"
+whenever you are unsure of what to type.
+Filenames can be specified either one per-command or with wildcards.
+
+
+;;
+;; The table of arguments to the CANCEL or REQUEST commands
+;;
+.kark.==0
+WhichT:	WTLen,,WTLen
+	CMD archival
+	CMD migration
+	CMD prohibit
+	CMD resist
+	CMD retrieval
+WTLen==.-WhichT-1
+
+;;
+;; dispatch table for the setting of FDB bits
+;;
+SetAct:	.arcf			;ARCHIVAL
+	.mgrat			;MIGRATION
+	.pro			;PROHIBIT
+	.res			;RESIST
+	.rstor			;RETRIEVAL
+
+;;
+;; dispatch table for the clearing of FDB bits
+;;
+CanAct:	.carcf			;ARCHIVAL
+	.cmig			;MIGRATION
+	.cpro			;PROHIBIT
+	.cres			;RESIST
+	.crst			;RETRIEVAL
+
+;;
+;; Stuff for dates and such
+;;
+.kark.==0
+PPFTbl:	PPFLen,,PPFLen
+	CMD before
+	CMD for
+	CMD since
+PPFLen==.-PPFTbl-1
+
+PPFDis:	.befor			;BEFORE
+	.for			;FOR
+	.since			;SINCE
+
+;;
+;; dummy locations
+;;
+.befor:	0
+.for:	0
+.since:	0
+
+Direct:	0			;which direction, Past,Present,or Future?
+Date:	0			;date to compare
+LkAtDt:	0			;bool: 0=no dates, non0=look at dates
+DatBlk:	Block 3			;storage for date and time
+
+;;
+;; stack stuff
+;;
+PDLen==20
+SaveP:	0			;saved stack pointer
+PDList:	Block PDLen
+
+;;
+;; File data storage locations
+;;
+SavJFN:	0			;original JFN
+ThisJ:	0			;present JFN
+FilDat:	0			;data storage for GTFDB calls
+	0
+WildP:	0			;wildcard flag word
+FirstP:	0			;filename output flag word
+ChgDir:	0			;boolean for changing JFNS/Directory names
+Any:	0			;boolean for this directory
+ThisD:	Block 30		;this directory name
+LastD:	Block 30		;last directory name
+
+;;
+;; Block that the CYCLE subroutine gets AC2 & AC3 from for ARCF calls
+;;
+CycleB:	0			;function
+	0			;argument
+
+;;
+;;================================================================
+;;	IPCF stuff for QUASAR interaction
+;;================================================================
+;;
+.insrt lib:glxlib
+
+SavNxt:	0			;save the flags for next MRECV call
+MePID:	0			;my PID storage location
+
+ToQ:	0			;flag word (25 for finding PID of
+MyPID:	0			;my PID		QUASAR with MUTIL)
+QPID:	0			;QUASAR's PID
+	0			;length and address of block
+
+ForM:	25			;find a system PID
+	2			;and make it QUASAR's
+QsPID:	0			;store it here
+
+FromQ:	0			;flag word
+	0			;QUASAR's PID
+	0			;my PID
+	0			;length and address of block
+
+QReqst:	7,,.qolis		;7 words and list queues
+	Ms.Ack			;acknowledge, please
+	1			;acknowledge code
+	0			;flag word
+	1			;one argument
+	2,,0
+	2000,,0			;retrieval queue
+	Block 10		;buffer
+
+QDelR:	20,,.qokil		;20 words and cancel request
+	Ms.Ack			;acknowledge, please
+	1			;ack code
+	.otret			;retrieval queue
+RName:	0			;SIXBIT request name
+RMask:	0			;request name mask (-1 if rname has name)
+	0			;bogus "external sequence number"
+RNumb:	0			;request number (0 if using rname)
+RUser:	Block 10		;request username (ascii without brackets)
+
+DatPag:	Block 1000		;blank data page for QUASAR
+
+
+;;
+;;================================================================
+;;	THE PROGRAM
+;;================================================================
+;;
+Start:	RESET
+	Move p,[-PDLen,,PDList-1]
+	E%ON			;enable capabilities
+	Movei a,3
+	Movei b,ForM
+	MUTIL
+	  Jrst [Type "?Can't find QUASAR: "
+		Call Barf
+		.Logout]
+	Move a,QsPID		;QUASAR's PID
+	Movem a,QPID		;save it
+	GJINF
+	Move b,a
+	Hrroi a,UsrDef
+	DIRST
+	  Nop			;no error, it won't hurt
+
+CLoop:	Movei a,CRep
+	Movem a,CmdBlk
+	Move a,[.priin,,.priou]
+	Movem a,CmdBlk+1
+	Hrroi a,[Asciz "ARCF> "]
+	Movem a,CmdBlk+2
+
+	Movei a,CmdBlk
+	Movei b,IniFDB
+	COMND
+	Movem p,SaveP
+CRep:	Move p,SaveP
+	Move a,CmdBlk+.cmflg
+	Txo a,CM%RAI		;uppercase input for me, please
+	Movem a,CmdBlk+.cmflg
+	Movei a,CmdBlk
+	Movei b,TopFDB
+	COMND
+	Txne a,CM%NOP
+	  Jrst [Hrroi 3,[Asciz "?Ambiguous"]
+		Caie b,NPXAMB
+		  Hrroi 3,[Asciz "?Unrecognized command"]
+		Call Terpri
+		Move 1,3
+		PSOUT
+		Jrst CLoop]
+	Move v,(b)
+	Hrrz b,v
+	Move v,Action(b)
+	Call (v)
+	Jrst CLoop
+
+;;
+;;================================================================
+;;	COMMAND DISPATCH ADDRESSES
+;;================================================================
+;;
+
+;;
+;; CANCEL: Cancel some request
+;;
+Cancel:	Noise "request of"
+	Movei a,CmdBlk
+	Movei b,ChgFDB
+	COMND
+	Txne a,CM%NOP
+	  Jrst [Call Terpri
+		Type "?Unable to find that to change"
+		Ret]
+	Move v,(b)
+	Hrrz b,v
+	Move v,CanAct(b)
+	Cain v,.crst		;was it restore request?
+	  Jrst .crst		;yeah, we don't do this shit...
+	Noise "for files"
+	Movx a,GJ%OLD\GJ%IFG
+	Hrr a,[0,,.gjall]
+	Movem a,JFNBlk
+	Movei a,CmdBlk
+	Movei b,FilFDB
+	COMND
+	Txne a,CM%NOP
+	  Jrst [Call Terpri
+		Type "?Cannot parse: "
+		Call Barf
+		Ret]
+	Move x,b
+	Movei a,CmdBlk
+	Movei b,AttFDB
+	COMND
+	Txne a,CM%NOP
+	  Jrst [Call Terpri
+		Type "?Gak: "
+		Call Barf
+		Ret]
+	Tlz c,-1
+	Cain c,AttFDB		;was it a confirm?
+	  Jrst [Setzm LkAtDt	;don't look at date field
+		Jrst DoIt]
+	Move y,(b)
+	Hrrz b,y
+	Move y,PPFDis(b)
+	Call GtDate
+	  Ret
+	Movem b,Date
+DoIt:	Movem x,SavJFN
+	Movem x,ThisJ
+	Call (v)
+	Ret
+
+;;
+;; ARCHIVAL: archive any files in this file group specification
+;;
+.carcf:	Movei b,.arrar		;archive a file
+	Movei c,.arclr		;and clear it
+	Movem b,CycleB
+	Movem c,CycleB+1
+	Movei fw,.fbctl		;look in .fbctl (want it off!)
+	Movx f,FB%OFF		;we want them online!
+	Call Cycle
+	Ret
+
+;;
+;; MIGRATION: migrate any files in this file group specification
+;;
+.cmig:	Movei b,.arriv		;migrate a file
+	Movei c,.arclr		;and clear it
+	Movem b,CycleB
+	Movem c,CycleB+1
+	Movei fw,.fbctl		;look in .fbctl (want it off!)
+	Movx f,FB%OFF		;we want them online!
+	Call Cycle
+	Ret
+
+;;
+;; MIGRATABILITY: resist or prohibit
+;;
+.cpro:	Movei b,.arexm		;exempt from migration
+	Movei c,.arclr		;and clear it
+	Movem b,CycleB
+	Movem c,CycleB+1
+	Movei fw,.fbctl		;look in .fbctl (want it off!)
+	Movx f,FB%OFF		;we want them online!
+	Call Cycle
+	Ret
+
+.cres:	Movei b,.arnar		;resist migration
+	Movei c,.arclr		;and clear it
+	Movem b,CycleB
+	Movem c,CycleB+1
+	Movei fw,.fbctl		;look in .fbctl (want it off!)
+	Movx f,FB%OFF		;we want them online!
+	Call Cycle
+	Ret
+
+;;
+;; RETRIEVAL: gotta talk to QUASAR about this one...
+;;
+.crst:	Noise "request(s)"
+	Setzm RName		;zero any previous stuff
+	Setzm RMask
+	Setzm RNumb
+	Setzm RUser
+	Movei a,CmdBlk
+	Movei b,ReqFDB
+	COMND
+	Txne a,CM%NOP
+	  Jrst [Call Terpri
+		Type "?Bad request: "
+		Call Barf
+		Ret]
+	Tlz c,-1
+	Cain c,ReqFDB		;request number?
+	  Jrst CRNo
+	Cain c,AllFDB		;"*"?
+	  Jrst CRA
+	Cain c,NamFDB		;request name?
+	  Jrst CRNm
+	Type "?Illegal option"
+	Ret
+
+CRNo:	Move v,b		;save the number
+	Confirm
+	  Ret
+	Movem v,RNumb		;deposit it
+	Jrst CDone		;and do the sending
+
+CRNm:	Hrroi a,AtmBuf
+	Hrroi b,ReqNam
+	Setz c,
+	SIN
+	Confirm
+	  Ret
+	Hrroi a,ReqNam
+	Call A2Six
+	  Jrst [Type "%Truncating to six characters"
+		Jrst .+1]
+	Movem d,RName
+	Setom RMask
+	Jrst CDone
+
+CRA:	Movei a,CmdBlk
+	Movei b,USwFDB
+	COMND
+	Txne a,CM%NOP
+	  Jrst CmdErr
+	Tlz c,-1
+	Move a,[Sixbit "*"]
+	Movem a,RName		;store the "*" as request name, no mask
+	Cain c,CfmFDB		;confirmed?
+	  Jrst CDone		;yeah
+	Movei a,CmdBlk
+	Movei b,UsrFDB
+	COMND
+	Txne a,CM%NOP
+	  Jrst CmdErr
+	Hrroi a,RUser		;username for request
+	DIRST
+	  Jrst [Type "?DIRST error: "
+		Call Barf
+		Ret]
+	Confirm
+	  Ret
+
+CmdErr:	Call Terpri
+	Type "?Command error: "
+	Call Barf
+	Ret
+
+;; send the IPCF message to cancel the request and get a response
+
+CDone:	Movx a,IP%CFV\IP%CPD	;send a whole page and create a PID
+	Movem a,ToQ
+	Move a,[1000,,.page.]
+	Movem a,ToQ+.ipcfp
+
+;; stock up DatPag with the request
+
+CD1:	Movsi a,QDelR
+	Move b,Page
+	Hrr a,b
+	Addi b,20
+	Blt a,(b)
+	Movei a,4
+	Movei b,ToQ
+	MSEND
+	  Jrst [Type "?IPCF error @CD1: "
+		Call Barf
+		Jrst CDunn]
+CD2:	Movx a,IP%CFB		;don't wait
+	Movem a,FromQ+.ipcfl
+	Move a,MyPID		;here's my PID
+	Movem a,FromQ+.ipcfr
+	Move a,QPID		;here's QUASAR's PID
+	Movem a,FromQ+.ipcfs
+	Move a,[1000,,DatPag]	;1000 words at DatPag
+	Movem a,FromQ+.ipcfp
+
+CD3:	Movei a,1000		;wait a second here
+	DISMS			;  to give QUASAR reply time
+	Movei a,4
+	Movei b,FromQ
+	MRECV
+	  Jrst [Cain a,IPCFX2	;no messages?
+		  Jrst [Caig n,8	;8 tries
+			  Jrst [Aos n	;increment
+				Jrst CD3]
+			Setz n,	;reset counter
+			Jrst IPEr1]	;and die with error
+		Jrst IPEr1]
+	Movei d,DatPag+6
+	Type "["
+	AType (d)
+	CType "]
+	Jrst CDunn
+
+IPEr1:	Type "IPCF error @CD3: "
+	Call Barf
+CDunn:	Movei a,.mudes		;punt this used PID, please
+	Movem a,ToQ
+	Movei a,2
+	Movei b,ToQ
+	MUTIL
+	  Ret
+	Ret
+
+
+;;
+;; EXIT: Leave program
+;;
+Exit:	Noise "and say goodbye"
+	Confirm
+	  Ret
+	.Logout
+
+;;
+;; HELP: Get help on something
+;;
+help:	Noise "with"
+	Movei a,CmdBlk
+	Movei b,HlpFDB
+	COMND
+	Txne a,CM%NOP
+	  Jrst [Call Terpri
+		Type "?Ow! Yer hurtin' me!!"
+		Jrst CPopJ]
+	Tlz c,-1		;only want the right half for this
+	Cain c,HlpFDB
+	  Jrst [AType DefHlp
+		Jrst CPopJ]
+	Move v,(b)
+	Confirm
+	  Ret
+	Hrrz b,v
+	AType @HText(b)
+	Call Terpri
+	Ret
+
+;;
+;; QUEUE: show listing of retrieval queue
+;;
+Queue:	Noise "listing of retrieval queue"
+	Confirm
+	  Ret
+	Movx a,IP%CFV\IP%CPD	;send a whole page and create a PID
+	Movem a,ToQ
+	Move a,[1000,,.page.]
+	Movem a,ToQ+.ipcfp
+
+;; stock up DatPag with the request
+
+QSend:	Movsi a,QReqst
+	Move b,Page
+	Hrr a,b
+	Addi b,7
+	Blt a,(b)
+	Movei a,4
+	Movei b,ToQ
+	MSEND
+	  Jrst [Type "?IPCF error @QUEUE: "
+		Call Barf
+		Jrst QDone]
+QRec1:	Movx a,IP%CFB		;don't wait
+	Movem a,FromQ+.ipcfl
+	Move a,MyPID		;here's my PID
+	Movem a,FromQ+.ipcfr
+	Move a,QPID		;here's QUASAR's PID
+	Movem a,FromQ+.ipcfs
+	Move a,[1000,,DatPag]	;1000 words at DatPag
+	Movem a,FromQ+.ipcfp
+
+QRecv:	Movei a,1000		;wait a second here
+	DISMS			;  to give QUASAR reply time
+	Movei a,4
+	Movei b,FromQ
+	MRECV
+	  Jrst [Cain a,IPCFX2	;no messages?
+		  Jrst [Caig n,8	;8 tries
+			  Jrst [Aos n	;increment
+				Jrst QRecv]
+			Setz n,	;reset counter
+			Jrst IPErr]	;and die with error
+		Jrst IPErr]
+	Jumpe a,[Movei d,DatPag+6	;if AC1 = 0, no more data
+		 AType (d)
+		 Jrst QDone]
+	Call QGet		;get the message
+	  Jrst QDone
+	Movei d,<.page.*1000>	;address of number of words past this
+	Addi d,15		;we start at the fifteenth word
+	AType (d)		;type the message
+	Move a,SavNxt		;restore MRECV flags
+	Jumpe a,QDone		;return if last
+	Jrst QLoop		;go back for more
+
+QLoop:	Call QGet		;get next message
+	  Jrst QDone
+	Movei d,<.page.*1000>	;address of number of words past this
+	Addi d,6		;we start at the sixth word from now on
+	AType (d)		;type the message
+	Move a,SavNxt		;restore MRECV flags
+	Jumpe a,QDone		;return if last
+	Jrst QLoop		;go back for more
+
+QGet:	Hllzm a,FromQ+.ipcfp	;save the length of next message
+	Hrrzm a,FromQ+.ipcfl	;save flags for next call
+	Txne a,IP%CFV		;is next message a page?
+	  Jrst [Movei a,.page.	;yep, here's the address of the page
+		Hrrm a,FromQ+.ipcfp	;  as destination for next message
+		Jrst Q1]
+	Movei a,DatPag		;nope, heres the destination then
+	Hrrm a,FromQ+.ipcfp
+Q1:	Movx a,IP%CFB		;don't wait and error if no messages
+	Hllm a,FromQ+.ipcfl
+
+	Movei a,4
+	Movei b,FromQ
+	MRECV
+	  Jrst [Type "?IPCF error @Q1: "
+		Call Barf
+		Ret]
+	Movem a,SavNxt
+	Jrst PopJ1
+
+IPErr:	Type "IPCF error @QRECV: "
+	Call Barf
+QDone:	Movei a,.mudes
+	Movem a,ToQ
+	Movei a,2
+	Movei b,ToQ
+	MUTIL
+	  Ret
+	Ret
+
+;;
+;; REQUEST: Request something
+;;
+Reqest:	Noise "what"
+	Movei a,CmdBlk
+	Movei b,ChgFDB
+	COMND
+	Txne a,CM%NOP
+	  Jrst [Call Terpri
+		Type "?Unable to find that to change"
+		Jrst CPopJ]
+	Move v,(b)
+	Hrrz b,v
+	Move v,SetAct(b)
+	Noise "for files"
+	Movx a,GJ%OLD\GJ%IFG
+	Hrr a,[0,,.gjall]
+	Movem a,JFNBlk
+	Movei a,CmdBlk
+	Movei b,FilFDB
+	COMND
+	Txne a,CM%NOP
+	  Jrst [Call Terpri
+		Type "?Cannot parse: "
+		Call Barf
+		Jrst CPopJ]
+	Move x,b
+	Movei a,CmdBlk
+	Movei b,AttFDB
+	COMND
+	Txne a,CM%NOP
+	  Jrst [Call Terpri
+		Type "?Gak: "
+		Call Barf
+		Jrst CPopJ]
+	Tlz c,-1
+	Cain c,AttFDB		;was it a confirm?
+	  Jrst [Setzm LkAtDt	;don't look at date field
+		Jrst GWan]
+	Move y,(b)
+	Hrrz b,y
+	Move y,PPFDis(b)
+	Call GtDate
+	  Jrst CPopJ
+	Movem b,Date
+GWan:	Movem x,SavJFN
+	Movem x,ThisJ
+	Call (v)
+	Ret
+
+;;
+;; ARCHIVAL: archive any files in this file group specification
+;;
+.arcf:	Movei b,.arrar		;archive a file
+	Movei c,.arset		;and set it
+	Movem b,CycleB
+	Movem c,CycleB+1
+	Movei fw,.fbctl		;look in .fbctl (want it off!)
+	Movx f,FB%OFF		;we want them online!
+	Call Cycle
+	Ret
+
+;;
+;; MIGRATION: migrate any files in this file group specification
+;;
+.mgrat:	Movei b,.arriv		;migrate a file
+	Movei c,.arset		;and set it
+	Movem b,CycleB
+	Movem c,CycleB+1
+	Movei fw,.fbctl		;look in .fbctl (want it off!)
+	Movx f,FB%OFF		;we want them online!
+	Call Cycle
+	Ret
+
+;;
+;; RETRIEVAL: restore any files in this file group specification
+;;
+.rstor:	Movei b,.arrfr		;restore file
+	Movx c,AR%NMS		;and don't wait
+	Movem b,CycleB
+	Movem c,CycleB+1
+	Hrroi fw,.fbctl		;look in .fbctl (want it on!)
+	Movx f,FB%OFF		;we want them offline!
+	Call Cycle
+	Ret
+
+;;
+;; MIGRATABILITY: resist or prohibit
+;;
+.pro:	Movei b,.arexm		;exempt from migration
+	Movei c,.arset		;and set it
+	Movem b,CycleB
+	Movem c,CycleB+1
+	Movei fw,.fbbbt		;look in .fbbbt (want it off!)
+	Movx f,AR%EXM		;we want them no prohibit!
+	Call Cycle
+	Ret
+
+.res:	Movei b,.arnar		;resist migration
+	Movei c,.arset		;and set it
+	Movem b,CycleB
+	Movem c,CycleB+1
+	Movei fw,.fbbbt		;look in .fbbbt (want it off!)
+	Movx f,AR%NAR		;we want them no resist!
+	Call Cycle
+	Ret
+
+;;
+;; SHOW: Show the files ready for archival or migration
+;;
+ShowQ:	Noise "archival requests for"
+	Movx a,GJ%OLD\GJ%IFG
+	Hrri a,.gjall
+	Movem a,JFNBlk
+	Movx a,G1%IIN
+	Movem a,JFNBlk+.gjf2
+	Movei a,CmdBlk
+	Movei b,FilFDB
+	COMND
+	Txne a,CM%NOP
+	  Jrst [Call Terpri
+		Type "?Bad filename: "
+		Call Barf
+		Jrst CPopJ]
+	Move x,b		;save JFN
+	Confirm
+	  Ret
+	Setom Firstp		;first file looked at
+	Movem x,SavJFN
+	Movem x,ThisJ
+	Setzm Wildp
+	Tlne a,770000		;wildcarded?
+	  Setom Wildp		;yeah, flag it
+
+ShQ1:	Hrrz a,ThisJ
+	Move b,[1,,.fbbbt]
+	Movei c,FilDat
+	GTFDB
+	  Erjmp [Type "?GTFDB failure: "
+		 Call Barf
+		 Jrst ShQNxt]
+	Move y,FilDat
+	Movei v,ShQNxt
+	Txne y,AR%RIV
+	  Movei v,SQMig
+	Txne y,AR%RAR
+	  Movei v,SQArc
+	Jrst (v)
+
+SQArc:	Setzm FirstP
+	Type "Archival: "
+	Movei a,.priou
+	Hrrz b,ThisJ
+	Setzb c,d
+	JFNS
+	  Erjmp .+1
+	Jrst ShQNxt
+
+SQMig:	Setzm FirstP
+	Type "Migration: "
+	Movei a,.priou
+	Hrrz b,ThisJ
+	Setzb c,d
+	JFNS
+	  Erjmp .+1
+	Jrst ShQNxt
+
+ShQNxt:	Call Terpri
+	Skipn Wildp
+	  Jrst SQDone
+	Move a,SavJFN
+	GNJFN
+	  Jrst [Cain a,GNJFX1	;no more files?
+		  Jrst SQDone	;out of files...
+		Type "?GNJFN error: "
+		Call Barf
+		Jrst CPopJ]
+	Movem a,ThisJ
+	Jrst ShQ1
+SQDone:	Skipn FirstP		;any files done?
+	  Ret			;yup
+	Type " No files"
+	Ret
+
+;;
+;; STATUS: Show me what things look like here
+;;
+ShowIt:	Noise "of files"
+	Movx a,GJ%OLD\GJ%IFG
+	Hrri a,.gjall
+	Movem a,JFNBlk
+	Movx a,G1%IIN
+	Movem a,JFNBlk+.gjf2
+	Movei a,CmdBlk
+	Movei b,FilFDB
+	COMND
+	Txne a,CM%NOP
+	  Jrst [Call Terpri
+		Type "?Cannot parse: "
+		Call Barf
+		Jrst CPopJ]
+	Move x,b
+	Movei a,CmdBlk
+	Movei b,AttFDB
+	COMND
+	Txne a,CM%NOP
+	  Jrst [Call Terpri
+		Type "?Gak: "
+		Call Barf
+		Jrst CPopJ]
+	Tlz c,-1
+	Cain c,AttFDB		;was it a confirm?
+	  Jrst [Setzm LkAtDt	;don't look at date field
+		Jrst Okay]
+	Move y,(b)
+	Hrrz b,y
+	Move y,PPFDis(b)
+	Call GtDate
+	  Jrst CPopJ
+	Movem b,Date
+Okay:	Movem x,SavJFN
+	Movem x,ThisJ
+	Hrroi a,ThisD	;and make our new directory
+	Hrrz b,SavJFN	;  the new THISD
+	Move c,[Field(1,JS%DEV)+Field(1,JS%DIR)+JS%PAF]
+	JFNS
+4Wild:	Move a,SavJFN
+	Tlne a,770000		;any wildcards?
+	  Jrst [Setom WildP	;yep
+		Jrst .+2]
+	 Setzm WildP		;nope
+GoOn:	Skipe LkAtDt
+	  Jrst [Call GtAcDt	;get access date
+		Skipe Direct	;if we're going for only this day...
+		  Jrst [Skipg Direct
+			  Jrst [Camle b,Date
+				  Jrst StsNxt
+				Jrst ProcIt]
+			Camge b,Date
+			  Jrst StsNxt
+			Jrst ProcIt]
+		Came b,Date
+		  Jrst StsNxt
+		Jrst ProcIt]
+ProcIt:	Hrrz a,ThisJ
+	Move b,[1,,.fbbbt]
+	Movei c,FilDat
+	GTFDB
+	  Erjmp [Type "?GTFDB failure: "
+		 Call Barf
+		 Jrst StsNxt]
+ChekIt:	Setzm FirstP		;first time for report
+	Move y,FilDat
+	Txne y,AR%RAR
+	  Jrst [Movei v,ReqArc
+		Call Output
+		Jrst .+1]
+	Txne y,AR%RIV
+	  Jrst [Movei v,ReqMig
+		Call Output
+		Jrst .+1]
+	Txne y,AR%NAR
+	  Jrst [Movei v,ResMig
+		Call Output
+		Jrst .+1]
+	Txne y,AR%EXM
+	  Jrst [Movei v,ExmMig
+		Call Output
+		Jrst .+1]
+	Txne y,AR%RFL
+	  Jrst [Movei v,Failed
+		Call Output
+		Jrst .+1]
+	Txne y,AR%WRN
+	  Jrst [Movei v,WarnEm
+		Call Output
+		Jrst .+1]
+	Txne y,AR%RSN
+	  Jrst [Movei v,Reason
+		Call Output
+		Jrst .+1]
+StsNxt:	Skipe WildP
+	  Jrst [Skipe ChgDir
+		  Call Chged	;changed
+		Setzm FirstP
+		Call NxtJFN
+		  Jrst [Call Chged	;no more files
+			Jrst CPopJ]
+		Call Terpri
+		Jrst GoOn]
+	Ret			;no wildcards, go back
+
+OutGbg:	Block 40		;filename buffer
+Output:	Skipe FirstP
+	  Jrst (v)
+	Setom FirstP
+	Setom Any		;this is for this directory, eh?
+	Hrroi a,OutGbg
+	Hrrz b,SavJFN
+	Setz c,
+	JFNS
+	  Erjmp [Type "?JFNS failure: "
+		 Call Barf
+		 Jrst CPopJ]
+OutCnt:	Setz d,
+	Move a,[440700,,OutGbg]
+OutC1:	ILdb b,a
+	Jumpn b,[Cail b,40	;control character?
+		   Aos d	;nope, takes a character to output
+		 Jrst OutC1]
+	AType OutGbg		;type the name
+	Move a,d
+	Movei d,40.
+	Sub d,a
+	Skipg d
+	  Movei d,40
+	Call PadSpc
+	Jrst (v)
+
+;; put AC4 spaces
+PadSpc:	Movei a,40
+	Jumple d,CPopJ
+PadS1:	PBOUT
+	Sojg d,PadS1
+	Ret
+
+ReqArc:	Type " [Archive]"
+	Ret
+ReqMig:	Type " [Migrate]"
+	Ret
+ResMig:	Type " [Resist]"
+	Ret
+ExmMig:	Type " [Prohibit]"
+	Ret
+Failed:	Type " [Restore failed]"
+	Ret
+WarnEm:	Type " [Expiration near]"
+	Ret
+Reason:	Type " [OFFLINE: "
+	Move a,FilDat
+	Txne a,Bit(15.)
+	  Jrst [Type "expired]"
+		Jrst CPopJ]
+	Txne a,Bit(17.)
+	  Jrst [Type "migrated]"
+		Jrst CPopJ]
+	Txne a,Bit(16.)
+	  Jrst [Type "archived]"
+		Jrst CPopJ]
+	Type "can't tell"
+	Ret
+
+
+;;
+;;================================================================
+;;	SUBROUTINES
+;;================================================================
+;;
+
+;;
+;; Multi-file processing of one ARCF function.
+;;
+;;   ARCF function (for AC2) is in CYCLEB
+;;   ARCF argument (for AC3) is in CYCLEB+1
+;;
+Cycle:	Move a SavJFN
+	Tlne a,770000		;any wildcards?
+	  Jrst [Setom WildP	;yes
+		Jrst .+2]
+	 Setzm WildP		;no
+Cycle1:	Skipe LkAtDt
+	  Jrst [Call GtAcDt	;get access date
+		Skipe Direct	;if we're going for only this day...
+		  Jrst [Skipg Direct
+			  Jrst [Camle b,Date
+				  Jrst Cycle2
+				Jrst ProcF]
+			Camge b,Date
+			  Jrst Cycle2
+			Jrst ProcF]
+		Came b,Date
+		  Jrst Cycle2
+		Jrst ProcF]
+;;
+;;  FW has the flag word in the FDB to look at
+;;  F has the bits to test
+;;  left half of FW says whether we want them on or off (0 for off, -1 for on)
+;;
+ProcF:	Jumpe fw,[Jumpe f,ProcF1	;if both zero, process all
+		  Jrst .+1]
+	Hrrz a,SavJFN
+	Move b,fw		;this word
+	Hrli b,1		;one word
+	Movei c,d		;store in AC4
+	GTFDB
+	Hlre a,fw		;want it on or off?
+	Jumpe a,[Tdne d,f	;want it off
+		   Jrst Cycle2	;it's on, forget this file
+		 Jrst ProcF1]
+	Tdnn d,f		;want it on
+	  Jrst Cycle2		;it's off, forget it for now
+ProcF1:	Movei a,.priou
+	Hrrz b,SavJFN
+	Setz c,
+	JFNS
+	Hrrz a,ThisJ
+	Move b,CycleB		;function
+	Move c,CycleB+1		;arguments
+	ARCF
+	  Erjmp [Type "	[failed: "
+		 Call Barf
+		 CType "]
+		 Jrst Cycle2]
+	Type "	[OK]"
+Cycle2:	Skipe WildP		;any more to try?
+	  Jrst [Call NxtJFN	;yes, grab them and loop
+		  Jrst CPopJ	;well, we ran out of files. go back
+		Jrst Cycle1]	;got another, loop
+	Ret
+	  
+;;
+;; Get the most recent access date
+;;
+TempD:	0			;for access date
+TempD2:	0			;for new one from GTFDB
+GtAcDt:	Setzm TempD
+	Setzm TempD2
+	Move b,[1,,.fbref]
+	Call GFDB
+	  Ret
+	Move a,TempD
+	Movem a,TempD2		;automagically most recent so far
+Write:	Move b,[1,,.fbwrt]
+	Call GFDB
+	  Ret
+	Move a,TempD2
+	Camle a,TempD
+	  Movem a,TempD		;more recent
+Create:	Move b,[1,,.fbcrv]
+	Call GFDB
+	  Ret
+	Move a,TempD2
+	Camle a,TempD
+	  Movem a,TempD		;more recent
+	Move b,TempD		;the most recent access date to AC2
+	Ret
+
+
+GFDB:	Hrrz a,SavJFN
+	Movei c,TempD2
+	GTFDB
+	  Erjmp [Type "?GTFDB failure: "
+		 Call Barf
+		 Jrst CPopJ]
+	Jrst PopJ1
+
+;;
+;; Check if any files got done when changing directories
+;;
+Chged:	Hrroi a,ThisD	;and make the old THISD
+	Hrroi b,LastD	;  the new LASTD
+	Setz c,
+	SIN
+	Hrroi a,ThisD	;and make our new directory
+	Hrrz b,SavJFN	;  the new THISD
+	Move c,[Field(1,JS%DEV)+Field(1,JS%DIR)+JS%PAF]
+	JFNS
+	  Erjmp [Jrst .+1]
+	Skipn Any
+	  Jrst [Type "
+nothing for "
+		AType LastD
+		Jrst CPopJ]
+	Setzm Any
+	Ret
+
+;;
+;; Gets a date from the user, defaulting to an old value, NOW for current date
+;;
+GtDate:	Cain y,.for		;was it FOR?
+	  Jrst [Setz a,
+		Jrst GtD1]
+	Cain y,.since		;was it SINCE?
+	  Jrst [Movei a,1
+		Jrst GtD1]
+	Cain y,.befor		;was it BEFORE?
+	  Jrst [Seto a,
+		Jrst GtD1]
+	Type "?Did you derive some twisted pleasure from that one?"
+	Ret
+GtD1:	Movem a,Direct
+	Setom LkAtDt	;look at the dates
+	Movei a,CmdBlk
+	Movei b,DatFDB
+	COMND
+	Txne a,CM%NOP
+	  Jrst [Call Terpri
+		Type "?Bad date format"
+		Jrst CPopJ]
+	Tlz c,-1
+	Cain c,DatFDB
+	  Jrst PopJ1
+	Caie c,Tk3FDB
+	  Jrst [Type "?AAAAAARRRRRRRRGGGGGGGGHHHHHHHHHHH!!!!"
+		Ret]
+	Movei a,CmdBlk
+	Movei b,NumFDB
+	COMND
+	Txne a,CM%NOP
+	  Jrst [Call Terpri
+		Type "?Invalid number"
+		Jrst CPopJ]
+	GTAD
+	Hrlzs b
+	Sub a,b
+	Hllz b,a
+	Jrst PopJ1
+
+;;
+;; Turn ascii string (pointer in AC1) to sixbit (pointer in AC4).
+;;
+A2Six:	Move c,[440600,,d]
+	Hrli a,440700
+	Movei 0,6
+	Setz d,			;remove stray characters here
+A2S1:	ILdb b,a
+	Jumpe b,PopJ1
+	Subi b,40
+	IDpb b,c
+	Sojg 0,A2S1
+	ILdb b,a
+	Jumpe b,PopJ1		;last character anyway
+	Ret
+	
+;;
+;; Get the next JFN
+;;
+NxtJFN:	Move a,SavJFN
+	GNJFN
+	  Jrst [Cain a,GNJFX1	;ran outta files?
+		  Jrst CPopJ	;yes, return +1
+		Type "?GNJFN failure: "	;no, error time
+		Call Barf
+		.Logout]
+	Txne a,GN%DIR		;changed directories--
+	  Jrst [Setom ChgDir	;tell everyone we did,
+		Jrst .+2]
+	 Setzm ChgDir		;didn't change directories--set flag to 0
+	Movem a,ThisJ
+PopJ1:	Aos (p)
+CPopJ:	Ret
+
+variables
+constants
+
+.page.==<.+777>/1000
+
+Page:	.page.*1000
+
+	End Start

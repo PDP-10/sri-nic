@@ -1,0 +1,544 @@
+
+	Title @UDisk -- Used Disk for given directory spec
+
+.decsav
+
+A=5
+B=6
+C=7
+T=10
+TT=11
+ZZ=12				;always contains 0 for byte operations
+
+X1=13				;temporary
+X2=14				;  summing
+X3=15				;  objects
+
+P=17
+
+.tsize==2000.			;size of sorting tables
+.pdlen==20			;stack size
+ .flen==40			;field length for directory strings
+
+.insrt mid:symbols		;symbol definitions
+.insrt mid:macros		;home-grown macros
+.insrt mid:macsym		;DEC-grown macros
+.insrt mid:sout			;user-space SOUT
+.insrt mid:prarg		;PRARG routines/symbols
+.insrt mid:comnd		;COMND routines/storage
+;;
+Define EType &string
+	Hrroi 1,[Asciz string]	;BP to string
+	ESOUT			;print on newline following a "?"
+Termin
+
+Define Fatal &string
+	EType string
+	Call Barf		;output real error message
+	.Logout			;and die
+Termin
+;;
+PopJ1:	Aos (P)
+CPopJ:	Return
+Retskp==<Jrst PopJ1>		;skip-return
+;;
+;;================ Counters ================
+;;
+DirCnt:	0			;directory counter
+TWork:	0			;total working quota
+TPerm:	0			;total permanent quota
+TUsed:	0			;total used pages
+DWork:	0			;directory working quota
+DPerm:	0			;directory permanent quota
+DUsed:	0			;directory used pages
+.ctend==DUsed			;last counter's address
+;;
+;;================ Directory Specification ================
+;;
+DirFlg:	0			;directory spec flags
+DSpec:	Block .flen		;directory spec string
+;;
+;;================ Current Directory Information ================
+;;
+DirNum:	0			;number of current directory
+DirNam:	Block .flen		;name of current directory
+;;
+;;================ Job Information Storage ================
+;;
+JobInf:	Block 4			;GJINF storage
+ConDir:	Block .flen		;connected directory string
+;;
+;;================ COMND FDBs ================
+;;
+PNmFDB:	Field(.cmfld,CM%FNC) ? 0 ? 0 ? 0
+DirFDB:	Field(.cmdir,CM%FNC)\CM%DPP + SrtFDB ? CM%DWC ? 0
+	-1,,ConDir
+SrtFDB:	Field(.cmswi,CM%FNC) + LstFDB ? SrtKey ? 0 ? 0
+LstFDB:	Field(.cmswi,CM%FNC) + ConFDB ? LstKey ? 0 ? 0
+
+SORT%N==0			;value for sort-by-name
+SORT%S==1			;value for sort-by-size
+LIST%B==1			;value for brief-listing
+LIST%V==2			;value for verbose-listing
+
+SrtKey:	SKLen,,SKLen
+	[Asciz "name-sort"],,SORT%N	;sort output alphabetically
+	[Asciz "size-sort"],,SORT%S	;sort output, largest usage first
+SKLen==.-SrtKey-1
+
+LstKey:	LKLen,,LKLen
+	[Asciz "brief-listing"],,LIST%B	;just list totals
+	[Asciz "verbose-listing"],,LIST%V	;list all directories
+LKLen==.-LstKey-1
+
+;;
+;;================ Random Cruft ================
+;;
+MaxInt:	370000,,0		;biggest number I can reasonably think of
+Punted:	0			;"punted data" flag
+SrtMod:	SORT%N		        ;default sort mode is alphabetic
+LstMod:	0			;prompt by default
+InfFlg:	0			;"found infinity" flag
+
+FirstB:	0			;first block
+Rsults:	Block .tsize
+UBlock:	Block .tsize
+
+PDL:	-.pdlen,,.
+	Block .pdlen
+EOMPTR:	0			;pointer to current end-of-memory
+$CRLF:	Asciz /
+/
+Header:	Asciz "
+
+  Used     Working    Permanent     - Directory -
+"
+Prompt:	Asciz " Do you want a full directory rundown? (y/n) "
+Puntxt:	Asciz "    [Infinite quotas were excluded from quota totals ('*' in listing)]"
+
+;;================================================================
+;;	Finally, some code...
+;;
+Start:	RESET			;why isn't this automagic?
+	Move P,PDL		;set up runtime stack
+	Setzb ZZ,DirCnt		;clear some
+	Move 1,[DirCnt,,TWork]	;  counters
+	BLT 1,.ctend		;  out...
+	ENABLE			;enable any privs within program
+	Movei 1,.rsini		;initialize rescan buffer
+	RSCAN			;make text available to me
+	ifnsk.			;bletch -- error
+	  Fatal "Failed getting JCL: "
+	  endif.
+	GJINF			;get my job information
+	DMovem 1,JobInf		;store the info
+	DMovem 3,JobInf+2	;   from GJINF call
+	Hrroi 1,ConDir		;destination
+	Setz 3,			;full text
+	DIRST			;store connected directory string
+	  0			;if this fails, we're in TROUBLE!
+;;	
+;;	Beginning the parse
+;;	
+	Movei 1,CmdBlk		;command state block
+	Movei 2,PNmFDB		;program name (.cmfld)
+	COMND			;parse first field
+	ifxn. 1,CM%NOP		;parsing error (shouldn't happen)
+	  Fatal "Bogus program name: "
+	  endif.
+Parse0:	Movei 1,CmdBlk		;command state block
+	Movei 2,DirFDB		;dir spec or switch (.cmdir/.cmswi/.cmcfm)
+	COMND			;get command field
+	ifxn. 1,CM%NOP		;ack. bad input
+	  Fatal "Bad switch or directory spec: "
+	  endif.
+Parse1:	Ldb 1,[.BP CM%FNC,(3)]	;get function code
+	Caie 1,.cmswi		;switch given?
+	ifskp.			;SWITCH: get directory spec
+	  Hrrz 1,3		;get address of fdb used
+	  Hrrz 3,(2)		;get flag in RH of switch entry
+	  Caie 1,SrtFDB		;what switch?
+	    Jrst Pars1a
+	  Movem 3,SrtMod	;  save flag as sort mode
+	  Movei 3,LIST%V	;  sort flag implies verbosity
+Pars1a:	  Movem 3,LstMod	;  save flag as list mode
+	  Jrst Parse0		;loop until the loser gives a dir spec
+	else.			;DIRECTORY: get switch
+	  Caie 1,.cmdir		;directory given?
+	  ifskp.		;yoop, chew on it a bit
+	    Hrroi 1,DSpec	;destination
+	    Hrroi 2,AtmBuf	;where the text is
+	    Setz 3,		;asciz style
+	    $SOUT		;copy that muthuh
+Parse2:	    Movei 1,CmdBlk	;command state block
+	    Movei 2,SrtFDB	;switch (.cmswi/.cmcfm)
+	    COMND		;get switch
+	    ifxn. 1,CM%NOP	;ack, bad spec
+              Fatal "Bad switch or confirmation: "
+	      endif.
+	    Ldb 1,[.BP CM%FNC,(3)]	;get function code
+	    Caie 1,.cmswi	;switch given?
+	    ifskp.		;SWITCH: get directory spec
+	      Hrrz 1,3		;get address of fdb used
+	      Hrrz 3,(2)	;get flag in RH of switch entry
+	      Caie 1,SrtFDB		;what switch?
+		Jrst Pars2a
+	      Movem 3,SrtMod	;  save flag as sort mode
+	      Movei 3,LIST%V	;  sort flag implies verbosity
+Pars2a:	      Movem 3,LstMod	;  save flag as list mode
+	      Jrst Parse2	;loop until the loser confirms
+	    endif.
+	  else.			;not directory...
+	    Hrroi 1,DSpec	;destination
+	    Hrroi 2,ConDir	;connected directory
+	    Setz 3,		;asciz style
+	    $SOUT		;copy string in memory
+	    endif.
+	  endif.
+
+	Movx 1,RC%AWL		;allow wildcards in spec
+	Hrroi 2,DSpec		;directory spec
+	Setz 3,			;nothing at all
+	RCDIR			;get a number for me
+	ifjer.			;if error
+	  Fatal "Bad directory spec: "
+	  endif.
+	ifxn. 1,RC%NOM		;if no match
+	  Fatal "Bad directory spec: "
+	  endif.
+	Movem 1,DirFlg		;save directory spec flags
+	Movem 3,DirNum		;save directory number
+
+	Movei 1,EOM		;end of memory
+	Movem 1,EOMPTR		;save pointer
+	Setzm InfFlg		;zero this
+	Setzm Punted		;  and this (nothing done just yet)
+	do.			;time for a little loop here...
+	  Move 1,InfFlg		;get old InfFlg
+	  IOrm 1,Punted		;Punted = (Punted | InfFlg)
+	  Setzm InfFlg		;new directory now...
+	  Call GStats		;get statistics
+	  Call NStats		;update statistics
+	  Call ListIt		;list the directory information
+	  Call NxtDir		;next directory
+	    loop.		;more to do
+	  enddo.		;no more -- fall out
+;;;; gotta do this again for the last directory in the list...
+	Move 1,InfFlg		;get old InfFlg
+	IOrm 1,Punted		;Punted = (Punted | InfFlg)
+;;;;
+	Call Terpri		;newline
+	Type "                   Directories:  "
+	Move A,DirCnt		;directory count
+	Call FNType		;output it
+	CRType "              Total Disk Usage:  "
+	Move A,TUsed		;disk usage total
+	Call FNType		;output it
+	CRType "           Total Working Quota:  "
+	Move A,TWork		;working quota total
+	Call FNType		;output it
+	CRType "         Total Permanent Quota:  "
+	Move A,TPerm		;permanent quota total
+	Call FNType		;output it
+	Skipn Punted		;did we punt any directories?
+	ifskp.			;yes
+	  Call Terpri
+	  AType Puntxt		;let 'em know what the scoop is
+	  endif.
+	Skipe 1,LstMod		;skip if no listing switches given
+	ifskp.			;none given - prompt the user
+	  Hrroi A,Prompt	;the prompt text for the question
+	  Call GetY.N		;get a "yes" or "no"
+	    Jrst Croak		;no listing required -- punt.
+	  Call Vrbose		;gimme a verbose listing
+	else.			;switch given - do what it said
+	  Cain 1,LIST%V		;skip if user set brief-mode
+	    Call Vrbose		;give verbose listing
+	endif.
+Croak:	.Logout			;and all done!
+	Jrst Croak		;*** only until PRARG confusion is gone... ***
+
+;;================================================================
+;;	Subroutines
+;;
+;;	FNTYPE  -  Type a flagged # to tty smartly
+;;		Requires: A / Number for output
+;;		Returns: +1: only on success with # output or
+;;			     "+Inf" if flagged (# < 0)
+;;
+FNType:	ifl. A			;if outta-range flagged
+	  Type "+Inf"
+	else.			;otherwise it's regular
+	  Movei 1,.priou	;destination
+	  Move 2,A		;number to output
+	  Movei 3,10.		;decimal (all I need right now...)
+	  NOUT			;output the number
+	    .Lose		;cheap error recovery
+	  endif.
+	Return
+;;
+;;	GETY.N  -  Get Yes / No
+;;		Requires:  A / BP to prompt string
+;;		Returns:  +1: "no"
+;;			  +2: "yes"
+;;
+GetY.N:	E%OFF			;turn off echo
+	do.
+	  Hrroi 1,$CRLF		;carriage return
+	  PSOUT			;output it to prepare for
+	  Move 1,A		;  prompt
+	  PSOUT			;prompt user
+	  PBIN			;get input
+	  Caig 1,"z
+	    Cail 1,"a
+	   Subi 1,40		;uppercase the input
+	  Caie 1,"Y
+	  ifskp.		;"yes"...
+	    Type "Yes"
+	    E%ON		;turn on echo
+	    Retskp		;skip-return
+	    endif.
+	  Caie 1,"N
+	  ifskp.		;"no"...
+	    Type "No"
+	    E%ON		;turn on echo
+	    Return		;return +1
+	    endif.
+	  CType ^G		;feep at feeb
+	  loop.			;  and loop
+	  enddo.
+;;
+;;	GSTATS  -  Get Statistics for current directory's usage/quotas
+;;		Requires:  DirNum / Directory number
+;;		Returns:  +1 always; info in ACs 1-3 from GTDAL call
+;;
+GStats:	Move 1,DirNum		;directory number
+	GTDAL			;get allocation information
+	ifjer.			;error...
+	  Fatal "Bad directory check (internal error): "
+	  endif.
+	Return
+;;
+;;	LISTIT  -  List the current directory stuff to EOM listing
+;;		Requires: DirNum / current directory number
+;;			  EOMPTR / BP to end of listing text
+;;			  Information in counters (DWork-DUsed)
+;;		Returns: +1 always, updated BP in EOMPTR
+;;
+ListIt:	Move 1,EOMPTR		;BP to current EOM
+	Hrli 1,440700
+	Move 2,DUsed		;used pages
+	Move 3,[Field(6,NO%COL)+NO%LFL+10.]	;6-column, left-fill, decimal
+	ifl. 2
+	  Hrroi 2,[Asciz "  +Inf"]
+	  Setz 3,
+	  $SOUT
+	else.
+	  NOUT			;output to string
+	    Nop			;no error recovery...
+	  endif.
+	Movei 2,40		;<space>
+	IDpb 2,1		;put it in there
+	Move 2,DWork		;working quota
+	Move 3,[Field(11.,NO%COL)+NO%LFL+10.]	;11-column, left-fill, decimal
+	ifl. 2
+	  Hrroi 2,[Asciz "       +Inf"]
+	  Setz 3,
+	  $SOUT
+	else.
+	  NOUT			;output to string
+	    Nop			;no error recovery...
+	  endif.
+	Movei 2,40		;<space>
+	IDpb 2,1		;put it in there
+	IDpb 2,1		;put another in there
+	Move 2,DPerm		;permanent quota
+	Move 3,[Field(11.,NO%COL)+NO%LFL+10.]	;11-column, left-fill, decimal
+	ifl. 2
+	  Hrroi 2,[Asciz "       +Inf"]
+	  Setz 3,
+	  $SOUT
+	else.
+	  NOUT			;output to string
+	    Nop			;no error recovery...
+	  endif.
+	Hrroi 2,[Asciz "   "]	;some spaces
+	Setz 3,			;asciz...
+	$SOUT			;tack 'em on
+	Movei 2,40		;standard case -- a space
+	Skipe InfFlg		;did we have an "infinity" this round?
+	  Movei 2,"*		;yes, flag the directory name in the output
+	IDpb 2,1		;put the right char there
+	Movei 2,40		;one more space
+	IDpb 2,1		;  to the listing
+	Move 2,DirNum		;current directory number
+	DIRST			;output name to listing
+	ifnsk.			;errors shouldn't happen!
+	  Fatal "Failed directory translation (internal error): "
+	  endif.
+	Hrroi 2,$CRLF		;carriage return / linefeed
+	Setz 3,			;asciz...
+	$SOUT			;prepare for next one
+	
+	Addi 1,2		;guarantee at least one null byte
+	Hrli 1,440700		;and set up new BP for next directory
+	Movem 1,EOMPTR		;save pointer for later
+	Return			;all done
+
+
+;;
+;;	SORTIT  -  Sorted insertion of new directory's statistics.
+;;
+;;      During the loop we consider putting the record between
+;;	the records pointed to by AC1 and AC2.  The former refers
+;;	to the "previous" record, the latter is the "next" record.
+;;	At the end of each loop the slot moves forward by one, making
+;;	the old "next" record the new "previous" one...
+;;
+SortIt:	Skipe DirCnt		;skip if first directory
+	ifskp.			;first directory - just insert it
+	  Movei 1,Rsults	;AC1: start of results table
+	  Movem 1,FirstB	;this is the defacto first record
+	  Movei T,FirstB	;T: pointer to "previous" record
+	  Setz 1,		;AC1: zero to clear forward pointer
+	else.	  
+	  Move A,SrtMod		;fetch the search mode flag
+	  Caie A,SORT%N		;sort by name? (this is automatic)
+	  ifskp.		;**** sort by name (just add to end)
+	    Move 3,DirCnt	;AC3: count of entries in table already
+	    Movei T,Rsults-1(3)
+	    Move 1,Rsults-1(3)	;AC1: previous entry in table
+	  else.			;**** sort by size
+	    Move 1,FirstB	;AC1: First block descriptor
+	    Movei T,FirstB	;T: address of first descriptor
+	    do.			;loop through the existing entries
+	      Skipn 2,(1)	;skip if there's a next dir
+	        Jrst endlp.	;end of table, just insert here
+	      Hlrz 3,2		;AC3: addr of usage block for "next dir"
+	      Hlrz 3,(3)	;AC3: pages used for "next dir"
+	      Camge 3,DUsed	;skip if "next dir" used more than new one
+	        Jrst endlp.	;found the right place - fall through
+	      Hrrz T,1		;T: address of "previous" record
+	      Move 1,2		;"next dir" becomes "previous dir"
+	      loop.		;loop until end of blocks
+	    enddo.
+	  endif.
+	endif.
+ 	Movei 3,Rsults		;AC3: start of results table
+	Add 3,DirCnt		;AC3: address for next entry
+	Hrrm 1,(3)		;new insert gets "previous" forward pointer
+	Hrrm 3,(T)	        ;"previous" record gets new forward pointer
+	Movei 1,UBlock		;AC1: start of usage-block table
+	Add 1,DirCnt		;AC1: address for next entry
+	Hrlm 1,(3)		;store usage-block pointer
+	Hrl 4,DUsed		;AC4: <pages used>,,xxxxxx
+	Hrr 4,EOMPTR		;AC4: <pages used>,,<string address>
+	Movem 4,(1)		;save entry in results table
+	Return
+
+;;
+;;	NSTATS  -  Update to New Statistics
+;;		Requires: 1-3 / GTDAL-returned disk information
+;;		Returns: +1 always, with new totals in DirCnt-TUsed,
+;;			    and current info in DWork-DUsed
+;;
+NStats:	Setzm InfFlg		;init the locally-checked "infinity" flag
+	DMove X1,TWork		;copy permanent totals (work,perm)
+	Move X3,TUsed		;copy permanent total (used)
+	Move A,1		;current dir's working quota
+	Movei B,DWork		;address for temp
+	Movei C,X1		;address for sum
+	Call SMerge		;do some 'smart' accumulation
+	  Setom InfFlg		;encountered infinity, remember it
+	Move A,2		;current dir's disk usage
+	Movei B,DUsed		;address for temp
+	Movei C,X3		;address for sum
+	Call SMerge		;do some 'smart' accumulation
+	  Setom InfFlg		;encountered infinity, remember it
+	Move A,3		;current dir's permanent quota
+	Movei B,DPerm		;address for temp
+	Movei C,X2		;address for sum
+	Call SMerge		;do some 'smart' accumulation
+	  Setom InfFlg		;encountered infinity, remember it
+
+	Call SortIt		;insert new record into results table
+	Aos DirCnt		;increment directories counter
+	Movem X3,TUsed		;save permanent total (used)
+	Skipe InfFlg		;did we see infinity?
+	ifskp.			;no
+	  DMovem X1,TWork	;save permanent totals (work,perm)
+	  endif.
+	Return			;all done
+
+;;
+;;	VRBOSE  -  Output a verbose list of the results
+;;
+Vrbose:	AType Header
+	Move A,FirstB		;A: first block address
+	do.
+	  Skipn B,(A)		;fetch next entry
+	    Jrst endlp.		;no more entries - done
+	  Hlrz A,B		;A: address of this usage record
+	  Hrro 1,(A)		;AC1: BP to usage record's string
+	  PSOUT			;output to tty:
+	  Move A,B		;new "previous" entry
+	  loop.			;loop on next record
+	enddo.
+	Return
+
+;;
+;;	NXTDIR  -  Step to next directory in list
+;;		Requires: DirNum / Current directory number
+;;			  DSpec  / Text directory spec (maybe wildcarded)
+;;		Returns: +1: success - new # in DirNum
+;;			 +2: no more directories in list
+;;
+NxtDir:	Movx 1,RC%STP\RC%AWL	;step/allow-wildcards
+	Hrroi 2,DSpec		;directory spec string
+	Move 3,DirNum		;current loc in stepping list
+	RCDIR			;find next directory
+	ifjer.			;jsys error
+	  Fatal "Bad directory stepping (internal error): "
+	  endif.
+	Txne 1,RC%NMD\RC%NOM	;any more directories?
+	  Retskp		;nope, done
+	Movem 3,DirNum		;yeah, here's the next one
+	Return
+;;
+;;	SMERGE  -  Merge statistics halfway intelligently
+;;		Requires:  A / number for adding
+;;			   B / address for temp storage of A
+;;			   C / address for sum storage
+;;		Returns: +1: had +Inf in data
+;;			 +2: otherwise
+;;			 Sum overflows or #s >= MaxInt are turned
+;;			 into -1s. (= +Infinity)
+;;
+SMerge:	Camge A,MaxInt		;bigger than max?
+	ifskp.			;yeah...
+	  Setom (B)		;flag this
+	  Return		;and punt +1 (+Inf)
+	  endif.
+	Movem A,(B)		;save to temp
+	Skipge (C)		;is sum < 0 ?
+	  Retskp		;yeah, done. +2 (valid data)
+	Add A,(C)		;sum the two
+	Caml A,(C)		;is new sum valid (overflows) ?
+	ifskp.			;no, adjust
+	  Setom (C)		;flag sum
+	  Retskp		;and return +2 (valid data)
+	  endif.
+	Camge A,MaxInt		;is new sum out of bounds?
+	ifskp.			;yeah
+	  Setom (C)		;flag sum
+	else.			;new sum is in bounds
+	  Movem A,(C)		;save it
+	  endif.
+	Retskp			;all done +2 (valid data)
+
+variables
+constants
+
+EOM:	0			;the End Of Memory...
+
+	End Start

@@ -1,0 +1,402 @@
+From: decvax!J.Rapaport@S.ARPA, decvax!Grouptheory.Systems.Inc.@seismo.CSS.GOV
+Sender: decvax!rap@seismo.CSS.GOV
+Date: Thu Dec  5 11:17:09 EST 1985
+Subject: Plot (3) filter to PostScript
+
+--------------
+
+Dear Richard:  I am sending you a copy of the source for a bridge to 
+the apple LaserWriter (and any other PostScript engine) that will take
+output from any C program using the plot(3) library.   Full documentation
+is included in the comments.  If you think this might be of help to others
+on the net, feel welcome to post it.   It is called "tlw", to match the
+naming convention of the other tplot filters.
+
+In addition, I have included a small C program ("margtest.c") for testing tlw.
+It draws a box around the page, near the margin that the LaserWriter 
+imposes.  Since tlw likes to know the location of this margin, which differs
+from machine to machine, "margtest" is an aid to determining the margin
+on a given laserwriter (and perhaps, toner cartridge).  There are
+#define's in the source of tlw that can be altered to indicate the location
+of your margins.  See the comments in the source.
+
+Thanks,
+
+Steve Rapaport
+{decvax, etc...} !utzoo!dciem!nrcaer!grpthry!rap
+
+"Bottom-up Programming: If it was good enough for God..."
+
+First, the test program, margtest.c:
+------------------------- cut here ----------------------------------------
+
+
+/* this is just a test program to find out where the margins are on your 
+ * laserwriter.  Run it and send the output through tlw to the laserwriter.
+ * it should draw a (perfectly) square box with dashed diagonals. 
+ * Adjust MARGX and MARGY in tlw until the edges of the box are just visible.
+ */
+
+#include <stdio.h>
+#define  BLEFT	0, 0
+#define  TLEFT  0, 4096
+#define  BRIGHT	4096, 0
+#define  TRIGHT 4096, 4096
+main ()
+{
+	openpl ();
+	space (BLEFT, TRIGHT);
+	linemod ("longdashed");
+	line (BLEFT, TRIGHT);
+	linemod ("shortdashed");
+	line (BRIGHT, TLEFT);
+	linemod ("solid");
+	move (BLEFT);
+	cont (TLEFT);
+	cont (TRIGHT);
+	cont (BRIGHT);
+	cont (BLEFT);
+	closepl ();
+}
+
+------------------------- cut here ----------------------------------------
+Then, the bridge (tlw.c):
+------------------------- cut here ----------------------------------------
+
+/* The following program may be used, copied, and modified by anyone at will,
+ * so long as this message is not removed or altered.
+ * 'tlw' was written by Steve Rapaport at grouptheory systems inc., October 85.
+ * {decvax, etc...}!utzoo!dciem!nrcaer!grpthry!rap
+ * Copyright 1985 grouptheory systems inc.  Permission to reproduce & update
+ * granted.
+ */
+
+/*
+ *
+ * tlw -- a filter to turn output from plot(3) library routines into postscript
+ *        instructions for the Apple LaserWriter.   (or any PostScript device).
+ *        Compatible with all Berkeley 4.2 PLOT(5) files.  (I think!)
+ *        To install, just compile it with the math library (-lm), and
+ *        put it somewhere that everyone can get at.  (e.g. /usr/bin/tlw).
+ *
+ *        Bugs: until end of Dec '85, mail me at utzoo!dciem!nrcaer!grpthry!rap
+ *        After that, you're on your own....
+ *
+ *        Example of use:  Let 'plotter' be a C program containing 
+ *        calls to plot(3) routines.  The following command will
+ *        put the output of 'plotter' on the laserwriter:
+ *
+ *        plotter | tlw | <whatever you use to send PostScript to the lw>
+ *
+ *        In addition, tlw may be added as a 'terminal' filter to the 
+ *        plot(1G) shell script (tplot(1G) in system 3) 
+ *        by adding the following line to plot (or tplot):
+ *
+ *           -Tlw)  exec /usr/bin/tlw $* ;;
+ *
+ *        (or wherever you put this program)  and using -Tlw as plot option.
+ *
+ *        Portability:  This program has only been tested on a Plexus P/60
+ *        running System 3.  It uses no fancies, though, and outputs plain
+ *        ascii.  The only problem I can foresee involves the input of
+ *        plot(5) files.  
+ *
+ *        I am using (int) variables to hold the
+ *        integer parameters; if your C thinks (int) is less than 16 bits,
+ *        change that declaration to (long) in main() and readswpd().
+ *
+ *        Customization:  The program takes no options, but certain macros 
+ *        may be changed in the source to customize for your installation.
+ *
+ *            DEFXSCALE, DEFYSCALE:  These are the size of the laserwriter
+ *            raster area, in points.  Legal size paper will require
+ *            DEFYSCALE to change to 14.0 * 72.0.  
+ *            to use another PostScript device (e.g., some Linotron typesetters)
+ *            change these to match the raster area for your machine.  
+ *            *Note* that they are (float). (If these constants are defined 
+ *            without decimals, the program will behave *strangely*)
+ *
+ *            MARGX, MARGY:  compensate for the clipping boundaries of
+ *            the laserwriter.  They are measured in points, and their
+ *            effect is to reduce the page size to fit within the lw's
+ *            raster area.  The numbers given here work okay on my machine,
+ *            you may wish to change them to fit yours.
+ *            MARGX refers to the amount that the short dimension differs
+ *            from 8.5 inches (612 points), and MARGY refers to the 
+ *            analagous difference from 11 inches (792 points).
+ *            Note that these constants are (float).
+ *
+ *            FLIP:  For the sake of most graphs, defining FLIP 
+ *            flips the x and y axes to make the page wider than it is tall.
+ *            To reverse this effect, undefine FLIP (comment out the #define).
+ *            You may want to keep two versions of the filter in your library,
+ *            named, say, tlwh and tlwv, one with FLIP defined, one not.
+ *
+ *            FONT, PITCH:  These are the parameters that postscript takes.
+ *            10 point letters seem to fit well with what the standard
+ *            programs expect.  You may wish to change them, though.  If
+ *            you prefer, say, Helvetica to Times Roman, you might change FONT
+ *            to "/Helvetica".  PITCH is assumed integer.
+ *
+ *            LINEWIDTH :  This linewidth (.2 of a point) suits my taste.
+ *            You may have your own opinions.  Note that the width is
+ *            independent of the scale of the space.  Assumed (float).
+ *
+ */
+
+
+
+/* 
+ installation-dependent constants: 
+ (change these at will)
+ */
+
+/* if you want plots to come out vertical on the page, comment out next line: */
+#define FLIP
+
+#define DEFXSCALE	612.0
+#define DEFYSCALE	792.0
+#define MARGX		39.0
+#define MARGY		20.0
+#define FONT        "/Times-Roman"
+#define PITCH		10
+#define LINEWIDTH	.2
+
+/* 
+ * change the following at your own peril: 
+ */
+
+#include <stdio.h>
+#include <math.h>
+#define FOREVER		1
+#define DEGREES		* 180.0 / 3.141592654
+#define DOTS		/ scale
+#define min(a,b)   ( (a < b) ? a : b )
+#define MARGSCALE   min(( DEFXSCALE - MARGX )/DEFXSCALE,  \
+					    ( DEFYSCALE - MARGY )/DEFYSCALE)
+
+main()  
+/*  hacker's notes:  (if you're reading this far, you are probably one such.)
+ *
+ *  Program assumes you may use the 'space' scaling function once, many times,
+ *  or not at all.  This creates some extra (dumb-looking) PostScript output.
+ *  If you try to optimize, keep this assumption in mind.
+ *
+ *  Upon finding errors in the input, my version skips up to the next newline
+ *  and continues reading.  This is good if you want to put comments into your
+ *  plot (5) files.  If not, just making the default case in the switch a
+ *  null switch (comment out the one executable statement in it) will
+ *  ignore each invalid character.
+ *  
+ *  You may notice a strange moveto in the label section.  This is my 
+ *  (trial-and-error determined) kludge to make the first letter of the
+ *  label come out CENTERED on the current point.  Plot seems to expect that.
+ *
+ *  Erase just erases the current page without printing.  I think that's how
+ *  it's supposed to work.  If you want it to flush instead, change the 
+ *  printf("erasepage\n") to printf("showpage\n");
+ *
+ */
+{
+	int x, y, x2, y2, xc, yc;  /* or whatever 16 bits is in your C    */
+									 /* if a short int is less than 16 bits */
+									 /* this program won't work unless you  */
+									 /* change this declaration.            */
+	float r, ang1, ang2;
+	float xscale, yscale;
+	float scale = 1.0;
+	float newpitch = (float) PITCH;
+	float newlinew = LINEWIDTH;
+	char command;
+	char *dashstyle;
+	char string [257];
+
+	printf ("%% -------------------------------------------------- %%\n");
+	printf ("%% This is a PostScript (TM) program produced by tlw,\n");
+	printf ("%% from standard plot(5) output. \n");
+	printf ("%% (S.J. Rapaport, grouptheory systems, 1985)\n");
+
+	printf ("\n\n");
+	printf ("/tlwcontext save def\n");
+	printf ("%f setlinewidth\n", LINEWIDTH);
+	printf ("%s findfont %d scalefont setfont\n",FONT, PITCH);
+
+	initcoords ();
+
+	do {
+		command = getchar();
+		switch (command)
+		{
+			default:   /* if invalid command char, skip rest of line */
+
+				/* This is good if you want to put comments into your
+				   plot (5) files.  If not, just commenting out the 
+				   next line will ignore each invalid character.
+				 */
+
+				if (! gets(string)) fin (0);
+			break;
+
+			case 'm':   /*   move (x, y)   */
+				readswpd (&x, stdin);
+				readswpd (&y, stdin);
+				printf ("%d %d moveto\n",x, y); 
+			break;
+
+			case 'n':   /*   cont (x, y)   */
+				readswpd (&x, stdin);
+				readswpd (&y, stdin);
+				printf ("%d %d lineto\n", x, y);
+				printf ("currentpoint   stroke   moveto\n");
+			break;
+
+			case 'p':   /*   point (x, y)  */
+				readswpd (&x, stdin);
+				readswpd (&y, stdin);
+				printf ("gsave \n");
+				printf ("1 setlinecap\n");
+				printf ("currentlinewidth 2 mul setlinewidth\n");
+				printf ("%d %d moveto\n", x, y);
+				printf ("0 0  rlineto\n");
+				printf ("stroke\n");
+				printf ("grestore\n");
+			break;
+
+			case 'a':   /*   arc (xc, yc, x, y, x2, y2)   */
+				readswpd (&xc, stdin);
+				readswpd (&yc, stdin);
+				readswpd (&x, stdin);
+				readswpd (&y, stdin);
+				readswpd (&x2, stdin);
+				readswpd (&y2, stdin);
+				r = sqrt ((float) ((x-xc) * (x-xc) + (y-yc) * (y-yc)));
+				ang1 = atan ( (float) (y-yc) / (float) (x-xc) ) DEGREES;
+				ang2 = atan ( (float) (y2-yc) / (float) (x2-xc) ) DEGREES;
+				if ((x - xc) < 0) ang1 = 180.0 + ang1;
+				if ((x2 - xc) < 0) ang2 = 180.0 + ang2;
+				printf ("newpath \n");
+				printf ("%d %d %6.3f %6.3f %6.3f arc\n", xc, yc, r, ang1, ang2);
+				printf ("currentpoint   stroke   moveto\n");
+			break;
+
+			case 'c':   /*   circle (xc, yc, r)   */
+				readswpd (&xc, stdin);
+				readswpd (&yc, stdin);
+				readswpd (&x, stdin);
+				printf ("newpath \n");
+				printf ("%d %d %d 0 360 arc\n", xc, yc, x);
+				printf ("currentpoint   stroke   moveto\n");
+			break;
+
+			case 'l':   /*   line (x, y, x2, y2)   */
+				readswpd (&x, stdin);
+				readswpd (&y, stdin);
+				readswpd (&x2, stdin);
+				readswpd (&y2, stdin);
+				printf ("%d %d moveto\n", x, y); 
+				printf ("%d %d lineto\n", x2, y2);
+				printf ("currentpoint   stroke   moveto\n");
+			break;
+
+			case 't':   /*   label ( string )   */
+				if (! gets(string) ) fin (0);
+				printf ("%6.3f %6.3f rmoveto\n", -newpitch/4, -newpitch/4);
+				printf ("\t(%s) show\n", string);
+				printf ("%6.3f %6.3f rmoveto\n", newpitch/4, newpitch/4);
+			break;
+
+			case 'e':    /*  erase ()   */
+					printf ("erasepage\n");  /* just erase current page */
+			break;
+
+			case 'f':    /*  linemod(dashstyle)   */
+				if (! gets(string) ) fin (0);
+				dashstyle = string;
+
+				if (strcmp (dashstyle, "dotted") == 0) {
+				printf("[%6.3f %6.3f] 0 setdash\n", 1 DOTS, 4 DOTS);
+				}
+				else if (strcmp (dashstyle, "solid") == 0) {
+				printf("[] 0 setdash\n");
+				}
+				else if (strcmp (dashstyle, "longdashed") == 0) {
+				printf("[%6.3f %6.3f] 0 setdash\n", 4 DOTS, 1 DOTS);
+				}
+				else if (strcmp (dashstyle, "shortdashed") == 0) {
+				printf("[%6.3f %6.3f] 0 setdash\n", 2 DOTS, 3 DOTS);
+				}
+				else if (strcmp (dashstyle, "dotdashed") == 0) {
+				printf("[%6.3f %6.3f %6.3f %6.3f] 0 setdash\n",5 DOTS, 2 DOTS, 1 DOTS, 2 DOTS);
+				}
+				else break;   /* ignore any other styles */
+			break;
+
+			case 's':   /*   space (x, y, x2, y2)   */
+				readswpd (&x, stdin);
+				readswpd (&y, stdin);
+				readswpd (&x2, stdin);
+				readswpd (&y2, stdin);
+
+				xscale =  DEFXSCALE / (float) (x2 - x);
+				yscale =  DEFYSCALE / (float) (y2 - y);
+				scale = (xscale < yscale) ? xscale : yscale;  /* min */
+				newlinew = LINEWIDTH / scale;
+				newpitch = PITCH / scale;
+
+				initcoords();
+				printf ("%d %d translate\n", -x, -y);
+				printf ("%6.3f %6.3f scale\n", scale, scale);
+				printf ("%6.3f setlinewidth\n", newlinew);
+				printf ("%s findfont ", FONT);
+				printf ("%6.3f scalefont ", newpitch);
+				printf ("setfont\n");
+			break;
+
+		} /* end of switch */
+
+	} while (FOREVER);      
+}
+
+initcoords ()  /* set up coordinate system default  (before scaling) */
+{
+#ifdef FLIP
+	printf("initmatrix\n");
+	printf("90 rotate\n");
+	printf("0 %f translate \n", -DEFXSCALE);
+	printf("%4.1f %4.1f translate \n", MARGY / 2, MARGX / 2);
+	printf("%f %f scale \n", MARGSCALE, MARGSCALE);
+#else
+	printf("initmatrix\n");
+	printf("%4.1f %4.1f translate \n", MARGX / 2, MARGY / 2);
+	printf("%f %f scale \n", MARGSCALE, MARGSCALE);
+#endif
+}
+
+readswpd (location, stream) 
+int *location;
+FILE *stream;
+{
+	int nextch;
+
+	nextch = getc(stream);
+	*location = getc(stream);
+	*location = ((0377 & (*location)) << 8) + (0377 & nextch);
+}
+
+
+fin (error)  /* end of input file */
+int error;
+{
+	if (! error)  /* flush output at end of file */ {
+		printf ("\nshowpage\n");
+		printf ("\ntlwcontext restore\n");
+	}
+	else    /* fatal error (none provided in original source) */
+		printf ("%% fatal error in input file: no page produced.\n");
+	exit (error);
+}
+
+
+
+
+

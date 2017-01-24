@@ -1,0 +1,2025 @@
+; UPD ID= 25, FARK:<5-WORKING-SOURCES.UTILITIES>REAPER.MAC.4,   2-Jun-82 23:14:53 by TILLSON
+;Edit 132 - Set prohibit on MAIL.TXT
+; UPD ID= 22, FARK:<5-WORKING-SOURCES.UTILITIES>REAPER.MAC.3,  20-May-82 17:10:22 by TILLSON
+;Edit 131 - Fix PEON: parsing
+; UPD ID= 21, FARK:<5-WORKING-SOURCES.UTILITIES>REAPER.MAC.2,  18-May-82 12:09:26 by TILLSON
+;Edit 130 - Fix error handling after RCDIR%
+;<5.UTILITIES>REAPER.MAC.2, 28-Oct-81 15:35:28, EDIT BY GRANT
+;Change major version to 5
+; UPD ID= 219, FARK:<4-WORKING-SOURCES.UTILITIES>REAPER.MAC.3,  25-Sep-80 14:01:08 by SCHMITT
+;Edit 104 - Do not print INFO messages through ERROUT
+;	  - Never output to .CTTRM rather .PRIOU
+;	  - Change Version numbers to be decimal
+; UPD ID= 198, FARK:<4-WORKING-SOURCES.UTILITIES>REAPER.MAC.2,   9-Sep-80 11:47:28 by SCHMITT
+;EDIT 103 - MAKE DOFET GET CORRECT LENGTH OF FDB
+;<4.UTILITIES>REAPER.MAC.13,  3-Jan-80 15:28:52, EDIT BY R.ACE
+;UPDATE COPYRIGHT DATE
+;<4.UTILITIES>REAPER.MAC.12, 27-Nov-79 06:55:58, EDIT BY R.ACE
+;TCO 4.2580 - MAKE STACK LARGER
+;<4.UTILITIES>REAPER.MAC.11, 19-Oct-79 16:59:32, EDIT BY DBELL
+;TCO 4.2538 - FIX DOTRM9 TO STOP IF EXACTLY AT DIRECTORY QUOTA
+;<4.UTILITIES>REAPER.MAC.10, 18-Oct-79 11:32:00, EDIT BY DBELL
+;TCO 4.2530 - PREVENT MAIL.TXT.1 FROM BEING MIGRATED
+;<4.UTILITIES>REAPER.MAC.9, 13-Sep-79 10:52:26, EDIT BY DBELL
+;TCO 4.2464 - DO CONFIRM FUNCTION IN LIST COMMAND
+;<HURLEY.CALVIN>REAPER.MAC.11, 21-Mar-79 12:56:39, EDIT BY HURLEY.CALVIN
+; Cause an ERSTR whenever ERROUT is called
+;<CALVIN>REAPER.MAC.8, 19-Mar-79 11:28:17, EDIT BY CALVIN
+; Cause BEGIN command to be ignored if user is NOT WHEEL
+;<JC>REAPER.MAC.3, 16-Mar-79 14:22:07, EDIT BY CALVIN
+; Don't print "%%No period specified..." if TRIM run or not WHEEL
+; Print some info at top of peon's output about "this would have happened"
+; Build map of files already done so TRIM won't multiply list files
+;<4.UTILITIES>REAPER.MAC.6,  6-Mar-79 14:11:56, EDIT BY BLOUNT
+; REMOVE .FBCRE FROM AGE TABLE SO THAT RESTORING THE DISK
+; DOESN'T MAKE ALL FILES SEEM TO BE RECENT
+;<4.UTILITIES>REAPER.MAC.5,  5-Mar-79 13:22:55, EDIT BY HURLEY.CALVIN
+; remove possibility of "online expiration reached" message happening
+; (repeat 0'd out the code which prints it - also, put in an age limit
+; of 5 years. No files can exist older than that.
+;<4.UTILITIES>REAPER.MAC.4,  1-Feb-79 12:47:30, EDIT BY HURLEY.CALVIN
+; Add a call to DOERST in DOPERI so reason for the error is printed
+;<4.UTILITIES>REAPER.MAC.3,  1-Feb-79 12:20:06, EDIT BY HURLEY.CALVIN
+; REPEAT 0 out online expiration code; Make sure no bogus .FBTDT's occur
+; by checking FDB length in $GTFDB; Use AND not OR in DOFLS1 to determine
+; if file may have file contents deleted (Both tapes must exist)
+;<4.UTILITIES>REAPER.MAC.2, 24-Jan-79 14:32:44, EDIT BY KIRSCHEN
+; Correct bug in DOPERI routine - RET instead of JRST DOPER3 if no online exp
+;<ARC-DEC>REAPER.MAC.7, 27-Nov-78 08:44:49, EDIT BY CALVIN
+; Install checking for already existing tape ID's before migrating again
+;<ARC-DEC>REAPER.MAC.11,  9-Nov-78 10:25:14, EDIT BY CALVIN
+; Install tape counting logic
+;<ARC-DEC>REAPER.MAC.7,  3-Nov-78 13:50:45, EDIT BY CALVIN
+; Cause DOFET to discard tape info if file expires and is currently online
+; Created REAPER from BBN's ARCHIV program.
+
+	TITLE Reaper
+	SUBTTL Policy module for involuntary migration
+
+;THIS SOFTWARE IS FURNISHED UNDER A LICENSE AND MAY ONLY BE USED
+;  OR COPIED IN ACCORDANCE WITH THE TERMS OF SUCH LICENSE.
+;
+;COPYRIGHT (C) 1978,1979,1980 BY DIGITAL EQUIPMENT CORPORATION, MAYNARD, MASS.
+
+	SEARCH MONSYM,MACSYM
+	SALL
+	.REQUIRE ARMAIL
+	EXTERN MLINIT,MLTOWN,MLDONE,.MLOFL,.MLNFL
+
+
+	F=0			; Flags
+	T1=1
+	T2=2
+	T3=3
+	T4=4
+	JFNSTK=5
+	DIRPGS=6		; Pages collected on a directory
+	COUNT=10
+	P=17
+
+	PERWRN=^D14		; Warn users 2 weeks in advance of FDB purge
+
+	TAB==11
+	NPDL==200		; # OF WORDS IN STACK
+	NFILMX==^D8000		; # files we can know about
+	NTAPES==^D1000*2	; # tapes we can remember
+	%FREE==50000		; Where free space starts
+	NJFNS==^D20+^D15	; Space for system & user order list
+	NDIRS==^D75
+	FDBLEN==.FBLEN
+	IOJFNS==CBLK+.CMIOJ	; IO JFNs for COMND
+	.CACHN==0		; Chan for ^A
+
+	OPDEF CALL [PUSHJ P,]
+	OPDEF RET [POPJ P,]
+	DEFINE RETSKP<JRST RSKP>
+	OPDEF CALLRET [JRST]
+
+;**;[103] Remove .FBHDR from DEFSTR FBLEN line  RAS  9-SEP-80
+	DEFSTR FBLEN,,35,9 ; Actual length of the FDB
+
+	DEFINE CTB (DAT,FLGS,TXT)<
+	XWD [ASCIZ \TXT\],[FLGS+DAT]>
+
+	DEFINE ERROR (LBL,MSG)<
+	JRST [
+IFNB <MSG>,<HRROI T1,[ASCIZ /MSG/]>
+IFB <MSG>,<SETZ T1,>
+		CALL ERROUT
+		SKIPG NREDIR
+		JRST LBL
+		HRROI T1,[ASCIZ /?TAKE file aborted
+/]
+		CALL ERROUT
+		JRST TAKERR]>
+
+	DEFINE FATAL(MSG)<
+	JRST [	PUSH P,T1
+		HRROI T1,[ASCIZ /?'MSG'
+/]
+		PSOUT
+		POP P,T1
+		HALTF
+		RET]
+>
+
+	DEFINE NOISE(MSG)<
+	MOVEI T2,[FLDDB. (.CMNOI,,<POINT 7,[ASCIZ /MSG/]>)]
+	COMND>
+
+	DEFINE DEFSPC (NAM,SIZ)<
+	NAM=%FREE
+	%FREE==%FREE+SIZ>
+
+; Flags in F
+
+	COMMAF==1B0		; For formatting output
+	DIRCH==1B1		; Directory changed (GNJFN)
+	TAKEF==1B2		; Take RESIST (AR%NAR) files
+	PNDFF==1B4		; File already has migration pending
+	LSTTTF==1B5		; Listing is to TTY
+
+IFNDEF GN%STR,<GN%STR==1B13>
+
+; Version info
+
+VMAJOR==5		;MAJOR VERSION #
+VMINOR==0		;MINOR VERSION #
+;**;[104] Make Version Numbers decimal       RAS   25-SEP-80
+VEDIT==^D132		;EDIT #
+VWHO==0			;GROUP WHO LAST EDITED (0=DEC DEVELOPMENT)
+
+VERS==<VWHO>B2+<VMAJOR>B11+<VMINOR>B17+VEDIT
+
+REAPER:	JRST START
+	JRST START
+	EXP VERS
+
+	DEFSPC (MSGSPC,2000)	; Message body
+	DEFSPC (TAPCNT,NTAPES) ; Space for this many tapes
+	DEFSPC (DONEFL,NFILMX) ; Map of files we've already done
+
+; Command table
+
+CTBL:	NCTBL,,NCTBL
+	CTB .ARCHI,,<BEGIN>
+	CTB .FLUSH,,<DELETE-CONTENTS>
+	CTB .EXIT,,<EXIT>
+	CTB .LIST,,<LIST>
+	CTB .INVOL,,<MIGRATE>
+	CTB .ORDER,,<ORDER>
+	CTB .PERIO,,<PERIOD>
+	CTB .PURGE,,<PURGE>
+	CTB .SCAN,,<SCAN>
+	CTB .SKIP,,<SKIP>
+	CTB .TAKE,,<TAKE>
+	CTB .TAPE,,<TAPE>
+	CTB .TRIM,,<TRIM>
+NCTBL==.-CTBL-1
+
+CRLF:	ASCIZ /
+/
+FENCE:	IOWD NPDL,PDL
+PDL:	BLOCK NPDL
+JFNSTP:	0			; Pointer to ORDER list to use
+SJFNPT:	0			; System ORDER list
+JFNPTR:	0
+%JFNS:	BLOCK NJFNS
+DIRPTR:	0
+DIRS:	BLOCK NDIRS
+LEVTAB:	REPEAT 3,<.+3>
+	BLOCK 3
+CHNTAB:	3,,CNTRLA		; ^A Routine
+	BLOCK ^D14
+	3,,ILIPSI		; For TAKE commands
+	BLOCK ^D36-^D16
+CHNMSK:	1B<.CACHN>+1B<.ICILI>
+GTOWBK:	GJ%OLD+GJ%DEL+GJ%XTN	; File should exist
+	.NULIO,,.NULIO		; No I/O
+	0			; No device
+	0			; No dir
+	0			; No name
+	0			; No type
+	0			; No protection
+	0			; No account
+	0			; No JFN
+	G1%IIN			; Find even invisible ones
+
+
+STRTZR:!			; Start of area zipped at start up
+LHOSTN:	0			; Local site #
+MSGPTR:	0			; Pointer into message body
+HAVORD:	0			; Non 0 if we have system order list
+HVUSOD:	0			; Have user order list
+WHEEL:	0			; If wheel=-1
+PERIOD:	0			; Period after which file is considered
+TRIM:	0			; -1 => Trim over allocation directories
+TAPE:	0			; -1 => Check tapes in use
+TPPTR:	0			; Free space ptr for tape references
+FLUSH:	0			; -1 => Flush offline files older than PERIOD
+PURGE:	0			; -1 => purge expired FDB's from disk
+INVOL:	0			; -1 => Req migration of old files (PERIOD old)
+SCNOLY:	0			; -1 => Scan only, don't mark files
+CMDTYP:	0
+LOCJFN:	0			; Local JFN routine
+ARCJFN:	0			; JFN for path of files to consider
+CURDIR:	0			; # of directory we are currently working on
+LSTJFN:	0			; Output file
+NREDIR:	0			; # times redirected (pushed)
+TOTPGS:	0			; # of pages collected
+NFILES:	0			; # of files marked
+FLPGS:	0			; # pages flushed
+NFLFIL:	0			; # of files flushed
+NTMFIL:	0			; # of temp files deleted
+TMPGS:	0			; Pages freed from temp files
+NPURGE:	0			; # of FDB's purged
+GNJFLG:	0			; Flag from JFN2ND saying it did the GNJFN
+SNDFRK:	0			; Fork handle for SNDMSG
+FILPTR:	0			; -# files in DONEFL
+NLINB==40
+LINBUF:	BLOCK NLINB		; TEXTI line buffer
+CBFSIZ==^D200/5			; Size of command buffer
+CBFR:	BLOCK CBFSIZ
+ACBSIZ==^D200/5			; Size of atom bfr
+ACBFR:	BLOCK ACBSIZ
+CBLK:	BLOCK .CMGJB+1		; Command state block
+GJBLK:	BLOCK .GJBFP+1		; GTJFN arg blk
+FDB:	BLOCK FDBLEN		; Place for examining files
+TAPBLK:	BLOCK .ARPSZ+1		; Place for ARCF to tape info
+DEFDEV:	BLOCK 11
+DEFDIR:	BLOCK 11
+DEFNAM:	BLOCK 11
+DEFEXT:	BLOCK 11
+DIRWLD:	BLOCK 11		; Wildcard file spec
+EOFADR:	0			; Where to go on EOF PSI
+TEMP:	BLOCK 25		; Block for STDIR's etc
+DEVSTR:	BLOCK 11		; For GTOWBK default device
+DIRSTR:	BLOCK 11		; For GTOWBK default directory
+FILPTH:	BLOCK ^D39		; For BEGIN command file path
+MAILFL:	BLOCK 1			; Flag for ENDUSR to hand to MLTOWN
+MLBLK:	BLOCK 3			; Arg block for MLTOWN
+
+ENDZRO:!			; End of area cleared at start up
+
+START:	RESET
+	SETZ F,			; Clear all flags
+	SETZM STRTZR		; Clear data area
+	MOVE T1,[STRTZR,,STRTZR+1]
+	BLT T1,ENDZRO-1
+	MOVE P,FENCE
+	MOVE T1,[SIXBIT/LHOSTN/]
+	SYSGT			; Get local site #
+	SKIPE T2		; Anything there?
+	MOVEM T1,LHOSTN	; Yes, save it
+	MOVE JFNSTK,[-NJFNS,,%JFNS]
+	MOVEM JFNSTK,JFNPTR
+	CALL RLJFNS		; Release any lingering JFNS
+	MOVSI T1,-NDIRS
+	MOVEM T1,DIRPTR
+	MOVEI T1,.FHSLF
+	GPJFN
+	MOVEM T2,IOJFNS
+	MOVE T2,[LEVTAB,,CHNTAB]
+	SIR			; Set up interrupt tables
+	EIR
+	MOVE T2,CHNMSK		; Channels we'll handle
+	AIC
+	MOVE T1,[.TICCA,,.CACHN]
+	ATI			; Capture ^A
+	MOVEI T1,.FHSLF
+	RPCAP
+	TXNE T3,SC%WHL+SC%OPR
+	SETOM WHEEL		; User is a wheel
+	SKIPN WHEEL
+	SETOM SCNOLY		; Peons are listing only
+	MOVE T1,[ICBLK,,CBLK]
+	BLT T1,CBLK+.CMGJB	; Init command blk
+	SKIPN WHEEL
+	JRST PEON		; Go do peon code
+	MOVE T1,[-NTAPES,,TAPCNT]
+	MOVEM T1,TPPTR		; Init free space ptr
+	SETZM 0(T1)		; Make sure no 1st tape!
+	JRST TOPCMD		; Start talking to user
+
+
+TOPCMD:	SETZM CMDTYP		; Clear last one
+	HRROI T1,[ASCIZ /REAPER>/]
+	MOVEM T1,CBLK+.CMRTY
+	MOVEI T1,REPAR0
+	MOVEM T1,CBLK
+	MOVEI T1,CBLK
+	MOVEI T2,[FLDDB. (.CMINI)]
+	COMND			; Init line
+
+; Here when reparse needed
+
+REPAR1:	MOVEI T1,CBLK
+	MOVEI T2,[FLDDB. (.CMKEY,,CTBL)]
+	COMND
+	TXNE T1,CM%NOP
+	ERROR TOPCMD,<>
+	HRRZ T2,0(T2)		; Get ptr to command word
+	MOVE T2,0(T2)		; Flags,,dispatch addr
+	MOVEM T2,CMDTYP		; Save
+	CALL 0(T2)		; Do it
+	MOVE JFNSTK,JFNPTR
+	CALL RLJFNS
+	JRST TOPCMD
+
+REPAR0:	MOVE P,FENCE
+	MOVE JFNSTK,JFNPTR
+	CALL RLJFNS		; Release those not covered
+	JRST REPAR1
+
+
+; Initial command state block
+
+ICBLK:	REPAR0			; Reparse dispatch
+	.PRIIN,,.PRIOU
+	POINT 7,[ASCIZ /REAPER>/] ; Prompt
+	POINT 7,CBFR		; Beg of user input
+	POINT 7,CBFR		; Beg of next field to be parsed
+	CBFSIZ*5		; # chars there
+	0			; # unparsed chars
+	POINT 7,ACBFR		; Point to atom buffer
+	ACBSIZ*5		; Size (amount left) in atom bfr
+	GJBLK			; GTJFN arg blk
+
+
+SETGTD:	MOVE T2,[GJBLK,,GJBLK+1]
+	SETZM -1(T2)
+	BLT T2,GJBLK+.GJBFP	; Clear it to start
+	MOVE T2,[.PRIIN,,.PRIOU]
+	MOVEM T2,GJBLK+.GJSRC
+	MOVX T2,GJ%XTN
+	IORM T2,GJBLK+.GJGEN
+	MOVX T2,G1%IIN
+	MOVEM T2,GJBLK+.GJF2	; Into extended blk
+	JUMPE T1,R		; Done if doesn't want stars
+	HRROI T2,[ASCIZ /*/]
+	MOVEM T2,GJBLK+.GJDIR	; For directory name
+	MOVEM T2,GJBLK+.GJNAM	; For file name
+	MOVEM T2,GJBLK+.GJEXT	; For extention
+	MOVX T2,GJ%IFG+.GJALL
+	IORM T2,GJBLK+.GJGEN
+	RET
+
+; Here to do GTFDB & also set up TAPBLK with current file
+
+$GTFDB:	GTFDB
+	 ERJMP [HRLI T2,.FBLN0	; Probably a short FDB
+		GTFDB
+		JRST .+1]
+	LOAD T2,FBLEN,(T3)	; Get length of the FDB
+	CAIGE T2,.FBLXT		; Long enough for tape info?
+	JRST [	SETZM .FBTDT(T3) ; No, date is not valid then
+		SETZM TAPBLK+.ARTP1 ; No tape info
+		SETZM TAPBLK+.ARTP2 ; ...
+		RET]
+	HRRZS T1		; JFN only
+	MOVX T2,.ARGST		; Get tape info
+	MOVEI T3,TAPBLK
+	ARCF
+	 ERJMP .+1
+	RET
+
+; Here to determine if file has ANY tape info associated with it +1=>no
+; +2 => either 1 or 2 tapes there
+
+HAVTAP:	SKIPN TAPBLK+.ARTP1	; Tape 1 ID there?
+	SKIPE TAPBLK+.ARTP2	; No, how about tape 2 ID?
+	RETSKP			; One or the other is there
+	RET			; Neither are there
+
+; BEGIN (Processing files) {filespec}
+
+.ARCHI:	NOISE <Processing files>
+	SETZ T1,		; Real JFNs
+	CALL GETFIL		; Get a file spec
+	 JRST [	SKIPE WHEEL	; A WHEEL?
+		ERROR R,<?Bad filespec in BEGIN command>
+		MOVE T1,T2	; Not a WHEEL
+		CLOSF
+		 JFCL
+		RET]		; Ignore BEGIN if not WHEEL
+	CALL CONFRM
+	 ERROR ARCHCX,<>	; Go release JFN
+	SKIPN WHEEL		; A WHEEL?
+	JRST [	MOVE T1,T2	; No, ignore the BEGIN command
+		CLOSF
+		 JFCL
+		RET]
+ARCHI1:	MOVEM T2,ARCJFN		; Path to check
+
+	SKIPN PERIOD		; was a period specified?
+	JRST [	SKIPE WHEEL	; If peon
+		SKIPE TRIM	; Or a TRIM run
+		JRST .+1	; Don't mention no period
+		HRROI T1,[ASCIZ /%%No period specified, continuing...
+/]
+		PSOUT
+		JRST .+1]
+
+; Get a directory number so we can step with RCDIR
+
+	HRROI T1,DIRWLD		; Area for string with wildcards
+	MOVX T3,<FLD(.JSAOF,JS%DEV)+FLD(.JSAOF,JS%DIR)+JS%PAF>
+	JFNS			; Get STR:<DIR>
+	MOVX T1,RC%AWL		; Allow wildcards
+	HRROI T2,DIRWLD		; Point to directory string
+	SETZ T3,		; No previous dir #
+	RCDIR			; Get a dir #
+	TXNE T1,RC%NOM		; No match???
+	 FATAL <Failed to translate string to directory number>
+	MOVEM T3,CURDIR		; Save the result
+
+	HRROI T1,FILPTH		; Area for complete filespec
+	MOVE T2,ARCJFN
+	MOVX T3,<FLD(.JSAOF,JS%DEV)+FLD(.JSAOF,JS%DIR)+FLD(.JSAOF,JS%NAM)+FLD(.JSAOF,JS%TYP)+FLD(.JSAOF,JS%GEN)+JS%PAF>
+	JFNS
+
+; Set up default strings for name and extension
+
+	HRROI T1,DEFNAM		; Area for name string
+	MOVX T3,<FLD(.JSAOF,JS%NAM)>
+	JFNS			; Get the name specified
+	HRROI T1,DEFEXT		; Area for extension string
+	MOVX T3,<FLD(.JSAOF,JS%TYP)>
+	JFNS			; Get the extension
+	MOVE T1,T2		; JFN to T1
+	RLJFN			; No longer need this
+	 JFCL
+	SETZM ARCJFN
+
+	CALL MLINIT		; Init stuff for sending mail
+
+; Put in the listing file to describe what we were told to do
+
+	SKIPN T1,LSTJFN		; Have a listing file?
+	JRST [	MOVSI T1,(GJ%FOU+GJ%SHT)
+		HRROI T2,[ASCIZ /REAPER.LIST/]
+		GTJFN
+		 ERROR R,<Unable to create list file>
+		MOVX T2,<FLD(7,OF%BSZ)+OF%WR>
+		OPENF
+		 ERROR R,<Unable to open list file>
+		MOVEM T1,LSTJFN	; Save it
+		JRST .+1]
+	MOVE T1,LSTJFN
+	DVCHR			; Get characteristics of file
+	LOAD T2,DV%TYP,T2	; Pick up device type
+	CAIN T2,.DVTTY		; Already went to TTY?
+	TXO F,LSTTTF		; Listing is to TTY
+	MOVE T1,LSTJFN
+	HRROI T2,[ASCIZ /
+
+ REAPER run started at /]
+	SETZB T3,T4
+	SOUT
+	SETO T2,
+	ODTIM
+	HRROI T2,CRLF
+	SOUT
+	HRROI T2,CRLF
+	SOUT
+	HRROI T2,[ASCIZ / Specified file path: /]
+	SOUT
+	HRROI T2,FILPTH
+	SOUT
+	SKIPN WHEEL
+	JRST [	HRROI T2,[ASCIZ /
+ The following would happen if the OPERATOR ran REAPER now:
+
+/]
+		SOUT
+		JRST STAT9]
+	HRROI T2,CRLF
+	SETZB T3,T4
+	SOUT
+	SKIPN PERIOD		; Any period given to us?
+	JRST STAT0		; No
+	HRROI T2,[ASCIZ / Period is: /]
+	SOUT
+	MOVE T2,PERIOD
+	MOVX T3,<FLD(^D10,NO%RDX)>
+	NOUT
+	JFCL
+	HRROI T2,[ASCIZ / days
+/]
+	SETZB T3,T4
+	SOUT
+;...
+
+;...
+STAT0:	HRROI T2,[ASCIZ / Scan only
+/]
+	SKIPE SCNOLY
+	SOUT
+	HRROI T2,[ASCIZ / Deleting disk contents of old offline files
+/]
+	SKIPE FLUSH
+	SOUT
+	HRROI T2,[ASCIZ / Purging expired offline files
+/]
+	SKIPE PURGE
+	SOUT
+	SKIPN TRIM		; Triming directories?
+	JRST STAT1		; No, skip that
+	MOVEI COUNT,6		; # to do before new line
+	HRROI T2,[ASCIZ / Trimming directories over permanent allocation
+ Order during TRIM for taking files is: /]
+	SOUT
+	SKIPN HAVORD		; Any?
+	JRST [	HRROI T2,[ASCIZ /None specified
+/]
+		SOUT
+		JRST STAT1]
+	MOVE JFNSTK,[-NJFNS,,%JFNS]
+	CALL PRTORD		; Print it
+STAT1:	HRROI T2,[ASCIZ / Skipping directories: /]
+	SETZB T3,T4
+	SOUT
+	SKIPN DIRS		; Any spec'd?
+	JRST [	HRROI T2,[ASCIZ / None specified
+/]
+		SOUT
+		JRST STAT3]
+	MOVEI COUNT,4		; # before wrapping
+	TXZ F,COMMAF
+	MOVSI JFNSTK,-NDIRS
+STAT4:	SKIPN T2,DIRS(JFNSTK)
+	JRST STAT3		; Done
+	PUSH P,T2
+	HRROI T2,[ASCIZ /, /]
+	TXOE F,COMMAF
+	SOUT
+	POP P,T2
+	DIRST
+	 JRST [	HRROI T2,[ASCIZ /??????/]
+		SOUT
+		JRST .+1]
+	SOJLE COUNT,[ MOVEI COUNT,4
+		HRROI T2,[ASCIZ /
+	/]
+		SOUT
+		TXZ F,COMMAF
+		JRST .+1]
+	AOBJN JFNSTK,STAT4
+STAT3:	HRROI T2,CRLF
+	SOUT
+STAT9:
+;...
+
+; Listing is started, now start processing
+
+	TXZ F,DIRCH		; New directory
+DODIR:	CALL CHKDIR		; Make sure of good directory
+	 JRST ENDARC		; That's the last of them
+	SETZ DIRPGS,		; No pages collected yet
+	SETO T1,
+	CALL SETGTD		; Set up the block
+	MOVE T1,[.NULIO,,.NULIO]
+	MOVEM T1,GJBLK+.GJSRC
+	HRROI T1,TEMP		; Scratch area
+	MOVE T2,CURDIR		; Dir we are working on
+	DIRST			; Get the string
+	 FATAL <Can't translate directory # to string>
+	MOVE T1,[POINT 7,TEMP]
+	MOVE T2,[POINT 7,DEFDEV]	; Make structure name
+	MOVEM T2,GJBLK+.GJDEV
+DODIR1:	ILDB T3,T1
+	CAIN T3,":"
+	SETZ T3,
+	IDPB T3,T2
+	JUMPN T3,DODIR1
+DODIR2:	ILDB T3,T1		; Flush "<"
+	MOVE T2,[POINT 7,DEFDIR]	; Make directory name
+	MOVEM T2,GJBLK+.GJDIR
+DODIR3:	ILDB T3,T1
+	CAIN T3,">"
+	SETZ T3,
+	IDPB T3,T2
+	JUMPN T3,DODIR3
+	CALL GETORD		; Get any USER ORDER
+	HRROI T1,DEFNAM
+	MOVEM T1,GJBLK+.GJNAM
+	HRROI T1,DEFEXT
+	MOVEM T1,GJBLK+.GJEXT
+DOFIL:	SETZM FILPTR		; Reset count of entries in DONEFL
+	CALL DOKEEP		; Touch files WE want around
+	CALL DOPERI		; Migrate old files
+	CALL DOFLSH		; Delete contents of old archive files
+	CALL DOMISC		; Delete old temp files, etc.
+	CALL DOTRIM		; Trim directory back to quota
+	CALL DOTAPE		; Check tapes reference by this directory
+	CALL INCDIR		; Move on
+	 JRST ENDARC		; No more
+	JRST DODIR		; Loop
+
+INCDIR:	MOVX T1,RC%STP+RC%AWL	; Gotta go to next directory
+	HRROI T2,DIRWLD		; Point to wildcard string
+	MOVE T3,CURDIR		; Current dir #
+	RCDIR			; Find next one
+	TXNE T1,RC%NMD		; No more dirs?
+	RET
+	MOVEM T3,CURDIR		; Remember new dir #
+	TXZ F,DIRCH		; New directory
+	MOVE JFNSTK,JFNPTR
+	CALL RLJFNS		; Release any user ORDER JFNs
+	RETSKP			; Done here
+
+ARCHDF:	SETO T1,
+	CALL SETGTD		; Set defaults to *
+	MOVEI T1,GJBLK
+	MOVE T2,[.NULIO,,.NULIO]
+	MOVEM T2,GJBLK+.GJSRC	; No input
+	HRROI T2,[ASCIZ /PS:<*>*.*.*/]
+	GTJFN
+	 ERROR R,<? Bad filespec in BEGIN command>
+	JRST ARCHI1
+
+ARCHCX:	MOVE T1,T2		; Here when file not confirmed
+	RLJFN
+	 JFCL
+	RET
+
+ENDARC:	HRROI T1,TEMP
+	HRROI T2,CRLF
+	SETZB T3,T4
+	SOUT
+	MOVE T2,NFILES
+	MOVE T3,TOTPGS
+	HRROI T4,[ASCIZ / files marked for migration, /]
+	CALL LSTTOT
+	HRROI T1,TEMP
+	MOVE T2,NFLFIL
+	MOVE T3,FLPGS
+	HRROI T4,[ASCIZ / archive files deleted from disk, /]
+	CALL LSTTOT
+	HRROI T1,TEMP
+	MOVE T2,NTMFIL
+	MOVE T3,TMPGS
+	HRROI T4,[ASCIZ / temporary files deleted, /]
+	CALL LSTTOT
+	HRROI T1,TEMP
+	MOVE T2,NPURGE
+	SETZ T3,		; No pages from offline files
+	HRROI T4,[ASCIZ / expired files purged, /]
+	CALL LSTTOT
+	SKIPE TAPE		; Did we get tapes info?
+	CALL DMPTAP		; Yes, dump out the info now
+	MOVE T1,LSTJFN
+	CLOSF			; Close the listing file
+	 JFCL
+	SETZM LSTJFN		; No longer valid
+	CALL MLDONE		; Clean up mail stuff
+	HALTF
+	JRST REAPER
+
+; Period checker
+
+DOPERI:	SKIPN INVOL		; Switch for this turned on?
+	RET			; No
+	MOVX T1,GJ%IFG+GJ%XTN+.GJALL
+	MOVEM T1,GJBLK+.GJGEN	; Fix up GTJfn bits
+	MOVEI T1,GJBLK
+	HRROI T2,CRLF		; As if the user took default
+	GTJFN
+	 RET			; Done, none here
+	MOVEM T1,LOCJFN		; Save the JFN
+DOPER1:	HRRZ T1,LOCJFN
+	MOVE T2,[FDBLEN,,.FBHDR]
+	MOVEI T3,FDB
+	CALL $GTFDB
+	MOVE T1,FDB+.FBCTL
+	TXNE T1,FB%ARC!FB%OFF!FB%DIR!FB%NOD!FB%TMP!FB%PRM
+	JRST DOPER9		; Go to next file
+	MOVE T1,FDB+.FBBBT
+	TXNE T1,AR%RAR!AR%RIV!AR%NAR!AR%EXM ; If requested or resist, skip it
+	JRST DOPER9
+	CALL HAVTAP		; See if we have tape ID's already
+	 CAIA			; We do not
+	JRST DOPER9		; We do, don't migrate the file again
+
+; Check to see if online expiration has occured
+
+REPEAT 0,<
+	SKIPN T2,FDB+.FBNET	; Have on online expiration?
+	JRST DOPER3		; No, file can't expire then
+	HLRZS T2		; Want date portion of online exp
+	GTAD			; Get now
+	HLRZS T1
+	CAIGE T1,(T2)		; File expired?
+	JRST DOPER3		; No (& does have exp. date)
+	JUMPN T2,DOPER5		; Expired date if non-zero--take it
+	MOVE T1,FDB+.FBCRE	; Interval, find most recent date
+	CAMG T1,FDB+.FBCRV
+	MOVE T1,FDB+.FBCRV
+	CAMG T1,FDB+.FBWRT
+	MOVE T1,FDB+.FBWRT
+	CAMG T1,FDB+.FBREF
+	MOVE T1,FDB+.FBREF
+	HRRZ T2,FDB+.FBNET	; Get the interval
+	HLRZS T1
+	ADD T2,T1		; Form expiration date
+	GTAD
+	HLRZS T1
+	CAIGE T1,(T2)		; Expired?
+	JRST DOPER3		; No, check for age
+DOPER5:	SETO T2,		; Flag file is expired
+	JRST DOPER2
+
+> ; End REPEAT 0
+
+; Now check for too old a file
+
+DOPER3:	SKIPG PERIOD		; Have a real period?
+	JRST DOPER9		; No, skip this then
+	CALL GTAGE		; Get age of file
+	CAMGE T2,PERIOD		; Old enough?
+	JRST DOPER9		; No, skip it
+DOPER2:	CALL CKDNFL		; Has this one been done before?
+	 JRST DOPER9		; Yes, skip it this time
+	PUSH P,T2		; Save age
+	HRRZ T1,LOCJFN
+	MOVEI T2,.ARRIV		; Request file be migrated
+	MOVEI T3,.ARSET
+	SKIPN SCNOLY		; Only a scan?
+	ARCF			; No, real thing
+	 ERJMP [HRROI T1,[ASCIZ /%ARCF failed in DOPERI
+/]
+		PSOUT
+		CALL DOERST	; Include why in the printout
+		HRRZ T1,LOCJFN
+		HRROI T2,[ASCIZ / ARCF failed/]
+		CALL LSTFIL
+		POP P,T2	; Age
+		JRST DOPER9]
+	HRRZ T1,FDB+.FBBYV
+	ADD DIRPGS,T1		; Accum what we've taken
+	ADDM T1,TOTPGS		; Into running total
+	AOS NFILES		; Count files
+	HRROI T1,TEMP
+	POP P,T2		; Restore age
+repeat 0,<JUMPL T2,[HRROI T2,[ASCIZ /Online expiration reached/]
+		SETZB T3,T4
+		SOUT
+		JRST DOPER4]
+>; end repeat 0
+	MOVX T3,<FLD(^D10,NO%RDX)>
+	NOUT
+	 JFCL
+	HRROI T2,[ASCIZ / days old/]
+	SETZB T3,T4
+	SOUT
+DOPER4:	HRRZ T1,LOCJFN		; File taken
+	HRROI T2,TEMP
+	CALL LSTFIL		; Into listing
+DOPER9:	MOVE T1,LOCJFN
+	GNJFN
+	 JRST [	SETZM LOCJFN
+		RET]
+	JRST DOPER1
+
+
+; Flush contents of OLD online files with tape backup
+
+DOFLSH:	SKIPE PERIOD
+	SKIPN FLUSH
+	 RET			; Either no period or Flush not wanted
+	MOVX T1,GJ%IFG+GJ%XTN+.GJALL
+	MOVEM T1,GJBLK+.GJGEN
+	MOVEI T1,GJBLK
+	HRROI T2,CRLF		; Take default
+	GTJFN
+	 RET			; No files to do
+	MOVEM T1,LOCJFN		; Save the JFN
+	HRROI T1,[ASCIZ /Old file contents deleted from disk/]
+	MOVX T2,.MLOFL		; Use the offline msg file
+	CALL BEGUSR		; Start user message
+DOFLS1:	HRRZ T1,LOCJFN		; Current file
+	MOVE T2,[FDBLEN,,.FBHDR]
+	MOVEI T3,FDB
+	CALL $GTFDB
+	MOVE T1,FDB+.FBCTL
+	TXNE T1,FB%OFF		; Already off-line?
+	JRST DOFLS9		; Yes, skip it
+	SKIPE TAPBLK+.ARTP1	; First tape exist?
+	SKIPN TAPBLK+.ARTP2	; AND 2nd? (HAVTAP is OR not AND)
+	 JRST DOFLS9		; Both tapes don't exist yet
+	CALL GTAGE		; Get its age
+	CAMGE T2,PERIOD		; Old enough?
+	JRST DOFLS9		; No, skip the file
+	PUSH P,T2		; Save the age
+	MOVX T1,DF%CNO+DF%NRJ	; Disk contents only
+	HRR T1,LOCJFN
+	SKIPN SCNOLY		; Only a scan?
+	DELF			; No, real thing
+	 JRST [	SKIPE SCNOLY	; Real failure?
+		JRST .+1	; No
+		HRROI T1,[ASCIZ /%DELF failed in DOFLSH - /]
+		PSOUT
+		CALL DOERST	; Include ERSTR's comments
+		HRRZ T1,LOCJFN
+		HRROI T2,[ASCIZ / DELF failed/]
+		CALL LSTFIL
+		POP P,T2
+		JRST DOFLS9]
+	HRROI T1,[ASCIZ / - Disk contents deleted/]
+	CALL TOUSR		; Include in the message
+	AOS NFLFIL
+	HRRZ T1,FDB+.FBBYV	; Get # of pages
+	ADD DIRPGS,T1
+	ADDM T1,FLPGS		; To total
+	HRROI T1,TEMP
+	HRROI T2,[ASCIZ / Disk contents deleted, /]
+	SETZB T3,T4
+	SOUT
+	POP P,T2		; Age
+	MOVX T3,<FLD(^D10,NO%RDX)>
+	NOUT
+	 JFCL
+	HRROI T2,[ASCIZ / days old/]
+	SETZ T3,
+	SOUT
+	HRRZ T1,LOCJFN
+	HRROI T2,TEMP
+	CALL LSTFIL
+DOFLS9:	MOVE T1,LOCJFN
+	GNJFN
+	 JRST [	SETZM LOCJFN	; Done JFN is garbage
+		CALL ENDUSR	; End the message
+		RET]
+	JRST DOFLS1
+
+
+; Here to touch various files that shouldn't get migrated...
+
+DOKEEP:	MOVX T1,GJ%OLD+GJ%XTN	; All files must exist
+	MOVEM T1,GJBLK+.GJGEN
+	MOVX T1,G1%IIN
+	MOVEM T1,GJBLK+.GJF2
+	HRROI T2,[ASCIZ /DIRECTORY.OWNER/]
+	CALL DOKEP1
+	HRROI T2,[ASCIZ /MAIL.TXT.1/]
+	CALL DOKEP1
+	HRROI T2,[ASCIZ /OFFLINE-FILE-MSGS.TXT/]
+	CALL DOKEP1
+	RET
+
+DOKEP1:	MOVE T1,[.NULIO,,.NULIO]
+	MOVEM T1,GJBLK+.GJSRC
+	MOVEI T1,GJBLK
+	GTJFN
+	 RET			; File doesn't exist
+	PUSH P,T1		; Save the JFN
+;**;[132] Replace 8 lines with 6 lines at DOKEP1:+7L	2-JUN-82	RMT
+	MOVX T2,.AREXM		; [132] Set prohibit migration
+	MOVX T3,.ARSET		; [132]
+	ARCF			; [132]
+	 ERJMP [ERROR R,<>]	; [132] Print any error messages
+	POP P,T1		; [132] Recover the JFN
+	RLJFN			; [132] And get rid of it for good
+	 JFCL
+	RET
+
+
+; Trim directory back to size
+
+DOTRIM:	SKIPN TRIM
+	 RET			; We weren't told to do this
+	MOVX T1,GJ%IFG+GJ%XTN+.GJALL
+	MOVEM T1,GJBLK+.GJGEN
+	MOVE T1,CURDIR		; Get current directory #
+	GTDAL
+	SUB T2,T3		; Pages they are over
+	SUB T2,DIRPGS		; And those already stolen
+	JUMPLE T2,R		; Done if under allocation
+	TXON F,DIRCH		; Need to print directory name?
+	CALL LSTDIR		; Yes, do that
+	MOVE DIRPGS,T2		; Those required from user
+	MOVE T1,LSTJFN
+	HRROI T2,[ASCIZ / Collecting /]
+	SETZB T3,T4
+	SOUT
+	MOVE T2,DIRPGS
+	MOVX T3,<FLD(^D10,NO%RDX)>
+	NOUT
+	 JFCL
+	HRROI T2,[ASCIZ / pages
+
+/]
+	SETZB T3,T4
+	SOUT
+	MOVE JFNSTK,JFNSTP	; Get pointer to ORDER list
+DOTRI1:	SKIPN T2,0(JFNSTK)	; Anything?
+	JRST DOTRI2		; No, go to next phase
+	TXZ F,TAKEF		; Leave RESIST's (AR%NAR) if possible
+	CALL DOTRM		; Do the work
+	 JRST DOTRIX		; Done
+	AOBJN JFNSTK,DOTRI1
+DOTRI2:	TXZ F,TAKEF		; Leave if we can
+	HRROI T2,[ASCIZ /*.*.*/]
+	CALL DOTRMS
+	 JRST DOTRIX		; Done, enough collected
+	MOVE JFNSTK,JFNSTP	; Current ORDER list
+DOTRI3:	SKIPN T2,0(JFNSTK)	; Any there?
+	JRST DOTRI4		; No, done
+	TXO F,TAKEF		; Take RESIST's if necessary
+	CALL DOTRM
+	 JRST DOTRIX		; Done, enough pages collected
+	AOBJN JFNSTK,DOTRI3
+DOTRI4:	HRROI T2,[ASCIZ /*.*.*/]
+	TXO F,TAKEF		; Take what we have to
+	CALL DOTRMS
+	 JRST DOTRIX		; Got all we needed
+DOTRIX:	JUMPLE DIRPGS,R		; Leave
+	TXON F,DIRCH		; Make sure we said what directory
+	CALL LSTDIR		; We didn't yet, do it now
+	MOVE T1,LSTJFN
+	HRROI T2,[ASCIZ / Still over allocation by /]
+	SETZB T3,T4
+	SOUT
+	MOVE T2,DIRPGS
+	MOVX T3,<FLD(^D10,NO%RDX)>
+	NOUT
+	 JFCL
+	HRROI T2,[ASCIZ / pages
+/]
+	SETZB T3,T4
+	SOUT
+	RET
+
+
+; Do actual work; Expects T2 to have JFN of files to consider (ORDER)
+
+DOTRM:	HRROI T1,TEMP
+	MOVX T3,<FLD(.JSAOF,JS%NAM)+FLD(.JSAOF,JS%TYP)+JS%PAF>
+	JFNS			; Default name string
+	HRROI T2,TEMP		; Point to default string
+
+; Enter here with a string pointer in AC2 (also fallen into from DOTRM)
+
+DOTRMS:	MOVEI T1,GJBLK		; Enter here with string
+	GTJFN
+	 RETSKP			; Done, none of correct flavor
+	MOVEM T1,LOCJFN		; Save the local JFN
+DOTRM1:	HRRZ T1,LOCJFN
+	MOVE T2,[FDBLEN,,.FBHDR]
+	MOVEI T3,FDB
+	TXZ F,PNDFF		; No archive pending on this file
+	CALL $GTFDB
+	CALL CKDNFL		; Check if file already done
+	JRST DOTRM9		; Yes, don't do it again
+	MOVE T2,FDB+.FBCTL
+	MOVE T3,FDB+.FBBBT
+	TXNE T3,AR%RAR!AR%RIV	; Archive already pending?
+	JRST [	TXNE T3,AR%NDL	; Will we get any pages of it?
+		JRST DOTRM9	; No, skip the file
+		TXO F,PNDFF	; Yes, flag archive already pending
+		JRST DOTRM8]	; And enter further down the line
+	TXNN T3,AR%EXM		; Not allowed to migrate it?
+	TXNE T2,FB%ARC!FB%OFF!FB%DIR!FB%TMP!FB%NOD!FB%PRM
+	JRST DOTRM9		; Skip it
+	CALL HAVTAP		; Already have tape backup?
+	 CAIA			; No, can take it
+	JRST DOTRM9		; Yes, skip the file
+	TXNE F,TAKEF		; Take resists?
+	JRST DOTRM2		; Yes
+	TXNE T3,AR%NAR		; No, Resist on?
+	JRST DOTRM9		; Yes, pass it up
+DOTRM2:	HRRZ T1,LOCJFN
+	MOVX T2,.ARRIV		; Migrate it
+	MOVEI T3,.ARSET
+	SKIPN SCNOLY		; Only a scan?
+	ARCF			; No, real
+	 ERJMP [HRROI T1,[ASCIZ /%ARCF failed in DOTRMS - /]
+		PSOUT
+		CALL DOERST	; Do ERSTR too
+		HRRZ T1,LOCJFN
+		HRROI T2,[ASCIZ / ARCF failed/]
+		CALL LSTFIL
+		JRST DOTRM9]
+DOTRM8:	HRRZ T2,FDB+.FBBYV	; Get # of pages we got back
+	SUB DIRPGS,T2
+	TXNN F,PNDFF		; Actually mark it?
+	ADDM T2,TOTPGS		; Yes, add to total pages
+	AOS NFILES		; And count the files
+	PUSH P,T2		; Save # of pages
+	HRROI T1,TEMP
+	POP P,T2
+	MOVX T3,<FLD(^D10,NO%RDX)>
+	NOUT
+	 JFCL
+	HRROI T2,[ASCIZ / pages claimed/]
+	TXNE F,PNDFF		; Was archive already pending?
+	HRROI T2,[ASCIZ / migration already pending/]
+	SETZB T3,T4
+	SOUT
+	HRRZ T1,LOCJFN
+	HRROI T2,TEMP
+	CALL LSTFIL		; Into listing
+DOTRM9:	JUMPLE DIRPGS,DOTRMD	; Done, end up things
+	MOVE T1,LOCJFN
+	GNJFN
+	 RETSKP
+	JRST DOTRM1		; Around for more
+	RET
+
+DOTRMD:	HRRZ T1,LOCJFN
+	RLJFN
+	 JFCL
+	SETZM LOCJFN
+	RET			; Signal directory done
+
+
+; Do miscellaneous operations  -- delete old temp files,
+; expunge FDBs which are past offline expiration.
+
+DOMISC:	MOVX T1,GJ%IFG+GJ%XTN+.GJALL
+	MOVEM T1,GJBLK+.GJGEN
+	MOVEI T1,GJBLK		; Get defaults
+	HRROI T2,CRLF		; Use them
+	GTJFN
+	 RET			; Nothing to do
+	MOVEM T1,LOCJFN		; Save local JFN
+	HRROI T1,[ASCIZ /Offline expired files/]
+	MOVX T2,.MLNFL		; Don't send to offline msg file
+	CALL BEGUSR		; Start a message
+DOMSC1:	HRRZ T1,LOCJFN
+	MOVE T2,[FDBLEN,,.FBHDR]; Whole FDB
+	MOVEI T3,FDB
+	CALL $GTFDB
+	MOVE T1,FDB+.FBCTL	; Get ctl bits
+	TXNE T1,FB%TMP		; Temp file?
+	JRST DOTMP		; Delete it if too old
+	JRST DOFET		; Yes, check offline expiration
+
+DOMSC9:	MOVE T1,GNJFLG		; We have to do the GNJFN?
+	SETZM GNJFLG		; Clear for next time around
+	JUMPG T1,DOMSC1		; No, was done for us & found a next file
+	MOVE T1,LOCJFN		; Either we should, or was done & failed
+	GNJFN			; Move to next file
+	 CAIA
+	JRST DOMSC1		; Go do next one
+	SETZM LOCJFN		; No longer valid
+	CALL ENDUSR		; Send off the message if necessary
+	RET
+
+; Check offline file to see if it has reached offline expiration.
+; If so, expunge it.
+
+DOFET:	SKIPN PURGE		; Purge expired FDBs?
+	JRST DOMSC9		; No, done here
+;**;[103] Replace one line at DOFET + 2L   RAS   9-SEP-80
+	LOAD T1,FBLEN,FDB+.FBHDR ; Get the FDB length
+	CAIGE T1,.FBLXT		; Long enough?
+	JRST DOMSC9		; No, skip this file
+	SKIPN FDB+.FBTP1	; Have any tape info?
+	SKIPE FDB+.FBTP2
+	CAIA			; Has at least 1 tape's worth
+	JRST DOMSC9		; Has none, skip this file
+	MOVE T1,FDB+.FBFET	; Get TAD/interval
+	TLNN T1,-1		; Which is it?
+	JRST [	HRLZS T1	; Make # days,,0
+		ADD T1,FDB+.FBTDT ; Date when will be expired
+		JRST .+1]
+	MOVE T2,T1		; Expiration TAD in T2
+	GTAD			; Get now
+	CAMGE T1,T2		; Past expiration?
+	JRST DOFET2		; No, skip it
+DOFET1:	MOVE T1,FDB+.FBBBT
+	TXNN T1,AR%WRN		; User been warned about this?
+	JRST DOFET3		; No, do so now
+	CALL JFN2ND		; Get a 2nd JFN on the file
+	PUSH P,LOCJFN		; Save indexable one
+	MOVEM T1,LOCJFN		; Replace with new one
+	PUSH P,T2		; Spare JFN
+	HRRZ T1,LOCJFN		; Get JFN
+	MOVE T2,FDB+.FBCTL
+	TXNN T2,FB%OFF		; File currently offline?
+	JRST DOFETD		; Discard tape backup info since online
+	TXO T1,DF%EXP+DF%ARC
+	POP P,LOCJFN		; JFN in T1 should be no good after DELF
+	SKIPN SCNOLY		; Scan only?
+	DELF			; No, real thing
+	 JRST [	RLJFN		; Ditch JFN
+		 JFCL
+		SKIPE SCNOLY	; Get here from list only switch?
+		JRST .+1	; Yes, wasn't really an error
+		HRROI T1,[ASCIZ /%DELF failed in DOFET - /]
+		PSOUT
+		CALL DOERST
+		HRRZ T1,LOCJFN
+		HRROI T2,[ASCIZ / DELF failed/]
+		CALL LSTFIL
+		HRRZ T1,LOCJFN
+		RLJFN
+		 JFCL
+		POP P,LOCJFN
+		JRST DOMSC9]
+	AOS NPURGE		; Count # of files we do this to
+	HRRZ T1,LOCJFN
+	HRROI T2,[ASCIZ / Expunged, offline expiration reached/]
+	CALL LSTFIL
+	HRROI T1,[ASCIZ / - File deleted and expunged (expired)/]
+	CALL TOUSR
+DOFET9:	HRRZ T1,LOCJFN
+	RLJFN
+	 JFCL
+	POP P,LOCJFN
+	JRST DOMSC9
+
+DOFET2:	MOVE T3,FDB+.FBBBT
+	TXNE T3,AR%WRN		; Been warned?
+	JRST DOMSC9		; Yes, don't do it again
+	ADD T1,[PERWRN,,0]	; Make it look later than it is
+	CAMGE T1,T2		; Now is it expired?
+	JRST DOMSC9		; No, on the next file
+DOFET3:	HRRZ T1,LOCJFN
+	HRLI T1,.FBBBT		; Set the warning flag
+	MOVX T2,AR%WRN
+	MOVE T3,T2
+	SKIPN SCNOLY		; Don't if only a listing
+	CHFDB
+	HRROI T1,[ASCIZ / - Offline expiration approaching/]
+	CALL TOUSR		; Put this in the msg
+	JRST DOMSC9		; And go on
+
+DOFETD:	MOVX T2,.ARDIS		; Discard tape info
+	MOVX T3,AR%CR1+AR%CR2	; Clear both sets of tape info
+	SKIPN SCNOLY		; Don't if only a listing
+	ARCF
+	 ERJMP [ HRROI T1,[ASCIZ /%ARCF failed in DOFETD - /]
+		PSOUT
+		CALL DOERST
+		JRST .+1]
+	HRRZ T1,LOCJFN
+	HRROI T2,[ASCIZ / Tape backup information discarded/]
+	CALL LSTFIL
+	HRROI T1,[ASCIZ / - Tape backup information discarded (expired)/]
+	CALL TOUSR
+	HRRZ T1,LOCJFN
+	RLJFN			; 2nd JFN no longer needed
+	 JFCL
+	POP P,LOCJFN		; 3rd JFN was never needed here
+	JRST DOFET9		; Clean up there
+
+; Delete temporary files PERIOD days old.
+
+DOTMP:	SKIPN PERIOD		; Period specified?
+	JRST DOMSC9		; No, nothing to do
+	CALL GTAGE
+	CAMGE T2,PERIOD		; File old enough?
+	JRST DOMSC9		; No, skip it
+	CALL JFN2ND		; Get 2nd JFN on the file
+	PUSH P,LOCJFN
+	MOVEM T1,LOCJFN
+	PUSH P,T2		; Save spare JFN
+	HRRZ T1,LOCJFN
+	TXO T1,DF%EXP
+	POP P,LOCJFN		; T1 JFN bogus after DELF
+	SKIPN SCNOLY		; Scanning?
+	DELF			; No, do it for real
+	 JRST [	RLJFN		; DELF lost for some reason
+		 JFCL
+		SKIPE SCNOLY	; Get here from listing only run?
+		JRST .+1	; Yes, continue normally
+		HRROI T1,[ASCIZ /%DELF failed in DOTMP - /]
+		PSOUT
+		CALL DOERST
+		HRRZ T1,LOCJFN
+		HRROI T2,[ASCIZ / DELF failed/]
+		CALL LSTFIL
+		HRRZ T1,LOCJFN
+		RLJFN
+		 JFCL
+		POP P,LOCJFN
+		JRST DOMSC9]
+	HRRZ T1,FDB+.FBBYV	; Get pages claimed
+	ADD DIRPGS,T1		; Accumulate dir total
+	ADDM T1,TOTPGS		; Account total pages in this directory
+	ADDM T1,TMPGS		; Accumulate temp file total
+	AOS NTMFIL		; Count temp files deleted
+	HRROI T1,TEMP
+	MOVX T3,<FLD(^D10,NO%RDX)>
+	NOUT			; Output age of file
+	 JFCL
+	HRROI T2,[ASCIZ / days old, deleted and expunged/]
+	SETZB T3,T4
+	SOUT
+	HRRZ T1,LOCJFN
+	HRROI T2,TEMP
+	CALL LSTFIL
+	JRST DOFET9
+
+DOTAPE:	MOVX T1,GJ%IFG+GJ%XTN+.GJALL
+	MOVEM T1,GJBLK+.GJGEN
+	MOVEI T1,GJBLK
+	HRROI T2,CRLF
+	GTJFN
+	 RET			; None to do
+	MOVEM T1,LOCJFN
+DOTAP1:	HRRZ T1,LOCJFN
+	MOVX T2,.ARGST
+	MOVEI T3,TAPBLK
+	ARCF			; Get the tape info
+	 ERJMP DOTAP2		; Isn't any for that file
+	SKIPE T1,TAPBLK+.ARTP1
+	CALL DOTAP		; If any, do it
+	SKIPE T1,TAPBLK+.ARTP2
+	CALL DOTAP
+DOTAP2:	MOVE T1,LOCJFN
+	GNJFN
+	 RET			; All done
+	JRST DOTAP1
+
+DOTAP:	MOVE T2,[-NTAPES,,TAPCNT]
+DOTP1:	SKIPN 0(T2)		; Have a tape in this slot?
+	JRST DOTP2		; No, insert current guy
+	CAMN T1,0(T2)		; This our tape?
+	JRST [	AOS 1(T2)	; Increment the count
+		RET]
+	ADD T2,[2,,2]		; Step to next slot
+	JUMPL T2,DOTP1		; Loop if there is a next one
+	RET			; Not found & space is full
+
+DOTP2:	SKIPN T2,TPPTR		; Get free space ptr
+	RET			; There is no more free
+	MOVEM T1,0(T2)		; Remember tape ID
+	MOVEI T3,1
+	MOVEM T3,1(T2)		; Init count to 1
+	ADD T2,[2,,2]		; Move on to next one
+	MOVEM T2,TPPTR		; Update free ptr
+	JUMPL T2,R		; Done if free space still available
+DOTPFL:	SETZM TPPTR
+	HRROI T1,[ASCIZ /%Tape reference count buffer is full
+/]
+	PSOUT
+	RET
+
+; Check CURDIR to see if SKIPping this directory; if so, advance
+; to one we aren't SKIPping
+
+CHKDIR:	SKIPN DIRS		; Skipping anything?
+	RETSKP			; No, stop here then
+	MOVE T3,CURDIR		; Get current dir #
+	MOVSI T1,-NDIRS		; Those to check
+CHKDI1:	CAME T3,DIRS(T1)	; Skip this guy?
+	AOBJN T1,CHKDI1	; Loop
+	JUMPGE T1,RSKP		; Done, no match
+CHKDI2:	CALL INCDIR		; To next directory
+	 RET			; No next
+	JRST CHKDIR		; Check this one too
+
+GTAGE:	PUSH P,[377777,,0]	; File was VERY old
+	MOVSI T4,-NDATES
+	GTAD			; Get now
+GTAGE1:	MOVE T3,DATES(T4)	; Those we need to check
+	MOVE T2,FDB(T3)		; Get it
+	SUB T2,T1		; Find difference
+	MOVNS T2
+	CAMGE T2,0(P)		; Smaller than what we have?
+	MOVEM T2,0(P)		; Yes, save it
+GTAGE2:	AOBJN T4,GTAGE1		; Find smallest (most recent date)
+	HLRZ T2,0(P)		; Get what we found
+	ADJSP P,-1		; Remove from stack
+	CAILE T2,^D365*10	; tops20 hasn't been around this long
+	SETZ T2,		; is impossible age, call it 0
+	RET			; And return
+
+DATES:	.FBCRV
+	.FBWRT
+	.FBREF
+	.FBTDT			; Last archive d&t
+NDATES==.-DATES
+
+; Here to see if a file has already been done once, & record if not
+; Ret +1 if already done, +2 if not
+
+CKDNFL:	MOVE T1,FDB+.FBADR	; Assume caller as obtained the FDB
+	SKIPN T4,FILPTR		; Get current count
+	JRST CKFLD1		; None, make 1st entry
+	HRLZS T4		; Make an AOBJN ptr
+CKFLD2:	CAMN T1,DONEFL(T4)	; This match?
+	RET			; Yes, note we've seen the file before
+	AOBJN T4,CKFLD2		; No match yet
+CKFLD1:	MOVEM T1,DONEFL(T4)	; Record new guy
+	SOS T1,FILPTR		; Update the count
+	MOVMS T1		; Make positive count
+	CAIGE T1,NFILMX		; Over running the buffer?
+	RETSKP			; No
+	AOS FILPTR		; Yes, keep using last cell
+	HRROI T1,[ASCIZ \%%File buffer full in CKDNFL - increase NFILMX
+\]
+	PSOUT
+	RETSKP
+
+.EXIT:	NOISE <To monitor>
+	SKIPLE NREDIR
+	ERROR .+1,<EXIT command encountered in TAKE file>
+	CALL CONFRM
+	 ERROR R,<>
+	HALTF
+	RET
+
+EXIT1:	HALTF
+	JRST EXIT1
+
+.FLUSH:	NOISE <Of old offline files>
+	CALL CONFRM
+	 ERROR R,<>
+	SETOM FLUSH
+	RET
+
+.INVOL:	NOISE <Old files to offline storage>
+	CALL CONFRM
+	 ERROR R,<>
+	SETOM INVOL
+	RET
+
+.LIST:	NOISE <Output to file>
+LIST1:	MOVEI T1,CBLK
+	MOVEI T2,[FLDDB. (.CMOFI,CM%SDH,,,<REAPER.LIST>)]
+	SKIPN WHEEL
+	MOVEI T2,[FLDDB. (.CMOFI,CM%SDH,,<Output to file>,<TTY:>)]
+	COMND
+	TXNE T1,CM%NOP
+	ERROR R,<? Bad filespec in LIST command>
+	PUSH P,T2		;SAVE JFN
+	CALL CONFRM		;CONFIRM THE LINE
+	 ERROR PERIOX,<>	;BAD
+	POP P,T1		;RESTORE JFN
+	MOVX T2,<FLD(7,OF%BSZ)+OF%WR>
+	OPENF
+	 ERROR R,<? Cannot open listing file>
+	EXCH T1,LSTJFN
+	JUMPE T1,R
+	CLOSF
+	 JFCL
+	RET
+
+COMCON:	FLDDB. 	(.CMCMA,CM%SDH,,<File list>,,CFMBLK)
+
+.ORDER:	NOISE <For trimming>
+	MOVE JFNSTK,JFNPTR	; Free space
+ORDER1:	SETO T1,		; Parse only pls
+	CALL GETFIL
+	 ERROR R,<? Bad filespec in ORDER list>
+ORDER3:	MOVEM T2,0(JFNSTK)	; Save JFN
+	AOBJP JFNSTK,[	ERROR ORDER2,<% ORDER space is full>]
+	MOVEI T1,CBLK
+	MOVEI T2,COMCON
+	COMND			; Get a file or confirm it
+	HRRZS T3		; Get what we were given
+	CAIN T3,CFMBLK		; End?
+	JRST ORDER2		; Yes, take exit
+	CAIE T3,COMCON		; Comma?
+	ERROR R,<? Bad syntax in ORDER command>  ; Garbage
+	SETO T1,		; Parse only
+	CALL GETFIL
+	 ERROR R,<? Bad filespec in ORDER list>
+	JRST ORDER3		; Loop
+ORDER2:	MOVEM JFNSTK,JFNPTR	; Cover stack
+	SETOM HAVORD		; Say we have a system order list
+	RET
+
+
+.PERIO:	NOISE <For migration>
+	MOVEI T1,CBLK
+	MOVEI T2,[FLDDB. (.CMNUM,CM%SDH,<^D10>,<Number of days>)]
+	COMND
+	TXNE T1,CM%NOP
+	ERROR R,<? Bad PERIOD>
+	PUSH P,T2		; Save # of days
+	NOISE <Days>
+	CALL CONFRM
+	 ERROR PERIOX,<>
+	POP P,PERIOD
+	RET
+
+PERIOX:	ADJSP P,-1
+	RET
+
+
+.PURGE:	NOISE <Expired FDBs from disk>
+	CALL CONFRM
+	 ERROR R,<>
+	SETOM PURGE
+	RET
+
+.SCAN:	NOISE <Only>
+	CALL CONFRM
+	 ERROR R,<>
+	SETOM SCNOLY
+	RET
+
+.SKIP:	NOISE <Directories>
+	MOVE JFNSTK,DIRPTR
+SKIP1:	MOVEI T1,CBLK
+	MOVEI T2,[FLDDB. (.CMDIR,CM%SDH,CM%DWC,<NAME OF DIRECTORY TO SKIP>)]
+	COMND
+	TXNE T1,CM%NOP
+	ERROR R,<? Bad directory name in SKIP list>
+	MOVE T3,T2
+SKIP3:	MOVEM T3,DIRS(JFNSTK)	; Save #
+	AOBJP JFNSTK,[	ERROR SKIP2,<% SKIP space full>]
+	MOVX T1,RC%STP+RC%AWL
+	MOVE T2,CBLK+.CMABP
+	RCDIR
+;**;[130] ADD 1 LINE AT SKIP3:+4L	RMT	18-MAY-82
+	 ERJMP [ERROR R,<>]	;[130] Type RCDIR% error
+	TXNN T1,RC%NOM+RC%AMB+RC%NMD
+	JRST SKIP3
+	MOVEI T1,CBLK
+	MOVEI T2,COMCON
+	COMND
+	HRRZS T3		; What actually took
+	CAIN T3,CFMBLK		; Confrm?
+	JRST SKIP2		; Yes, end it
+	CAIE T3,COMCON		; Comma?
+	ERROR R,<? Bad syntax in SKIP command>
+	JRST SKIP1
+SKIP2:	MOVEM JFNSTK,DIRPTR
+	RET
+
+
+.TAKE:	NOISE <Commands from file>
+	SETZ T1,		; No *'s
+	CALL SETGTD
+	MOVX T1,GJ%OLD
+	IORM T1,GJBLK+.GJGEN
+	MOVEI T1,CBLK
+	MOVEI T2,[FLDDB. (.CMFIL,,,,<SYSTEM:REAPER.CMD>)]
+	COMND
+	TXNE T1,CM%NOP
+	ERROR R,<? TAKE file not found>
+	CALL CONFRM
+	 ERROR R,<>
+	MOVE T1,T2		; Attempt to open it
+
+; PEON code enters here
+
+TAKE1:	MOVX T2,<FLD(7,OF%BSZ)+OF%RD>
+	OPENF
+	 ERROR R,<? Cannot open TAKE file>
+	PUSH P,IOJFNS		; Save previous
+	PUSH P,FENCE		; Previous stack ptr
+	MOVEM P,FENCE		; Current fence
+	HRL T2,T1
+	HRRI T2,.NULIO		; Suppress output
+	MOVEM T2,IOJFNS		; Set it
+	AOS NREDIR		; We are redirected
+	MOVEI T1,EOF
+	MOVEM T1,EOFADR
+	JRST TOPCMD		; Re-enter it
+
+
+TAKERR:	MOVE P,FENCE		; Restore state of stack
+				; Fall thru to EOF
+EOF:	MOVE T1,IOJFNS		; Save current
+	POP P,FENCE		; Recover old guy
+	POP P,IOJFNS
+	SOS NREDIR		; Pop one level of redirection
+	HLRZS T1
+	CLOSF
+	 JFCL
+	RET
+
+.TAPE:	NOISE <Check of tapes in use>
+	CALL CONFRM
+	 ERROR R,<>
+	SETOM TAPE
+	RET
+
+.TRIM:	NOISE <Directories over allocation>
+	CALL CONFRM
+	 ERROR R,<>
+	SETOM TRIM
+	RET
+
+
+; Listing routines
+
+LSTFIL:	TXON F,DIRCH		; New directory?
+	CALL LSTDIR		; Yes, spit it out
+	PUSH P,T1		; Save JFN
+	PUSH P,T2		; Save note
+	MOVE T1,LSTJFN		; Where it goes
+	MOVE T2,-1(P)		; JFN
+	MOVX T3,<FLD(.JSAOF,JS%NAM)+FLD(.JSAOF,JS%TYP)+FLD(.JSAOF,JS%GEN)+JS%PAF+JS%TMP>
+	JFNS
+	HRROI T2,[ASCIZ /   /]
+	SETZB T3,T4
+	SOUT
+	POP P,T2		; Note
+	CAIE T2,0		; Any?
+	SOUT			; Yes, include it
+	HRROI T2,CRLF
+	SOUT
+	POP P,T1		; JFN
+	RET
+
+LSTDIR:	PUSH P,T1
+	PUSH P,T2
+	HRRZ T1,LSTJFN
+	HRROI T2,CRLF
+	SETZB T3,T4
+	SOUT
+	HRROI T2,[ASCIZ /   /]
+	SOUT
+	MOVE T2,CURDIR		; Current dir #
+	DIRST
+	 JFCL
+	HRROI T2,CRLF
+	SETZB T3,T4
+	SOUT
+	PUSH P,JFNSTK		; Save this
+	MOVE JFNSTK,JFNSTP	; Current ordering list
+	SKIPE HVUSOD		; Have a user order?
+	JRST [	HRROI T2,[ASCIZ / User ordering: /] ; Yes
+		SETZB T3,T4
+		SOUT
+		CALL PRTORD	; Print it
+		JRST .+1]
+	POP P,JFNSTK
+	POP P,T2
+	POP P,T1
+	RET
+
+LSTTOT:	PUSH P,T3
+	PUSH P,T4
+	MOVX T3,<FLD(^D10,NO%RDX)>
+	NOUT			; No. of files
+	 JFCL
+	MOVE T2,0(P)		; String ptr
+	SETZB T3,T4
+	SOUT
+	MOVE T2,-1(P)		; No. of pages
+	MOVX T3,<FLD(^D10,NO%RDX)>
+	NOUT
+	 JFCL
+	HRROI T2,[ASCIZ / pages
+/]
+	SETZB T3,T4
+	SOUT
+	HRROI T1,TEMP
+	TXNN F,LSTTTF		; Listing to TTY?
+	PSOUT			; No, do it now
+	MOVE T1,LSTJFN
+	HRROI T2,TEMP
+	SOUT
+	POP P,T4
+	POP P,T3
+	RET
+
+
+CFMBLK:	FLDDB. (.CMCFM)
+
+CONFRM:	PUSH P,T1
+	PUSH P,T2
+	PUSH P,T3
+	MOVEI T1,CBLK
+	MOVEI T2,CFMBLK
+	COMND			; Confirm please
+	TXNN T1,CM%NOP
+	AOS -3(P)		; Say confirmed
+	POP P,T3
+	POP P,T2
+	POP P,T1
+	RET
+
+GETFIL:	PUSH P,T1		; Save parse only param
+	SETO T1,		; Say we want *'s
+	CALL SETGTD		; Set the defaults for GTJFN
+	MOVX T1,GJ%OLD+GJ%IFG+GJ%DEL
+	IORM T1,GJBLK+.GJGEN
+	POP P,T1
+	CAMN T1,[-1]		; Parse only?
+	JRST [	MOVX T1,GJ%IFG+GJ%OLD
+		ANDCAM T1,GJBLK+.GJGEN
+		MOVX T1,GJ%OFG
+		IORM T1,GJBLK+.GJGEN
+		JRST .+1]
+	MOVEI T1,CBLK
+	MOVEI T2,[FLDDB. (.CMFIL)]
+	MOVE T3,GJBLK+.GJCPP
+	COMND
+	TXNE T1,CM%NOP
+	RET
+RSKP:	AOS 0(P)
+R:	RET
+
+
+RLJFNS:	SKIPE T1,0(JFNSTK)	; Anything?
+	RLJFN			; Yes, release it
+	 JFCL
+	SETZM 0(JFNSTK)
+	AOBJN JFNSTK,RLJFNS
+	RET
+
+
+CNTRLA:	PUSH P,T1
+	SKIPN CURDIR		; Processing a BEGIN command?
+	JRST [	HRROI T1,[ASCIZ / Not processing a BEGIN command
+/]
+;**;[104] Replace one line at CNTRLA+3L with 2 Lines  RAS  25-SEP-80
+		CALL CRIF	;[104] Check for beginning of line
+		PSOUT		;[104] And output string
+		JRST CNTRA1]
+	PUSH P,T2
+	HRROI T1,[ASCIZ / Working on /]
+;**;[104] Replace 2 Lines at CNTRLA+7L with 3 Lines   RAS  25-SEP-80
+	CALL CRIF		;[104] Check for beginning of line
+	PSOUT			;[104] And output string
+	MOVX T1,.PRIOU		;[104] Output goes to Primary Output
+	MOVE T2,CURDIR
+	DIRST
+	 JRST [HRROI T1,[ASCIZ /changing directories...
+/]
+;**;[104] Replace 1 Line at CNTRA2-4L with 2 Lines    RAS 25-SEP-80
+		CALL CRIF	;[104] Check for beginning of line
+		PSOUT		;[104] And output string
+		JRST CNTRA2]
+	HRROI T1,CRLF
+;**;[104] Replace 1 Line at CNTRA2-1L with 2 Lines    RAS 25-SEP-80
+	CALL CRIF		;[104] Check for beginning of line
+	PSOUT			;[104] And output string
+CNTRA2:	POP P,T2
+CNTRA1:	POP P,T1
+	DEBRK
+
+ERROUT:	PUSH P,T1
+	PUSH P,T2
+	PUSH P,T3
+	PUSH P,T4		; Be invisible to caller
+	CALL CRIF
+;**;[104] Replace 1 line at ERROUT+5L with 1 Line    RAS  25-SEP-80
+	MOVX T1,.PRIOU		; Output goes to primary output
+	SETZB T3,T4
+	MOVE T2,-3(P)		; Get supplied error message
+	SKIPN T2		; Was a string handed to us?
+	JRST [	HRROI T2,[ASCIZ \?\]
+		SOUT
+		JRST ERROU1]
+	SOUT			; Print it
+	HRROI T2,[ASCIZ \ - \]
+	SOUT
+ERROU1:	MOVE T2,[.FHSLF,,-1]	; Most recent error message
+	SETZ T3,
+	ERSTR
+	 JFCL
+	 JFCL
+	HRROI T2,CRLF
+	SOUT
+PRET4:	POP P,T4
+	POP P,T3
+	POP P,T2
+	POP P,T1
+	RET
+
+CRIF:	PUSH P,T1
+	PUSH P,T2
+	PUSH P,T3
+	PUSH P,T4
+;**;[104] Replace 1 Line at CRIF+4L with 1 Line    RAS    25-SEP-80
+	MOVX T1,.PRIOU		; Output goes to primary output
+	RFPOS
+	HRRZS T2
+	CAIGE T2,1
+	JRST PRET4
+	HRROI T2,CRLF
+	SETZB T3,T4
+	SOUT
+	JRST PRET4
+
+ILIPSI:	SKIPN EOFADR
+	FATAL <? Illegal instruction interrupt>
+	MOVE P,FENCE
+	CIS
+	PUSH P,EOFADR
+	SETZM EOFADR		; Clear
+	RET			; Return where we're wanted
+
+
+GETORD:	SKIPN TRIM		; Will the order be useful?
+	JRST GETOR4		; Flag no user order & return
+	SETOM HVUSOD		; Assume the user will have one
+	MOVE JFNSTK,JFNPTR	; Where free space starts
+	PUSH P,GJBLK+.GJGEN	; Save this, it's set up for someone
+	MOVX T1,GJ%OLD
+	MOVEM T1,GJBLK+.GJGEN	; Set what we need
+	MOVEI T1,GJBLK
+	HRROI T2,[ASCIZ /MIGRATION.ORDER/]
+	GTJFN
+	 JRST GETOR3		; No order list for us
+	HRRZS T1		; Probably got flags back
+	PUSH P,T1		; Save the JFN
+	MOVX T2,<FLD(7,OF%BSZ)+OF%RD>
+	OPENF
+	 JRST [	POP P,T1	; JFN
+		RLJFN
+		 JFCL
+		JRST GETOR3]
+	MOVEM JFNSTK,JFNSTP	; Set for user ORDER list
+	MOVEI T1,GTOREO
+	MOVEM T1,EOFADR		; Where EOF interrupt should go
+	PUSH P,(P)		; Save JFN again
+	MOVE T1,FENCE
+	MOVEM T1,-1(P)		; Save dis guy
+	MOVEM P,FENCE
+
+GETOR1:	MOVX T1,GJ%OFG+GJ%SHT+GJ%FNS+.GJALL
+	HRL T2,0(P)		; Read from file
+	HRRI T2,.NULIO		; No output
+	GTJFN
+	 JRST GETOR2		; Abort on error of any kind
+	MOVEM T1,0(JFNSTK)	; Save it
+	AOBJN JFNSTK,GETOR1	; Loop until...
+	ERROR GTOREO,<GETORD: User's ORDER list caused JFN storage to fill up>
+GETOR2:
+GTOREO:	POP P,T1
+	CLOSF
+	 JFCL
+	POP P,FENCE		; Restore this to original contents
+GETOR3:	POP P,GJBLK+.GJGEN	; Restore GTJFN block
+	CAME JFNSTK,JFNPTR	; Get anything?
+	RET
+	MOVE T1,[-NJFNS,,%JFNS]
+	MOVEM T1,JFNSTP
+GETOR4:	SETZM HVUSOD		; User didn't have an order list
+	RET
+
+
+PRTORD:	TXZ F,COMMAF
+STAT2:	SKIPN T2,0(JFNSTK)
+	JRST STAT21		; Done
+	PUSH P,T2
+	HRROI T2,[ASCIZ /, /]
+	SETZ T3,
+	TXOE F,COMMAF
+	SOUT			; Make it pretty
+	POP P,T2
+	MOVX T3,<FLD(.JSAOF,JS%NAM)+FLD(.JSAOF,JS%TYP)+FLD(.JSAOF,JS%GEN)+JS%PAF>
+	JFNS
+	SOJLE COUNT,[ MOVEI COUNT,6 ; Reset count
+		HRROI T2,[ASCIZ /
+	/]
+		SETZB T3,T4
+		SOUT
+		TXZ F,COMMAF
+		JRST .+1]
+	AOBJN JFNSTK,STAT2	; Loop over possible ones
+STAT21:	HRROI T2,CRLF
+	SETZB T3,T4
+	SOUT
+	RET
+
+BEGUSR:	SKIPE SCNOLY
+	RET			; Scan only, don't do message
+	MOVEM T2,MAILFL		; Save flag handed us
+	MOVEM T1,MLBLK+1	; Remember the subject
+	MOVE T1,CURDIR
+	MOVEM T1,MLBLK+0	; Save directory #
+	MOVE T1,[POINT 7,MSGSPC]
+	MOVEM T1,MSGPTR
+	MOVEM T1,MLBLK+2	; Text field
+	RET			; All set up
+
+ENDUSR:	SKIPE SCNOLY
+	RET			; Don't if scan only
+	MOVE T1,MSGPTR
+	CAMN T1,[POINT 7,MSGSPC] ; Have anything for the user?
+	RET			; No, don't bother sending then
+	HRROI T2,CRLF
+	SETZB T3,T4
+	SOUT			; Finish off text of message
+	MOVEI T1,MLBLK
+	MOVE T2,MAILFL		; Pick up flag type user wanted
+	CALL MLTOWN		; Mail to owner of the files
+	RET
+
+TOUSR:	SKIPE SCNOLY
+	RET			; Don't if scan only
+	PUSH P,T1		; Save comment line
+	MOVE T1,MSGPTR
+	HRRZ T2,LOCJFN
+	MOVX T3,<FLD(.JSAOF,JS%DEV)+FLD(.JSAOF,JS%DIR)+FLD(.JSAOF,JS%NAM)+FLD(.JSAOF,JS%TYP)+FLD(.JSAOF,JS%GEN)+JS%PAF>
+	JFNS
+	POP P,T2		; Comment line
+	SETZB T3,T4
+	TLNE T2,-1		; Look like a string ptr?
+	SOUT			; Yes, include it
+	HRROI T2,CRLF
+	SOUT
+	MOVEM T1,MSGPTR
+	RET
+
+JFN2ND:	HRROI T1,TEMP
+	HRRZ T2,LOCJFN
+	MOVX T3,<FLD(.JSAOF,JS%DEV)+FLD(.JSAOF,JS%DIR)+FLD(.JSAOF,JS%NAM)+FLD(.JSAOF,JS%TYP)+FLD(.JSAOF,JS%GEN)+JS%PAF>
+	JFNS
+	MOVX T1,GJ%IFG+GJ%XTN+GJ%DEL
+	MOVEM T1,GJBLK+.GJGEN
+	MOVEI T1,GJBLK
+	HRROI T2,TEMP
+	GTJFN
+	 FATAL <GTJFN Failed in JFN2ND>
+	PUSH P,T1		; Save 2nd JFN for a bit
+	MOVEI T1,GJBLK
+	HRROI T2,TEMP		; Get a 2nd JFN (3rd?)
+	GTJFN
+	 FATAL <2nd GTJFN in JFN2ND failed>
+	PUSH P,T1
+	MOVE T1,LOCJFN
+	GNJFN			; Step to next file
+	 SKIPA T2,[-1]		; Failed
+	MOVEI T2,1		; JFN2ND won
+	MOVEM T2,GNJFLG		; Remember for whoever
+	POP P,T2		; 3rd JFN
+	POP P,T1		; 2nd JFN
+	RET
+
+; Here to sort & print tape reference counts
+
+DMPTAP:	MOVE T1,[-NTAPES,,TAPCNT]
+TAPDM1:	MOVE T2,[-NTAPES,,TAPCNT]
+TAPDM3:	SKIPN 0(T2)		; Empty?
+	JRST TAPDM4		; Yes, step outer ptr
+	SKIPN T3,0(T1)		; Outer done?
+	JRST TAPDM5		; Yes
+	CAML T3,0(T2)		; Need to swap places?
+	JRST TAPDM2		; No, step to next cell
+	EXCH T3,0(T2)
+	EXCH T3,0(T1)
+	MOVE T3,1(T1)
+	EXCH T3,1(T2)
+	EXCH T3,1(T1)
+TAPDM2:	AOBJN T2,.+1
+	AOBJN T2,TAPDM3
+TAPDM4:	AOBJN T1,.+1
+	AOBJN T1,TAPDM1
+TAPDM5:	MOVE T1,LSTJFN
+	MOVEI T2,"L"-100
+	BOUT			; Next page please
+	HRROI T2,[ASCIZ /
+Tape ID   Count		Tape ID   Count		Tape ID   Count
+/]
+	SETZB T3,T4
+	SOUT
+	MOVE COUNT,[-NTAPES,,TAPCNT]
+TAPDM6:	SKIPN 0(COUNT)
+	JRST TAPDM7		; Done?
+	CALL TAPPRT
+	ADD COUNT,[2,,2]
+	JUMPGE COUNT,TAPDM7
+	SKIPN 0(COUNT)
+	JRST TAPDM7
+	MOVE T1,LSTJFN
+	MOVEI T2,TAB
+	BOUT
+	BOUT
+	CALL TAPPRT
+	ADD COUNT,[2,,2]
+	JUMPGE COUNT,TAPDM7
+	SKIPN 0(COUNT)
+	JRST TAPDM7
+	MOVE T1,LSTJFN
+	MOVEI T2,TAB
+	BOUT
+	BOUT
+	CALL TAPPRT
+	ADD COUNT,[2,,2]
+	JUMPGE COUNT,TAPDM7
+	MOVE T1,LSTJFN
+	HRROI T2,CRLF
+	SETZB T3,T4
+	SOUT
+	JRST TAPDM6
+TAPDM7:	MOVE T1,LSTJFN
+	HRROI T2,CRLF
+	SETZB T3,T4
+	SOUT
+	RET
+
+TAPPRT:	MOVE T2,0(COUNT)	; Get tape ID
+	TLNE T2,777777		; # or sixbit
+	JRST TAPSIX		; Sixbit
+	MOVE T1,LSTJFN
+	MOVX T3,<FLD(7,NO%COL)+FLD(^D10,NO%RDX)+NO%MAG+NO%LFL>
+	NOUT
+	 JFCL
+TAPPR1:	HRROI T2,[ASCIZ /   /]
+	SETZB T3,T4
+	SOUT
+	MOVE T2,1(COUNT)	; Get reference count
+	MOVX T3,<FLD(5,NO%COL)+FLD(^D10,NO%RDX)+NO%MAG+NO%LFL>
+	NOUT
+	JFCL
+	RET
+
+
+TAPSIX:	MOVEI T2," "
+	BOUT
+	MOVE T3,0(COUNT)
+	SETZ T2,
+	MOVE T1,[POINT 7,TEMP]
+	SETZ T4,0
+TAPSI1:	ROTC T2,6		; Move a char into T2
+	JUMPE T2,TAPSI2
+	ADDI T2,40
+	IDPB T2,T1
+	SETZ T2,
+	AOJA T4,TAPSI1		; Count # of chars
+TAPSI2:	IDPB T2,T1		; End the string
+	MOVEI T3,6
+	MOVE T1,LSTJFN
+	MOVEI T2," "
+	SUB T3,T4		; # of spaces needed
+	JUMPLE T3,TAPSI3
+	BOUT
+	SOJG T3,.-1
+TAPSI3:	HRROI T2,TEMP
+	SETZB T3,T4
+	SOUT
+	JRST TAPPR1
+
+; Here to do check for users who would like see what stands to be taken
+; given current policies
+
+PEON:	MOVX T1,GJ%OLD+GJ%SHT
+	HRROI T2,[ASCIZ /SYSTEM:REAPER.CMD/]
+	GTJFN
+	 JRST [	HRROI T1,[ASCIZ /?Policy file not available
+/]
+		PSOUT
+		HALTF
+		JRST REAPER]
+	CALL TAKE1		; Fake a take on that file
+PEON1:	HRROI T1,[ASCIZ / Output to: /]
+;**;[131] Replace 2 lines with 7 lines at PEON1:+1L	RMT	18-MAY-82
+	MOVEM T1,CBLK+.CMRTY	; [131] Save the new prompt
+	MOVEI T1,REPAR2		; [131]
+	MOVEM T1,CBLK		; [131] And new reparse address
+	MOVEI T1,CBLK		; [131]
+	MOVEI T2, [FLDDB. (.CMINI)] ; [131]
+	COMND			; [131] Print the new prompt
+REPAR2:	CALL LIST1		; [131] Get the file for output
+	SKIPN LSTJFN		; Get one?
+	JRST PEON1		; No, try again
+PEON2:	HRROI T1,[ASCIZ / Check files: /]
+;**;[131] Replace 2 lines with 7 lines at PEON2:+1L	RMT	18-MAY-82
+	MOVEM T1,CBLK+.CMRTY	; [131] Save the new prompt
+	MOVEI T1,REPAR3		; [131]
+	MOVEM T1,CBLK		; [131] And new reparse address
+	MOVEI T1,CBLK		; [131]
+	MOVEI T2, [FLDDB. (.CMINI)] ;
+	COMND			; [131] Print new prompt
+REPAR3:	MOVEI T1,[<GJ%OLD+GJ%DEL+GJ%IFG+GJ%XTN+GJ%CFM>!.GJALL
+		.PRIIN,,.PRIOU	; From where ever
+		0		; Default the device
+		0		; Default the dir too
+		-1,,[ASCIZ /*/]	; All files
+		-1,,[ASCIZ /*/]	; All types
+		0		; Protection
+		0		; Account
+		0		; JFN
+;**;[131] Replace 5 lines with 15 lines at DOERST-8L	RMT	18-MAY-82
+		G1%IIN		; Find invisible
+		0		; [131] User's typescript
+		0		; [131] Number of bytes in user's typescript
+		0		; [131] Pointer to CTL/R buffer
+		0		; [131] Pointer to dest. buffer
+		0]		; [131] Pointer to attribute block
+	MOVEM T1,CBLK+.CMGJB	; [131] Set up GTJFN block
+	MOVEI T1,CBLK		; [131]
+	MOVEI T2,[FLDDB. (.CMFIL)] ; [131]
+	COMND			; [131] Parse the filespec
+	TXNE T1,CM%NOP		; [131] Bad one?
+	 ERROR PEON2,<>		; [131] Type the error and try again
+	PUSH P,T2		; [131] Save the JFN
+	CALL CONFRM		; [131] Confirm
+	POP P,T2		; [131] Get back the JFN
+	CALL ARCHI1		; Do it
+	HALTF
+	JRST .-1		; No continue
+
+DOERST:	PUSH P,T1
+	PUSH P,T2
+	PUSH P,T3		; Save things
+	MOVX T1,.PRIOU		; To TTY
+	MOVE T2,[.FHSLF,,-1]	; Most recent one
+	SETZ T3,
+	ERSTR
+	 JFCL
+	JRST [	HRROI T1,[ASCIZ /ERSTR failed/]
+		PSOUT
+		JRST .+1]
+	HRROI T1,CRLF
+	PSOUT
+	POP P,T3
+	POP P,T2
+	POP P,T1
+	RET
+
+	END <3,,REAPER>

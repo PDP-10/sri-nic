@@ -1,0 +1,248 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+;	C-HDR - C Environment definitions for FAIL modules
+;
+;	KCC should insert this file automatically at the start of every
+; FAIL file it generates (just after any ENTRY or TITLE statements).
+;	Any independent FAIL modules intended for use with KCC programs
+; should also .INSERT this file.  However, such modules are discouraged
+; in favor of using #asm.
+;	For further comments and details, see the source file!
+
+
+
+; Now define various macros to help compensate for cpu/sys differences.
+
+	DEFINE DMOVE(AC,MEM)
+	  <	MOVE AC,MEM
+		MOVE <AC+1>,1+MEM
+	  >
+	DEFINE DMOVEM(AC,MEM)
+	  <	MOVEM AC,MEM
+		MOVEM <AC+1>,1+MEM
+	  >
+
+
+
+	DEFINE ADJSP(AC,CONS)
+	  <	ADD AC,[<CONS,,CONS>+<CONS&<-1,,0>>]
+	  >
+
+
+
+	DEFINE ADJBP(AC,MEM)
+	<	EXTERN $ADJBP
+		MOVE 15,AC
+		MOVE 16,MEM
+		PUSHJ 17,$ADJBP
+		MOVE AC,15
+	>
+	DEFINE %CHRBP(TOAC,FRMBP)
+	  <	MOVE TOAC,FRMBP
+		ADD TOAC,[110000,,0]
+		TLNN TOAC,007000	; If skip, assume 9-bit bytes and OK
+		 SUB TOAC,[020000,,0]	; Oops, assume 7-bit bytes, fix up.
+		CAIG TOAC,
+		 SUB TOAC,[430000,,1]
+	  >
+
+
+
+
+; KA-10 Double-Precision Floating Point (software format)
+;	Copied from:
+;		DEC Assembly Language Handbook, 1st edition, 1972
+;		PDP-10 System Reference Manual  DEC-10-HGAC-D
+;			3rd printing August 1969
+;		Page 2-67, "Programming Examples".
+;	NOTE!  These macros require 3 registers, not just 2!
+;	Supposedly KCC never uses AC 16 as a temp register, so
+;	we are assured that A+2 will always exist (may be 16 sometimes).
+
+DEFINE DMOVN(A,M)
+<	MOVE A,M
+	MOVE <A+1>,1+M
+	DFN A,<A+1>
+>
+DEFINE DMOVNM(A,M)	; Inefficient, but...
+<	DFN A,<A+1>
+	MOVEM A,M
+	MOVEM <A+1>,1+M
+	DFN A,<A+1>
+>
+DEFINE DFAD(A,M)
+<	PUSH P,<A+2>
+	UFA <A+1>,1+M ; Sum of low parts to A+2
+	FADL A,M	; Sum of high parts to A,A+1
+	UFA <A+1>,<A+2>	; Add low part of high sum to A+2
+	FADL A,<A+2>	; Add low sum to high sum
+	POP P,<A+2>
+>
+DEFINE DFSB(A,M)
+<	DFN A,<A+1>	; Negate double length operand
+	DFAD A,M	; Perform normal add
+	DFN A,<A+1>	; -(M - AC) = AC - M
+>
+DEFINE DFMP(A,M)
+<	PUSH P,<A+2>
+	MOVEM A,<A+2>	; Copy high AC operand in A+2
+	FMPR <A+2>,1+M ; One cross product to A+2
+	FMPR <A+1>,M	; Other to A+1
+	UFA <A+1>,<A+2>	; Add cross products into A+2
+	FMPL A,M	; High product to A,A+1
+	UFA <A+1>,<A+2>	; Add low part to cross sum in A+2
+	FADL A,<A+2>	; Add low sum to high part of product
+	POP P,<A+2>
+>
+DEFINE DFDV(A,M)
+<	PUSH P,<A+2>
+	FDVL A,M	; Get high part of quotient
+	MOVN <A+2>,A	; Copy negative of quotient in A+2
+	FMPR <A+2>,1+M ; Multiply by low part of divisor
+	UFA <A+1>,<A+2>	; Add remainder
+	FDVR <A+2>,M	; Divide sum by high part of divisor
+	FADL A,<A+2>	; Add result to original quotient
+	POP P,<A+2>
+>
+
+
+; Set up system-dependent stuff
+	; ERJMPA for use instead of ERJMP when JSYS normally skips.
+
+	OPDEF ERJMPA [JUMPA 16,]
+
+
+
+	OPDEF XMOVEI	[SETMI]
+	OPDEF XHLLI	[HLLI]
+	OPDEF ADJBP	[IBP]
+	DEFINE IFIW <SETZ >	; Instruction Format Indirect Word
+				; in non-zero sections
+
+
+
+DEFINE %INIT
+<
+
+	.REQUEST c:clb10x
+
+
+	TWOSEG 400000
+	RELOC 0
+	RELOC 400000
+>
+DEFINE %%IMPUR		; Auxiliary
+<	RELOC
+	DEFINE %IMPURE <>
+	DEFINE %PURE <%%PURE >
+>
+DEFINE %%PURE		; Auxiliary
+<	RELOC
+	DEFINE %PURE <>
+	DEFINE %IMPURE <%%IMPUR >
+>
+DEFINE %IMPURE		; Switch to impure segment for variable stuff
+<	%INIT
+	RELOC
+	DEFINE %IMPURE <>
+	DEFINE %PURE <%%PURE >
+>
+DEFINE %PURE		; Switch to pure segment for constant stuff
+<	%INIT
+	DEFINE %PURE <>
+	DEFINE %IMPURE <%%IMPUR >
+>
+	DEFINE	$$CODE	<%PURE >	; Synonyms KCC currently uses.
+	DEFINE	$$DATA	<%IMPURE >
+
+
+; Now define cpu/sys independent KCC stuff.
+P=17			; Stack register
+%ARG1==-1		; Argument offsets in stack, upon entry to subroutine
+%ARG2==-2		; 2nd arg
+%ARG3==-3		; 3rd arg
+%ARG4==-4		; 4th arg
+%ARG5==-5		; 5th arg
+
+	OPDEF %CALL	[PUSHJ 17,]	; C routine call
+	OPDEF %RET	[POPJ 17,]	; C routine return
+
+	OPDEF RET	[POPJ 17,]	; Convenient return from PUSHJ
+	; Note cannot use CALL as that is a WAITS/TOPS10 monitor UUO.  Foo.
+
+
+
+	PURGE IFE,IFN,IFG,IFGE,IFL,IFLE,IFDEF,IFNDEF,IFIDN,IFDIF
+	
+	EXTERN	$START
+	EXTERN $RET,$RETZ,$RETN,$RETP,$RETF,$RETT
+	EXTERN $ZERO
+
+	%PURE		; Always start off with this now.

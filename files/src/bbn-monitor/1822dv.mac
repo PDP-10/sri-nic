@@ -1,0 +1,1278 @@
+;Merge CMU and BBN code
+;<MONITOR.CMU>1822DV.MAC.2, 14-Aug-85 06:48:51, Edit by VAF
+;CS147 Put an IFN IPMONF around some debugging code.
+;[BBNF.ARPA]<5-3-NET>1822DV.JVD.8,  1-Aug-84 09:41:43, Edit by: JDELSIGNORE
+; Added CALL MNOSRT rather than MNTCALL NTOSRT
+
+; Comapaible with Multinet V2
+
+	SEARCH PROLOG,ANAUNV
+ND MLCF,0
+
+
+	TTITLE 1822DV
+
+;Multinet interface routines common to 1822 networks.  These are the
+;"protocol" dependent routines (i.e. those that are hardware independent),
+;hardware dependent routines are in the driver module (IMPPHY, ANXPHY etc.).
+
+;All routines expect an NCT pointer in P1.
+
+;The following must agree with the definitions in the driver modules.
+
+HSTGDM==NTGEN		; 1st general purpose word used for down flag needed
+NTNOP==NTGEN+1		; 2nd, used for NOP needed count
+NTIHDR==NTGEN+2		; Buffer for reading in headers (4 words)
+			; Uses IHxxx structure definitions w/pointer at NTIHDR
+
+	RESCD	;ps Accessed from interrupt level
+
+;Protocol dispatch vector
+
+NCPVEC::
+	NCTVEC(NCPVEC,NCPKIL,NTPKIL)	; Protocol specific interface kill
+	NCTVEC(NCPVEC,R,NTPERR)		; Protocol specific error handler
+	NCTVEC(NCPVEC,IMPEIN,NTIDUN)	; Input done
+	NCTVEC(NCPVEC,IMODUN,NTODUN)	; Output done
+	NCTVEC(NCPVEC,IMPHDR,NTLLDR)	; Create local leader
+	NCTVEC(NCPVEC,RSKP,NTPINI)	; Network up function
+	NCTVEC(NCPVEC,RFNTOC,NTPMNT)	; Network maintainence
+	NCTVEC(NCPVEC,R,NTPRMV)		; Nothing to release
+
+	SWAPCD	;ps End of interrupt level access
+
+	COMMENT #
+
+RFNM counting routines make sure that the IMP is not flooded with messages
+for a single host.  In order to fit into a single word, the host key is a
+strangely crunched number:
+	<8 Bits Port number><1 Bit high priority><3 Bits handling type>
+		<4 Bits NCT hash number><8 Bits IMP number>
+
+RFNM counting uses two 4-bit fields for each host.
+	NO (next message out) Initial value 0
+	NB (next message back) Initial value 0
+
+When a controlled message is sent the low 4 bits of its message ID are
+set to the current value of NO, and NO is incremented (modulo 16).
+
+When a RFNM or equivalent is received, NB is set to its message ID+1
+(modulo 16).  This takes advantage of sequential delivery guarantee;
+if ID .ne. NB then a RFNM has been lost.  If NO - NB > c(RFNM0) then
+output is blocked for that host, and the blocked bit is set.
+
+This scheme protects against lost of up to eight consecutive RFNM's .
+The blocked bit is used to protect against that case.
+NB: only the messages are delivered sequentially, the RFNMs may NOT
+be delivered sequentially.  Failure of sequential RFNMs works out ok.
+
+Periodicly the table is scanned for blocked connections.  If one is
+found, the "was blocked" bit is checked.  If this is also non-zero
+then the connection has been blocked since the last pass, and the
+counts are zeroed.  If that bit is zero, then it is set for the next
+pass.  Whenever a packet is sent to a host both bits are cleared.
+
+	#
+
+;Structure of entries in the RFNTAB table
+
+DEFSTR(RFNFLG,0,11,12)			; Mask that includes the following
+  DEFSTR(RFNBB,0,0,1)			; Blocked bit (Must be bit 0)
+  DEFSTR(RFNWB,0,1,2)			; Was blocked field
+  DEFSTR(RFNNO,0,5,4)			; Next packet out
+  DEFSTR(RFNDN,0,6,1)			; Host is down bit
+  DEFSTR(RFNWD,0,7,2)			; Host was down field
+  DEFSTR(RFNNB,0,11,4)			; Next packet back
+DEFSTR(RFNHST,0,35,24)			; Host key
+; DEFSTR(RFNPT,0,19,8)			; Port
+  DEFSTR(RFNHT,0,23,4)			; Handling Type:
+    DEFSTR(RFNHP,0,20,1)		;   High Priority bit
+    DEFSTR(RFNNP,0,23,3)		;   Number of Packets (really PIPRC)
+  DEFSTR(RFNNT,0,27,4)			; NCT id
+; DEFSTR(RFNIP,0,35,8)			; IMP number
+
+;GTRFNH
+;Macro to create the pseudo 'host number' from the leader pointed to by T2.
+;Stores value in T1.
+
+DEFINE GTRFNH <
+	LOAD T1,IHADR,(T2)		; Get Port and IMP numbers
+	LOAD CX,IHNET,(T2)		; NCT number
+	STOR CX,RFNNT,+T1		; Goes in the middle
+	LOAD CX,IHHHP,(T2)		; Get Handling Type: High Priority
+	STOR CX,RFNHP,+T1		; Save it
+	LOAD CX,IHHNP,(T2)		; Get Handling Type: Number of
+					;  Packets (Really PIPRC)
+	STOR CX,RFNNP,+T1		; Save it
+>
+
+;NCPKIL	Protocol dependent functions in taking down an interface.
+;Ret+2:	When function is complete.
+
+NCPKIL:	MOVE T1,NTRDY(P1)		; Get status word
+	TRZN T1,1B18			; First time through?
+	IFSKP.
+	  MOVEM T1,NTRDY(P1)		; Save modified flag
+
+;Create a "Host going down" message.  Assumes "Unknown reason".
+;HSYST4 contains time back up.
+
+REPEAT 0,<
+	  CALL LGTAD			; Get time
+	  CAMLE T1,HSYST4		; Is time back up later than now?
+	  IFSNK.
+	    MOVEI T1,177776		; No
+	  ELSE.
+	    ADD T1,[6,,0]
+	    CAMG T1,HSYST4		; More than 6 days away?
+	    IFNSK.
+	      MOVEI T1,177777		; Yes
+	    ELSE.
+	      MOVX T4,<IC%DSA!IC%UTZ>	; Use GMT standard time
+	      ODCNV			; Separate into day, second etc
+	      HRRZ T1,T3		; Day of week
+	      HRRZ T2,T4		; Seconds since midnight
+	      IDIVI T2,^D300		; Convert seconds to 5 min
+	      IDIVI T2,^D12		; Separate into hour and 5 min
+	      LSH T1,5
+	      IORI T1,(T2)		; Insert hour of day
+	      LSH T1,4
+	      IORI T1,(T3)		; And 5 min part of hour
+	    ENDIF.
+	  ENDIF.
+	  LSH T1,4			; Room for REASON
+>					; (Assume "reason unknown")
+	  MOVX T1,177776B31		; Assume unknown reason/time up"
+	  MOVEM T1,HSTGDM(P1)		; Save message
+
+	  MOVX T1,^D<10*1000>		; When to give up (10 seconds)
+	  ADD T1,TODCLK
+	  MOVEM T1,NTDCLK(P1)		; Save timer
+	ENDIF.
+
+	MOVE T1,NTDCLK(P1)		; Get timeout value
+	CAMLE T1,TODCLK			; Timeout happened?
+	 SKIPG HSTGDM(P1)		; Wait for "Going down" msg to be sent
+	  RETSKP			; Skip return when done
+	RET				; Not done yet
+
+	RESCD	;ps Called from interrupt level
+
+;IMPHDR	Create an ARPANet local leader.  Allows Class A, B, and C networks.
+
+;T1/	Local net destination address
+;T2/	(Ext) pointer to network top of buffer
+;T3/	Protocol code (Only NP.IP implemented)
+;P1/	NCT
+;Ret+1:	Always, T1/ error code, MNTX00 if ok, or MNTX02,MNTX04,MNTX06*,MNTX21*
+
+	%PITOS (<;>)			; Define offset for type-of-service
+
+IMPHDR:	SAVEAC <T2>			; Save real pointer
+	ACVAR <OPKT>
+	STOR T1,PFLAD,(T2)		; Save address in well known position
+	MOVE OPKT,T2			; Save Buffer pointer
+
+;Correct data pointers and byte count
+
+	LOAD T4,PTPBZ,(OPKT)		; Length at transport level
+	ADDI T4,.NBHDL*4		; Plus leader size in bytes
+	STOR T4,PLNBZ,(OPKT)		; Length at local net level
+
+	PNTLDR T2,PTPDT,(OPKT)		; Address of transport level leader
+        LOAD T4,IPPRC,(T2)		; Get IP precedence bits
+	SUBI T2,.NBHDL			; Size of local leader, words
+	STOR T2,PLNDT,(OPKT)		; Address of local net level leader
+
+	SETZM .NBLD0(T2)		; Clear 1st word of leader
+	SETZM .NBLD1(T2)		; Clear other words
+	SETZM .NBLD2(T2)
+
+	STOR T4,IHHNP,(T2)		; Save PIPRC as Handling Type
+					; (Not really) Number of Packets
+	LOAD T4,NTHSH,(P1)		; Get NCT unique code
+	STOR T4,IHNET,(T2)		; Used by RFNHSH etc.
+
+	MOVX T4,INTLNK			; Get link
+	STOR T4,IHLNK,(T2)		; Set it in leader
+	MOVX T4,ITY%LL			; New format flag
+	STOR T4,IHFTY,(T2)		; Set it in leader
+
+	CAIE T3,NP.IP			; For IP protocol?
+	IFSKP.
+	  CALL IP2IMP			; Convert 32 bit IP Host Address to
+					; 24 bit IMP Address
+	  TDZ T1,NTNLHM(P1)		; Clear logical host bits from dest.
+	ELSE.
+	  MOVX T1,<NE%DRP+MNTX21>	; Protocol not supported by local net
+	  RET
+	ENDIF.
+
+	STOR T1,IHADR,(T2)		; Store address
+
+	PUSH P,[MNTX00]			; Assume all ok
+
+	MOVE T4,$PITOS(OPKT)		; Get word containing TOS
+	TXNN T4,<IPPRC&<^-<IPPRC/2>>>	; High priority? (MSB of PIPRC)
+	IFSKP.				; Yes, set HTY%HP bit
+	  SETONE IHHHP,(T2)		; Set Handling Type High Priority
+	ENDIF.
+	
+	LOAD T3,PTPBZ,(OPKT)		; Length at transport level
+	ASH T3,3			; Make into bits
+	STOR T3,IHLEN,(T2)		; Save size in bits
+
+	MOVX T1,STY%FC			; Assume Normal flow-control
+	; Use Subtype 3 (STY%UC) iff bit A3ENB of NTFLAG is on and
+	; (low delay) and (NOT high reliability)
+	IFQN. A3ENB,(P1)		; Type 3 messages off?
+	  TXNE T4,<IPLDY>		; Unless request "low delay" and
+	   TXNE T4,<IPHRL>		; "low reliability"
+	    TRNA			; Not both, Normal flow-control
+	     MOVX T1,STY%UC		; If both, Uncontrolled flow
+	ENDIF.
+
+	; Check the bit lenghts depending upon the subtype
+	CAIE T1,STY%FC			; Normal flow control?
+	IFSKP.				; Yes, no bigger than 8064 data bits
+	  CAIG T3,^D8064-1		; Larger than 8064?
+	  IFSKP.			; Yup
+	    ; Bogus value probably given in SITE-ADDRESS file
+	    BUG.(CHK,IMPPTB,1822DV,SOFT,<Packet too big for 1822 device>,
+<<T3,ACTUAL>,<NTPSIZ(P1),NTPSIZ>,<P1,NCT>>,<
+
+Cause:	A higher level protocol has requested 1822 to deliver a packet
+	which is too long for the network.  Either the higher level
+	protocol has miscalculated the maximum packet size, or the
+	PACKET-SIZE variable in SYSTEM:SITE-ADDRESS.TXT is incorrect.
+
+Action:	Determine the cause, and if the SITE-ADDRESS file is at fault,
+	then correct it and execute the .IPNIF function of the IPOPR%
+	JSYS to process the new file and cycle all of the networks.
+
+Data:	The packet length in bits excluding the header; the maximum
+	packet size as found in the NCT, and the NCT address.
+
+>)
+	    MOVX T3,<<<^D8064-1>/^D8>,,MNTX02>  ; Too big
+	    MOVEM T3,(P)
+	  ENDIF.
+
+	ELSE.
+	  CAIG T3,^D991-1		; Uncontrolled must be single packet
+	  ANSKP.
+	    MOVX T3,<<<^D991-1>/^D8>,,MNTX02>  ; Too big
+	    MOVEM T3,(P)
+	    MOVX T1,STY%FC		; Must use Normal flow-control
+	ENDIF.
+
+	STOR T1,IHSTY,(T2)		; Message sub-type
+
+	GTRFNH				; Build host key
+;	TXZ T1,1B0			; Don't add to table if not there
+	CALL RFNHSH ;(T1:T2,T3)		; See how long the queues are
+	  JFCL
+
+	POP P,T1			; Previous error or MNTX00 if none
+
+	IFL. T2
+	  MOVX T1,<NE%DRP+MNTX06> 	; Host is down
+	  RET
+	ENDIF.
+
+	CAML T2,RFNM0			; Queue length exceed max outstanding?
+	  MOVX T1,MNTX04		; Yes, flow control limit exceeded
+	RET
+	ENDAV.
+
+;IP2IMP	Convert 32 bit IP Host Address to 24 bit IMP Address.
+; Handles Internet Class A, B, and C Networks.
+;
+;T1/	32 bit IP Host Address
+;	CALL IP2IMP
+; Returns +1: Always, with 24 bit IMP Address in T1, clobbers no ACs
+
+IP2IMP:	SAVEAC <T2>		;Clobbered by lower IP2IMx routines
+	LOAD T2,IA%CLS,+T1	;Get Network Class
+	XCT IP2IMX(T2)		;Convert it as a function of Class
+	RET			;Return
+
+;IP2IMX	 Execution Table for IP2IMP
+
+IP2IMX:	AND T1,[77777777]	;Class A - Save 24 bits only
+	AND T1,[77777777]	;  "
+	AND T1,[77777777]	;  "
+	AND T1,[77777777]	;  "
+	CALL IP2IMB		;Class B
+	CALL IP2IMB		;  "
+	CALL IP2IMC		;Class C
+	JFCL			;Class ???
+
+;IP2IMB	Convert a Class B 32 bit IP Host Address into a 24 bit IMP Address.
+; A.B.C.D => C.0.D
+;
+;T1/	Class B 32 bit IP Host Address
+;	CALL IP2IMB
+; Returns +1: Always, with 24 bit IMP Address in T1, clobbers T2.
+
+IP2IMB:	LDB T2,[POINT 8,T1,27]	;Grab byte C
+	DPB T2,[POINT 8,T1,19]	;Plop it into byte B's position
+	AND T1,[77600377]	;Keep only the proper bits
+	RET			;Return
+
+;IP2IMC	Convert a Class C 32 bit IP Host Address into a 24 bit IMP Address.
+; A.B.C.D, where D is four 2 bit bytes in the form WXYZ => W.0.XYZ
+;
+;T1/	Class C 32 bit IP Host Address
+;	CALL IP2IMC
+; Returns +1: Always, with 24 bit IMP Address in T1, clobbers T2.
+
+IP2IMC:	LDB T2,[POINT 2,T1,29]	;Grab high 2 bits of byte D
+	DPB T2,[POINT 2,T1,19]	;Plop it into byte B's position
+	AND T1,[600077]		;Keep only the proper bits
+	RET			;Return
+
+;IMP2IP	Converts a 24 bit IMP Address to a 32 bit IP Host Address.
+;
+;T2/	Extended receive leader pointer must be preserved
+;P1/	Pointer to the NCT
+;	CALL IMP2IP
+; Returns +1: Always, 32 bit IP address in T1 (NA%PRO/NA%REST format)
+; Clobbers no ACs
+
+IMP2IP:	SAVEAC <T2,T3,T4>	;Clobbered by lower level IMP2Ix routines
+	MOVE T1,NTLADR(P1)	;Get this interface's local host address
+	LOAD T3,IA%CLS,+T1	;Get Network Class
+	XCT IMP2IX(T3)		;Convert it as a function of Class
+	LOAD T3,NTPRO,(P1)	;Get protocol type
+	STOR T3,NA%PRO,+T1	;Save in IP Address
+	RET			;Return
+
+;IMP2IX	Execution Table for IMP2IP
+
+IMP2IX:	CALL IMP2IA		;Class A
+	CALL IMP2IA		;  "
+	CALL IMP2IA		;  "
+	CALL IMP2IA		;  "
+	CALL IMP2IB		;Class B
+	CALL IMP2IB		;  "
+	CALL IMP2IC		;Class C
+	JFCL			;Class ???
+
+;IMP2IA	Convert a 24 bit IMP Address to a Class A 32 bit IP Host Address.
+; A.B.C => NET.A.B.C
+;
+;T1/	Local Host Address from the NCT
+;T2/	Extended receive leader pointer must be preserved
+;T3/	Network Class
+;	CALL IMP2IA
+; Returns +1: Always, with 32 bit IP Host Address in T1, clobbers T4.
+
+IMP2IA:	AND T1,INTNET(T3)	;Save only the Network portion
+	LOAD T4,IHADR,(T2)	;Get the IMP Host Address
+	DPB T4,[POINT 24,T1,35]  ;Plop into the low 24 bits
+	RET			;Return
+
+;IMP2IB	Convert a 24 bit IMP Address to a Class B 32 bit IP Host Address.
+; A.B.C => NET.NET.A.C
+;
+;T1/	Local Host Address from the NCT
+;T2/	Extended receive leader pointer must be preserved
+;T3/	Network Class
+;	CALL IMP2IB
+; Returns +1: Always, with 32 bit IP Host Address in T1, clobbers T4.
+
+IMP2IB:	AND T1,INTNET(T3)	;Save only the Network portion
+	LOAD T4,IHHST,(T2)	;Get the Host Port from IMP Address
+	DPB T4,[POINT 8,T1,27]  ;Plop into the third byte
+	LOAD T4,IHIMP,(T2)	;Get the IMP Number
+	DPB T4,[POINT 8,T1,35]  ;Plop 8 bits of it into the fourth byte
+	RET			;Return
+
+;IMP2IC	Convert a 24 bit IMP Address to a Class C 32 bit IP Host Address.
+; W.0.XYZ, where WXYZ are 2 bit bytes => NET.NET.NET.WXYZ
+;
+;T1/	Local Host Address from the NCT
+;T2/	Extended receive leader pointer must be preserved
+;T3/	Network Class
+;	CALL IMP2IC
+; Returns +1: Always, with 32 bit IP Host Address in T1, clobbers T4.
+
+IMP2IC:	AND T1,INTNET(T3)	;Save only the Network portion
+	LOAD T4,IHHST,(T2)	;Get the Host Port from IMP Address
+	DPB T4,[POINT 2,T1,29]  ;Plop 2 bits of it into the high order part of
+				;the fourth byte
+	LOAD T4,IHIMP,(T2)	;Get the IMP Number
+	DPB T4,[POINT 6,T1,35]  ;Plop 6 bits of it into the low order part of
+				;the fourth byte
+	RET			;Return
+
+;IMPEIN	"End of input" processing for an input buffer. Here from device driver
+;after device specific operations done.
+
+;P1/	NCT with NTIB containing extended input buffer address
+
+IMPEIN:	PUSH P,[IPDV%D]			; Assume will drop due to error
+	MNTCALL NTSCHK			; Check status
+	 TRNA				; Error, will drop
+	  SETZM (P)			; Ok, will process it
+
+	SKIPN T2,NTIB(P1)		; Extended buffer address
+	  JRST IMPEIV			; Wasn't one
+
+	LOAD T3,NTHSH,(P1)		; Get network key from NCT
+
+	IFL. T2				; Only buffer header read
+	  XMOVEI T2,NTIHDR(P1)		; Point to canned local header
+	  STOR T3,IHNET,(T2)		; Network key into local header
+	  TXO T2,IPDV%R			; Mark it as a canned buffer
+	ELSE.
+	  PNTLDR T1,PLNDT,(T2)		; Address of local net level leader
+	  STOR T3,IHNET,(T1)		; Stick it into buffer header
+	ENDIF.
+
+	TDO T2,(P)			; Include possible IPDV%Drop flag
+	TXO T2,IPDV%I!IPDV%E		; End of input
+	CALL NTPRNG ;(T2)		; Into ring
+
+	SKIPE (P)			; Drop flag
+	  JRST IMPEI7			; Drop it
+
+					; Set pointer to 1822 header
+	TXZE T2,IPDV%R			; Real buffer?
+	IFSKP.
+	  PNTLDR T2,PLNDT,(T2)		; Address of local net level leader
+	ENDIF.
+
+	LOAD T3,IHFTY,(T2)		; Is this a long format leader?
+	CAIE T3,ITY%LL
+	  JRST IMPEI5			; No. Throw it away (but correct IMP)
+
+;Count type/subtype
+
+	SKIPL T1,NTPSTS(P1)		; Locate statistics block @ NCTiC
+	IFSKP.
+	  LOAD T3,IHMTY,(T2)		; Get message type.
+	  INHSTI (,,T3,T1,T4,2)		; Histogram Type (CELL(NCTiC)
+	  SKIPG T1,XCELL(NCTiC,1,(T1))	; Counting subtypes?
+	  IFSKP.
+	    LOAD T3,IHSTY,(T2)		; Get subtype
+	    INHSTI (,,T3,T1,T4)		; Histogram Sub-type (CELL(NCTiC)
+	  ENDIF.
+	ENDIF.
+
+;Process by message type, counting RFNMs if appropriate
+
+	LOAD T3,IHMTY,(T2)		; Get message type.
+	CAIGE T3,NRFNXS			; RFNM equivalent?
+	  XCT RFNXCT(T3) ;(T2)		; Yes, process according to type.
+
+	SKIPG NTIB(P1)			; Header only?
+	  JRST IMPEI7			; Always discard control messages
+
+	CAIE T3,.IHREG			; Regular?
+	 CAIN T3,.IHUNC			; Uncontrolled?
+	IFSKP.
+	  MOVX T1,NP.GEN		; No, discard other types
+	ELSE.				; Decide what protocol owns it
+	  LOAD T4,IHLNK,(T2)		; Get the link
+	  MOVX T3,<XWD -NLNKS,PROLNK>	; Pointer to lookup table
+	  DO.
+	    HRRZ T1,(T3)		; Get a link number
+	    CAIE T1,(T4)		; Same as this one?
+	      AOBJN T3,TOP.		; No, try next
+	  ENDDO.
+	  IFL. T3			; Link found
+	    HLRZ T1,(T3)		; Get the protocol type number
+	    CAIE T1,NP.IP		; IP?
+	    IFSKP.
+	      CALL IMP2IP ;(T2,P1)	; IP address from local leader
+	      MOVE T2,NTIB(P1)		; Restore pointer to buffer
+	      STOR T1,PFLAD,(T2)	; Foreign local net address
+	      MOVX T1,NP.IP		; Restore protocol code
+	      CALL PVNCT ;(T1,P1:P1)	; Convert Physical to Virtual NCT
+	      ;; T1/ Protocol code; P1/ Pointer to virtual NCT
+	    ENDIF.
+	  ELSE.
+	    MOVX T1,NP.GEN		; Not found, discard
+	  ENDIF.
+	ENDIF.
+
+	ADJSP P,-1			; Clear stack
+
+	SETZ T2,			; Clear T2
+	SKIPN T4,NTPHY(P1)		;Link to a physical?
+	IFSKP.				;Yes, use the physical
+	  EXCH T2,NTIB(T4)		;Get the buffer
+	ELSE.				;No, Already have the physical
+	  EXCH T2,NTIB(P1)		;Get the buffer
+	ENDIF.
+	MOVX T3,<4*.NBHDL>		;Get local leader length
+
+	CALLRET MNTEIN ;(T1,T2,T3,P1)	; Do end of input handling
+
+;Association table LINK<->Protocol type.
+;LH = Protocol number (BUFDEF),  RH = Link number
+
+PROLNK:		XWD NP.IP,INTLNK
+IFN MLCF,<	XWD NP.MLC,MLCLNK>
+NLNKS==.-PROLNK
+
+
+;Have a short leader message
+;T3/	Message type
+
+IMPEI5:	CAIN T3,.IHNOP			; NOP?
+	IFSKP.
+	  MOVEI T1,10			; Send NOP's so IMP knows what we want
+	  MOVEM T1,NTNOP(P1)
+	  CALL MNOSRT			; Make sure output is going
+	ENDIF.
+
+;Going to discard a packet due to error
+;IMPEI6:
+	SKIPGE T1,NTPSTI(P1)		; Locate statistics block
+	  AOS CELL(MNMRC,3,(T1))	; Count packets dropped due to error
+	IFSKP.				; Never
+
+;Going to discard a packet which is uninteresting
+
+IMPEI7:	  SKIPGE T1,NTPSTI(P1)		; Locate statistics block
+	    AOS CELL(MNMRC,2,(T1))	; Count packets ok to drop
+	ENDIF.
+	MOVE T2,NTIB(P1)		; Pointer to packet/header
+	IFL. T2				; Pointer to header
+	  XMOVEI T2,NTIHDR(P1)		; Internal buffer
+	  TXO T2,1B0			; Canned
+	  MOVX T3,<FLD(NL.NCP,DTYP)>	; FLD(NP.nun,DPRO)+FLD(NH.xxx,DDEV)
+	ENDIF.
+	MOVX T1,PT%KIL			; Received packet being flushed
+	TDNE T1,MNTRAC			; Want trace?
+	  CALL PRNPKH ;(T1,T2,T3,P1)	; Yes
+
+	SKIPLE T1,NTIB(P1)		; Be safe
+	  CALL RETBUF			; Free a network buffer
+	JRST IMPEIX
+
+;No buffer
+
+IMPEIV:	SKIPGE T1,NTPSTI(P1)		; Locate statistics block
+	  AOS CELL(MNMRC,7,(T1))	; Count vanishing packets
+	
+;Enter here when buffer has been released
+
+IMPEIX:	SETZM NTIB(P1)
+	ADJSP P,-1			; Clear stack
+	MNTJRST NTISRT			; Start new input
+
+
+;RFNXCT	Table of XCTs, do RFNM counting if proper message type.
+
+;T2/	Extended received buffer pointer to local leader must be preserved
+;T3/	Message type must be preserved
+
+RFNXCT:	JFCL			;  0  Don't count Regular messages
+	CALL RFNIN		;  1  Count Error In Leader as RFNM
+	JFCL			;  2  Don't count Host Going Down
+	JFCL			;  3  Don't count Unused
+	JFCL			;  4  Don't count NOP
+	CALL RFNIN		;  5  Count RFNMs
+	CALL RFNDHS		;  6  Count Dead Host Status
+	CALL RFNIN		;  7  Count Dead Host messages
+	CALL RFNIN		;  8  Count Error In Data
+	CALL RFNIN		;  9  Count Incomplete Transmission
+	CALL RFNIR		; 10  Flush entries for Interface Reset
+NRFNXS==.-RFNXCT		;
+;	JFCL			; 11  Don't count Refused, try again
+;	JFCL			; 12  Don't count Refused, will notify
+;	JFCL			; 13  Don't count Refused, still trying
+;	JFCL			; 14  Don't count Ready
+
+
+;NCPUNQ	Get next buffer to send on a NCP net.
+
+;P1/	NCT
+;Ret+1:	If no buffer can be sent
+;Ret+2:	Buffer to send in T1
+
+NCPUNQ::
+MNTM5<	AOS CELL(CMNTUNQ,0,,MNT)>	; NCPUNQ called
+
+	CALL UPDTCK			; Set current time
+	XMOVEI T1,NTHOBO(P1)		; Point to high priority queue head
+	CALL RFNOUT			; Get a buffer
+	IFNSK.				; Nothing useable in high, try low
+	  XMOVEI T1,NTLOBO(P1)		; Point to low priority queue head
+	  CALL RFNOUT			; Get a buffer
+	  IFNSK.			; Nothing useable in either queue
+MNTM5<	    AOS CELL(CMNTUNQ,1,,MNT)>	; NCPUNQ didn't find anything to send
+	    RET				; Nothing to do
+	  ENDIF.
+	ENDIF.
+
+;Here with buffer in T1, regardless of which queue it came from
+
+	SKIPGE T2,NTPSTI(P1)		; Collecting statistics?
+	  SOS CELL(MNMSQ,0,(T2))	; One less entry in output queue
+	MOVE T2,TODCLK			; Time driver beginning transmission
+	STOR T2,PLNDB,(T1)
+	RETSKP				; Return success, buffer in T1
+
+
+
+;IMODUN	End of output handler for 1822 nets.
+
+;Here on PI level from device routine after sending out last word of a
+;buffer. Put it on retransmission queue if regular link, and RFNM still
+;outstanding. Else put it on free list.
+
+;T1/	Trace code
+;P1/	NCT
+
+IMODUN:	PUSH P,T1			; Save trace code
+	MNTCALL NTSCHK			; Keep ready line status up to date
+	  JFCL				; Ignore error return
+	POP P,T1
+	
+	CALLRET MNTODN ;(T1)		; Do General End of Output processing
+
+;RFNIR	Interface Reset - flush all entries for interface P1.
+
+RFNIR:	SAVEQ
+	SAVET
+	MOVE Q3,NTPSTI(P1)		; Collecting statistics?
+	MOVE Q2,TODCLK			; Yes, Now
+	MOVX Q1,RFNHST			; Host field
+
+	XMOVEI T1,RFNIR0		; Function to call for each virtual NCT
+	CALL VNCTFN ; (P1)		; Apply RFNIR0 to each virtual NCT
+
+	MOVEM Q2,RFNGCT			; Run maintenance now
+jfcl;	CALL MNTWAK			; Get those extra entries expunged
+	RET
+
+; Worker routine called for each virtual NCT for RFNIR
+
+RFNIR0:	MOVSI T4,-RFNTSZ
+
+	SETZ T2,
+	LOAD T3,NTHSH,(P1)		; Get interface id
+	STOR T3,RFNNT,+T2		; Into proper position
+
+	PIOFF
+	DO.
+	  MOVE T3,RFNTAB(T4)		; Get entry
+	  XOR T3,T2			; Interface id field
+	  TDNE T3,[RFNNT]		; Desired interface
+	  IFSKP.
+	    ANDM Q1,RFNTAB(T4)		; Flush flag bits
+	    TXNN T3,RFNBB		; Was it blocked?
+	     SKIPL Q3			; Yes, If collecting statistics,
+	      TRNA			; Nothing to do
+	       ADDM Q2,CELL(MNMSR,1,(Q3)) ; End block time
+	  ENDIF.
+	  AOBJN T4,TOP.			; Over whole table
+	ENDDO.
+	PION
+	RET
+
+;RFNDHS	Handle a dead host status message from the IMP.
+
+;T2/	Extended received leader pointer must be preserved
+;T3/	Message type must be preserved
+;P1/	NCT address
+
+RFNDHS:	SAVET			; Save temps
+	SETZ T3,		; Clear status word
+	CALL IMP2IP ;(T2 ldr)	; Convert IMP addr to IP addr
+	MOVEM T1,NTHDWN(P1)	; Flag this host down
+	LOAD T1,IHSTY,(T2)	; Get the sub-type field
+	STOR T1,HS%RSN,+T3	; Save it as the reason
+	CAILE T1,4		; Sub-type 1-4 or 15?
+	 CAIL T1,15
+	IFSKP.			; No, Sub-type 5 thru 14
+	  LOAD T1,IHDAY,(T2)	; Get day coming back up
+	  STOR T1,HS%DAY,+T3	; Save it
+	  LOAD T1,IHHR,(T2)	; Get hour coming back up
+	  STOR T1,HS%HR,+T3	; Save it
+	  LOAD T1,IHMIN,(T2)	; Get minute coming back up
+	  STOR T1,HS%MIN,+T3	; Save it
+	ENDIF.
+	MOVEM T3,NTHDWI(P1)	; Put Status in the TCB
+	AOS MNTFLG+1		; Make MultiNet Utility Fork run
+	RET
+
+;RFNIN	Handle a received RFNM (or equivalent).
+
+;T2/	Extended received leader pointer must be preserved
+;T3/	Message type must be preserved
+;P1/	NCT address
+
+RFNIN:	SAVET				; Save temp AC's
+	PUSH P,T2			; Save leader pointer
+	PUSH P,T3			; Save message type separately
+	SKIPGE T1,NTPSTI(P1)		; Collecting statistics?
+	  AOS CELL(MNMSR,2,(T1))	; Count RFNM equivalents received
+
+	GTRFNH				; Create the host code
+;	TXZ T1,1B0			; Do dot add if not there
+	LOAD T4,IHMI2,(T2)		; Get the ID
+	CALL RFNHSH ;(T1:T2,T3)		; Look address up
+	IFNSK.				; Not found (?)
+	  ADJSP P,-2			; Clean stack
+	  RET
+	ENDIF.
+	AOS T4				; Increment the ID
+	STOR T4,RFNNB,<+RFNTAB(T3)>	; And set the next expected
+
+	MOVE T4,T2			; (1B0)+outstanding count
+	IFQN. RFNBB,+RFNTAB(T3)		; Were we blocked (at max) and
+	  HRRZS T2			; Flush down flag
+	  CAML T2,RFNM0			; No longer need to be blocked?
+	  ANSKP.			; Yes
+	    SETZRO RFNWB,+RFNTAB(T3)	; Unblocked (whole field)
+	    MOVE T1,TODCLK		; End of RFNM holding time
+	    SKIPGE CX,NTPSTI(P1)	; Collecting statistics?
+	      ADDM T1,CELL(MNMSR,1,(CX)) ; Stop accumulating RFNM hold time
+	    CALL MNTWAK ; Kills T1	; Wake hardware fork
+	ENDIF.
+
+	POP P,T1			; Retrieve message type
+	POP P,T2			; Recover leader pointer
+	IFL. T4				; Host is down
+	  CAIE T1,.IHRFN		; Is it a RFNM?
+	  IFSKP.			; Yes, RFNM from down host means up, so
+	    SETZRO RFNWD,<+RFNTAB(T3)>	; Clear both down flag bits
+	  ENDIF.
+	ELSE.  				; Host may have messages outstanding
+	  CAIE T1,.IHDDD		; Host dead?
+	  IFSKP.			; Yes
+	    SETONE RFNDN,<+RFNTAB(T3)>	; Remember host is down for awhile
+	    CALL IMP2IP ;(T2 ldr)	; Convert IMP addr to IP addr
+	    MOVEM T1,NTHDWN(P1)		; Flag this host down
+	    SETZM NTHDWI(P1)		; Don't know why yet
+	    AOS MNTFLG+1		; Make MultiNet Utility Fork run
+	  ENDIF.
+	ENDIF.
+	RET
+
+;RFNOUT	Count up outgoing packets to a host.
+
+;T1/	Queue pointer:  0(T1) is Head,  1(T1) is Tail
+;P1/	NCT address
+;Ret+1:	No packets on this queue can be sent.
+;Ret+2:	Packet to send in T1, already dequeued. 
+
+RFNOUT:	SKIPN 0(T1)			; If nothing in the queue
+	  RET				; Nothing can be sent
+
+	SAVEAC <T3,T4,Q1,Q2,Q3>
+	MOVE Q1,T1			; Save queue head pointer
+	SETZ Q3,			; No packets being held
+
+	PIOFF				; Protect queues and RFNM tables
+	XMOVEI T4,-$NBQUE(Q1)		; Save queue head as previous
+
+	DO.				; Scan queue for sendable packet
+	  LOAD Q2,NBQUE,(T4)		; Make next packet the current
+	  IFE. Q2
+	    PION			; Things are safe
+	    SKIPL T2,NTPSTI(P1)		; Collecting statistics?
+	    IFSKP.
+	      CAMG Q3,CELL(MNMSR,6,(T2)) ; More packets being held than before?
+	      ANSKP.			; Yes
+	        MOVEM Q3,CELL(MNMSR,6,(T2)) ; Set new maximum
+	        MOVE Q3,TODCLK
+	        MOVEM Q3,CELL(MNMSR,7,(T2)) ; Remember when
+	    ENDIF.
+	    RET				; Nothing can be sent
+	  ENDIF.
+
+
+;Process packet which application has marked as "don't bother sending"
+
+	  MOVE CX,PKTFLG(Q2)		; Get flags
+	  TXNN CX,PPRAX			; Abort output?
+	  IFSKP.			; Q1/ Head, T4/ Previous, Q2/ Current
+MNTM5<	    AOS CELL(CMNTUNQ,2,,MNT)>	; NCPUNQ found PPRAX set
+	    LOAD T1,NBQUE,(Q2)		; Next packet in queue is
+	    STOR T1,NBQUE,(T4)		; Chained to previous
+
+	    CAME Q2,1(Q1)		; Is current packet the queue tail?
+	    IFSKP.
+	      MOVEM T4,1(Q1)		; Yes, previous becomes new tail
+	      SKIPN (Q1)		; But if head is empty,
+	        SETZM 1(Q1)		; So is tail
+	    ENDIF.
+
+	    MOVE T2,TODCLK
+	    STOR T2,PLNDB,(Q2)		; When driver began
+
+	    SKIPGE T2,NTPSTI(P1)	; Collecting statistics?
+	      SOS CELL(MNMSQ,0,(T2))	; One less entry in output queue
+
+	    MOVX T2,PLNXO		; Tell not sending (no output restart)
+	    IORM T2,PKTFLG(Q2)
+	    MOVEM Q2,NTOB(P1)		; MNTODN/IMODUN wants address here
+
+	    PUSH P,T4			; Save previous
+	    PION			; Cannot call IMODUN with PIOFF
+
+	    MOVX T1,PT%KOL		; Output killed
+	    MNTCALL NTODUN		; Output completion processing
+	    SETOM NTOB(P1)
+	    PIOFF			; Since the queue could only change
+					; by additions, things should be ok,
+					; Check to make sure
+	    POP P,T4			; Restore previous
+	    SKIPE T3,0(Q1)		; First entry in queue
+	    IFSKP.			; Whole queue is gone,
+	      XMOVEI T4,-$NBQUE(Q1)	; Set queue head as previous to return
+	    ELSE.			; Queue isn't empty
+	      DO.			; Scan for T4
+	        CAMN T3,T4		; Find it?
+	          EXIT.			; Yes, first get out of inner loop
+	        LOAD T3,NBQUE,(T3)	; Get next
+	        JUMPN T3,TOP.		; Have one, back to check it
+	      ENDDO.
+	      CAMN T3,T4		; Find it?
+	        LOOP.			; Yes, back to continue and process it
+	      SETZ Q3,			; No, zero packets being held
+	    ENDIF.			; Its gone, give up and start all over
+	    LOOP.			; Back to top to re-scan/return
+	  ENDIF.
+
+	  PNTLDR T2,PLNDT,(Q2)		; Address of local net level leader
+	  LOAD T1,IHMTY,(T2)		; Get packet type
+	  JUMPN T1,RFNIC5		; Non-zero goes out immediatly
+	  LOAD T1,IHSTY,(T2)		; Get subtype
+	  JUMPN T1,RFNIC5		; Non-zero goes out immediatly
+
+	  PUSH P,T2			; Save pointer to local leader
+	  DO.				; Loop, trying not to block
+	    GTRFNH			; Create the host code
+	    TXO T1,1B0			; Add to table if not there
+	    CALL RFNHSH ;(T1:T2,T3)	; Look address up
+	    IFSKP.			; Pass over it if cannot get entry
+	      TXZ T2,1B0		; Ignore host down status
+	      CAMGE T2,RFNM0		; Too many for this host?
+		JRST RFNINC		; No, use this buffer
+
+;Too many for host, have to save for later
+
+	      MOVX T2,RFNBB		; Get the "blocked" bit
+	      TDNE T2,RFNTAB(T3)	; Host previously blocked?
+	      IFSKP.
+		IORM T2,RFNTAB(T3)	; No, but it is blocked now
+		SKIPL T1,NTPSTI(P1)	; Keeping statistics?
+		IFSKP.
+		  AOS CELL(MNMSR,0,(T1))  ; Count times some host is blocked
+		  MOVN T2,TODCLK
+		  ADDM T2,CELL(MNMSR,1,(T1))  ; Begin accumulating RFNM hold
+		ENDIF.			      ;time 
+	      ENDIF.
+	    ENDIF.
+
+	    JE RFNMC,(P1),RFNINC	; Use buffer if RFNM counting OFF 
+
+	    IFQN. ENHTY,(P1)		; Incrementing Handling Type allowed?
+	      MOVE T2,(P)		; Yes, Get local leader pointer
+	      LOAD T1,IHHNP,(T2)	; Get Number of Packets (really PIPRC)
+	      CAIN T1,.RTJST(-1,IHHNP)	; Field at maximum value?
+	      ANSKP.			; No, increment the field
+		AOS T1
+		STOR T1,IHHNP,(T2)	; Put it back
+		LOOP.			; Loop, try it again
+	    ENDIF.
+	  ENDDO.
+
+	  IFQE. PLNDE,(Q2)		; First time seen this packet?
+	    MOVN T2,TODCLK		; Yes
+	    STOR T2,PLNDE,(Q2)
+	    SKIPGE T2,NTPSTI(P1)	; Collecting statistics?
+	      AOS CELL(MNMSR,5,(T2))	; Yes, count packets held
+	  ENDIF.
+
+
+;Must try the next in the list
+
+	  AOS Q3			; Count packets (know) being held
+	  ADJSP P,-1			; Flush leader pointer
+	  MOVE T4,Q2			; Current is now previous
+	  LOOP.				; Onward to the next packet
+	ENDDO.
+;/* Not reached */
+
+
+;Increment packet count for this host, and dequeue the buffer.
+;T3/	Points to table entry
+;(P)/	Current packet
+
+RFNINC:	POP P,T2			; Restore leader pointer
+
+	LOAD T1,RFNNO,<+RFNTAB(T3)>	; Get current count
+	STOR T1,IHMI2,(T2)		; Set in the message ID
+	AOS T1				; Increment and
+	STOR T1,RFNNO,<+RFNTAB(T3)>	; Save as new next out
+
+RFNIC5:					; Q1/ Head, T4/ Previous, Q2/ Current
+	LOAD T1,NBQUE,(Q2)		; Get next
+	STOR T1,NBQUE,(T4)		; Remove from list
+	CAME Q2,1(Q1)			; Was this the queue tail?
+	IFSKP.
+	  MOVEM T4,1(Q1)		; Yes, previous becomes new tail
+	  SKIPN (Q1)			; But if head is empty,
+	    SETZM 1(Q1)			; So is tail
+	ENDIF.
+
+	PION				; Everything is safe now
+
+	SKIPL T2,NTPSTI(P1)		; Collecting statistics?
+	IFSKP.
+	  CAMG Q3,CELL(MNMSR,6,(T2))	; More packets being held than before?
+	  ANSKP.			; Yes
+	    MOVEM Q3,CELL(MNMSR,6,(T2))	; Set new maximum
+	    MOVE Q3,TODCLK
+	    MOVEM Q3,CELL(MNMSR,7,(T2))	; Remember when
+	ENDIF.
+
+	MOVE T1,Q2			; Return buffer in T1
+	SETZRO NBQUE,(T1)		; Not in a queue
+
+	RETSKP
+
+
+;RFNTOC	Check to make sure no RFNM's have been outstanding excessively long.
+
+;P1/	NCT
+
+RFNTOC:	MOVE CX,RFN8TO			; Get timeout clock
+	SUB CX,TODCLK			; Check against now
+	IFLE. CX			; Less than now?
+					; Yes
+	  MOVSI T4,-RFNTSZ		; RFNM Table AOBJN counter
+	  MOVX T3,RFNFLG		; Flag bits
+	  DO.
+	    SKIPN RFNTAB(T4)		; Slot in use?
+	    IFSKP.			; Yes
+
+	      PIOFF			; Protect table
+
+	      LOAD T1,RFNWD,+RFNTAB(T4)	; Old down field
+	      LSH T1,-1			; Old from current, current 0
+	      STOR T1,RFNWD,+RFNTAB(T4)	; New down field
+
+	      LOAD T1,RFNWB,+RFNTAB(T4)	; Old was blocked field
+	      CAIN T1,3			; This one blocked now and before?
+	      IFSKP.			; No
+	        LSH T1,-1		; Old from current, current 0
+	        STOR T1,RFNWB,+RFNTAB(T4)
+	      ELSE.
+	        ANDCAM T3,RFNTAB(T4) 	; Still blocked, clear the flag bits
+					; MNTFRK will try to restart output.
+	        SKIPL T1,NTPSTI(P1)	; Collecting statistics?
+	        IFSKP.
+		  AOS CELL(MNMSR,3,(T1)) ; Count RFNM timeouts
+	          MOVE T2,TODCLK	; Correct the RFNM blocked time
+	          ADDM T2,CELL(MNMSR,2,(T1))
+	        ENDIF.
+	      ENDIF.	
+
+	      PION
+
+	    ENDIF.
+	    AOBJN T4,TOP.
+	  ENDDO.
+	  MOVE T1,TODCLK		; Get now
+	  ADD T1,RFNM0+1		; Time between passes
+	  MOVEM T1,RFN8TO		; Time to check again
+	ENDIF.
+
+;See if it is time to compact the hash tables
+
+RFNTOD:	MOVE CX,RFNGCT			; Next GC time
+	SUB CX,TODCLK
+	IFLE. CX
+
+	  SKIPGE T2,NTPSTI(P1)		; Collecting statistics?
+	    AOS CELL(MNMSR,4,(T2))	; Garbage collect RFNM table
+
+;Pass 1 - Find all used entries
+
+	  MOVSI T4,-RFNTSZ		; Size of the table
+	  PUSH P,[0]			; End of list flag
+	  PIOFF				; Protect from PI level
+	  DO.
+	    SKIPN RFNTAB(T4)		; Slot in use?
+	    IFSKP.
+	      LOAD T1,RFNNO,<+RFNTAB(T4)> ; Get outstanding count
+	      LOAD T2,RFNNB,<+RFNTAB(T4)>
+	      SUB T1,T2
+	      ANDI T1,17		; Modulo 16 gives message out count
+	      SKIPE T1			; Anything out?
+	        PUSH P,RFNTAB(T4)	; Save this entry
+	      SETZM RFNTAB(T4)		; Free the slot
+	    ENDIF.
+	    AOBJN T4,TOP.
+	  ENDDO.
+
+;Pass 2, re-hash the active entries
+
+	  DO.
+	    SKIPN T1,(P)		; Retrieve an entry
+	      EXIT.
+	    ANDX T1,RFNHST		; Just the host key part
+	    TXO T1,1B0			; Add entry
+	    CALL RFNHSH ;(T1:T2,T3)	; Hash it into the table
+	      SETZ T3,			; Should never fail
+	    POP P,RFNTAB(T3)		; Set flags into the table
+	    LOOP.			; Onward
+	  ENDDO.
+	  PION				; Safe from PI level
+	  POP P,(P)			; Drop zero
+
+	  MOVE T1,TODCLK		; Set next time to GC
+	  ADD T1,RFNM0+2
+	  MOVEM T1,RFNGCT
+	ENDIF.
+
+	RET
+
+
+;RFNHSH Look up a host entry in the RFNM hash table, conditionally adding it.
+
+;T1/	Host key, 1B0 set to guarentee an entry in the table.
+;Ret+1:	No room to add another entry - wait a while.
+;Ret+2:	Entry exists
+;T2/	Outstanding RFNM count, 1B0 set if host down
+;T3/	Index
+;T4/	Preserved
+
+
+
+RFNHSH:	SAVEAC <T4>			; Save AC
+	SETO T4,			; Do not have a reuseable entry
+	PUSH P,T1			; Save flag
+	TXZ T1,1B0			; Do not include it in hashing
+
+	MOVE T3,T1			; Copy of address
+	LSH T3,-3
+	ADDI T3,^D23			; Randomize
+	IMUL T3,T1
+	MOVSS T3
+	ANDI T3,RFNTSZ-1		; And get initial probe
+
+;T1/ host key
+;T3/ initial probe
+
+	HRLI T3,-RFNTSZ			; Make an AOBJN pointer
+	DO.
+	  TRNE T3,RFNTSZ		; Reached end of the table?
+	    SUBI T3,RFNTSZ		; Yes, continue from top
+
+	  SKIPN T2,RFNTAB(T3)		; Entry in use?
+	    EXIT.			; No, end of search, T2/ count zero
+
+	  XOR T2,T1			; Check if host keys macth
+	  TXNN T2,RFNHST		; But only the appropriate bits
+	  IFSKP.
+	    IFL. T4			; Not desired entry, have reuseable?
+	      LOAD CX,RFNNB,+T2		; No, next back and
+	      LOAD T2,RFNNO,+T2		; Next out
+	      CAMN T2,CX		; Anything outstanding?
+	        HRRZ T4,T3		; No, this is reuseable
+	    ENDIF.
+	    AOBJN T3,TOP.		; No match, try next entry
+	    SETZ T2,			; No RFNMs outstanding
+	    MOVE T3,T4			; May have an available slot
+	  ELSE.				; Found entry, compute count
+	    MOVE T4,T2			; Save contents
+	    LOAD CX,RFNNB,+T2		; Next back and
+	    LOAD T2,RFNNO,+T2		; Next out
+	    SUB T2,CX			; Current count
+	    ANDI T2,17			; Modulo 16.
+	    TXNE T4,RFNWD		; If host down(now or before)?
+	      TXO T2,1B0		; Yes, return down flag
+	  ENDIF.
+	ENDDO.
+
+; T3/		-1	0,,reuseable	-x,,idx		-x,,idx
+; RFNTAB(T3)/	na	trash		0		desired entry
+;----------------------------------------------------------------------
+; T4-1B0	ret	add/skip	add/skip	skip
+; T4-0B0	ret	ret		ret		skip
+
+	POP P,T4			; Flag
+	CAMN T3,[-1]			; Check if table completely full
+	IFSKP.				; If have an entry
+	  SKIPG T3			; If reuseable or
+	   SKIPN RFNTAB(T3)		; Unused entry, and
+	    TXNN T4,1B0			; Need this host key
+	     TRNA			; (Don't use it if it isn't needed)
+	      MOVEM T1,RFNTAB(T3)	; Add entry w/o flags and skip return
+	  AOS (P)			; Skip return if have entry
+	ENDIF.
+	RET
+
+IFN IPMONF,<				;CS147
+REPEAT 1,<
+cwlrfn:	move cx,mntptp			; Debugging routine
+	caml cx,mntptp+770
+	  ret
+	aos cx,mntptp
+	push p,todclk
+	pop p,(cx)
+	aos cx,mntptp
+	push p,-2(p)
+	pop p,(cx)
+	aos cx,mntptp
+	movem t2,(cx)
+	aos cx,mntptp
+	movem t3,(cx)
+	aos cx,mntptp
+	push p,rfntab(t3)
+	pop p,(cx)
+	ret
+	block 10
+> ; End of REPEAT 1
+>;IFN IPMONF				;CS147
+
+	SWAPCD	;ps
+
+;RFNSTS	Debugging aid, print contents of RFNTAB entry.
+
+;T1/	IP host address
+;T2/	Destination descriptor if call RFNSTS+1
+
+RFNSTS:	MOVX T2,.PRIOU
+	TRVAR <<IMPB,3>>		; Fake IMP leader
+	ACVAR <HST,DST>
+	DMOVE HST,T1			; Save address and destination
+	STOR T1,IHADR,+IMPB
+	NETNUM T1,HST			; Get the number
+	CALL NETLUK			; Find the NCT
+	HRROI T2,[ASCIZ /No interface
+/]
+	JUMPE T1,RFNSTL
+	HRROI T2,[ASCIZ /Interface down
+/]
+	JUMPL T1,RFNSTL
+	LOAD T1,NTHSH,(T1)		; Net id number
+	STOR T1,IHNET,+IMPB
+
+;Assume Class A address for now.
+
+	MOVEI T2,IMPB
+	GTRFNH				; Build host key
+	TXZ T1,1B0			; Don't add entry if not there
+	CALL RFNHSH
+	IFNSK.
+	  HRROI T2,[ASCIZ /No entry for host
+/]
+	  JRST RFNSTL
+	ENDIF.
+	MOVE T4,RFNTAB(T3)		; Get data
+	PUSH P,T2
+	HRROI T2,[ASCIZ /Messages outstanding /]
+	CALL RFNSTL
+	POP P,T2
+	MOVX T3,^D10
+	NOUT%
+	  NOP
+	HRROI T2,[ASCIZ /
+Next out /]
+	SETZ T3,
+	SOUT%
+	LOAD T2,RFNNO,<+T4>
+	MOVX T1,.PRIOU
+	MOVX T3,^D10
+	NOUT%
+	  NOP
+
+	HRROI T2,[ASCIZ /
+Next back /]
+	SETZ T3,
+	SOUT%
+	LOAD T2,RFNNB,<+T4>
+	MOVX T3,^D10
+	NOUT%
+	  NOP
+	MOVEM T1,DST
+	HRROI T2,[ASCIZ /
+Blocked/]
+	LOAD T3,RFNBB,<+T4>
+	SKIPN T3
+	  HRROI T2,[ASCIZ /
+Not blocked/]
+	CALL RFNSTL
+	HRROI T2,[ASCIZ /
+Was blocked/]
+	LOAD T3,RFNWB,<+T4>
+	TXNE T3,1
+	  HRROI T2,[ASCIZ /
+Wasn't blocked/]
+	CALL RFNSTL
+	HRROI T2,[ASCIZ /
+Down/]
+	LOAD T3,RFNDN,<+T4>
+	SKIPN T3
+	  HRROI T2,[ASCIZ /
+Not down/]
+	CALL RFNSTL
+	HRROI T2,[ASCIZ /
+Was down
+/]
+	LOAD T3,RFNWD,<+T4>
+	TXNN T3,1
+	  HRROI T2,[ASCIZ /
+Wasn't down
+/]
+	CALL RFNSTL
+	DMOVE T1,HST			; For next time
+	RET
+RFNSTL:	MOVE T1,DST
+	SETZ T3,
+	SOUT%
+	MOVEM T1,DST
+	RET
+
+	ENDAV.
+	ENDTV.
+
+
+	SWAPCD	;ps
+
+; Routines to process 1822 specific switches in the SITE-ADDRESS.TXT
+; configuration file.
+
+
+;ENABLE type 3 messages on an 1822 interface
+
+STAR3::	STOR T2,A3ENB,(P1)	; Change it
+	RET
+
+;ENABLE RFNM counting on an 1822 interface
+
+STRFNC::
+	STOR T2,RFNMC,(P1)	; Change it
+	RET
+
+;ENABLE HANDLING TYPE FIELD on an 1822 interface
+
+STRHTY::
+	STOR T2,ENHTY,(P1)	; Change it
+	RET
+
+;Local network with 1822 protocol
+
+AD1822::
+	MOVX T4,NL.NCP		; 1822 local network
+	MOVX T3,MAXLDR-.NBHDL	; Header size correction
+	XMOVEI T2,NCPVEC	; Protocol vector
+	HRROI T1,[ASCIZ /
+% 1822 ignored (not in system configuration)./]
+	CALLRET ADPVEC		; Join code in MNETDV
+
+
+	TNXEND				; End of module
+	END

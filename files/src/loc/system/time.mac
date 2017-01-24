@@ -1,0 +1,221 @@
+;[SRI-NIC]SRC:<LOC.SYSTEM>NTIME.MAC.2,  3-Jul-90 17:22:31, Edit by MKL
+; hack up to only use WWV clock
+;[SRI-NIC]PS:<MKL>TIME.MAC.65, 17-Mar-86 11:35:33, Edit by MKL
+; add some time sanity checks
+;[SRI-NIC]PS:<MKL>TIME.MAC.47,  5-Mar-86 16:18:34, Edit by MKL
+; More changes. Call WWV program if it exists.
+; Handle UDP retransmissions.
+;[SRI-NIC]PS:<MKL>TIME.MAC.2, 14-Feb-86 13:25:29, Edit by MKL
+; NIC version, UDP only
+;[SRI-CSL]PS:<TCP>TIME.MAC.12, 24-May-85 15:44:00, Edit by MKL
+;always set time, fix bug to print failed host name in POLLER routine
+;[SRI-CSL]PS:<TCP>TIME.MAC.8, 10-May-85 17:14:06, Edit by MKL
+;change host table
+;<VAF.MAC>TIME.MAC.1, 16-May-84 10:25:57, Edit by VAF
+;Initial version derived from BBN TIMCHK program.
+
+	TITLE TIME - Set clock from network
+
+;Based on TIMCHK:
+;Written October/November 1981 by Robert C Clements, at
+; Bolt Beranek and Newman, Inc.
+;
+; Copyright (c) 1981 Bolt Beranek and Newman, Inc., Cambridge MA 02238
+;
+; This software may be copied freely for use within the Internet
+; community, but may not be sold or used for profit without permission
+; of the author and copyright holder.
+;
+
+	SEARCH MACSYM,MONSYM
+	.REQUIRE SYS:MACREL
+
+F=0
+A=1
+B=2
+C=3
+D=4
+E=5
+
+Q1=6
+Q2=7
+Q3=10
+
+X=11
+Y=12
+TCBH=13
+
+P=17
+
+OPDEF CALL [PUSHJ P,]
+OPDEF RET [POPJ P,]
+DEFINE MSG(MESS)<
+	HRROI B,[ASCIZ \MESS\]
+	CALL DOSOUT
+>
+
+PDLL==100			;STACK LENGTH
+
+;START OF PROGRAM
+
+GO:	RESET			;CLEAR THE WORLD
+	MOVE P,PDP		;SET UP A STACK
+	MOVEI F,0		;FLAGS ALL CLEAR TO START
+	TIME			;Get real time at start
+	MOVEM A,BEGRLT		; ..
+	movx 1,gj%sht!gj%old
+	hrroi 2,[Asciz /SYSTEM:MONITR.EXE.0/]
+	gtjfn%
+	 erjmp jsyser
+	movei 2,4
+	movei 3,1
+	rftad%
+	 erjmp jsyser
+	rljfn%
+	 erjmp .+1
+	movem 4,montim
+	CALL DOWWV		;get time from local clock, returned in ac1
+	movem 1,wwvtim
+	CALL PRTTIM		;Print what we got
+	MOVEI A,.FHSLF		;SEE IF WE'RE A WHOPR
+	RPCAP			; AND ENABLED
+	TRNE C,SC%WHL!SC%OPR	; ..
+	CALL SETTIM		;IFF SO, OFFER TO SET THE TIME
+	HALTF			;DONE
+	JRST GO			;RESTART IF CONTINUED
+
+;get time from WWV clock if it exists, returns time in AC1 or zero
+DOWWV:	movx 1,gj%old!gj%sht
+	hrroi 2,[asciz /SYSTEM:WWV.EXE/]
+	GTJFN%
+	 erjmp nowwv
+	move 4,1		;save jfn
+	movx 1,cr%cap
+	CFORK%
+	 erjmp nowwv
+	move 5,1		;save handle
+	hrlz 1,5
+	hrr 1,4
+	GET%
+	 erjmp nowwv
+	move 1,5
+	move 2,[.priin,,.nulio]	;no output
+	SPJFN%%
+	 erjmp .+1
+	move 1,5
+	setz 2,
+	SFRKV%
+	 erjmp nowwv
+	move 1,5
+	WFORK%
+	 erjmp nowwv
+	move 1,5
+	movei 2,RCVBUF
+	RFACS%
+	 erjmp nowwv
+	KFORK%
+	 erjmp nowwv
+	move 1,4
+	RLJFN%
+	 erjmp .+1
+	move 1,RCVBUF+1		;get time returned
+	camg 1,montim		;greater than last monitor write?
+	 setz 1,		;no good
+	ret
+nowwv:	setz 1,
+	ret
+
+CRLF:	HRROI B,[ BYTE (7).CHCRT,.CHLFD,0]
+DOSOUT:	SKIPG A,OJFN
+	MOVEI A,.PRIOU
+	MOVEI C,0
+	SOUT
+	RET
+
+JSYSER:	JSERR			;FAILURE
+	HALTF
+	JRST GO
+
+PRTTIM:
+	tmsg <WWV Clock says >
+	MOVEI A,.PRIOU		;To primary output
+	move 2,wwvtim
+	jumpe 2,[Tmsg <time not available.>
+		 setzm wwvtim
+		 ret]
+	SETZ C,			;Full, verbose format
+	ODTIM%			;Print the time out
+	TMSG <
+
+>
+	hrroi 1,prompt
+	psout%
+	movei 1,tiblk
+	texti%
+	 erjmp cfno
+	move 2,[point 7,answer]
+	ildb 1,2
+	caie 1,"Y"
+cfno:	 setzm wwvtim
+	RET
+
+tiblk:	.rdrty
+	rd%bel+rd%rai+rd%jfn
+	.priin,,.priou
+	-1,,answer
+	20
+	-1,,answer
+	-1,,prompt
+prompt:	asciz \Confirm to set (Y/N)? \
+
+
+; SETTIM ROUTINE, OFFERS TO SET TIME TO THE AVERAGE OF THOSE FROM NET
+
+settim:	skipn wwvtim
+	 ret			;NO, CAN'T DO IT
+	TIME%
+	sub a,begrlt		;ACCOUNT FOR TIME WAITING FOR ANSWER
+	idivi a,^D333
+	add a,wwvtim
+	move x,a		;save time
+	GTAD%
+	came	1,[-1]
+	 Jrst	[Tmsg <%Aborted:  Time already set as >
+		 movei a,.priou
+		 seto b,
+		 setz c,
+		 ODTIM%
+		 call crlf
+		 ret]
+	move a,x
+	STAD%			;SET IT!
+	 jrst settme		;ERROR
+	ret
+
+SETTME:	HRROI A,[ASCIZ /?Failed to set time
+/]
+	PSOUT
+	RET
+
+;CONSTANTS
+PDP:	XWD -PDLL,PDL
+
+;VARIABLES
+
+MYADDR:	BLOCK 1			;MY ADDRESS, INTERNET 32-BIT FORM
+MYJOBN:	BLOCK 1			;THIS JOB'S JOB NUMBER
+OJFN:	BLOCK 1			;OUTPUT DATA TO THIS JFN
+AVG:	BLOCK 1			;average time
+rcvbuf:	block 10
+answer:	block 10
+wwvtim:	0			;time from local clock (net format)
+wwvvar:	0
+BEGRLT:	BLOCK 1			;TIME% done at program startup
+montim:	block 1			;time of last monitor write
+timcnt:	block 1
+LOCTIM:	BLOCK 1
+TADTIM:	BLOCK 1			;Local time via GTAD
+
+PDL:	BLOCK PDLL+1
+
+	END GO

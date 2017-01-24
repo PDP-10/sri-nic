@@ -1,0 +1,2751 @@
+;[BBNF.ARPA]CWL:<5-4-NET>TTANDV.JVD.11,  4-Feb-85 10:17:42, Edit by JDELSIGNORE
+; Gave this module a face lift:  Allow all defined TELNET options to
+; be used, implement user interface to allow access to the TELNET state
+; information, user's may send/receive subnegotiations.  See MTOPR%
+; functions .MONEG, .MOGSB, and .MOSSB for details.
+; UPD ID= 3890, SNARK:<6.MONITOR>TTANDV.MAC.4,  11-Mar-84 10:35:20 by PAETZOLD
+;More TCO 6.1733 - sendall fixes.  Accept "DO BINARY".  Fix up message TTC7SN
+; UPD ID= 3519, SNARK:<6.MONITOR>TTANDV.MAC.3,  24-Jan-84 07:23:05 by HAUDEL
+;TCO 6.1931 - Delete instuction that builds only 18 bit address.
+; UPD ID= 2726, SNARK:<6.MONITOR>TTANDV.MAC.2,  22-Jul-83 14:58:06 by PAETZOLD
+;TCO 6.1733 - Merge TCP/IP changes in release 6 again
+;<TCPIP.5.1.MONITOR>TTANDV.MAC.15,  5-Jul-83 08:29:57, Edit by PAETZOLD
+;TCP changes for 5.1.  Combine TTNTDV and TTTVDV.  Remove NCP code.
+
+
+
+;THIS SOFTWARE IS FURNISHED UNDER A LICENSE AND MAY ONLY BE USED
+;  OR COPIED IN ACCORDANCE WITH THE TERMS OF SUCH LICENSE.
+;
+;COPYRIGHT (C) 1982,1983,1984
+;BY DIGITAL EQUIPMENT CORPORATION, MAYNARD, MASS.
+
+IFN	.TVFLG,<		; If supporting TCP terminals
+
+	SUBTTL	TVT Dependent Code
+
+COMMENT	!
+
+These  routines  support  TCP  Virtual Terminals, which are very
+similar to ARPANET NVTs. They speak "new" TELNET  protcol.  TVTs
+are  operated by the TCP portion of the Internet fork. This fork
+does the listen, etc. and there is  no  usermode  equivalent  of
+NETSRV.  The  listen  is  special in that it is marked as a TVT,
+which means that the buffers  involved  are  TTYSRV  buffers  in
+monitor  space  and  not  user-supplied  buffers  in some user's
+space. Further, no PSI are  generated  for  buffer  completions.
+Allocation  (window)  is set by the number of bytes available in
+the TTY buffers.  TVTs  use  the  TELNET  protocol  through  TCP
+connections.  Most  of  the  TELNET  code  is in TTNTDV and this
+module uses that code.
+
+!
+
+	RESCD	;ps
+
+
+;NVT SPECIAL CHARACTERS
+
+IACCH==377			;INITIATE COMMAND
+DNTCH==376			;DON'T
+DOCH==375			;DO
+WNTCH==374			;WON'T
+WILCH==373			;WILL
+SBCH==372			;SB BEGINNING OF SUB NEGOTIATION
+GACH==371			;GA GO AHEAD
+ELCH==370			;EL ERASE LINE
+ECCH==367			;EC ERASE CHARACTER
+AYTCH==366			;AYT ARE YOU THERE?
+AOCH==365			;AO ABORT OUTPUT
+IPCH==364			;IP INTERRUPT PROCESS
+BRKCH==363			;BREAK
+DMCH==362			;DM DATA MARK
+NOPCH==361			;NOP
+SECH==360			;SE END OF SUBNEGOTIATION
+
+
+;NVT OPTION DEFINITIONS
+
+; Format of NVOPT. macro call:
+; NVOPT.(Nam,Num,DoRtn,DntRtn,WilRtn)
+;  Nam - the option name
+;  Num - the option number
+;  DoRtn - Address of routine to call upon receiving a DO
+;  DntRtn - Address of routine to call upon receiving a DONT
+;  WilRtn - Address of routine to call upon receiving a WILL
+
+; WARNING: Options must be sorted by option number and no gaps are allowed
+
+DEFINE NVOPTS<
+NVOPT.(BIN,^D0,RSKP  ,R     ,RSKP  )  ;;Binary Transmission
+NVOPT.(ECH,^D1,NVTECN,NVTECF,R     )  ;;Echo
+NVOPT.(RCN,^D2,R     ,R     ,R     )  ;;Reconnection
+NVOPT.(SGA,^D3,NVTSGA,NVTAGA,RSKP  )  ;;Suppress Go Ahead
+NVOPT.(NAM,^D4,R     ,R     ,R     )  ;;Approx Message Size Negotiation
+NVOPT.(STS,^D5,R     ,R     ,R     )  ;;Status
+NVOPT.(TMK,^D6,RSKP  ,R     ,R     )  ;;Timing Mark
+NVOPT.(RCT,^D7,R     ,R     ,R     )  ;;Remote Controlled Trans and Echo (RCTE)
+NVOPT.(OLW,^D8,R     ,R     ,R     )  ;;Output Line Width
+NVOPT.(OPS,^D9,R     ,R     ,R     )  ;;Output Page Size
+NVOPT.(OCD,^D10,R     ,R     ,R     )  ;;Output Carriage-Return Disposition
+NVOPT.(OHS,^D11,R     ,R     ,R     )  ;;Output Horizontal Tab Stops
+NVOPT.(OHD,^D12,R     ,R     ,R     )  ;;Output Horizontal Tab Disposition
+NVOPT.(OFD,^D13,R     ,R     ,R     )  ;;Output Formfeed Disposition
+NVOPT.(OVS,^D14,R     ,R     ,R     )  ;;Output Vertical Tab Stops
+NVOPT.(OVD,^D15,R     ,R     ,R     )  ;;Output Vertical Tab Disposition
+NVOPT.(OLD,^D16,R     ,R     ,R     )  ;;Output Linefeed Disposition
+NVOPT.(XAS,^D17,R     ,R     ,R     )  ;;Extended ASCII
+NVOPT.(LGO,^D18,R     ,R     ,R     )  ;;Logout
+NVOPT.(BYM,^D19,R     ,R     ,R     )  ;;Byte Macro
+NVOPT.(DET,^D20,R     ,R     ,R     )  ;;Data Entry Terminal
+NVOPT.(SUP,^D21,R     ,R     ,R     )  ;;SUPDUP
+NVOPT.(SPO,^D22,R     ,R     ,R     )  ;;SUPDUP Output
+NVOPT.(SLC,^D23,R     ,R     ,R     )  ;;Send Location
+NVOPT.(TTP,^D24,R     ,R     ,R     )  ;;Terminal Type
+NVOPT.(EOR,^D25,R     ,R     ,R     )  ;;End of Record
+NVOPT.(TUI,^D26,R     ,R     ,R     )  ;;Transmit Unique ID
+NVOPT.(OMK,^D27,R     ,R     ,R     )  ;;Output Mark
+> ; End DEFINE NVOPTS
+
+	WILOPT==1B27		;Flag to indicate "WILL" option
+	OPTOPT==377		;Option portion only
+
+	MAXOPT==-1		;Init the maximum option seen
+
+DEFINE NVOPT.(NAM,NUM,DORTN,DNTRTN,WILRTN)<
+IFDEF NAM'OPT,<			;;Beware multiple definitions
+	IF1 <PRINTX ?Telnet option NAM is already defined.>>
+IFN <NUM-<MAXOPT+1>>,<		;;Sorted by number, no gaps allowed
+	IF1 <PRINTX ?Telnet options out of order or gap seen (Option NAM)>>
+NAM'OPT==NUM			;;Define the option
+MAXOPT==NAM'OPT			;;New maximum
+> ; End DEFINE NVOPT.
+
+	NVOPTS			;Define all option names and find the maximum
+	PURGE NVOPT.
+
+
+; Device dependent word definitions for TVTs in the terminal's dynamic
+; data
+
+;
+; Device Dependent Word
+;
+TTNETW=TTDEV
+
+;BITS IN TTNETW
+
+DEFSTR PTITC,TTNETW,2,3		;COUNT, SYNC-INS
+;DEFSTR NVWKS,TTNETW,3,1	;RCTE WAKEUP SEEN
+DEFSTR NVRCS,TTNETW,4,1		;RCTE CHANGE IN STATE
+DEFSTR NVTMO,TTNETW,5,1		;NEGOTIATION TIME-OUT STARTED
+DEFSTR NVSTP,TTNETW,9,4		;CURRENT NVT STATE
+;THE FOLLOWING NVT STATES ARE STORED IN TTNETW BITS 6-9 (NVSTP)
+  .DFWIL==1			;DEFERRED WILL
+  .DFWNT==2			;DEFERRED WONT
+  .DFDO==3			;DEFERRED DO
+  .DFDNT==4			;DEFERRED DONT
+  .DFIAC==5			;DEFERRED IAC
+  .DFSB0==6			;DEFERRED SB (waiting for option)
+  .DFSB1==7			;DEFERRED SB (waiting for data)
+  .DFSB2==10			;DEFERRED SB (IAC received)
+DEFSTR NVGAB,TTNETW,10,1	;SUPPRESS GO-AHEAD
+DEFSTR NVCRI,TTNETW,11,1	;LAST CHAR IN WAS CR
+;DEFSTR NVCRP,TTNETW,12,1	;LAST CHAR OUT WAS CR
+;DEFSTR PTVT,TTNETW,35,23	;Extended TCB address (See ANAUNV)
+
+;
+; Break classes for NVT's
+;
+TTBRKC==TTDDLN
+DEFSTR PBRCT,TTBRKC,8,9 ;BITS 0-8: OUTSTANDING BREAK COUNT
+				;BITS 9-17: LAST RCTE COMMAND SENT
+				;BITS 18-35: LAST BREAK CLASSES SENT
+MAXBRC==777
+
+
+;
+; Subnegotiation word contains:
+;  In the RH, a pointer to the first Subnegotiation Link in a
+;   list of Subnegotiation Links, or 0 if no Subnegotiations
+;   sent/received.
+;  In the LH, a pointer to the current Subnegotiation Link.  Note this
+;   Link is also linked into the above linked list.
+;
+
+NVTSUB==TTBRKC+1		;Subnegotiation Word
+
+; Structure of a Subnegotiation Word in the dynamic data
+DEFSTR(SWCUR,NVTSUB,17,18)	;Pointer to current
+DEFSTR(SWSLP,NVTSUB,35,18)	;Pointer to first SB Link
+
+; Structure of a Subnegotiation Link
+SL.HDR==0			;Start of the header info
+  DEFSTR(SLOPF,SL.HDR,8,9)	; Recvd=0/Sent=1 Flag + Option Code
+    DEFSTR(SLRSF,SL.HDR,0,1)	; Recvd=0/Sent=1 Flag
+    DEFSTR(SLOPT,SL.HDR,8,8)	; Option Code
+  DEFSTR(SLLEN,SL.HDR,17,9)	; Number of bytes at SL.DAT
+  DEFSTR(SLNXT,SL.HDR,35,18)	; Next
+
+SL.DAT==1			;Start of the Subnegotiation Data Bytes
+
+SL.NWD==10			;Number of words to allocate
+SL.NDW==SL.NWD-SL.DAT		;Maximum number of data words
+SL.NDB==SL.NDW*4		;Maximum number of bytes in data area
+
+;
+; Subnegotiation Timeout
+;
+
+NVTUNT==NVTSUB+1		; TIMEOUT FOR SUBNEGOTIATION RECEPTION
+
+
+;TELNET option negotiation state variables:
+; For each defined option, the TVT maintains a set of bits that
+; describe the state of the option.  These bits are stored as a byte
+; array in the dynamic data area.  The following bits are defined.
+
+; WARNING: Bits must be assigned right to left AND
+;	  Must agree with MONSYM definitions of MO%xxx!
+NS.OND==1B35			;Outstanding Negotiations DO
+NS.ONW==1B34			;Outstanding Negotiations WILL
+NS.CSD==1B33			;Current Status DO
+NS.CSW==1B32			;Current Status WILL
+NS.SBR==1B31			;Subnegotiation Received
+NS.SBS==1B30			;Subnegotiation Sent (Not used)
+
+; Mask that includes all of the above bits
+NSMSK==NS.OND!NS.ONW!NS.CSD!NS.CSW!NS.SBR!NS.SBS
+
+;Allocate the Negotiation State Byte Array
+..NBY==MAXOPT+1			;Number of bytes needed (Options start at 0)
+..BSZ==<WID(NSMSK)>		;Compute Bits Per Byte (Byte Size)
+..BSZ==<<<..BSZ+1>/2>*2>	;Rounded up mod 2 bits number of Bits Per Byte
+..BPW==^D36/..BSZ		;Compute Bytes Per Word
+..BSZ==^D36/..BPW		;Space them evenly
+..NWD==<..NBY+..BPW-1>/..BPW	;Number of words required
+
+NSNWD==..NWD			;Number of words for NVTOPF
+NSBSZ==..BSZ			;Number of Bits Per Byte
+NSNBY==..NBY			;Number of Bytes in Byte array
+NSBPW==..BPW			;Number of Bytes Per Word
+
+; Create a mask tha has the NS.OND and NS.ONW bits on for each byte
+; per word.  This allows us to check a word at a time for efficiency.
+	NSONX==0		;Init the mask
+REPEAT NSBPW,<			;For each byte in the word
+	NSONX==NSONX_<-NSBSZ>	;Shift the mask right
+	NSONX==NSONX!<<NS.OND!NS.ONW>B<NSBSZ-1>>  ;OR in new bits
+>
+
+NVTOPF==NVTUNT+1		;Byte array that describes the state
+				;of the defined TELNET options
+
+;
+; Length of a TVT block
+;
+
+TVTLEN==NVTOPF+NSNWD		;Length of a TVT block
+
+IFNDEF TVTNIF,<TVTNIF==TVTNOF>
+
+; Allocate a byte pointer array that access the State Data Bytes in
+; the dynamic data.  Must be resident, used in schedular context,
+; should be write protected.
+	..N==0
+NSBPTR:				; Array of byte pointers indexed by option
+				; that access the state data bytes
+REPEAT NSNBY,<
+	POINT NSBSZ,NVTOPF+<..N/NSBPW>(T2),<NSBSZ-1>+<MOD.(..N,NSBPW)*NSBSZ>
+	..N==..N+1
+>
+
+
+;TEMP CODE TO DO TTYDIS AND TTYAWK CODE. REMOVED FROM TTYSRV
+
+;ROUTINES TO ADJUST LOCK STATUS BEFORE AND AFTER DISMISSING.
+;THIS CODE PUTS AN ENTRY ON THE JSB STACK IN THE EVENT THE PROCESS
+;IS INTERRUPTED WHILE DISMISSED.
+
+;PUT ENTRY ON JSB STACK, AND GO OKINT
+;ACCEPTS:	T2/ ADDRESS OF DYNAMIC DATA
+
+TTYDIS:	JE TTLCK,(T2),R		;THIS IS A HACK TO KEEP FSIINI HAPPY.
+				;SINCE THE SWAPPABLE MONITOR IS NOT
+				;LOADED YET, WE CAN'T USE THE NORMAL
+				;LOCKING STATEGY. THIS IS ACCEPTABLE
+				;HERE SINCE NO CONFUISION CAN RESULT.
+	SKIPE INSKED		;IN THE SCHEDULER?
+	RET			;YES. DON'T MANIPULATE THE JSB STACK
+	SAVET			;SAVE ALL REGISTERS
+	LOAD T1,TINTL,(T2)	;GET INTERNAL LINE NUMBER
+	MOVEI T2,STKCD3		;GET PROPER CODE
+	CALL JSBSTK		;QUEUE UP THE ENTRY
+	OKINT			;ALLOW INTS NOW
+	RET			;AND DONE
+
+;DISMISS WAS SATISFIED. DEQUEUE THE ENTRY AND GO NOINT
+
+TTYAWK:	JE TTLCK,(T2),R		;THIS IS A HACK TO KEEP FSIINI HAPPY.
+				;SINCE THE SWAPPABLE MONITOR IS NOT
+				;LOADED YET, WE CAN'T USE THE NORMAL
+				;LOCKING STATEGY. THIS IS ACCEPTABLE
+				;HERE SINCE NO CONFUISION CAN RESULT.
+	SKIPE INSKED		;IN THE SCHEDULER?
+	RET			;YES. DON'T MANIPULATE THE JSB STACK
+	SAVET			;SAVE ALL REGISTERS
+	NOINT			;PREVENT INTS
+	LOAD T1,TINTL,(T2)	;GET INTERNAL LINE NUMBER
+	MOVEI T2,STKCD3		;GET TYPE
+	CALLRET JSFRMV		;REMOVE ENTRY AND DONE
+
+
+;TCOBN - ENTRY FOR BINARY OUTPUT. NO TRANSLATION NO LINKS.
+;TCOBQ - ENTRY FOR BINARY OUTPUT. NO TRANSLATION NO LINKS.
+; NO SPECIAL HANDELING
+	RESCD	;ps
+
+;ACCEPTS:
+;	T1/ CHARACTER (UP TO 9 BITS)
+;	T2/ ADDRESS OF DYNAMIC DATA
+
+;	CALL TCOBN
+
+;RETURNS +1: ALWAYS
+
+
+TCOBQ:				;HERE FOR NOW EVENTUAL WILL GO PAST
+				; SPECIAL CHARATER VECTOR CALL
+TCOBN:	SAVELN			;SAVE LINE NUMBER
+	ANDI T1,377		;8 BITS OF CHARACTER
+	CALL TCOU6		;GO OUTPUT THE CHARACTER WITHOUT ADDING
+				; PARITY OR DOING LINKS
+	RET			;RETURN
+
+
+
+
+;TTC7SN - LINE IS A NVT. SEE IF NVT LOGINS ARE ALLOWED
+
+TTC7SN:	TXNE T1,SF%NVT		;SEE IF NVT LOGINS ALLOWED
+	JRST RTRUE		;YES, GO LOGIN IN
+	HRROI T1,[ASCIZ/
+?Internet logins are currently disallowed
+/]
+	CALL TTEMES
+	JRST RFALSE		;FAIL
+
+;CHKIAC	Check if about to send an IAC on an NVT line, doubles character if so.
+
+CHKIAC:	CAIE	T1,IACCH	; sending an IAC?
+	 RET			; no
+	CALL	@0(P)		; Send twice if so
+	MOVEI	T1,IACCH	; (2nd time through)
+	RET
+
+
+;NVTRRR - SEND RCTE
+
+;ACCEPTS:
+;	T2/ ADDRESS OF DYNAMIC DATA
+
+;RETURNS +1:  ALWAYS
+
+NVTRRR:	STKVAR<NVTCH>
+	DO.
+	  SETZM NVTCH		;ASSUME ZERO COMMAND
+	  IFQN. NVRCS,(T2)	;ANY CHANGE IN STATE?
+	    CALL GTBRKC		;YES, GET BREAK CLASSES
+	    MOVEM T1,NVTCH	;SAVE THAT
+	    CALL GTSPCC		;GET BREAK CLASS FOR SPECIAL ECHO CHAR.
+	    IORM T1,NVTCH	;MUST BREAK ON ALL OF THEM
+	    SKIPE T1		;ANY SPECIAL BREAKS?
+	      MOVEI T1,2	;YES, SUPPRESS ECHO OF BREAKS
+	    MOVE T3,TTFLGS(T2)	;GET FLAGS
+	    TXNN T3,<TT%ECO!TT%ECM> ;NO ECHO WANTED?
+	      IORI T1,6		;SUPPRESS ALL ECHOES
+	    TXC T3,<TT%ECO!TT%ECM>
+	    TXCN T3,<TT%ECO!TT%ECM> ;SUPPRESS ECHOES OF BREAKS?
+	      IORI T1,2		;YES, ...
+	    IORI T1,11		;CAUSE BREAK CLASS TO CHANGE
+	    HRLM T1,NVTCH	;SAVE THE COMMAND
+	    MOVEI T1,^D10	;NEED 4 CHARS FOR BREAK CLASSES
+	  ELSE.			;NO CHANGE IN STATE
+	    MOVEI T1,6		;NEED 6 FOR SB ETC
+	  ENDIF.
+	  CALL NVTRSV		;RESERVE SPACE
+	    RET			;RETURN
+	  MOVEI T1,SBCH		;BEGINNING OF SUBNEGOTIATIONS
+	  CALL NVTSSP		;SEND IAC-SB
+	  MOVEI T1,RCTOPT
+	  CALL TCOBQ		;SAY WHICH OPTION WE ARE CHANGING
+	  HLRZ T1,NVTCH		;GET COMMAND
+	  CALL TCOBN		;SEND THE COMMAND
+	  IFN. T1		;HAVE A CHANGE
+	    HRRZ T1,NVTCH	;GET NEW BREAK CLASSES
+	    LSH T1,-8		;GET HIGH ORDER BYTE
+	    CALL TCOBN		;SEND IT
+	    HRRZ T1,NVTCH	;AND LOW ORDER TOO.
+	    CALL TCOBN		;SEND LOW ORDER BYTE
+	  ENDIF.
+	  MOVEI T1,SECH		;END OF SUBNEGOTIATIONS
+	  CALL NVTSSP		;SEND SE
+	  LOAD T1,PBRCT,(T2)	;GET OUTSTANDING BREAKS
+	  MOVE T3,NVTCH		;GET BREAK INFO BACK
+	  SKIPE T3		;SKIP IF NONE
+	    MOVEM T3,TTBRKC(T2)	;SET NEW CURRENT BREAK CLASSES
+	  SOS T1		;DECREMENT OUTSTANDING BRKS
+	  STOR T1,PBRCT,(T2)	;STORE BACK
+	  SETZRO NVRCS,(T2)	;CANCEL STATE CHANGE
+	  OKSKD1
+	  JUMPN T1,TOP.		;REPEAT IF BREAKS STILL OUTSTANDING
+	ENDDO.
+	RET
+	ENDSV.
+
+; TABLE OF BREAK CLASS FOR EACH CHARACTER
+
+U==1
+L==2
+N==4
+FC==10
+CC==20
+K6==40
+K7==100
+K8==200
+K9==400
+
+CHWTB:	BYTE(9)CC,CC,CC,CC,CC,CC,CC,CC	; ^@ - ^G
+	BYTE(9)FC,FC,FC,FC,FC,FC,CC,CC	; ^H - ^O
+	BYTE(9)CC,CC,CC,CC,CC,CC,CC,CC	; ^P - ^W
+	BYTE(9)CC,CC,CC,CC,CC,CC,CC,FC	; ^X - EOL
+	BYTE(9)K9,K6,K8,K8,K8,K8,K8,K8	; SPACE - '
+	BYTE(9)K7,K7,K8,K8,K6,K8,K6,K8	; ( - /
+	BYTE(9)N,N,N,N,N,N,N,N		; DIGITS
+	BYTE(9)N,N,K6,K6,K7,K8,K7,K6	; 8, 9 - ?
+	BYTE(9)K8,U,U,U,U,U,U,U		; @ - G
+	BYTE(9)U,U,U,U,U,U,U,U		; H - O
+	BYTE(9)U,U,U,U,U,U,U,U		; P - W
+	BYTE(9)U,U,U,K7,K8,K7,K8,K8	; X - _
+        BYTE(9)K8,L,L,L,L,L,L,L		; ' - g
+	BYTE(9)L,L,L,L,L,L,L,L		; h - o
+	BYTE(9)L,L,L,L,L,L,L,L		; p - w
+	BYTE(9)L,L,L,K7,K7,K7,K8,CC	; x - RUBOUT
+
+;GTBRKC - GET TERMINAL BREAK CLASSES
+
+;ACCEPTS:
+;	T2/ DYNAMIC DATA ADDRESS
+
+;RETURNS +1: ALWAYS
+;	T1/ BREAK CLASSES
+
+
+GTBRKC:	SETZ T1,
+	MOVE T3,TTFLGS(T2)
+	TXNE T3,TT%WKA		;BREAK ON ALPHANUMERICS
+	 TRO T1,7		;UPPER AND LOWER CASE AND NUMBERS
+	TXNE T3,TT%WKP		;PUNCTUATION
+	 TRO T1,740
+	TXNE T3,TT%WKN		;NON-FORMATTING CONTROLS
+	 TRO T1,20
+	TXNE T3,TT%WKF		;FORMATTERS
+	 TRO T1,10
+	RET
+
+;GTSPCC - GET BREAK CLASS FOR CHARACTERS NEEDING SPECIAL ECHOES
+
+;ACCEPTS:
+;	T2/ ADDRESS OF DYNAMIC DATA
+
+;RETURNS +1: ALWAYS
+;	T1/ BREAK CLASS FOR CHARACTERS NEEDING SPECIAL OUTPUT
+
+GTSPCC:	STKVAR<NVCOC1,NVCOC2,NVFMCC>
+	CALL TTYGPI		;GET PI CHARACTERS AS COCFORMAT
+	MOVE T1,NVCOC1		;SAVE COC WORDS FROM TTYGPI
+	MOVE T3,NVCOC2
+	CALL TTRCOC		;GET CONTROL CHAR OUTPUT MODES
+	ANDCMI T3,377		;ONLY CONTROL CHARACTERS
+	IORI T3,2B<40*2-^D36+1>	;FAKE A NORMAL ECHO FOR SPACE
+	ANDCM T3,NVCOC2		;FORCE ZEROES FOR INT CHARS
+	ANDCM T1,NVCOC1
+	XOR T1,NVTNMD		;COMPARE TO ASSUMED ECHO MODE
+	XOR T3,NVTNMD+1
+	MOVE T1,NVFMCC		;SAVE T1
+	MOVEI T1,FC		;ASSUME NEEDS FORMATTERS
+	EXCH T1,NVFMCC		;SAY SO AND GET T1 BACK
+	TDZN T1,[BYTE (2)0,0,0,0,0,0,0,0,3,3,3,3,3,3]
+	TDNE T3,[BYTE (2)0,0,0,0,0,0,0,0,0,0,0,0,0,3]
+	 SKIPA
+	 SETZM NVFMCC		;NOT NEEDED AFTER ALL
+	TDZN T1,[BYTE (2)3,3,3,3,3,3,3,3,0,0,0,0,0,0,3,3,3,3]
+	TDNE T3,[BYTE (2)3,3,3,3,3,3,3,3,3,3,3,3,3,0,0,3]
+	 MOVEI T1,CC		;NEED SPECIAL ECHO FOR NON-FORMATTERS
+	IOR T1,NVFMCC
+	TRNE T3,<BYTE (2)0,0,0,0,0,0,0,0,0,0,0,0,0,0,3>	; SPACE?
+	 IORI T1,K9		;NEED SPECIAL ECHO FOR SPACE
+	RET
+	ENDSV.
+
+;TTYGPI - GET NORMAL MODES FOR ECHO (MUST AGREE WITH THAT IN USER TELNET)
+
+;ACCEPTS:
+;	T2/ ADDRESS OF DYNAMIC DATA
+
+;RETURNS +1: ALWAYS
+;	T1/ COC1 WORD BASED ON INTERRUPT CHARACTERS
+;	T3/ COC2 WORD BASED ON INTERRUPT CHARACTERS
+
+
+TTYGPI:	STKVAR<NVTCC1,NVTCC2,NVDYND>
+	SETZM NVTCC1		;ZERO COC TYPE WORDS HERE
+	SETZM NVTCC2
+	MOVEM T2,NVDYND		;NEED THIS ACCUMULATOR
+	MOVE T1,TTPSI(T2)	;GET PSI BITS
+	ANDCMI T1,77		;MASK OUT EXTRANEOUS BITS
+	TRZE T1,100		;IS SPACE AN INTERRUPT?
+	 TRO T1,10		;YES, SET BIT 40(8)
+	TRZE T1,20		;RUBOUT?
+	 TRO T1,4		;SET BIT 41(8)
+	LSH T1,-1		;AVOID SIGN BIT
+TTGPI1:	MOVN T2,T1		;COMPLEMENT ALL BUT RIGHTMOST 1
+	AND T2,T1		;GET JUST THAT BIT
+	ANDCAM T2,T1		;CLEAR IT
+	MUL T2,T2		;SQUARE IT
+	LSH T3,1		;FILL THE GAP
+	IORB T3,NVTCC2		;OR IN BITS
+	IORB T2,NVTCC1
+	JUMPN T1,TTGPI1		;LOOP TILL ALL ARE DONE
+	LSHC T2,1
+	IOR T2,NVTCC1		;OR IN BITS
+	IOR T3,NVTCC2
+	LSHC T2,1
+	MOVE T1,T2		;MOVE FIRST WORD TO T1
+	MOVE T2,NVDYND		;RESTORE ADDRESS OF DYNAMIC DATA
+	RET
+	ENDSV.
+
+NVTNMD:	BYTE (2)0,0,0,0,0,0,0,2,2,2,2,2,2,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,2
+
+;TTCOBN - NVT CLEAR OUTPUT BUFFERS
+;ENTERS CLEAR BUFFER ROUTINE AFTER DEVICE DEPENDENT CODE TO PREVENT
+; LOOPING
+
+;ACCEPTS:
+;	T2/ ADDRESS OF DYNAMIC DATA
+
+
+;RETURNS +1: ALWAYS
+
+
+TTCOBN:	NOSKD1
+	CHNOFF DLSCHN
+	CALLRET TTCOB5
+
+;NVTDOB - PERFORM DOBE SEQUENCE CALLED FROM TTDOBE
+
+;ACCEPTS:
+;	T2/ ADDRESS OF DYNAMIC DATA
+
+;	TDJRST OFF VDOBE	;DOBE
+
+
+;RETURNS +1: ALWAYS
+
+
+NVTDOB:
+REPEAT 0,<
+MNTM5	AOS CELL(TCVDO,1,,TCV)	; NVTDOB negotiation
+
+; This causes a phenomonal number of timing mark negotiations
+; (enough to hit a TAC bug) with very little real gain
+;
+	MOVEI T1,TMKOPT		;TIMING MARK OPTION
+	CALL NVTNGT		;GO NEGOTIATE OPTION
+	 JFCL			;IGNORE FAILURE
+>
+	RET
+
+;NVTPAR - CHECK STPAR ARGUMENT AND NEGOTIATE ANY NEEDED OPTIONS
+
+
+;ACCEPTS:
+;	T1/ NEW JFN MODE WORD
+;	T2/ ADDRESS OF DYNAMIC DATA
+
+;	TDCALL OFF VSTPAR	;STPAR JSYS
+
+
+;RETURNS +1: ALWAYS
+
+TVTPAR:	STKVAR<NVJFMW>
+	MOVEM T1,NVJFMW		;SAVE NEW JFN MODE WORD
+	MOVE T3,T1		;COPY NEW STATE
+	XOR T1,TTFLGS(T2)	;GET DIFFERENCE
+	TXNN T1,<FLD(.TTHDX,TT%DUM)>  ;ECHO CHANGE? (FULL <--> HALF/LINEHALF)
+	 JRST NVTPA2		;NO, TRY NEXT
+	MOVX T1,ECHOPT+WILOPT	;ECHO OPTION REQUEST
+	TXNN T3,TT%DUM		;NEGOTIATE ON?
+	SKIPA T3,[IFIW!NVTNGT]	;YES NEGOTIATE ECHO
+	MOVE T3,[IFIW!NVTNGF]	;NO
+	CALL @T3		;CALL THE ROUTINE
+	 SKIPA			;SET TO LINE HALF DUPLEX
+	JRST NVTPA2		;CHECK FOR OTHER NEGOTIATIONS
+	SETONE TT%DUM,NVJFMW	;SET IT	TO LINE HALF DUPLEX
+
+
+NVTPA2:				;OTHER CHECKS GO HERE IF ANY
+NVTPAX:	MOVE T1,NVJFMW		;RESTORE NEW JFN MODE WORD
+	RET
+
+	ENDSV.
+
+
+;NVTMOD - CHECK SFMOD ARGUMENT AND NEGOTIATE ANY OPTIONS NEEDED
+; Currently only attempts to negotiate XMIT BINARY.
+; This does nothing on failure to negotiate, because previous
+; versions of the monitor didn't even bother to negotiate -
+; the negotiation failing can't have any worse effect.
+;
+; Note that this does not get called on a OPENF,
+; so opening an NVT in 8 bit mode is not sufficent
+; for ensuring a binary transfer, the SFMOD must be done also.
+; This does allow the user the option of getting the negotiation
+; done or not.
+; 
+;ACCEPTS:
+;	T1/ NEW JFN MODE WORD
+;	T2/ ADDRESS OF DYNAMIC DATA
+
+;RETURN +1: ALWAYS
+
+NVTMOD:	RET			;until debugged
+	STKVAR<MDJFMW,MDRADD>
+	MOVEM T1,MDJFMW		;SAVE NEW JFN MODE WORD
+	MOVE T3,T1		;COPY OF ARGUMENT
+
+	XOR T1,TTFLGS(T2)	;GET BIT DIFFERENCE
+	TRNN T1,1B29		;CHANGE IN BINARY?
+	IFSKP.
+	  TRNN T3,1B29		;BINARY REQUESTED?
+	  SKIPA T3,[IFIW!NVTNGT]	;YES NEGOTIATE BINARY
+	   MOVE T3,[IFIW!NVTNGF]	;NO
+	  MOVEM T3,MDRADD	;SAVE ROUTINE ADDRESS
+	  MOVEI T1,BINOPT	;REQUEST FOR BINARY
+	  CALL @T3		;CALL THE ROUTINE
+	   NOP			; Ignore failure
+	  MOVEI T1,BINOPT+WILOPT	;BINARY REQUEST
+	  MOVE T3,MDRADD	;GET ROUTINE ADDRESS
+	  CALL @T3		;REQUEST OPTION
+	   NOP
+	ENDIF.
+
+	MOVE T1,MDJFMW		;GET BACK JFN MODE WORD
+	RET
+	ENDSV.
+
+;NVTNGT - NEGOTIATE AN OPTION
+
+;ACCEPTS:
+;	T1/ OPTION REQUEST
+;	T2/ ADDRESS OF DYNAMIC DATA
+
+;RETURN +1: FAILURE COULD NOT GET OPTION
+;	+2: SUCCESS GOT OPTION
+
+NVTNGT:	MOVEI T3,[IFIW!NVTXWL	;GET ADDRESS OF WILL
+		  IFIW!NVTXDO]	; AND DO ROUTINES
+	CALL NVTNGC		;GO NEGOTIATE THEM
+	 AOS 0(P)		;SUCCESS
+	RET			;FAILURE
+
+;NVTNGF - REFUSE OPTION
+
+;ACCEPTS:
+;	T1/ OPTION REQUEST
+;	T2/ ADDRESS OF DYNAMIC DATA
+
+;RETURN +1: SUCCESS REFUSED OPTION
+;	+2: FAILURE COULD NOT REFUSE OPTION
+
+NVTNGF:	MOVEI T3,[IFIW!NVTXWN	;GET ADDRESS OF WON'T
+		  IFIW!NVTXDN]	; AND DON'T ROUTINES
+NVTNGC:	STKVAR<NNGOPT,NNGADD,NNGDAD>
+	MOVEM T1,NNGOPT		;SAVE OPTION
+	MOVEM T2,NNGDAD		;AND ADDRESS OF DYNAMIC DATA
+	MOVEM T3,NNGADD		;AND ADDRESS OF ROUTINES
+	ANDI T1,OPTOPT		;Get only the option
+	CAILE T1,MAXOPT		;LEGAL OPTION
+	 RET			;NO
+	NOINT			;MAKE SURE WE ARE NOT INTERRUPTABLE
+	LDB T3,NSBPTR(T1)	;Get the State Data Byte
+	MOVE CX,NNGOPT		;Get the full option back
+	TXNN CX,WILOPT		;Are we asking for this option?
+	 TXOA T3,NS.OND		;No, Outstanding Negotiation DO
+	  TXO T3,NS.ONW		;Yes, Outstanding Negotiation WILL
+	DPB T3,NSBPTR(T1)	;Save the State Data Byte
+	TXZN CX,WILOPT		;ARE WE ASKING FOR THIS OPTION? Clear it.
+	 AOS NNGADD		;NO.  BUMP TO DO OR DON'T
+	MOVE T3,NNGADD		;GET ADDRESS OF ROUTINE
+	CALL @0(T3)		;SAY "DO, WILL, DONT, WONT"
+	MOVE T1,NNGOPT		;GET OPTION BACK
+	ROT T1,-9		;INTO TOP 9 BITS
+	MOVE T2,NNGDAD		;GET DYNAMIC DATA ADDRESS
+	CALL TTYDIS		;SET UP FOR DISMISS
+; Fall thru...
+
+;...Fell thru
+	MOVE T2,NNGDAD		;GET DYNAMIC DATA ADDRESS
+	DYNST			;GET STATIC LINE NUMBER
+	MOVSS T2		;MOVE IT TO THE LEFT HALF
+	IOR T1,T2		;LINE NUMBER IN 9-17
+	HRRI T1,NVTNTT		;ACTIVATION TEST
+	MDISMS
+	MOVE T2,NNGDAD		;GET ADDRESS OF DYNAMIC DATA
+	CALL TTYAWK		;GO NOINT AGAIN
+	SETZRO NVTMO,(T2)	;CANCEL ANY TIME-OUT IN PROGRESS
+	MOVE T3,NNGOPT		;GET OPTION AGAIN
+	MOVX T1,NS.CSW		;Assume it was WILL
+	TXZN T3,WILOPT		;Was it WILL? Clear it.
+	 MOVX T1,NS.CSD		;No, it was DO
+	LDB T3,NSBPTR(T3)	;Get the State Data Byte
+	TDNN T3,T1		;IS IT OFF?
+	 AOS 0(P)		;Yes, skip return, failure
+	OKINT			;INTERRUPTS ARE NOW OK
+	RET
+	ENDSV.
+
+
+;NVTNTT - WAIT ROUTINE FOR NVT NEGOTIATIONS
+
+;ACCEPTS T1/  BITS 18-26  OPTION NUMBER
+;	      BITS 27-35  TTY NUMBER
+
+NVTNTT:	MOVE T2,T1		;Get line number only
+	ANDI T2,777
+	CALL STADYN		;GET ADDRESS OF DYNAMIC DATA
+	  JRST 1(T4)		;NOT ACTIVE. THIS SHOULD NOT HAPPEN
+	SKIPN TTNETW(T2)	;SATISFIED IF DISCONNECTED
+	  JRST 1(T4)		;NEGOTIATION COMPLETE
+	LSH T1,-9		;Right justify option number
+	MOVE T3,T1		;Get option number only
+	ANDI T3,OPTOPT
+	LDB T3,NSBPTR(T3)	;Get State Data Byte
+	MOVX T2,NS.ONW		;Assume it was WILL
+	TXNN T1,WILOPT		;Was it WILL?
+	  MOVX T2,NS.OND	;No, it was DO
+	TDNN T3,T2		;Complete?
+	  JRST 1(T4)		;NEGOTIATION COMPLETE
+	JRST 0(T4)
+
+;NVTNRM - NORMAL NVT CHARACTER PROCESSING
+
+;ACCEPTS:
+;	T1/ CHARACTER
+;	T2/ ADDRESS OF DYNAMIC DATA
+
+;RETURN +1: ALWAYS
+
+NVTNRM:	CAIL T1,200		;POSSIBLE NVT CONTROL CHARACTER?
+	  CALLRET NVTCTL	;PROCESS POSSIBLE NVT CONTROL CHARACTER
+
+NVTDCH:	LDB T3,NSBPTR+BINOPT	;Get BINARY option State Data Byte
+	TXNE T3,NS.CSD		;Are we in DO BINARY mode?
+	IFSKP.			;NOT BINARY, SPECIAL CHECKS
+	  IFQN. NVCRI,(T2)	;WAS LAST CH CR?
+	    SETZRO NVCRI,(T2)	;YES, FORGET THAT
+	    JUMPE T1,R		;NULL?
+	    CAIN T1,.CHLFD	;WAS THIS ONE A LINE FEED
+	      RET		;YES, FORGET IT
+	  ELSE.			;LAST NOT CR
+	    CAIE T1,.CHCRT	;IS THIS ONE?
+	    ANSKP.		;NO, PROCEED NORMALLY
+	      SETONE NVCRI,(T2)	;YES, REMEMBER IT
+	  ENDIF.
+	ENDIF.
+
+	SETZ Q2,		;NO SPECIAL FLAGS
+	PUSH P,Q1		;SAVE Q1
+	DYNST			;GET LINE NUMBER FOR TTCHI
+	NOSKD1			;TTCHI EXPECTS TO BE CALLED NOSKED
+	CALL TTCHI		;STUFF IT IN TTY BUFFER
+	  NOP			;IGNORE ERROR RETURN
+	OKSKD1
+	POP P,Q1
+	RET
+
+;NVTCTL - TELNET CONTROL CODES RECEIVED
+
+;ACCEPTS:
+;	T1/ CHARACTER
+;	T2/ ADDRESS OF DYNAMIC DATA
+
+;RETURN +1: ALWAYS
+
+NVTCTL:	SKIPN TTNETW(T2)	;IF NO SOCKETS ATTACHED,
+	  JRST NVTDCH		;IGNORE CHAR
+	CAIE T1,IACCH		;YES, IS IAC
+	  JRST NVTDCH		;NO, CONTINUE PROCESSING
+	MOVEI T3,.DFIAC		;SET TO DEFFERED IAC
+	STOR T3,NVSTP,(T2)
+	RET
+
+
+;NVTIAC - PROCESS BYTE AFTER IAC
+
+;ACCEPTS:
+;	T1/ CHARACTER
+;	T2/ ADDRESS OF DYNAMIC DATA
+
+;RETURN +1: ALWAYS
+
+
+NVTIAC:	CAIGE T1,SECH		;END OF SUBNEGOTIATIONS
+	 RET			;NOT A VALID COMMAND
+	SETZ T3,		;NEXT STATE IF ANY
+	XCT NVTDTB-SECH(T1)	;DISPATCH ON THE CHARACTER
+	 JRST NVTDCH		;SPECIAL FUNCTION CHARACTER
+	STOR T3,NVSTP,(T2)	;NEXT STATE
+	RET
+
+NVTDTB:	RET			;(360) END OF SUBNEGOTIATION
+	RET			;(361) NOP -- IGNORE
+	JRST NVTIDM		;(362) NEW DATA MARK
+	RET			;(363) BREAK -- IGNORE
+	MOVEI T1,3		;(364) IP -- CONVERT TO ^C
+	MOVEI T1,"O"-100	;(365) AO -- CONVERT TO ^O
+	MOVEI T1,"T"-100	;(366) AYT -- CONVERT TO ^T
+	MOVEI T1,177		;(367) EC -- CONVERT TO DEL
+	MOVEI T1,"U"-100	;(370) EL -- CONVERT TO ^U
+	RET			;(371) GA -- IGNORE
+	TROA T3,.DFSB0		;(372) SB start
+	TROA T3,.DFWIL		;(373) DEFER WILL
+	TROA T3,.DFWNT		;(374) DEFER WONT
+	TROA T3,.DFDO		;(375) DEFER DO
+	TROA T3,.DFDNT		;(376) DEFER DONT
+	JFCL			;(377) IAC IAC -- IAC
+
+; Input a DATA MARK
+NVTIDM:	PUSH P,T1		;SAVE A TEMP AC
+	LOAD T1,PTITC,(T2)	;SYNC COUNTS 1, INS COUNTS -1
+	AOJ T1,
+	STOR T1,PTITC,(T2)
+	POP P,T1		;RESTORE THE AC
+	RET
+
+
+;NVTSSP - SEND SPECIAL CHARACTER
+
+;ACCEPTS:
+;	T1/ CHARACTER
+;	T2/ ADDRESS OF DYNAMIC DATA
+
+;RETURN +1: ALWAYS
+
+NVTSSP:	PUSH P,T1		;SAVE CHARACTER
+	MOVEI T1,2		;NEED 2 CHARACTERS
+	CALL NVTRSV		;RESERVE SPACE IN BUFFER (NOSKED)
+	 JRST [	POP P,T1	;COULDN'T GET DON'T WAIT
+		RET]		;RETURN
+	HRROI T1,IACCH		;SAME AS 377, BUT PREVENT ITS DOUBLING
+	CALL TCOBN		;CALL TCOBN TO GET CR-NULL IF NEEDED
+	POP P,T1		;GET BACK SPECIAL CHARACTER
+	CALL TCOBQ		;SEND IT
+	OKSKD1
+	RET
+
+;NVTRSV - RESERVE SPACE IN BUFFER FOR CHARACTERS SPECIFIED IN 1
+
+;ACCEPTS:
+;	T1/ NUMBER OF CHARACTERS
+;	T2/ ADDRESS OF DYNAMIC DATA
+
+;RETURN +1: FAILURE NO ROOM
+;	+2 SUCCESS
+
+NVTRSV:	NOSKD1			;MAKE SURE SPACE DOESN'T DISAPPEAR
+	LOAD T3,TOMAX,(T2)	;MAXIMUM BYTES IN OUTPUT BUFFER
+	SUB T3,TTOCT(T2)	;SPACE IN OUTPUT BUFFERS
+	CAML T3,T1		;WILL THEY FIT
+	 RETSKP			;YES. ENOUGH ROOM, RETURN SKIP
+	OKSKD1
+	MOVE T3,FORKX		;GET FORK NUMBER
+	CAMN T3,INTFRK		;IS THIS THE INTERNET FORK?
+	 RETBAD			;YES SO JUST RETURN
+	SKIPN INSKED		;IN THE SCHEDULER
+	SKIPE NSKED		;OR NO SKED
+	RETBAD			;YES TELL HIM THERE WAS NO ROOM
+	PUSH P,T1		;NO. WAIT FOR SPACE
+	PUSH P,T2		;SAVE ARGUMENTS
+	MOVEI T1,TCOTST		;GET ADDRESS OF WAIT ROUTINE
+	CALL TTYDIS		;SET UP FOR DISMISS
+	DYNST			;GET LINE NUMBER
+	HRL T1,T2		;MOVE IT TO THE LEFT HALF
+	MDISMS			;WAIT FOR SPACE
+	POP P,T2		;RESTORE ARGUMENTS
+	CALL TTYAWK		;GO NOINT AGAIN
+	POP P,T1
+	JRST NVTRSV		;TRY AGAIN
+
+
+;NVTRFU - SEND WONT (REFUSE)
+
+;ACCEPTS:
+;	T2/ ADDRESS OF DYNAMIC DATA
+;	OPTION ON TOP OF STACK
+
+;RETURN +1: ALWAYS
+
+
+NVTRFU:	MOVEI T1,WNTCH
+
+;NVTSRP - SEND REPLY IN 1 FOR OPTION ON STACK
+
+;ACCEPTS:
+;	T1/ REPLY
+;	T2/ ADDRESS OF DYNAMIC DATA
+;	OPTION ON TOP OF STACK
+
+;RETURN +1: ALWAYS
+
+
+NVTSRP:	PUSH P,T1		;SAVE REPLY
+	MOVEI T1,3
+	CALL NVTRSV		;RESERVE SPACE FOR THREE CHARACTERS
+	 JRST [	ADJSP P,-2	;NO ROOM CLEAN UP STACK
+		RET]
+	HRROI T1,IACCH		;SAME AS 377 BUT PREVENT DOUBLING
+	CALL TCOBN		;USE TCOBN TO GET CR-NULL IF NEEDED
+	POP P,T1		;GET REPLY
+	CALL TCOBQ		;SEND IT
+	POP P,T1		;GET OPTION
+	CALL TCOBQ		;SEND IT
+	OKSKD1
+	RET
+
+;NVTSWL - SEND WILL
+
+;ACCEPTS:
+;	T2/ ADDRESS OF DYNAMIC DATA
+;	OPTION ON TOP OF STACK
+
+;RETURN +1: ALWAYS
+
+;NVTXWL - ENTRY FOR OPTION IN T1
+
+
+NVTXWL:	PUSH P,T1		;SAVE OPTION
+NVTSWL:	MOVEI T1,WILCH		;ENTER HERE WHEN OPTION IS ON STACK
+	JRST NVTSRP		;SEND REPLY
+
+
+
+;NVTSNR - SEND NO REPLY
+
+;ACCEPTS:
+;	T2/ ADDRESS OF DYNAMIC DATA
+;	OPTION ON TOP OF STACK
+
+;RETURN +1: ALWAYS
+
+
+NVTSNR:	ADJSP P,-1		;NO REPLY NECESSARY OR POSSIBLE
+	RET
+
+;NVTSWN - SEND WONT
+
+;ACCEPTS:
+;	T2/ ADDRESS OF DYNAMIC DATA
+;	OPTION ON TOP OF STACK
+
+;RETURN +1: ALWAYS
+
+;NVTXWN - ENTRY FOR OPTION IN T1
+
+
+NVTXWN:	PUSH P,T1		;SAVE OPTION
+NVTSWN:	MOVEI T1,WNTCH		;ENTER HERE WHEN OPTION ALREADY PUSHED
+	JRST NVTSRP
+
+
+
+;NVTSDO - SEND "DO"
+
+;ACCEPTS:
+;	T2/ ADDRESS OF DYNAMIC DATA
+;	OPTION ON TOP OF STACK
+
+;RETURN +1: ALWAYS
+
+;NVTXDO - ENTRY FOR OPTION IN T1
+
+
+NVTXDO:	PUSH P,T1		;SAVE OPTION
+NVTSDO:	MOVEI T1,DOCH		;ENTER HERE WHEN OPTION ALREADY PUSHED
+	JRST NVTSRP
+
+;NVTSDN - SEND "DONT"
+
+;ACCEPTS:
+;	T2/ ADDRESS OF DYNAMIC DATA
+;	OPTION ON TOP OF STACK
+
+;RETURN +1: ALWAYS
+
+;NVTXDN - ENTRY FOR OPTION IN T1
+
+
+NVTXDN:	PUSH P,T1		;SAVE OPTION
+NVTSDN:	MOVEI T1,DNTCH		;ENTER HERE WHEN OPTION ALREADY PUSHED
+	JRST NVTSRP
+
+;NVTDO - PROCESS "DO"
+
+;ACCEPTS:
+;	T1/ OPTION
+;	T2/ ADDRESS OF DYNAMIC DATA
+
+;RETURN +1: ALWAYS
+
+
+NVTDO:	PUSH P,T1		;REMEMBER THE OPTION
+	CAILE T1,MAXOPT		;OPTION WE CAN HANDLE?
+	 JRST NVTRFU		;NO, REFUSE IT
+	LDB T3,NSBPTR(T1)	;Get State Data Byte
+	TXZN T3,NS.ONW		;OUTSTANDING WILL REQUEST? Clear it.
+	IFSKP.			;Yes, Positive ACK
+	  POP P,T1		;Restore option
+	  TXO T3,NS.CSW		;Set WILL bit
+	  DPB T3,NSBPTR(T1)	;Save State Data Byte
+	  RET			;Return
+	ENDIF.
+	TXNE T3,NS.CSW		;Is the option on?
+	 JRST NVTSNR		;YES, SEND NO REPLY
+	CALL @NVTDOD(T1)	;NO, ATTEMPT EXECUTION
+	 JRST NVTRFU		;CAN'T DO IT -- REFUSE
+	MOVE T1,(P)		;Get the option back
+	TXO T3,NS.CSW		;Set option on
+	DPB T3,NSBPTR(T1)	;Save the State Data Byte
+	JRST NVTSWL		;AND SEND "WILL"
+
+DEFINE NVOPT.(NAM,NUM,DORTN,DNTRTN,WILRTN)<
+	IFIW!DORTN		;;DO routine CALL address
+> ; End DEFINE NVOPT.
+
+NVTDOD:	NVOPTS			;Allocate DO CALL table
+	PURGE NVOPT.
+
+;ACTION ROUTINES FOR "DO"
+;TURN ECHOES ON
+
+NVTECN:	MOVX T1,TT%DUM
+	ANDCAM T1,TTFLGS(T2)	;SET TO FULL DUPLEX
+	RETSKP
+
+;SET SUPPRESS GA BIT
+
+NVTSGA:	SETONE NVGAB,(T2)
+	RETSKP
+
+;DO TIMING MARK PROTOCOL
+
+NVTDTM:	RETSKP
+
+
+;NVTDNT - PROCESS "DONT"
+
+;ACCEPTS:
+;	T1/ OPTION
+;	T2/ ADDRESS OF DYNAMIC DATA
+
+;RETURN +1: ALWAYS
+
+NVTDNT:	PUSH P,T1		;SAVE OPTION
+	CAILE T1,MAXOPT		;ARE WE WILLING FOR THIS OPTION
+	 JRST NVTSWN		;NO, SEND WONT
+	LDB T3,NSBPTR(T1)	;Get State Data Byte
+	TXZN T3,NS.ONW		;Outstanding Request? Clear it.
+	IFSKP.			;Yes, Negative ACK
+	  POP P,T1		;Restore option
+	  TXZ T3,NS.CSW		;Clear the option
+	  DPB T3,NSBPTR(T1)	;Save State Data Byte
+	  RET			;Return
+	ENDIF.
+	TXZN T3,NS.CSW		;OPTION ALREADY OFF? Clear it.
+	 JRST NVTSNR		;YES. SEND NO REPLY
+	CALL @NVTDND(T1)	;YES. PERFORM ACTION
+	MOVE T1,(P)		;Get the option back
+	DPB T3,NSBPTR(T1)	;Save the State Data Byte
+	JRST NVTSWN		;AND SEND "WON'T"
+
+DEFINE NVOPT.(NAM,NUM,DORTN,DNTRTN,WILRTN)<
+	IFIW!DNTRTN		;;DONT routine CALL address
+> ; End DEFINE NVOPT.
+
+NVTDND:	NVOPTS			;Allocate DONT CALL table
+	PURGE NVOPT.
+
+;"DONT" ACTION ROUTINES
+;TURN ECHOS OFF
+
+NVTECF:	MOVX T1,TT%DUM		;DUPLEX MODE
+	IORM T1,TTFLGS(T2)	;SET TO LINE HALF DUPLEX
+	RET
+
+;TURN OFF SUPPRESS GA BIT
+
+NVTAGA:	SETZRO NVGAB,(T2)
+	RET
+
+;NVTWIL - PROCESS "WILL"
+
+;ACCEPTS:
+;	T1/ OPTION
+;	T2/ ADDRESS OF DYNAMIC DATA
+
+;RETURN +1: ALWAYS
+
+
+NVTWIL:	PUSH P,T1		;SAVE THE OPTION
+	CAILE T1,MAXOPT		;Legal option?
+	 JRST NVTSDN		; TOO LARGE, REJECT
+	LDB T3,NSBPTR(T1)	;Get State Data Byte
+	TXZN T3,NS.OND		;IS THIS OPTION OUTSTANDING? Clear it.
+	IFSKP.			;Yes
+	  POP P,T1		;Restore option
+	  TXO T3,NS.CSD		;Set option on
+	  DPB T3,NSBPTR(T1)	;Save the State Data Byte
+	  RET
+	ELSE.
+	  TXNE T3,NS.CSD	;IS OPTION ALREADY ON?
+	   JRST NVTSNR		;YES. SEND NO REPLY
+	  CALL @NVTWID(T1)	;YES.  CALL ACTION ROUTINE
+	   JRST NVTSDN		;UNIMPLEMENTED OPTION OR CAN'T COMPLY
+	  MOVE T1,(P)		;Get the option back
+	  TXO T3,NS.CSD		;DONE. SET OPTION "ON"
+	  DPB T3,NSBPTR(T1)	;Save the State Data Byte
+	  JRST NVTSDO		;AND SEND "DO"
+	ENDIF.
+
+DEFINE NVOPT.(NAM,NUM,DORTN,DNTRTN,WILRTN)<
+	IFIW!WILRTN		;;WILL routine CALL address
+> ; End DEFINE NVOPT.
+
+NVTWID:	NVOPTS			;Allocate WILL CALL table
+	PURGE NVOPT.
+
+
+;NVTWNT - PROCESS "WONT"
+
+;ACCEPTS:
+;	T1/ OPTION
+;	T2/ ADDRESS OF DYNAMIC DATA
+
+;RETURN +1: ALWAYS
+
+
+NVTWNT:	PUSH P,T1		;SAVE OPTION
+	CAILE T1,MAXOPT		;LEGAL OPTION
+	 JRST NVTSDN		;NO, REPLY WITH DONT
+	LDB T3,NSBPTR(T1)	;Get State Data Byte
+	TXZN T3,NS.OND		;IS THIS OPTION OUTSTANDING? Clear it.
+	IFSKP.			;Yes
+	  POP P,T1		;Restore option
+	  TXZ T3,<NS.CSD>	;Clear option
+	  DPB T3,NSBPTR(T1)	;Save the State Data Byte
+	  RET
+	ELSE.
+	  TXZN T3,NS.CSD	;OPTION ALREADY OFF? Clear it.
+	   JRST NVTSNR		;YES. SEND NO REPLY
+	  DPB T3,NSBPTR(T1)	;Save State Data Byte
+	  JRST NVTSDN		;Send DONT
+	ENDIF.
+
+; Handle a user negotiation
+; T2/	Dynamic data
+; User AC3/	FLAGS+COMMAND,,OPTION
+;
+; Returns: +2 always, User's AC3 updated
+
+TVTNEG:	STKVAR <TNGOPT>
+	UMOVE T3,3		;Get User's AC3
+	LOAD T1,MO%OPT,T3	;Get the option code
+	MOVEM T1,TNGOPT		;Save it
+	CAILE T1,MAXOPT		;Do we know about this option?
+	 JRST TVTNGF		;No, fail
+	TXNE T3,MO%RNS		;Read Negotiation State?
+	IFSKP.			;No, User wants to negotiate
+	  LOAD T3,MO%NEG,T3	;Get command code
+	  CAIL T3,WILCH		;Is it legal?
+	   CAILE T3,DNTCH
+	    JRST TVTNGF		;No
+	  CAIG T3,WNTCH		;WILL or WONT?
+	   TXO T1,WILOPT	;Yes, flag we want WILL or WONT
+	  CAIE T3,WILCH		;WILL?
+	   CAIN T3,DOCH		; or DO?
+	  IFNSK.		;WILL or DO
+	    CALL NVTNGT		;Negotiate True
+	      NOP
+	  ELSE.			;WONT or DONT
+	    CALL NVTNGF		;Negotiate False
+	      NOP
+	  ENDIF.
+	ENDIF.
+	MOVE T3,TNGOPT		;Get option back
+	LDB T3,NSBPTR(T3)	;Get State Data Byte
+	TRNA			;Success (more or less)
+TVTNGF:	 SETO T3,		;Soft failure, return -1
+	UMOVEM T3,3		;Update user's AC3
+	RETSKP			;Success
+	ENDSV.
+
+;
+; Handle a user get subnegotiation byte string request
+; Call:	T2/	Dynamic data
+;	User AC3/	Block Address in user address space
+;	Block+0/	Timeout,,OPTION
+;	     +1/	Destination designator
+;	     +2/	Max number of bytes to transfer
+; Return:
+;	Block+1/	Updated destination designator if applicable
+;	     +2/	Number of bytes actually transfered
+
+TVTGSB:	STKVAR <BLKADR,<SBBLK,3>,TVGDAD,SBLPTR>
+	UMOVE T3,3		;Get user's block address
+	MOVEM T3,BLKADR
+	UMOVE T1,.MOSBO(T3)	;Get Timeout,,OPTION
+	MOVEM T1,.MOSBO+SBBLK
+	UMOVE T1,.MOSBP(T3)	;Get Destination Designator
+	MOVEM T1,.MOSBP+SBBLK
+	UMOVE T1,.MOSBN(T3)	;Get Max number of bytes to XFER
+	MOVEM T1,.MOSBN+SBBLK
+	MOVEM T2,TVGDAD		;Save the Dynamic Data Address
+	LOAD T3,MO%OPT,.MOSBO+SBBLK  ;Get user option
+	CAIG T3,MAXOPT		;Supported option?
+	IFSKP.			;No
+	  SETZM .MOSBN+SBBLK	;Say no bytes transfered
+	  JRST TVTGS9		;Exit
+	ENDIF.
+	LDB T3,NSBPTR(T3)	;Get State Data Byte
+	TXNE T3,NS.SBR		;Subnegotiation Received?
+	IFSKP.			;No, we must wait
+	  LOAD T1,MO%TMO,.MOSBO+SBBLK  ;Get the user timeout
+	  IMULI T1,^D1000	;In msecs.
+	  SKIPE T1		;Unless infinite
+	   ADD T1,TODCLK	;Add to clock
+	  MOVEM T1,NVTUNT(T2)	;Save user negotiation timeout
+	  LOAD T1,MO%OPT,.MOSBO+SBBLK  ;Get user option again
+	  ROT T1,-9		;Into top 9 bits
+	  CALL TTYDIS		;Set up for dismiss
+	  MOVE T2,TVGDAD	;Get Dynamic Data Address
+	  DYNST			;Get static line number
+	  MOVSS T2		;To the left half
+	  IOR T1,T2		;Option in 0-8, Line number in 9-17
+	  HRRI T1,TVTSBT	;Subnegotiation activation test
+	  MDISMS
+	  MOVE T2,TVGDAD	;Dynamic data address
+	  CALL TTYAWK		;NOINT again
+	  SETZM NVTUNT(T2)	;Clear any timeout in progress
+	  LOAD T3,MO%OPT,.MOSBO+SBBLK  ;Get user option again
+	  LDB T3,NSBPTR(T3)	;Get State Data Byte
+	  TXNE T3,NS.SBR	;Subnegotiation Received?
+	  IFSKP.		;No, timeout
+	    SETZM .MOSBN+SBBLK	;Say no bytes transfered
+	    JRST TVTGS9		;Exit and update user block
+	  ENDIF.
+	ENDIF.
+; Fall thru...
+
+;...Fell thru
+	; We are supposed to have a subnegotiation now, try to find it
+	LOAD T1,MO%OPT,.MOSBO+SBBLK  ;Get user option again
+	CALL TVFDSB		;Find Subnegotiation Data
+	IFSKP.			;Found it, address in RH of T1
+	  MOVEM T1,SBLPTR	;Save the SB link pointer
+	  TXZ T1,.LHALF		;Trash the left half
+	  XMOVEI T3,SBBLK	;Get the BLOCK address
+	  CALL TVMUSB		;Copy SB bytes to user's address space
+	  MOVE T1,SBLPTR	;Get the SB link pointer
+	  CALL TVULSB		;Unlink and release the block
+	ELSE.			;Not found
+	  SETZM .MOSBN+SBBLK	;Say no bytes transfered
+	ENDIF.
+
+TVTGS7:	LOAD T1,MO%OPT,.MOSBO+SBBLK  ;Get user option again
+	LDB T3,NSBPTR(T1)	;Get State Data Byte
+	TXZ T3,NS.SBR		;Say there is none
+	DPB T3,NSBPTR(T1)	;Save State Data Byte
+
+TVTGS9:	MOVE T3,BLKADR		;Get user block address back
+	MOVE T1,.MOSBP+SBBLK	;Get updated destination designator
+	UMOVEM T1,.MOSBP(T3)	;To user
+	MOVE T1,.MOSBN+SBBLK	;Get number of bytes transfered
+	UMOVEM T1,.MOSBN(T3)	;To user
+	RETSKP			;Success
+	ENDSV.
+
+
+; Schedular test for subnegotiation reception
+;ACCEPTS T1/  BITS 18-26  OPTION NUMBER
+;	      BITS 27-35  TTY NUMBER
+
+TVTSBT:	MOVE T2,T1		;Get line number only
+	ANDI T2,777
+	CALL STADYN		;GET ADDRESS OF DYNAMIC DATA
+	  JRST 1(T4)		;NOT ACTIVE. THIS SHOULD NOT HAPPEN
+	SKIPN TTNETW(T2)	;SATISFIED IF DISCONNECTED
+	  JRST 1(T4)		;NEGOTIATION COMPLETE
+	LSH T1,-9		;Right justify option number
+	ANDI T1,OPTOPT		;Get option number only
+	LDB T3,NSBPTR(T1)	;Get State Data Byte
+	SKIPE T1,NVTUNT(T2)	;Get timeout if any
+	 CAML T1,TODCLK		;Timed out? OR
+	  TXNE T3,NS.SBR	;Receive one yet?
+	   JRST 1(T4)		;Negotiation complete, timeout or recv'd
+	JRST 0(T4)		;No, wait some more
+
+;
+; Handle a user send subnegotiation byte string request
+; Call:	T2/	Dynamic Data
+;	User AC3/	Block address in user address space
+;	Block+0/	0,,OPTION
+;	     +1/	Source designator
+;	     +2/	Number of bytes to send
+; Return:
+;	Block+1/	Updated source designator if applicable
+
+TVTSSB:	STKVAR <BLKADR,<SBBLK,3>,TVSDAD,<DTABLK,SL.NDW>,DTAPTR,DTACTR,SAVCHR>
+	UMOVE T3,3		;Get user's block address
+	MOVEM T3,BLKADR
+	UMOVE T1,.MOSBO(T3)	;Get Timeout,,OPTION
+	MOVEM T1,.MOSBO+SBBLK
+	UMOVE T1,.MOSBP(T3)	;Get Source Designator
+	MOVEM T1,.MOSBP+SBBLK
+	UMOVE T1,.MOSBN(T3)	;Get number of bytes to XFER
+	MOVEM T1,.MOSBN+SBBLK
+	MOVEM T2,TVSDAD		;Save the Dynamic Data Address
+	LOAD T3,MO%OPT,.MOSBO+SBBLK  ;Get user option
+	CAIG T3,MAXOPT		;Supported option?
+	IFSKP.			;No
+	  SETZM .MOSBN+SBBLK	;Say no bytes transfered
+	  JRST TVTSS9		;Exit
+	ENDIF.
+	LDB T3,NSBPTR(T3)	;Get State Data Byte
+	TXNN T3,<NS.CSW!NS.CSD>	;Are we in WILL or DO mode?
+	IFSKP.			;Yes, ok to send
+	  MOVE T3,.MOSBN+SBBLK	;Number of bytes to transfer
+	  CAILE T3,SL.NDB	;Exceed maximum number of data bytes?
+	  ANSKP.		;No, ok to proceed
+	    XMOVEI T1,DTABLK	;Address of data block
+	    XMOVEI T3,SBBLK	;Address of MTOPR block
+	    CALL TVUMSB		;Copy data byte from user space
+	    MOVE T3,.MOSBN+SBBLK  ;Get number of data bytes transfered
+	    MOVEM T3,DTACTR	;Save here for count down
+	    ADD T1,T3		;Add in # of IAC seen in user data
+	    ADDI T1,5		;Allow for IAC SB <opt> ... IAC SE
+	    CALL NVTRSV		;Reserve the space if possible, NOSKD1
+	    ANSKP.		;Space reserved
+	      HRROI T1,IACCH	;Send and IAC without doubling
+	      CALL TCOBN
+	      MOVEI T1,SBCH	;Send SB
+	      CALL TCOBQ
+	      LOAD T1,MO%OPT,.MOSBO+SBBLK  ;Get user option
+	      CALL TCOBQ
+	      MOVX T1,<POINT 8,DTABLK>	;Pointer to data on stack
+	      MOVEM T1,DTAPTR	;Save here
+	      DO.
+		SOSGE DTACTR	;Count down
+		  EXIT.		;All sent
+		ILDB T1,DTAPTR	;Get the data byte
+		MOVEM T1,SAVCHR	;Save it
+		CAIN T1,IACCH	;An IAC?
+		  CALL TCOBQ	;Yes, double it
+		MOVE T1,SAVCHR	;Restore it incase TCOBQ clobbers it
+		CALL TCOBQ	;Send it
+		LOOP.		;Next
+	      ENDDO.
+	      HRROI T1,IACCH	;Send and IAC without doubling
+	      CALL TCOBN
+	      MOVEI T1,SECH	;Send SE
+	      CALL TCOBQ
+	      OKSKD1		;OKSKD1 now
+	ELSE.			;Not in WILL mode or too many bytes
+	  SETZM .MOSBN+SBBLK	;No bytes transfered
+	  JRST TVTSS9		;Exit and update block
+	ENDIF.
+
+TVTSS9:
+	MOVE T3,BLKADR		;Get user block address back
+	MOVE T1,.MOSBP+SBBLK	;Get updated source designator
+	UMOVEM T1,.MOSBP(T3)	;To user
+	MOVE T1,.MOSBN+SBBLK	;Get number of bytes transfered
+	UMOVEM T1,.MOSBN(T3)		;To user
+	RETSKP			;Success
+	ENDSV.
+
+
+;Add a byte to the subnegotiation link
+; Call:	T1/ Byte to add
+;	T2/ Dynamic data address
+;	T3/ SB link address
+;
+; Returns: +1 always
+; Clobbers no ACs
+TVADSB:	ACVAR <LEN,SBPTR>
+	LOAD LEN,SLLEN,(T3)	;Get the current length
+	CAIL LEN,SL.NDB		;About to exceed max # of data bytes
+	  RET			;Yes, ignore the byte
+	MOVE SBPTR,LEN		;Get a byte pointer the byte's destin.
+	ADJBP SBPTR,[POINT 8,SL.DAT(T3),7]
+	DPB T1,SBPTR		;Stash the byte away
+	AOS LEN			;Count this byte
+	STOR LEN,SLLEN,(T3)	;Save the updated length
+	RET			;Return
+	ENDAV.
+
+;Find subnegotiation data
+; Call:	T1/ BIT 27	RECV=0/SEND=1 FLAG
+;	    BITS 28-35	OPTION CODE
+;	T2/ Address of dynamic data
+;	CALL TVFDSB
+;
+; Returns: +1 failure, not found, T1 contains 0
+;	   +2 success, T1 contains: Previous,,Current
+;				    0,,Current (if Previous is NVTSUB(T2))
+; Clobbers No ACs
+TVFDSB:	SAVELN
+	ACVAR <COD,PTR>
+	MOVE COD,T1		;Save args
+	SETZ PTR,		;Make 0,,0
+	LOAD T1,SWSLP,(T2)	;Get address of first link
+	DO.
+	  JUMPE T1,R		;Failure if at end of list
+	  MOVSS PTR		;Make Previous,,???
+	  HRR PTR,T1		;Make Previous,,Current
+	  LOAD T2,SLOPF,(T1)	;Get SLRSF+SLOPT
+	  CAME T2,COD		;Find a match?
+	  IFSKP.		;Yes, exit
+	    MOVE T1,PTR		;Return Previous,,Current
+	    RETSKP		;Success
+	  ENDIF.
+	  LOAD T1,SLNXT,(T1)	;Get the next
+	  LOOP.
+	ENDDO.
+	ENDAV.
+
+;Allocate and link a subnegotiation link block
+; Call:	T1/ Bit 27	Recv=0/Send=1 flag
+;	    Bits 28-35	Option code
+;	T2/ Address of dynamic data
+;
+; Returns: +1 failure, SWCUR zeroed
+;	   +2 success, block allocated and linked, SWCUR set
+; Clobbers T3
+TVLNSB:	PUSH P,T1		;Save option
+	PUSH P,T2		;Save Dynamic Data address
+	MOVX T1,<XWD .RESP3,SL.NWD>  ;Get default SB link word length
+	MOVX T2,.RESTP		;From terminal pool
+	CALL ASGRES		;Assign some space, it's zeroed already
+	IFSKP.			;Success
+	  POP P,T2		;Restore Dynamic Data Address
+	  STOR T1,SWCUR,(T2)	;Save the current SB link address
+	  POP P,T3		;Restore option
+	  STOR T3,SLOPF,(T1)	;Set option+flag
+	  LOAD T3,SWSLP,(T2)	;Get pointer to first
+	  STOR T3,SLNXT,(T1)	;Make current point to it
+	  STOR T1,SWSLP,(T2)	;Make current first
+	  RETSKP		;Success
+	ENDIF.
+	POP P,T2		;Restore Dynamic Data Address
+	POP P,T1		;And option
+	SETZRO SWCUR,(T2)	;Say no current
+	RET			;Failed
+
+;Copy SB bytes to user's address space
+; Call:	T1/ Address of Subnegotiation Link
+;	T3/ Address of MTOPR .MOGSB Block in monitor address space
+;	CALL TVMUSB
+;
+; Returns: +1 always with words 1 and 2 update in the block
+; Clobbers T1,T3,T4
+TVMUSB:	SAVELN
+	ACVAR <SBL,BLK,INS,MAX>
+	MOVE SBL,T1		;Save args
+	MOVE BLK,T3
+	LOAD MAX,SLLEN,(SBL)	;Get number of SB bytes available
+	CAMLE MAX,.MOSBN(BLK)	;Less than number user wants?
+	 MOVE MAX,.MOSBN(BLK)	;No, transfer only what user can take
+	SETZM .MOSBN(BLK)	;None transfered yet
+	MOVE T1,.MOSBP(BLK)	;Get the destination desg.
+	TLC T1,-1		;Normalize byte pointer
+	TLCN T1,-1
+	 HRLI T1,(<POINT 7,0>)	;Make it an ASCIZ pointer
+	MOVE INS,[XCTBU [IDPB T2,T1]]  ;Assume byte pointer
+	TLNN T1,-1		;Pointer or JFN?
+	 MOVE INS,[BOUT%]	;JFN
+	MOVE T4,[<POINT 8,SL.DAT(SBL)>]	 ;Get pointer to SB bytes
+	DO.
+	  SOJL MAX,ENDLP.	;Transfer the max yet?
+	  ILDB T2,T4		;Get a SB byte
+	  XCT INS		;XCT correct instruction to store byte
+	  AOS .MOSBN(BLK)	;Update Transfer Count
+	  LOOP.
+	ENDDO.
+	MOVEM T1,.MOSBP(BLK)	;Update (maybe) Byte Pointer
+	RET
+	ENDAV.
+
+;Copy SB bytes from user's address space
+; Call:	T1/ Address of destination block in monitor address space
+;	T3/ Address of MTOPR .MOSSB Block in monitor address space
+;	CALL TVUMSB
+;
+; Returns: +1 always with word 1 updated in the block
+;		T1/ Number of IAC characters seen
+; Clobbers T3,T4
+TVUMSB:	SAVELN
+	ACVAR <DBK,BLK,INS,MAX,NIACS>
+	MOVE DBK,T1		;Save Args
+	MOVE BLK,T3
+	MOVE MAX,.MOSBN(BLK)	;Transfer all the user's data
+	MOVE T1,.MOSBP(BLK)	;Get the source desg.
+	TLC T1,-1		;Normalize byte pointer
+	TLCN T1,-1
+	 HRLI T1,(<POINT 7,0>)	;Make it an ASCIZ pointer
+	MOVE INS,[XCTBU [ILDB T2,T1]]  ;Assume byte pointer
+	TLNN T1,-1		;Pointer or JFN?
+	 MOVE INS,[BIN%]	;JFN
+	MOVE T4,[<POINT 8,(DBK)>]  ;Get pointer to SB bytes
+	SETZ NIACS,		;No IAC in input yet
+	DO.
+	  SOJL MAX,ENDLP.	;Transfer the max yet?
+	  XCT INS		;XCT correct instruction to load byte
+	  IDPB T2,T4		;Save a SB byte
+	  CAIN T2,IACCH		;Was it an IAC?
+	    AOJ NIACS,		;Yes, count the number of IACs seen
+	  LOOP.
+	ENDDO.
+	MOVEM T1,.MOSBP(BLK)	;Update (maybe) Byte Pointer
+	MOVE T1,NIACS		;Return number of IACs seen in input
+	RET
+	ENDAV.
+
+;Release all TVT subnegotiotion link blocks
+; Call:	CALL TVRLSB
+;
+; Return: +1 always
+; Clobbers No ACs
+TVRLSB:	SKIPN NVTSUB(T2)	;Any SB links?
+	  RET			;No
+	SAVELN
+	PUSH P,Q1		;Get a working register
+	LOAD T1,SWSLP,(T2)	;Get pointer to the first
+	DO.			;Release them all
+	  JUMPE T1,ENDLP.	;All done
+	  LOAD Q1,SLNXT,(T1)	;Get the next
+	  CALL RELRES		;Release the current
+	  MOVE T1,Q1		;Next is now current
+	  LOOP.
+	ENDDO.
+	POP P,Q1		;Restore working register
+	RET
+
+;Unlink and release a subnegotiation link block
+; Call: T1/ Previous,,Current
+;       CALL TVULSB
+;
+; Returns: +1 always
+; Clobbers T1,T3
+TVULSB:	SAVELN
+	HLRZ T3,T1		;Get address of Previous
+	TXZ T1,.LHALF		;Get address of Current
+	PUSH P,T1		;Save Current
+	LOAD T1,SLNXT,(T1)	;Get the pointer to the next
+	IFE. T3			;Was previous in Dynamic data?
+	  STOR T1,SWSLP,(T2)	;Yes, Unlink Current
+	ELSE.
+	  STOR T1,SLNXT,(T3)	;No, Unlink Current
+	ENDIF.
+	POP P,T1		;Get Current back
+	CALLRET RELRES		;Release it, return
+
+
+
+;
+; SUBNEGOTIATION PROCESSING
+;
+
+; STATE 0, WAITING FOR OPTION CODE
+; T1/	OPTION
+; T2/	DYNAMIC DATA
+;
+NVTSB0:	PUSH P,T1		;Save option
+	SETZRO SWCUR,(T2)	;Say no current
+	CAILE T1,MAXOPT		;Can we handle this option?
+	IFSKP.			;Yes
+	  LDB T3,NSBPTR(T1)	;Get State Data Byte
+	  TXNN T3,<NS.CSD!NS.CSW> ;In DO or WILL mode?
+	  ANSKP.		;Yes, ok to take this byte
+	    TXZN T3,NS.SBR	;Already have one of these? Clear it.
+	    IFSKP.		;Yes, dispose of it
+	      DPB T3,NSBPTR(T1)	;Save State Data Byte
+	      CALL TVFDSB	;Find it?
+	      ANSKP.		;Yes
+		CALL TVULSB	;Get rid of it
+	    ENDIF.
+	    MOVE T1,(P)		;Get option back
+	    CALL TVLNSB		;Allocate and link a block for this guy
+	     NOP		;Couldn't do it, bytes will be ignored
+	ENDIF.
+	POP P,(P)		;Drop option
+	MOVEI T3,.DFSB1		;Goto state 1
+	STOR T3,NVSTP,(T2)	;Set new state
+	RET
+
+; STATE 1, WAITING FOR DATA
+; T1/	BYTE
+; T2/	DYNAMIC DATA
+;
+NVTSB1:	CAIE T1,IACCH		;IAC?
+	IFSKP.			;Yes, goto SB state 2
+	  MOVEI T3,.DFSB2	;New state
+	  STOR T3,NVSTP,(T2)	;Set new state
+	ELSE.
+NVTSB3:	  MOVEI T3,.DFSB1	;Stay in same state
+	  STOR T3,NVSTP,(T2)	;Set new state
+	  LOAD T3,SWCUR,(T2)	;Get the current SB link pointer
+	  ANDN. T3		;Got one?
+	    CALL TVADSB		;Yes, add the byte to the SB link
+	ENDIF.
+	RET			;Wait for next
+
+
+; STATE 2, IAC RECEIVED
+; T1/	BYTE
+; T2/	DYNAMIC DATA
+;
+NVTSB2:	CAIN T1,IACCH		;Doubled IAC?
+	 JRST NVTSB3		;Yes, process as data
+	; Assumes anything but IAC IAC means end of negotiation
+	; this is valid since anything but IAC SE is an error
+	LOAD T3,SWCUR,(T2)	;Get current SB link pointer
+	SETZRO SWCUR,(T2)	;No more current
+	LOAD T3,SLOPT,(T3)	;Get the option
+	LDB T1,NSBPTR(T3)	;Get State Data Byte
+	TXO T1,NS.SBR		;Subnegotiation Received
+	DPB T1,NSBPTR(T3)	;Save the State Data Byte
+	RET
+
+;TVSBE1	Does SKIPE TTOCT(B) and SKIPE TSALC(B) for TVTS.  Skips only if
+;absolutely no chars to be handled for line.
+
+;T2/	Address of dynamic data
+;	CALL TVSBE1
+;Ret+1:	  T1/ TTOCT+TSALC
+;Ret+2:	No characters, T1=0
+
+TVSBE1::
+MNTM5	AOS CELL(TCVSE,0,,TCV)	; TVSBE1 calls
+	CALL TTSOBE		; Check normal output
+	 JRST TVSBE2		; Normal output to be done, T1/ count
+				; No normal output, or ^S
+	OPSTR <SKIPN>,TSALC,(B) ; Check SENDALL
+	 RETSKP			; Skip only if absolutely no chars
+TVSBE2:	OPSTR <ADD A,>,TSALC,(B); Add in SENDALL count
+MNTM5	AOS CELL(TCVSE,1,,TCV)	; TVSBE1 buffer not empty
+	RET			; No-skip, count in A
+
+
+;TVMSNT - TEST TO SEE IF SEND ALL SHOULD BE DONE
+;FNCALL OFF TTVT36	One Line
+;FNCALL OFF TTVT37	All Lines
+;ACCEPTS:
+;	T1/ Byte pointer to message
+;	T2/ LINE NUMBER
+;	T3/ Byte count
+;	T4/ Line type
+;RETURNS: +1 DON'T DO THIS LINE
+;	  +2 AND T2/-1: DON'T DO ANY LINES OF THIS TYPE
+;		(but how does one know if it is single or multiple?)
+;	  +2 AND T2/LINE NUMBER: DO THIS LINE
+
+	SWAPCD	;ps
+
+TVMSNT:	SASUBR <MSPT,MSLN,MSCT>	;Save T1-T3 as stack variables
+MNTM5	AOS CELL(TCVSA,0,,TCV)	; TVMSNT calls
+	JUMPL T2,R		; return now if no such lines
+	CALL LCKTTY		;GET DYNAMIC DATA ADDRESS IF IT EXIST
+	  JRST TVMSN1		;NO DYNAMIC DATA DO NOT SEND
+	SKIPN TTNETW(T2)	;ANY CONNECTIONS?
+	  JRST TVMSN1		;NO DO NOT SEND MESSAGE
+	CALL ULKTTY		;YES UNLOCK TTY DATABASE
+	AOS TVTNOF		;INDICATE OUTPUT FOR TVTS
+	MOVE T2,MSCT		;GET COUNT OF CHARACTERS IN MESSAGE
+	IMUL T2,TVTM0		;MULTIPLY BY ALLOWABLE TIME PER CHAR.
+	ADD T2,TODCLK		;GET TIME MESSAGE TO BE DISCARDED
+	MOVEM T2,TVMSTM		;SAVE TIME FOR TCP FORK
+MNTM5	AOS CELL(TCVSA,1,,TCV)	; TVMSNT sends message
+	RETSKP			;SEND MESSAGE
+
+TVMSN1:	CALL ULKTTY		;UNLOCK TTY
+	RETBAD			;NO DO NOT SEND MESSAGE
+
+;TVMNTR
+;ROUTINE TO CLEAR ALL TVT SNDALL REQUEST
+
+;Called NOSKED from OPSCAN on TVMSTM timeout set by TVMSNT
+
+	RESCD	;ps
+
+TVMNTR::
+MNTM5	AOS CELL(TCVKS,0,,TCV)	; TVMNTR calls
+	SKIPL T3,TVTPTR		;GET AOBJN COUNTER FOR TVT'S
+	  RET
+TMSNR1:	SKIPN T2,TTACTL(T3)	;GET ADDRESS OF DYNAMIC DATA
+	 JRST TMSNR2		;IF NON-STANDARD BLOCK CHECK
+	HRRZ T2,T2		;GET JUST ADDRESS
+	JE TTSAL,(T2),TMSNR2	;IF DOING SENDALL CLEAR IT
+	CALL CLRSAL		;CLEAR SENDALL FROM LINE
+MNTM5	AOS CELL(TCVKS,1,,TCV)	; TVMNTR Cancellations
+TMSNR2:	AOBJN T3,TMSNR1		;HAVE WE DONE ALL OF THE LINES
+	RET			;YES RETURN
+
+REPEAT 0,<;cwl wrong way to do this???
+;TVRFIL
+;Routine to signal TVT buffer refill when empty.  Called from GTTCI.
+
+TVRFIL:
+	SKIPN TTNETW(T2)	;STILL CONNECTED TO NETWORK?
+	  RET			;NO, NOTHING TO DO
+	SAVEAC <T1,T2,T3,T4,TCB> ;SAVE ACS
+	NOSKED			;OWN THE SYSTEM
+	SKIPL RA+PRCLCK		;IS REASSEMBLER RUNNING ALREADY?
+	IFSKP.
+          LOAD TCB,PTVT,(T2)	;NO, GET TCB IF EXISTS
+	  IFN. TCB
+	    JN TRCB,(TCB),TVRFI2 ;IF RECV BUFFER EXISTS RUN THE RA
+	    XMOVEI T3,TCBRPQ(TCB) ; Point at RA queue
+            LOAD T1,QNEXT,(T3)	 ;NO, GET NEXT ITEM ON RA QUEUE
+            CAMN T1,T3		;IS RA QUEUE EMPTY?
+	    IFSKP.
+TVRFI2:				;HERE TO RUN RA
+	      $SIGNL(RA,20)	;RUN REASSEMBLER AFTER SHORT DELAY
+	    ENDIF.
+	  ENDIF.
+	ENDIF.
+	OKSKED			;RETURN THE SYSTEM
+	RET
+> ; End of REPEAT 0
+
+	SWAPCD	;ps
+
+;TVSSP2	Set speed of terminal (used for flow control).
+
+;T2/	Static line number
+;T3/	Input baud,,Output baud
+;Called from TTSSPD for MTOPR function .MOSPD
+;Returns +1 always
+
+TVSSP2:	ACVAR <LINE,SPED>
+	SAVEAC <FR,TCB>
+	SETZ FR,
+	DMOVEM T2,LINE			; Save Static line number and speed
+	CALL CHKTVT			; Validate line number
+	  RET				; Not a TVT?
+	CALL TVTCHK			; Lock TTY & locate dynamic data
+	IFSKP.				; Ok
+;cwl ought to wait til output buffer empty ...
+;Have to release output buffers since going from low speed line (1 buffer)
+;to high speed (2 buffers) will increase TTOMAX but won't make sure that
+;there are really 2 buffers there, thus overrunning the output buffer.
+	  NOSKD1			; No scheduling
+	  SETZM TTOCT(T2)		; Zero output count
+	  SETZB T3,TTOOUT(T2)		; Clear output pointer
+	  EXCH T3,TTOIN(T2)		; Clear input pointer
+	  CALL TTRLBF			; Release buffers
+	  OKSKD1			; Allow scheduling
+
+	  MOVE T3,SPED
+	  MOVEM T3,TTSPWD(LINE)		; Set TTY speed word
+
+	  LOAD TCB,PTVT,(T2)		; RH of TCB address
+	  ANDG. TCB			; Make sure have TCB address
+	    HRRZ T3,SPED		; Get output speed (check for 0??)
+	    CALL TCBSPD			; Set speed in TCB
+	ENDIF.
+	CALL ULKTTY			; Unlock TTY
+	RET
+
+	ENDAV.
+
+;ASNTVT	Assign a TCP virtual terminal.
+
+;USREVT(OK,TTVT=1) calls TVTOPN which calls ASNTVT, ATNVT%(Not JOB0,TTVT=0)
+;calls TATNVT which calls ASNTVT
+
+;T1/ TCB (WITH AN%NTP flag for new protocol)
+;CALL ASNNVT
+;RETURNS +1: FAILURE
+;	 +2: SUCESS
+;T1/ LINE NUMBER
+;T2/ ADDRESS OF DYNAMIC DATA AND DATA BASE LOCKED
+
+ASNTVT::STKVAR <FLGTCB,TVLIN>
+	MOVEM T1,FLGTCB
+MNTM5	AOS CELL(TCVAS,0,,TCV)	; ASNTVT calls
+	HRRZ T1,TVTPTR		;GET FIRST TVT LINE NUMBER
+	SETZ T3,		;START WITH FIRST TVT
+	NOSKED
+ASNTV1:	MOVE T2,T1		;GET FIRST TVT OFFSET
+	ADD T2,T3		;ADD CURRENT TVT
+	MOVEM T2,TVLIN		;SAVE LINE NUMBER
+	CALL STADYN		;IS IT INITIALIZED
+	 JUMPE T2,ASNTV4	;NO. NO DYNAMIC DATA
+REPEAT 0,<
+	SKIPN TTNETW(T2)	;FREE?
+	 JRST ASNTV3		;YES.
+>
+ASNTV2:	CAIGE T3,NTTTVT-1	;LOOKED AT ALL TVT'S?
+	 AOJA T3,ASNTV1		;NO
+	OKSKED			;YES,
+	RETBAD			;RETURN BAD
+
+REPEAT 0,<
+ASNTV3:	LOAD T2,TCJOB,(T2)	;GET JOB FOR WHICH THIS IS A CNTRL TTY.
+	CAIN T2,-1		;IS THERE ONE
+	  JRST ASNTV4		; No, use this one
+	HLRZ T2,JOBPT(T2)	; Yes, is it really there?
+	CAMN T2,TVLIN		; Skip if TCJOB has obsolete data
+	  JRST ASNTV2		;YES. TTY ALREADY ATTACHED?
+> ;End REPEAT 0
+
+; if job-0 ought to use TTYASC
+; if other job, ought to use TTYASO
+; For now, they are essentially the same
+
+ASNTV4:
+	MOVE T2,TVLIN		;GET LINE NUMBER BACK
+	CALL TTYASC		;ASSIGN TVT
+	 JRST ASNTV6		;COULD NOT ASSIGN IT
+
+
+
+	MOVE T2,TVLIN		;GET LINE NUMBER
+	CALL LCKTTY		;AND LOCK DATA BASE
+	 JRST ASNTV5		;CANNOT LOCK DATA BASE. SHOULD'NT HAPPEN
+	SETONE TCJOB,(T2)	;INDICATE NO CONTROLLING JOB FOR TERM.
+	SETONE TTPRM,(T2)	;MAKE DATA PERMANENT UNTIL NVT CLOSED
+	SETZM TTNETW(T2)	; Clear TTNETW
+	SETZM NVTSUB(T2)	; Clear address of subneg. linked list
+	SETZM NVTUNT(T2)	; Clear user subneg. timeout
+	HRLI T1,-NSNWD		; Clear Negotiation State Byte Array
+	HRRI T1,NVTOPF(T2)	; -Number of words,,Address of first
+	DO.
+	  SETZM (T1)		; Clear one
+	  AOBJN T1,TOP.		; Clear all
+	ENDDO.
+	MOVE T1,FLGTCB		; Get arg back
+	STOR T1,PTVT,(T2)	;REMEMBER TCB address
+	SETONE TT%DUM,TTFLGS(T2) ;SET DUPLEX MODE
+	MOVEI T1,.TTIDL		;SET TO BE AN "IDEAL" TERMINAL
+	STOR T1,TTTYP,(T2)
+	MOVE T1,TVLIN		;RETURN LINE NUMBER
+	SETOM TTSPWD(T1)	;Unknown speed
+	OKSKED
+MNTM5	AOS CELL(TCVAS,1,,TCV)	; ASNTVT assigned
+	RETSKP
+
+ASNTV5:	CALL ULKTTY		;UNLOCK DATA BASE
+ASNTV6:	HRRZ T1,TVTPTR		;GET FIRST TVT
+	MOVE T3,TVLIN		;SET UP TO TRY NEXT LINE
+	SUB T3,T1		;GET TVT NUMBER IN 3
+	JRST ASNTV2		;AND TRY NEXT TVT
+	ENDSV.
+
+;TVTCSO
+;START OUTPUT TO A LINE CALLED FROM STRTOU
+;RETURNS +2: ALWAYS
+
+	RESCD	;ps
+
+TVTCSO::
+MNTM5	AOS CELL(TCVAA,3,,TCV)	; TVTCSO calls
+	AOS TVTNOF		; request tty scan
+	AOS TCPFLG		; Say it is TCP that needs to run
+	AOS INTFLG		; Get the Internet fork to run it
+	RETSKP
+
+
+
+
+
+;TVTDOB
+;TVT dismiss until output buffer empty
+
+;Avoid  doing  a  TELNET  timing  mark option negotiation if the
+;connection is closing since the other end will not respond.
+
+	SWAPCD	;ps
+
+TVTDOB:
+MNTM5	AOS CELL(TCVDO,0,,TCV)	; TVTDOB calls
+	LOAD TCB,PTVT,(T2)	; Get TCB if exists
+	 JUMPE TCB,R		; Return if none
+	LOAD T1,TSSYN,(TCB)	; Get send state
+	CAIE T1,SYNCED		; Can we send?
+	 RET			; No
+	LOAD T1,TRSYN,(TCB)	; Get receive side state
+	CAIE T1,SYNCED		; Can other end reply?
+	 RET			; No
+	JRST NVTDOB		; Yes and yes.  Do normal TELNET stuff
+
+;TVTCOB
+;TVT CLEAR OUTPUT BUFFER CALLED FROM TTCBF2
+
+;ACCEPTS:
+;T2/ ADDRESS OF DYNAMIC DATA
+;RETURNS +1: ALWAYS
+
+	RESCD	;ps
+
+TVTCOB:
+MNTM5	AOS CELL(TCVCO,0,,TCV)	; TVTCOB calls
+	SKIPE INSKED		; In scheduler?
+	IFSKP.			; No
+	  PUSH P,TCB
+	  LOAD TCB,PTVT,(T2)	; Get the TCB, if any
+	  IFG. TCB		; Have TCB
+	  ANDQE. TERR,(TCB)	; Don't DM if connection error
+	    LOAD T1,TSSYN,(TCB)	; Make sure send side is
+	    CAIE T1,SYNCED	; Still synced
+	  ANSKP.		; If not, cannot send anything
+MNTM5	    AOS CELL(TCVCO,1,,TCV) ; TVTCOB new DM
+	    NOSKED		; Keep TCP fork from unpacking
+				; This also makes NOINT
+	    MOVEI T1,DMCH	; Data mark character
+	    CALL NVTSSP		; Send new DM
+	    MOVE T1,TTOCT(T2)	; Get current output count
+	    PUSH P,T2		; Save dynamic data adr
+	    CALL SETURP		; Set the urgent pointer	
+	    POP P,T2		; Restore dynamic data adr
+	    OKSKED		; Allow TCP to run
+	  ENDIF.
+	  POP P,TCB
+	  RET
+	ENDIF.			; Not in scheduler
+				; (TCB, SETURP may cause page faults)
+MNTM5	AOS CELL(TCVCO,2,,TCV)	; TVTCOB called when INSKED
+	RET
+
+;CHECK OVERDUE NEGOTIATIONS
+
+	RESCD	;ps
+
+TVTNCK::
+MNTM5	AOS CELL(TCVNC,0,,TCV)	; TVTNCK calls
+	MOVE T2,TVTPTR		; Pointer to TVTs
+; Set next timeout check time
+	MOVE T1,TODCLK		; Get time of day
+	ADD T1,TVTN0		; Add time out quanity (between 1 and 2)
+	MOVEM T1,TVTNTM		; Save time for next check
+
+NEGCH1:	STKVAR <TVTCTR>		; Other nets join here
+	DO.
+	  MOVEM T2,TVTCTR	; Save TVT counter
+	  HRRZ T2,T2		; Get just right half
+	  CALL LCKTTY		; Get address of dyamic data and lock
+	  IFSKP.		; Active and
+	    SKIPN TTNETW(T2)	; Attached?
+	    ANSKP.		; Yes
+	      MOVSI T1,-NSNWD	; Check all option words
+	      HRRI T1,NVTOPF(T2)  ; Make AOBJN pointer into option words
+	      MOVX T3,NSONX	; Check for NS.OND or NS.ONW in
+	      DO.		;  any byte in a word
+		TDNE T3,(T1)	; Any outstanding?
+		  EXIT.		; Yes, quit looping
+		AOBJN T1,TOP.	; No, Look for next
+	      ENDDO.
+	      IFL. T1		; Were any outstanding?
+		MOVX T3,NVTMO	; Yes, Get the Timeout Bit
+		XORB T3,$NVTMO(T2)  ; Count counter
+		TXNN T3,NVTMO	; Count from 1 to 0?
+		  CALL TVTNC1	; Yes, cancel outstanding negotiations
+	      ELSE.
+		SETZRO NVTMO,(T2)  ; No, cancel time-out if any
+	      ENDIF.
+	  ENDIF.
+	  CALL ULKTTY		; Unlock data base
+	  MOVE T2,TVTCTR	; Get AOBJN counter
+	  AOBJN T2,TOP.		; Any more TVTs?
+	ENDDO.
+	RET			; No, return
+
+	ENDSV.
+
+;TVTNC1	Check/cancel TELNET negotiations.
+
+;T2/	Dynamic data address, line locked
+;	CALL TVTNC1
+;Ret+1:	Always.
+
+TVTNC1::
+MNTM5	AOS CELL(TCVNC,1,,TCV)	; Calls to TVTNC1
+	SETZRO NVTMO,(T2)	; Cancel time-out if any
+	MOVSI T1,-NSNWD		; Check all option words
+	HRRI T1,NVTOPF(T2)	; Make AOBJN pointer into option words
+	MOVX T3,NSONX		; Check for NS.OND or NS.ONW in
+	DO.			;  any byte in a word
+	  ANDCAM T3,(T1)	; Clear outstanding bits
+	  AOBJN T1,TOP.		; No, Look for next
+	ENDDO.
+	RET
+
+;SNDTVT
+;Send virtual terminal data
+
+;TCB/	Locked connection block
+;PKT/	Pointer to Internet portion of packet being filled
+;TPKT/	Pointer to TCP portion of packet
+;T1/	Max number of characters to send
+;T2/	Line block address
+;CALL SNDTVT
+;Ret+1:	Always.  Terminal data moved into packet. T1 has number of chrs.
+;		T2/ last octet of -1
+
+SNDTVT::
+	ACVAR <XFRCNT,LINBLK,PKTPTR,CNT>
+	PUSH P,[-1]			; Last octet
+	DMOVEM T1,XFRCNT	; T1,2 to XFRCNT and LINBLK
+MNTM5	AOS CELL(TCVST,0,,TCV)		; SNDTVT calls
+
+	LOAD PKTPTR,PIPL,(PKT)	; Current packet length is next byte to insert
+	ADJBP PKTPTR,[POINT 8,PKTELI(PKT)] ; Byte pointer there
+	MOVEI CNT,0		; Init number moved to packet
+	LDB T3,NSBPTR+RCTOPT		;Get RCTE option State Data Byte
+	TXNN T3,NS.CSW			; Have we said we will do RCTE?
+	IFSKP.				; Yes
+	ANDQN. PBRCT,(T2)		; Check the break count
+MNTM5	  AOS CELL(TCVST,1,,TCV)	; SNDTVT break
+	  CALL NVTRRR			; Try to send
+	ENDIF.
+
+	SKIPE TTNETW(T2)		; Still connected?
+	IFSKP.				; No
+	  CALL CLRSAL			; Flush sendall - DEC calls TTCOB5
+					; instead of TTCBF2 - Why?
+	  CALL TTCOBN			; Flush output buffer
+	  JRST SNDTV9			; And return
+	ENDIF.
+	SETONE TTOTP,(T2)		; Indicate output active
+MNTM5	AOS CELL(TCVST,2,,TCV)		; SNDTVT xfers
+
+
+; Move characters from the terminal output buffer(s) into the packet.
+; XFRCNT has space left in packet and CNT will be left with number
+; moved.
+
+	DO. (SNDTV4)
+	  SOS XFRCNT			; Getting a byte
+	  IFGE. XFRCNT			; Have another
+	    MOVE T2,LINBLK		; Restore address of data area
+	    NOSKD1
+	    CALL TTSND			; Get a chr from output buf to T3
+	    IFSKP.			; Got one
+	      OKSKD1
+	      IDPB T1,PKTPTR		; Add to packet
+	      MOVEM T1,(P)		; Save last
+	      AOJA CNT,TOP.		; Count it up and try for another
+	    ENDIF.
+	    OKSKD1			; Go OKSKED again
+MNTM5	    AOS CELL(TCVST,3,,TCV)	; SNDTVT failed to get a character
+	  ELSE.
+	    SETZRO TTOTP,(LINBLK)	; Clear output active bit
+	  ENDIF.
+	ENDDO.
+SNDTV9:	MOVE T1,CNT			; Return number in packet
+MNTM5	INHIST(TCVHS,TCV,T1,T2,T3)	; Histogram TVT send size CELL(
+	POP P,T2			; Return last octet
+	RET
+
+	ENDAV.
+
+;PRCTVT
+;Process TCP Virtual Terminal data
+
+;T1/	Byte pointer into packet where to begin (index by TPKT)
+;T2/	Pointer to dynamic line data block
+;T3/	Maximum number of characters to do
+;PKT/	Pointer to Internet portion of packet
+;TPKT/	Pointer to TCP portion of packet
+;TCB/	Locked connection block
+;CALL PRCTVT
+;Ret+1:	Always.  
+;T1/	Number of characters actually processed
+
+PRCTVT::
+	STKVAR <XFRCNT,LINBLK,PKTPTR,XFRD> ; Note order XFRCNT,LINBLK
+	MOVEM T1,PKTPTR
+	DMOVEM T2,LINBLK
+	SETZM XFRD		;Count actually transfered
+
+MNTM5	AOS CELL(TCVRT,0,,TCV)	; PRCTVT calls
+MNTM5	INHIST(TCVHR,TCV,T3,T1,T2) ; Histogram TVT recv size CELL(
+
+	DO.
+	  SOSGE XFRCNT		;Count another
+	   EXIT.		;end of transfer
+	  ILDB T1,PKTPTR	; Get a character
+	  MOVE T2,LINBLK	; Line block address
+	  LOAD T3,NVSTP,(T2)	; Current Telnet command state
+	  SETZRO NVSTP,(T2)	; Reset for normal dispatch next time
+	  CAIN T3,.DFIAC	; This an command, but
+	   CAIN T1,IACCH	; Not a data character
+	  IFSKP.
+MNTM5	    AOS CELL(TCVRT,1,,TCV)	; PRCTVT IAC
+	    INCRNO TCTOR,(TCB)	; Telnet commands for connection
+	  ENDIF.
+	  CALL @NVTSTD(T3)	; Dispatch to Telnet routine
+	  IFSKP.
+	    ; Could not process this character
+	    EXIT.		; EXIT NOW
+	  ELSE.
+	    AOS XFRD		; COUNT ANOTHER TRANSFERED
+	    LOOP.		; AND ONWARD
+	  ENDIF.
+	ENDDO.
+	MOVE T1,XFRD		; RETURN COUNT ACTUALLY TRANSFERED
+	RET
+
+	ENDSV.
+
+; State dispatch table PRCTVT
+NVTSTD:	IFIW!NVTNRM		;NOTHING DEFERRED
+	IFIW!NVTWIL		;DEFERRED WILL
+	IFIW!NVTWNT		;DEFERRED WONT
+	IFIW!NVTDO		;DEFERRED DO
+	IFIW!NVTDNT		;DEFERRED DONT
+	IFIW!NVTIAC		;DEFERRED IAC
+	IFIW!NVTSB0		;SUBNEGOTIATION, WAITING FOR OPTION CODE
+	IFIW!NVTSB1		;SUBNEGOTIATION, WAITING FOR DATA
+	IFIW!NVTSB2		;SUBNEGOTIATION, IAC RECEIVED
+
+;CHKTVT
+;SEE IF THIS LINE NUMBER IS A TVT
+
+;ACCEPTS:
+;T2/ INTERNAL LINE NUMBER
+;CALL CHKTVT
+;RETURNS +1: IF NOT TVT
+;	 +2: IF TVT
+
+	RESCD	;ps
+
+CHKTVT::
+	ACVAR <W1>		;GET AN AC TO WORK WITH
+MNTM5	AOS CELL(TCVCT,0,,TCV)	; CHKTVT calls
+	CAIL T2,NLINES		;Valid line number?
+	  RETBAD		;No, failure
+	LOAD W1,TTSTY,(T2)	;GET LINE TYPE FOR THIS LINE
+	CAIE W1,TT.TVT		;IS IT A TVT?
+	  RETBAD		;NO. FAILURE
+MNTM5	AOS CELL(TCVCT,1,,TCV)	; CHKTVT ok
+	RETSKP			;RETURN SUCCESS
+	ENDAV.			;END ACVAR
+
+	SWAPCD	;ps
+
+
+;TVTCHK
+;See if this line is a TCP Virtual terminal
+
+;T2/	Internal line number
+;	CALL TVTCHK
+;Ret+1: Line not initialized.	T2  0	Inactive	Not locked, okint
+;				T2 -1	Becoming active	Not locked, okint
+;				T2 adr	Non-standard blk Locked, noint
+;   +2:	Line initialized.	T2 adr	Std dynamic data Locked, noint
+
+TVTCHK::
+MNTM5	AOS CELL(TCVTC,0,,TCV)	; TVTCHK calls
+	CAIL T2,NLINES		; Legal terminal line number?
+	 JRST TVTCH8		; TCP Never calls with non-TVT
+	LOAD T1,TTSTY,(T2)	; Line type for this line
+	CAIE T1,TT.TVT		; Is it a TVT?
+	 JRST TVTCH8		; No.
+	CALL LCKTTY		; Get addr of dynamic data and lock
+	 RET			; Line not initialized
+MNTM5	AOS CELL(TCVTC,1,,TCV)	; TVTCHK ok
+	RETSKP			; Return with line blk addr in T2
+
+
+TVTCH8:	BUG.(HLT,TVTNTV,TTYSRV,SOFT,<TVTCHK called with non-TVT line>,
+<<T2,D>>,<
+
+Cause:	This BUG is not documented yet.
+
+Action:
+
+Data:
+
+>)
+	SETZ T2,		; "Inactive"
+;cwl/jvd - Shouldn't this be a RET?
+	RETSKP
+
+
+;TVTISP
+;Get number of holes in input buffer
+
+;T2/	Pointer to line block
+;	CALL TVTISP
+;Ret+1:	Always.  Space available in T1
+;T2 preserved.
+
+TVTISP::
+MNTM5	AOS CELL(TCVIS,0,,TCV)	; TVTISP calls
+	LOAD T1,TIMAX,(T2)	; Max capacity of line
+	SUB T1,TTICT(T2)	; Less what is already there
+	RET			; Gives amount left
+
+;TVTOSP	Get number of bytes in output buffer
+;T2/	Line block pointer
+;	CALL TVTOSP
+;Ret+1:	Always.  Number in T1.
+;T2 preserved.
+
+TVTOSP::
+MNTM5	AOS CELL(TCVOS,0,,TCV)	; TVTOSP calls
+	LOAD T1,TSALC,(T2)	; Sendall count plus
+	SKIPE T1		; If sendall, bump count so
+	  ADDI T1,1		; extra TTSND clears sndall info
+	ADD T1,TTOCT(T2)	; regular count
+	IFQN. <TTSFG,TTRXF,TTSHT>,(T2)
+	  SETZ T1,		; Hung on ^S, say none available for output
+MNTM5	  AOS CELL(TCVOS,1,,TCV) ; TVTOSP - no characters available due to ^S
+	ENDIF.
+	RET
+
+
+
+
+;TVTDTS
+;Close a full duplex TCP virtual terminal connection upon carrier-off
+
+;T2/	Line number
+;	CALL TVTDTS
+;Ret+1:	Always
+
+	RESCD	;ps
+
+TVTDTS:
+MNTM5	AOS CELL(TCVAA,4,,TCV)	; TVTDTS calls
+	CALL TVTDTT		; Detach the TVT
+	 RET			; Failure
+	RET			; Success
+
+;TVTDET
+;Detach  a job from a TCP virtual terminal connection returns to
+;caller's caller, TVTDTT returns to caller.  Called  from  HLTJB
+;when a job logs off
+
+;T2/	Line number
+;CALL TVTDET	(FNCALL off of TTVT11, TTVT19)
+;Ret+1:	Failure.  T1/	1B0 + Addr of routine if dismiss needed
+;		  or,   Error code if failed
+;Ret+2:	Success
+
+TVTDET:				; Called by TTYDEA
+MNTM5	AOS CELL(TCVDT,1,,TCV)	; TVTDET
+	POP P,0(P)		; Flush return address (so return from TTYDEA)
+TVTDTT:				; Called by TVTDTS
+	SE1CAL			; Enter section 1
+	SAVEPQ			; Save local ACs
+	STKVAR <TVTDLN,TVTDAD>	; Space for line number and block addr
+MNTM5	AOS CELL(TCVDT,0,,TCV)	; TVTDTT calls
+	MOVEM T2,TVTDLN		; Save the line number
+	CALL TVTCHK		; See if this is a TVT, and LCKTTY it
+	  JRST TVTDTU		; Not assigned.  Unlock and return.
+MNTM5	AOS CELL(TCVDT,2,,TCV)	; TVTDTT assigned
+	MOVEM T2,TVTDAD		; Save addr of dynamic data area
+	CALL CLRPRM		; Clear permanent bit, allowing deassign
+	PUSH P,TCB
+	SKIPN TTNETW(T2)	; Is there a connection?
+	IFSKP.			; Yes
+	  LOAD TCB,PTVT,(T2)	; Get the TCB, if any
+	  ANDG. TCB		; If none, cannot CLOSE1 it
+	    IFQN. TSUOP,(TCB)	; Already closed? (test not needed, but faster)
+MNTM5	      AOS CELL(TCVDT,3,,TCV) ; TVTDTT CLOSE
+	      PUSH P,P2 	; BFR
+	      PUSH P,FR
+	      SETZB FR,T3	; No flags, nor JCN
+	      XMOVEI T1,TCBLCK(TCB) ; Lock to lock
+	      XMOVEI T2,CLOSE1	; Function to call
+	      CALL LCKCAL	; Do a cross-job close
+	      POP P,FR
+	      POP P,P2		; BFR
+	    ENDIF.
+	    SETZRO TVTL,(TCB)	; Prevent OPSCAN from finding this TCB
+	ENDIF.
+	POP P,TCB		; Beware the STKVAR!
+	MOVE T2,TVTDAD		; Restore pointer to data block
+
+	SETZM TTNETW(T2)	; Flush the connection (and forget the TCB)
+	LOAD T3,TCJOB,(T2)	; Get owning job
+	CAIN T3,-1		; Is there one?
+	IFSKP.			; Yes
+	  MOVE T2,TVTDLN	; Get TTY line number
+	  MOVEI T1,.TTDES(T2)	; Make into device designator
+	  CALL CHKDES		; Get index to device tables
+	   JRST [MOVE T2,TVTDAD	; Get dynamic data address back
+		 CALL ULKTTY
+MNTM5		 AOS CELL(TCVDT,4,,TCV) ; TVTDTT bad dev desc
+		 RETBAD]	; Invalid device designator?????
+	SETZRO DV%OPN,DEVCHR(T2) ; Permit RELD at LGOUT to win
+	MOVE T2,TVTDAD		; Dynamic data block address
+	MOVE T1,TVTDLN		; Terminal line number
+	CAMN T1,CTRLTT		; Controlling terminal for this job?
+	  ANSKP.		; No
+	    LOAD T3,TCJOB,(T2)	; Get owning job
+	    HLRZ T3,JOBPT(T3)	; Get controlling terminal of job
+	    CAME T1,T3		; Is this a controlling terminaL
+	    ANSKP.		; Yes
+
+; A job exists on this line and the net connection has been broken.
+; Generate a carrier off PSI for the top fork.  This will cause the
+; terminal data block to be deassigned.
+
+MNTM5	      AOS CELL(TCVDT,5,,TCV) ; TVTDTT carrier off PSI
+	      MOVE T2,TVTDLN	; Get line number
+	      NOSKD1
+	      CALL NTYCOF	; Start the carrier off action
+	      OKSKD1
+	      MOVE T2,TVTDAD	; Get address
+TVTDTU:	      CALL ULKTTY	; Unlock the data block
+	      RETSKP		; And give a good return
+
+	ENDIF.			; No owning job, just deallocate data block.
+
+; Deassign the terminal's data block
+
+	IFQN. TTSAL,(T2)	; Doing a Send-All?
+	  CALL CLRSAL		; Yes, Interrupt-proof decrement
+	ENDIF.
+	CALL ULKTTY		; Unshare the data block
+	MOVE T2,TVTDLN		; TVT Line number
+	MOVEI T1,.TTDES(T2)	; Form device designator
+	CALL CHKDES		; Get index to device tables
+	 RETBAD			; Invalid device designator????
+	MOVEM T2,TVTDAD		; Save index to device tables
+	MOVE T2,TVTDLN		; Get terminal line number
+	CALL TTYDE0		; Deallocate the line
+	 RETBAD			; Return error or test routine
+MNTM5	AOS CELL(TCVDT,6,,TCV)	; TVTDTT check for CTTY
+	MOVE T2,TVTDAD		; Device table index
+	HRROS DEVUNT(T2)	; Set owning job to -1
+	SETZRO DV%ASN!DV%OPN,DEVCHR(T2) ; Not assigned or openned
+	MOVE T2,TVTDLN		; Get line number
+	CAME T2,CTRLTT		; Controlling terminal
+	 RETSKP			; No.
+	SETOM CTRLTT		; Yes. Indicate no terminal
+	MOVE T2,JOBNO		; Get job number
+	HRROS JOBPT(T2)		; This nob no longer has a terminal
+	RETSKP
+	ENDSV.
+
+;TVTIGA	Called when input buffer is empty.
+
+;T2/	Dynamic pointer (preserve)
+;	CALL TVTIGA
+;Ret+1:	Always.
+
+TVTIGA:	AOS TVTNIF		; Request input scan to refill input buffer
+MNTM5	AOS CELL(TCVAA,5,,TCV)	; TVTIGA calls
+IF1 <PRINTX %TVTIGA ABSENT>
+	RET
+
+
+;TVTOPR
+;Main routine to operate TVTs
+
+;CALL TVTOPR
+;Ret+1:	Always.
+
+TVTOPR::
+MNTM5	AOS CELL(TCVAA,6,,TCV)	; TVTOPR calls
+IFN TVTNIF-TVTNOF,<
+	SKIPG TVTNIF		; Input scan needed?
+>
+	 SKIPLE TVTNOF		; Output scan needed?
+	  CALL OPSCAN		; Yes.  Signal PZ where possible
+	MOVE T1,TODCLK		; Now
+	CAML T1,TVTNTM		; Time for check on overdue
+	  CALL TVTNCK		; Telnet negotiations
+	MOVE T1,TVTTIM		; Get time for listening
+	SKIPE TVTLSN		; if no listener
+	 CAMG T1,TODCLK		; time for another stab?
+	  CALL TVTLIS		; Try a listen
+	RET
+
+;TVTLIS	Set up a TCB listening on the TELNET port.
+
+;	CALL TVTLIS
+;Ret+1:	Always.  TVTLSN set ge 0 if error,  le 0 if OK.
+
+TVTLIS:
+MNTM5	AOS CELL(TCVLS,0,,TCV)	; TVTLIS calls
+	MOVE T1,FACTSW		; broadcast req
+	TXNN T1,SF%NVT		; NVT logins allowed?
+	IFSKP.			; Yes
+MNTM5	  AOS CELL(TCVLS,1,,TCV) ; TVTLIS permitted
+	  MOVEI T1,TVTCB	; Address of connection block
+	  TXO T1,TCP%PS+TCP%VT	; Control flags
+	  MOVE T2,TVTS0		; Timeout during synchronization
+	  MOVE T3,TVTRX		; Default re-transmission algorithm
+	  SKIPLE TVTCB+.TCPLP	; Turned off if local port is not set
+	   OPEN%		; Try to listen
+	    NOP			; Forget errors
+	  MOVEM T1,TVTLSN	; Save JCN, or error code (will try again
+	ENDIF.			; within TVTI0), or CDB address if off
+	MOVE T1,TODCLK		; Try again, regardless,
+	ADD T1,TVTI0		; In one minute
+	MOVEM T1,TVTTIM
+	RET			; Return
+	ENDSV.
+
+
+;TVTOPN
+;Open a TCP Virtual Terminal. Called in Job-0 context by USREVT(OK,TTVT=1).
+
+;TCB/	Pointer to TCB
+;CALL TVTOPN
+;Ret+1:	Always, T1 zero if OK or error code (ELT+^D4) otherwise
+
+TVTOPN::
+MNTM5	AOS CELL(TCVOP,0,,TCV)	; TVTOPN
+	MOVE T1,TCB		; Needs TCB
+	ANDX T1,37777777	; Full 23 bit address
+	TXO T1,AN%NTP		; Say it will speak new Telnet
+	CALL ASNTVT		; Assign a virtual terminal
+	IFSKP.			; Got one
+	  STOR T1,TVTL,(TCB)	; Save in connection block
+	  PUSH P,T2		; Save line block address
+	  IFQE. TOWNR,(TCB)	; If Job0 and still
+	    LOAD T2,TSTO,(TCB)	; has timeout
+	    IDIVI T2,^D1000	; in seconds equal to
+	    CAMN T2,TVTS0	; Synchronizing timeout, then switch to
+	      MOVE T2,TVTE0	; Established timeout
+	    IMULI T2,^D1000	; In msec
+	    STOR T2,TSTO,(TCB)	; Set it for the connection
+	  ENDIF.
+	  MOVE T2,T1		; Put line number in right place
+	  MOVEI T1,"C"-100	; Get a control-C to awaken the job
+	  NOSKD1
+	  CALL TTCHI		; Type it for the guy
+	    JFCL		; Ignore error return
+	  OKSKD1
+	  SETZM TVTLSN		; Get another listen done
+	  AOS TCPFLG		; Get done quickly
+	  AOS INTFLG
+	  POP P,T2		; Restore line block address
+	  CALL ULKTTY		; Block now stable
+	  SETZ T1,		; No error
+	ELSE.			; Failed to assign a TVT
+	  MOVX T1,ELT+^D4	; Out of resources error
+MNTM5	  AOS CELL(TCVOP,1,,TCV) ; TVTOPN no resorces
+	ENDIF.
+	RET
+
+;TVTCLS
+;Close a TCP Virtual Terminal. Invoked by USREVT(error,TTVT=1).
+
+;T1/	Code for reason
+;TCB/	Pointer to connection block
+;CALL TVTCLS
+;Ret+1:	Always.
+
+	RESCD	;ps
+TVTCLS::
+	ACVAR <CCODE>
+	MOVEM T1,CCODE
+MNTM5	AOS CELL(TCVCL,0,,TCV)	; TVTCLS calls
+	CAIE CCODE,XFP+^D12	; "Closing" or
+	 CAIN CCODE,EFP+^D7	; "Connection error or rejected"
+	  CAIA			; (other end restarted)
+	   JRST TVTCL1		; No.  Something else
+
+;Here  when  other end restarted and we received a RESET. PRCRST
+;called [USRERR with EFP+^D7] ABTCON with  EFP+^D7.  Beware:  it
+;may be THE listening connection.
+
+;Here  when  remote  end  is  closing.  We are in the process of
+;sending and ACK for his  FIN,  but  may  not  be  done  sending
+;everything  from  this end yet -- for instance, "Detached job N
+;..." msg. So, get the job to clean itself up  and  call  TVTDTS
+;via  TTHNGU  (from  FLOGO1 as called from JOBCOF by top fork of
+;the job), or via TTYDEA as called from TTYDAS  from  LDTACH  or
+;HLTJB.
+
+MNTM5	AOS CELL(TCVCL,1,,TCV)	; TVTCLS foreign closing/closed/RST
+	LOAD T2,TVTL,(TCB)	; Get the line number
+	JUMPE T2,TVTCL2		; TVT may not be assigned if during
+	NOSKD1			;  OPEN (if so, need another listen)
+	CALL NTYCOF		; Start the carrier off sequence
+	OKSKD1
+	JRST TVTCLX		; and leave
+
+TVTCL1:	CAIN CCODE,XLP+^D3	; "Closed"
+	  JRST TVTCL4		; Yes, just go detach it
+				; Not Closing, Closed, or Reset ...
+MNTM5	AOS CELL(TCVCL,2,,TCV)	; TVTCLS not foreign or local close/reset
+	CAIE CCODE,ELT+^D4	; "No free terminals"
+	IFSKP.
+MNTM5	  AOS CELL(TCVCL,3,,TCV) ; No TVT
+	  JRST TVTCL2		; Go fake CLOSE & release JCN
+	ENDIF.
+
+	CAIE CCODE,EFP+^D14	; "Connection reset" due to ICMP du/pp or
+	 CAIN CCODE,ELP+^D14	; "Connection reset" due to rx timeout?
+	  TRNA			; Yes
+	   JRST TVTCLX		; No, Something else.  Ignore it.
+MNTM5	AOS CELL(TCVCL,4,,TCV)	; TVTCLS - timeout
+
+;Here  when we have suffered a retransmission timeout on an open
+;connection. REXMIT called [USRERR with ELP+^D9,  "RX  timeout",
+;and]  ABTCON  with ELP+^D14, "Connection reset", which made the
+;connection dead (state is NOTSYN in both directions) and called
+;USREVT with ELP+^D14 who called us. All that remains is to  get
+;the  job  detached.  Note that the job may or may not be logged
+;in. Similar events for ICMP du/pp which calls ABTCON(EFP+^D14).
+
+;Here  when a connection OPENed correctly but there were no free
+;TVTs. PRCACK (or PRCSYN) called USREVT(OK) which called  TVTOPN
+;which  called  ASNTVT  which  failed.  TVTOPN  tried  to send a
+;message and  then  a  RST  to  the  other  end  before  calling
+;ABTCON(ELT+^D4)   which  called  USREVT(ELT+^D4)  which  called
+;TVTCLS(ELT+^D4). The state is NOT.NOT but we  have  to  fake  a
+;CLOSE and release the JCN.
+
+TVTCL2:	SETZRO TSUOP,(TCB)	; Don't send a FIN
+
+;If  this  is a valid Job0 JCN we are dealing with the TVTLISning
+;port. The "said open" bit tells whether  the  timeout  happened
+;while  the  connection  was opening (must do another listen) or
+;after it had opened (next listen is already in progress).
+
+	IFQE. TSOPN,(TCB)	; If connection was never established, and
+	ANDQE. TOWNR,(TCB)	; Connection for job 0, and
+	  LOAD T1,TJCN,(TCB)	; JCN in TCB matches
+	  HRRZ T2,TVTLSN	; JCN of listening connection
+	  CAME T1,T2
+	  ANSKP.
+;cwl count these?
+	    SETZM TVTLSN	; Get another listen done
+	    AOS TCPFLG		; Get done quickly
+	    AOS INTFLG
+	ENDIF.
+TVTCL4:
+	LOAD T2,TVTL,(TCB)	; Get line number
+	SKIPN T2		; TVT not assigned if during open
+	IFSKP.
+MNTM5	  AOS CELL(TCVCL,5,,TCV) ; TVTCLS detach
+	  CALL TVTDTS		; Detach owning job
+	ENDIF.
+	IFQE. TOWNR,(TCB)	; TVT owned by Job-0
+MNTM5	  AOS CELL(TCVCL,6,,TCV) ; TVTCLS return JCN
+	  LOAD T1,TJCN,(TCB)	; Get our (Job-0) handle on the TCB
+	  CALL RETJCN		; Release it
+	  SETZRO TJCN,(TCB)	; (RETJCN can't do this if TJCN was -1)
+	ENDIF.
+TVTCLX:	RET
+
+	ENDAV.
+
+	SWAPCD	;ps
+
+;OPSCAN	Get packets sent on each connection with output waiting
+;CALL OPSCAN
+;Ret+1:	Always.
+
+OPSCAN:	SAVEAC <FR,TCB>
+	ACVAR <TVTP,LINADR,NRA,NPZ>
+MNTM5	AOS CELL(TCVSN,0,,TCV)	; OPSCAN calls
+	SETZB NRA,NPZ		; Nothing this pass
+	SETZM TVTNOF		; Clear the run request flag
+IFN TVTNIF-TVTNOF,<SETZM TVTNIF>; Clear the run request flag
+	MOVE TVTP,TVTPTR	; AOBJN for all TVTs
+	DO.
+	  HRRZ T2,TVTP		; Next static line number
+	  CALL LCKTTY		; Lock and get dynamic area to T2, NOINT
+	   JUMPLE T2,OPSCA8	; Non standard block
+	  DO.			; Do this TVT
+	    MOVE LINADR,T2	; Save the terminal dynamic block ptr
+				; Make sure TVT and TCB are still linked
+	    LOAD TCB,PTVT,(LINADR) ; Have a TCB?
+	    JUMPE TCB,ENDLP.	; Jump if not there (??)
+;cwl touch tcb & nosked through these checks?
+	    JE TTVT,(TCB),ENDLP. ; Jump if not a TVT (should never jump)
+	    JE TVTL,(TCB),ENDLP. ; USREVT released the TVT line (??)
+	    LOAD FR,TERRT,(TCB)	; Want error trace?
+	    SKIPE FR		; No
+	      MOVX FR,1B0	; Yes
+
+				; Check if RA needed
+	    SKIPGE LWORD+TCBLCK(TCB) ; If TCB isn't locked and
+	     SKIPL LWORD+PRCLCK+RA ; RA isn't running and
+	    IFSKP.
+	      SKIPE TTICT(LINADR) ; Input buffer isn't empty?
+	      ANSKP.		; Yes
+	      ANDQN. QCNT,+TCBRPQ(TCB) ; Have packets
+MNTM5	        AOS CELL(TCVSN,1,,TCV) ; OPSCAN signal to RA
+MNTM5	        AOS NRA		; OPSCAN signal to RA (CELL(
+	        XMOVEI T1,RA	; Process to be scheduled
+	        MOVX T2,20	; Msec from now
+	        CALL SIGNAL	; Schedule RA in a while
+	    ENDIF.
+
+				; Check if PZ needed
+	    LOAD T3,TVTL,(TCB)	; Get the line number
+	    IFN. T3		; USREVT hasn't released the TVT line
+	      MOVE T2,LINADR	; Restore address of terminal block
+	      CALL TVSBE1	; Any output waiting?
+	       SKIPA T4,T1	; Yes.  Get PZ to call SNDTVT
+	      ANSKP.		; No.
+MNTM5	        AOS CELL(TCVSN,2,,TCV) ; OPSCAN signal to PZ
+MNTM5	        AOS NPZ		; OPSCAN signal to PZ (CELL(
+	        LOAD T3,TOMAX,(LINADR) ; Size of TTY output buffer
+;cwl emacs dobe's for low baud terminals make this loose ...
+	        MOVX T1,^D200	; The function to queue for PZ if a lot
+	        CAMGE T4,T3	; If output buffer full, or
+	         CAIGE T4,^D8	; Echoing (less that 8), then
+	          MOVX T1,-1	; Run the packetizer "now"
+	        CALL DLAYPZ	; Schedule the packetizer
+	    ENDIF.
+	  ENDDO.		; End of DO this TVT
+	  MOVE T2,LINADR	; Restore address of terminal block
+OPSCA8:	  CALL ULKTTY		; Decrease reference count, OKINT
+	  AOBJN TVTP,TOP.	; Loop over all TVTs
+	ENDDO.			; End of DO all TVTs
+	SKIPE T2,TVMSTM		; Any TTMSG's out?
+	 CAMLE T2,TODCLK	; Yes, time to flush yet?
+	IFSKP.			; Yes
+	  NOSKED		; Prevent anyone from changing data
+	  CALL TVMNTR		; Flush all TTMSG's to TVTs
+	  OKSKED
+	  SETZM TVMSTM		; Clear timer
+	ENDIF.
+MNTM5	INHIST(TCVPZ,TCV,NPZ,T1,T2) ; Histogram # PZ this pass (CELL(
+MNTM5	INHIST(TCVRA,TCV,NRA,T1,T2) ; Histogram # RA this pass (CELL(
+	RET
+
+	ENDAV.
+
+;TVTMSG
+;Routine to output a greeting message to a TVT
+
+	TVMSGZ==^D60		; size of buffer for TVTMSG in words
+
+TVTMSG::			; Routine to type out a greeting message
+	STKVAR <TVMSGJ,<TVMSGB,TVMSGZ>>
+	MOVX T1,<GJ%SHT!GJ%OLD>	; The file must allready exist
+	HRROI T2,[ASCIZ/SYSTEM:INTERNET-LOGIN-MESSAGE.TXT/]
+	GTJFN%			; Get the JFN
+	 ERJMP R	       	; assume file does not exist
+	MOVEM T1,TVMSGJ		; Save the JFN
+	MOVX T2,<7B5!OF%RD>	; we want read access
+	OPENF%			; open up the file
+	 ERJMP TVMSG2		; handle errors
+	SETZM TVMSGB		; zero the first word of the buffer
+	MOVEI T2,1+TVMSGB      	; get the address of the block
+	HRLI T2,-1(T2)		; build complete BLT ac
+	BLT T2,TVMSGZ-1+TVMSGB	; zero the whole buffer
+	HRROI T2,TVMSGB		; destination pointer
+	MOVNI T3,<<TVMSGZ*5>-1> ; read as much as we can
+	SIN%			; read in the string from the file
+	 ERJMP .+1		; handle errors
+	ADDI T3,<TVMSGZ*5>-1	; get the number of characters read
+	JUMPE T3,TVMSG1		; skip this stuff if none read
+	MOVEI T1,.PRIOU		; output to primary designator
+	MOVEI T2,TVMSGB		; get the address of the buffer
+	HRLI T2,440700		; build a byte pointer
+	MOVNS T3		; exact number of characters to output
+	SOUT%			; output the string
+	 ERJMP .+1		; handle errors
+TVMSG1:				; here also when buffer was empty
+	MOVE T1,TVMSGJ		; get the JFN
+	CLOSF%			; close it
+	 ERJMP .+1
+	RET			; return to caller
+
+TVMSG2:				; here when the OPENF% failed
+	MOVE T1,TVMSGJ		; get the JFN
+	RLJFN			; release it
+	 ERJMP .+1
+	RET			; return to caller
+	ENDSV.
+
+>	;END OF IFN .TVFLG
+
+
+	RESCD	;ps
+TTMSNT:
+TMSNTR::
+NVTDWN::
+NVTDTS:
+NVTDSC::
+NVTCHK::
+NETCAP:
+NEGCHK::RET			; No NCP NVT's
+
+NVTDET::POP P,CX
+
+NVTDTT::
+NTTCSO:
+CHKNVT::
+ASNNVT::RETBAD			; NO NCP NVTs
+
+;NVTCOB - NVT CLEAR OUTPUT BUFFER CALLED FROM TTCBF2
+
+;	T2/ ADDRESS OF DYNAMIC DATA
+;RETURNS +1: ALWAYS
+
+NVTCOB:
+	SKIPE INSKED		;IN SCHEDULER
+	  RET			;YES RETURN IMMEDIATELY
+	SKIPN TTNETW(T2)	;STILL CONNECTED TO NETWORK?
+	IFSKP.
+	  NOINT			;PROTECT POSSIBLE ILOCKS
+
+	  MOVEI T1,DMCH		;DATA MARK CHARACTER
+	  CALL NVTSSP		;SEND NEW DM
+	  OKINT
+	ENDIF.
+;;;	CALL TTXONA		;REACTIVATE OUTPUT IF NECESSARY
+	RET
+
+;NVTPAR - CHECK STPAR ARGUMENT AND NEGOTIATE ANY NEEDED OPTIONS
+
+;	T1/ NEW JFN MODE WORD
+;	T2/ ADDRESS OF DYNAMIC DATA
+;RETURNS +1: ALWAYS
+
+NVTPAR:	STKVAR<NVJFMW>
+	MOVEM T1,NVJFMW		;SAVE NEW JFN MODE WORD
+	MOVE T3,T1		;COPY NEW STATE
+	XOR T1,TTFLGS(T2)	;GET DIFFERENCE
+	TXNN T1,<FLD(.TTHDX,TT%DUM)>  ;ECHO CHANGE? (FULL <--> HALF/LINEHALF)
+	 JRST NVTPAY		;NO, TRY NEXT
+	MOVX T1,ECHOPT+WILOPT	;ECHO OPTION REQUEST
+	TXNN T3,TT%DUM		;NEGOTIATE ON?
+	SKIPA T3,[IFIW!NVTNGT]	;YES NEGOTIATE ECHO
+	MOVE T3,[IFIW!NVTNGF]	;NO
+	CALL @T3		;CALL THE ROUTINE
+	 SKIPA			;SET TO LINE HALF DUPLEX
+	IFSKP.
+	  SETONE TT%DUM,NVJFMW	;SET IT	TO LINE HALF DUPLEX
+	ENDIF.
+NVTPAY:	MOVE T1,NVJFMW		;RESTORE NEW JFN MODE WORD
+	RET
+
+	ENDSV.
+

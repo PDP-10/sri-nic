@@ -1,0 +1,127 @@
+Entry;
+begin "-- SCR file routines --"
+
+require "genhdr.sai"source!file;
+
+!**********************************************************************
+!  This file handles a SCR file from SCRIBE.  The file is already in
+!  the proper laser printer format with the following exceptions:
+!     1) The pages are in chronological (hence printing reverse) order
+!     2) There is no title page
+!     3) There is no post file information for the spooler
+!  This program fixes problems 1 and 2.
+!
+!		Dwight Hare  15 Nov 1982
+!**********************************************************************;
+
+!	External variables;
+
+
+External Integer   OutPtr, 	! Pointer to output buffer area;
+		   InChan;      ! Channel for input file;
+
+External integer   firstp,	! First page of specified range;
+		    lastp, 	! Last page of specified range;
+	         outpages;      ! Number of pages output;
+
+External integer InFlSize; 	! Input file size;
+
+!	External procedures, requires;
+
+
+External simp procedure 	     TableSet; ! Sets up font tables;
+External simp procedure 	     ResetOut; ! unmap the pages of the 
+						 output file buffer;
+
+External simp procedure       Error(string s); ! Error handling;
+External simp procedure              InitPage; ! Resets glyph table, etc.;
+External simp procedure		  
+	SetPos(boolean exmove, eymove; integer emovexamount,
+						emoveyamount,newx, newy); 
+					       ! Sets new x and y 
+						 coordinates, allows
+						 exact movements or
+						 movements to exact
+						 locations;
+
+require "DVIdef.sai" source!file; ! get the current DVI format definitions;
+require "ebgsrc.sai" source!file; ! debugging information;
+require "outmac.sai" source!file; ! output macros;
+require "inmac.sai"  source!file; ! input macros;
+
+! 	doSCRfile;
+
+
+!	D O   S C R   F I L E
+!
+! **********************************************************************
+! main driving program for SCR files.
+! **********************************************************************;
+internal simp procedure doSCRfile;
+	begin "-- do SCR file --"
+	integer v,w,w1,h,j;
+	Initin;		! Initialize input file page tables;
+	printi0(<nl,"starting doSCRfile">)
+	printi0(<nl,"doSCRfile, starting page processing">)
+	print(nl);
+	TableSet;
+	GotoByte(0);
+	InFileByte; ! read memory allocation byte;
+	while not(InFileByte = 0) do nothing; ! read job identification;
+	for j_1 step 1 until 8 do InFileByte; ! read 8 ignored bytes;
+	While not((v_InFileByte)=I!eof) do
+	    begin "-- scan for page breaks --"
+	    OutByte(v);
+	    case v of begin "-- case statement --"
+	      [I!space] [I!1spac] [I!mp] [I!mm] [I!nl]
+	               nothing;
+	      [I!page] begin print("[") end;
+	      [I!endp] begin outpages_outpages+1;
+	                     print(outpages,"]")
+		       end;
+	      [I!f] Begin OutByte(InFileByte) End;
+	      [I!bskip] [I!marg] [I!setsp] [I!mov] [I!h] [I!v] [I!delg]
+	           Begin OutByte(InFileByte); OutByte(InFileByte) End;
+	      [I!srule] begin   OutByte(InFileByte);
+	      			OutByte(InFileByte);
+	      			OutByte(InFileByte) End;
+	      [I!brule] Begin OutByte(InFileByte);
+	                      OutByte(InFileByte);
+	                      OutByte(InFileByte);
+	                      OutByte(InFileByte);
+	                      OutByte(InFileByte);
+	                      OutByte(InFileByte) End;
+	      [I!sgly] Begin OutByte(InFileByte);
+	                     OutByte(InFileByte);
+	                     OutByte(InFileByte);
+	                     OutByte(w_InFileByte);
+	                     OutByte(InFileByte);
+	                     OutByte(h_InFileByte);
+	                     OutByte(InFileByte);
+			     w1_cvd(cvf((w+7)/8));
+			     for j_1 step 1 until w1*h do
+			           begin OutByte(InFileByte) End End;
+	      [I!bgly] begin OutByte(InFileByte);
+                             OutByte(InFileByte);
+                             OutByte(InFileByte);
+                             OutByte(InFileByte);
+                             OutByte(w_InFileByte);
+			     v_InFileByte; w_(w LSH 8)+v;
+			     OutByte(v);
+                             OutByte(InFileByte);
+                             OutByte(InFileByte);
+                             OutByte(h_InFileByte);
+			     v_InFileByte; h_(h LSH 8)+v;
+			     OutByte(v);
+                             OutByte(InFileByte);
+                             OutByte(InFileByte);
+			     w1_cvd(cvf((w+7)/8));
+			     for j_1 step 1 until w1*h do
+			           Begin OutByte(InFileByte) End End;
+	      else begin if (v LSH -7) neq 0
+	           then print(nl,"error code "&cvs(v)&" - contact Dwight Hare",
+		              nl); ! error here; end
+	   end "-- case statement --"
+	   end "-- scan for page breaks --"
+	end   "-- do SCR file --";
+end   "-- SCR file routines --";

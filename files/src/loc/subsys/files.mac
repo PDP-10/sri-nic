@@ -1,0 +1,4223 @@
+;;; -*- Mode: Macro; Lowercase: Yes -*-
+;;;
+;;; The FIND Program:  Searches the file system for files matching a
+;;; certain set of constraints.
+;;;
+;;; This program is maintained by PAO@MIT-OZ.  If you make any
+;;; modifications, please send me a note, so that I can keep the
+;;; sources on a few other machines consistent.
+
+; Edit history:
+;
+;[MIT-OZ]OZ:<PAO>FIND.MAC.2, 27-Oct-85 13:40:04, Edit by PAO
+;103 Add /obscure-flags:/disk-address
+;[MIT-OZ]SS:<SYS.LOCAL-SUBSYS>FIND.MAC.38, 19-Jul-85 11:45:45, Edit by PAO
+;102 Remove psonly for OZ.  Change creation date to be .FBCRV, and .FBCRE to be
+;    "system write date".
+;    Fix date parsing (at CS.PDT)
+;[MIT-EECS]LIB:<SYS.UNSUPPORTED>FIND.MAC.34,  9-Apr-85 14:42:07, Edit by PAO
+;101 Need to activate the illegal interrupt channel before starting
+;    parsing, not after.
+;[MIT-EECS]PS:<PAO.MABEL>FIND.MAC.26, 28-Mar-85 16:13:01, Edit by PAO
+;100 (Wow) Change ^A abort to actually abort the searching GTJFN and
+;   the GNJFN.
+;[MIT-EECS]PS:<PAO>FIND.MAC.20, 28-Mar-85 16:00:52, Edit by PAO
+;77 Optimization of search jfn
+;   Repair of inconsistency of _ for fuzzy, and _ for argument in
+;     macro.  The macro arg is now #n.  (So you can't do /search:# in
+;     a macro
+;[MIT-OZ]SS:<SYS.UNSUPPORTED>FIND.MAC.13,  27-Mar-85 22:28, Edit by PAO
+;76 Add /breakage test type.
+;   Include total files tested in total line.
+;[MIT-OZ]SS:<SYS.UNSUPPORTED>FIND.MAC.9,  27-Mar-85 21:47, Edit by PAO
+;75 Fix bug introduced in 71--won't do test when already got FDB info.
+;   Add "tomorrow" and "yesterday" to date keywords.  Make the keywords
+;    act like day-only on t.eq and t.geq, only if no time increment was
+;    subtracted.
+;   Add a "fuzzy" time for t.eq and t.neq tests when a time is present.
+;   Make "time only" specifications work as originally intended (i.e.
+;    that time, regardless of day.
+;   Add "write-date" output option
+;[MIT-OZ]OZ:<PAO>FIND.MAC.2,  5-Jan-85 05:03:23, Edit by PAO
+;74 Re-add psonly assembly switch.
+;[MIT-EECS]PS:<PAO.SRC>FIND.MAC.108,  5-Jan-85 04:46:04, Edit by PAO
+;73 /take
+;[MIT-EECS]PS:<PAO.SRC>FIND.MAC.49,  4-Jan-85 17:15:53, Edit by PAO
+;72 /define: option!!!  (/list, too)
+;[MIT-EECS]PS:<PAO.SRC>FIND.MAC.48,  4-Jan-85 17:15:46, Edit by PAO
+;71 Sticky output flags.  Separate output flag word.  Sticky stuff display.
+;   Only gets FDB information when it is needed.
+;   Add /backed-up switch.  (Most useful negated.)
+;[MIT-EECS]PS:<PAO.SRC>FIND.MAC, 17-Sep-84, Edit by PAO
+;70 Add conditionalization for non-MIT sites
+;[MIT-EECS]PS:<PAO.SRC>FIND.MAC.23,  6-Jul-84 14:27:00, Edit by PAO
+;67 Attempting to hack up some optimization for searching...
+;[MIT-EECS]PS:<PAO.SRC>FIND.MAC.14, 29-Feb-84 18:31:16, Edit by PAO
+;66 Again rework date parsing.  Made it into a self-contained subroutine.
+;[MIT-EECS]PS:<PAO.SRC>FIND.MAC.13, 29-Feb-84 17:57:54, Edit by PAO
+;65 Added invisible runtime flag.  Moved string storage space to end of 
+;   program.  Made /search sticky.
+;<PAO>FIND.MAC.76, 27-Sep-83 13:24:32, Edit by PAO
+;64 Add deleted and invisible indications to the output listing.
+;   Indent the filenames by four spaces, and if the file is deleted or 
+;   invisible, then 'D' or 'I' is printed in brackets before the name.
+;   Fix release of real search JFN (as well as parse only one...)
+;<PAO>FIND.MAC.72, 26-Sep-83 14:42:36, Edit by PAO
+;63 Fix bug in 62.  (lurking for some time)  REMEMBER: NOUT SKIPS!!!!
+;<PAO>FIND.MAC.70, 25-Sep-83 16:01:49, Edit by PAO
+;62 Add date in total line.  (Random gratuitous hack.)
+;<PAO>FIND.MAC.68, 24-Sep-83 23:45:26, Edit by PAO
+;61 Rework date parsing.  Add parsing of a lone date or lone time, and
+;   keywords for "now" and "today", with signed offsets (only "-" for now).
+;   "today" means the current day at 0:00, "now" is obvious.  Changed macro
+;   prser. to jump to psret rather than returning; thus, in subroutines,
+;   a parsing error will leave the parser, as expected.
+;   Add support for only printing the total line.
+;   Release the parse-only search jfn when through with the loop.
+;<PAO>FIND.MAC.59, 10-Jun-83 01:04:06, Edit by PAO
+;60 Fix --More?-- processing.  Un-suppress output for things the
+;   user really wants to see, like ^P messages, "Abort search?" and
+;   the total line.  Indicate on the total line that the search was
+;   aborted, either by more flush or ^A abort.  Change break table for
+;   booleans to break on everything but the boolean operators.
+;<PAO>FIND.MAC.49,  5-Jun-83 03:12:59, Edit by PAO
+;57 fix output diversion.  Don't use primary output hacking.  Use JSYS's
+;   which want a JFN.  The output will go to the JFN in OUTFIL.
+;   Reinstalled /background, too.
+;   Fix bug in 56
+;<PAO>FIND.MAC.46,  5-Jun-83 02:51:44, Edit by PAO
+;56 Change temporary halt function to abort search instead.
+;<PAO>FIND.MAC.45,  7-Apr-83 01:12:17, Edit by PAO
+;55 Increased size of text buffer and atom buffer
+;<PAO>FIND.MAC.42, 13-Mar-83 17:31:18, Edit by PAO
+;54 Install more processing.  Change temporary halt feature to only
+;   check after test instead of both before and after.
+;<PAO>FIND.MAC.40,  2-Mar-83 16:02:19, Edit by PAO
+;53 Fixed error message on unbalanced parens
+;<PAO>FIND.MAC.39,  2-Mar-83 06:35:54, Edit by PAO
+;52 changed boolean operations to keywords (hacking break tables)
+;   added <, >, =, etc for less, greater, equal, not equal, etc.
+;<PAO>FIND.MAC.12,  2-Mar-83 04:25:41, Edit by PAO
+;51 added archive flags.  Redefined some of the keyword table entries.
+;   added the /obscure-flag switch
+;   added the psret error return from parse
+;   test range values to see if the first is > than second.
+;<PAO>FIND.MAC.2,  1-Mar-83 18:17:29, Edit by PAO
+;50 Add support for archive flags
+;sometime...
+;47 Temporarily remove /background until it is working properly.
+;<PAO>FIND.MAC.65, 22-Feb-83 13:49:19, Edit by PAO
+;46 fix bug in skexp (advances tp once too often)
+;   and sktrm (didn't advance after t.lpar)
+;<PAO>FIND.MAC.63, 22-Feb-83 12:07:20, Edit by PAO
+;45 improve error output when parse error.
+;<PAO>FIND.MAC.62, 11-Feb-83 17:17:00, Edit by PAO
+;44 add /background
+;[MIT-EECS]PS:<PAO.SRC>FIND.MAC.85,  6-Feb-83 15:11:33, Edit by PAO
+;43 add /exit and /help switches.  Add ref date to output.
+;	Change fs: to files:.
+;[MIT-EECS]PS:<PAO.SRC>FIND.MAC.84,  6-Feb-83 05:02:07, Edit by PAO
+;42 fixed time and date input, paren parsing
+;<PAO>FIND.MAC.56, 6-Feb-83 02:37:54, Edit by PAO
+;41 added cdate output
+;[MIT-EECS]PS:<PAO.SRC>FIND.MAC.77,  5-Feb-83 18:08:07, Edit by PAO
+;40 fixed interrupt setup, added directory skipping
+;<PAO>FIND.MAC.53,  5-Feb-83 21:36:26, Edit by PAO
+;37 add author output
+;<PAO>FIND.MAC.52,  5-Feb-83 21:24:44, Edit by PAO
+;36 fix failure to release test filename jfn's
+;<PAO>FIND.MAC.44,  5-Feb-83 19:58:40, Edit by PAO
+;35 add output diversion
+;<PAO>FIND.MAC.36,  5-Feb-83 15:47:58, Edit by PAO
+;34 add protection test
+;<PAO>FIND.MAC.31,  5-Feb-83 15:13:21, Edit by PAO
+;33 add string testing functions (clean up)
+;<PAO>FIND.MAC.28,  5-Feb-83 14:39:39, Edit by PAO
+;32 /total to print blocks
+;<PAO>FIND.MAC.25,  5-Feb-83 14:13:01, Edit by PAO
+;31 add /nodeleted, /noinvisible global switches
+;<PAO>FIND.MAC.25,  5-Feb-83 14:12:38, Edit by PAO
+;30 fix search of invisible files
+;<PAO>FIND.MAC.25,  5-Feb-83 14:12:15, Edit by PAO
+;27 fix range tests, define lots of range tests
+;<PAO>FIND.MAC.14,  5-Feb-83 12:09:11, Edit by PAO
+;26 fix input error bug
+;<PAO>FIND.MAC.8,  5-Feb-83 11:32:33, Edit by PAO
+;25 add structure references
+;[MIT-EECS]PS:<PAO.SRC>FIND.MAC.62,  2-Feb-83 23:36:24, Edit by PAO
+;24 add a bunch of tests
+;[MIT-EECS]PS:<PAO.SRC>FIND.MAC.54,  2-Feb-83 20:39:11, Edit by PAO
+;23 fix 22
+;[MIT-EECS]PS:<PAO.SRC>FIND.MAC.52,  2-Feb-83 19:59:55, Edit by PAO
+;22 file specifications are now tests.
+;[MIT-EECS]PS:<PAO.SRC>FIND.MAC.52,  2-Feb-83 03:55:10, Edit by PAO
+;21 change parser to use comnd.
+;[MIT-EECS]PS:<PAO.SRC>FIND.MAC.20,  1-Feb-83 23:08:14, Edit by PAO
+;20 start keeping edit numbers...
+;;;
+
+	title Find - the program with a quest...
+
+	search monsym,macsym,comtab
+	.require sys:macrel.rel
+
+if1,<printx Find - the program with a quest...>
+if2,<printx Starting assembly pass 2>
+
+MIT==0				;"This is MIT.  Collect and third
+				;number programs will not be accepted
+				;at this disk."
+psonly==0
+
+fver==:1
+fmin==:0
+fcust==:2
+fedit==:103			;This is octal!
+
+	pgver.(fver,fmin,fedit,fcust)	;20 version number
+
+	stdac.			;standard ac definitions
+
+tx=14				;usurp P5
+tp=15				;and P6
+
+
+;; flag definitions for comnd table
+
+t%flag==1b0
+t%rng==1b1
+t%date==1b2
+t%oct==1b3
+t%wst==1b4			;wild string...
+t%aflg==1b5			;archive flag
+t%six==1b6
+
+;;;71 Begin modification
+
+;; flag definitions for flag accumulator
+
+f%date==1b0			;parse a date range
+f%reps==1b1			;reparse (no .cmini)
+f%oct==1b2			;need octal number
+f%six==1b3
+
+f%prse==17b3			;all the parsing flags
+
+f%noi==1b6			;don't look for invisible files
+f%nod==1b7			;don't look for deleted files
+
+f%echo==1b8			;echo commands from take files
+				;(after macro expansion)
+
+ifn mit,<
+f%back==1b17			;run in the background
+>
+ife mit,<
+f%back==0
+>
+
+f%comf==f%noi!f%nod!f%back	;all the global command line flags
+
+;;; Flags indicating what file information we have
+
+fh%flg==1b35
+fh%afg==1b34
+fh%fdb==1b33
+fh%aut==1b32
+fh%wrt==1b31
+fh%acc==1b30
+fh%pag==1b29
+
+fh%all==177b35
+
+;; output control flags...
+
+o%prot==1b0			;print protection for each file
+o%pag==1b1			;print pages for each file
+o%auth==1b2			;print author for each file
+o%cdate==1b3			;print creation date for each file
+o%rdate==1b4			;print reference date for each file
+
+o%nofil==1b5			;don't list files (!) just total.
+o%totp==1b6			;print total pages
+o%wdate==1b7			; print write date for each file
+o%break==1b8			; print percent breakage
+o%swdate==1b9
+
+o%nstick==1b34
+o%sticky==1b35
+
+;;;71 end modification
+
+;; flag defaults for gtjfn
+
+srcdef==gj%old+gj%del+gj%ifg+gj%flg+gj%xtn+.gjall
+srcdf1==g1%iin
+
+;;; Character for argument specification in macros
+
+argchr=="#"
+
+;;;; macros and defstr's
+
+define sttst(tst,loc<i>),<
+	move'loc tx,tst
+	stor tx,tstcod
+	aos tp
+>
+
+define stts1(arg,loc),<
+	move'loc tx,arg
+	stor tx,targ1
+>
+
+define stts2(arg,loc),<
+	move'loc tx,arg
+	stor tx,targ2
+>
+
+define etmsg(text)<
+	hrroi t1,[asciz \text\]
+	esout
+>
+
+define fatal(text)<
+	jrst [ etmsg <text>
+	       call crlf
+	       call fail0 ]
+>
+
+define lose(text)<
+	jrst [ etmsg <text>
+		jrst cmloop ]	;should probably do some clean up, but...
+	>
+
+define prse1.<
+	txne t1,cm%nop
+	 jrst prserr
+>
+
+define prser.<
+	txnn t1,cm%nop
+	ifskp.
+	  call prserr
+	  jrst psret		;failure return
+	endif.
+>
+
+define cmcall(fblk)<
+	movei t1,cmstbk		;command state block
+	movx t2,fblk		;function block
+	comnd
+>
+
+define noise(gw)<
+	movei t1,cmstbk
+	movei t2,[flddb.(.cmnoi,,<-1,,[asciz \gw\]>)]
+	comnd
+	prser.
+>
+
+define confirm,<
+	movei t1,cmstbk
+	movei t2,cm.cfm
+	comnd
+>
+
+define need (type,erract)<
+	txnn f,fh%'type 
+	 jrst [ call get'type
+		 erract
+		jrst .+1 ]
+>
+
+define optrace (message,jfnsrc)<
+	skipn opttrc
+	ifskp.
+	 tmsg <message: >
+	 skipn t2,jfnsrc
+	 ifskp.
+	  movei t1,.priou
+	  move t3,[777770,,1]
+	  jfns
+	 else.
+	  tmsg <No jfn>
+	 endif.
+	 call crlf
+	endif.
+>
+
+define optrt1 (message)<
+	skipn opttrc
+	ifskp.
+	 push p,t1
+	 tmsg <message: >
+	 skipn t2,(p)
+	 ifskp.
+	  movei t1,.priou
+	  move t3,[777770,,1]
+	  jfns
+	 else.
+	  tmsg <No jfn>
+	 endif.
+	 call crlf
+	 pop p,t1
+	endif.
+>	 
+
+defstr tstcod,tsttab(tp),35,36
+defstr targ1,tsta1(tp),35,36
+defstr targ2,tsta2(tp),35,36
+defstr ptcod,tsttab,35,36
+defstr pta1,tsta1,35,36
+defstr pta2,tsta2,35,36
+
+defstr comrep,cmstbk+.cmflg,35,18
+defstr prompt,cmstbk+.cmrty,35,36
+defstr combuf,cmstbk+.cmbfp,35,36
+defstr comptr,cmstbk+.cmptr,35,36
+defstr comcnt,cmstbk+.cmcnt,35,36
+defstr cominc,cmstbk+.cminc,35,36
+defstr comgjb,cmstbk+.cmgjb,35,36
+defstr gjbptr,cmstbk+.cmgjb,35,36
+
+defstr sgjflg,srcgjb+.gjgen,35,36	;flags for search gtjfn
+defstr sgjf1,srcgjb+.gjf2,35,36	;more flags
+
+defstr fdbctl,fdb+.fbctl,35,36
+mskstr filcls,fdb+.fbctl,fb%fcf
+defstr ibaddr,fdb+.fbadr,35,36
+defstr protect,fdb+.fbprt,35,36	;protection
+mskstr gen,fdb+.fbgen,fb%gen
+mskstr dirnum,fdb+.fbgen,fb%drn
+mskstr retent,fdb+.fbbyv,fb%ret
+mskstr bytsiz,fdb+.fbbyv,fb%bsz
+mskstr mode,fdb+.fbbyv,fb%mod
+mskstr pages,fdb+.fbbyv,fb%pgc
+defstr size,fdb+.fbsiz,35,36
+defstr numwrt,fdb+.fbcnt,17,18
+defstr numref,fdb+.fbcnt,35,18
+defstr butim,fdb+.fbbk0,17,18
+defstr bunwrt,fdb+.fbbk0,35,18
+mskstr offpgs,fdb+.fbbbt,ar%psz
+mskstr offrsn,fdb+.fbbbt,ar%rsn
+defstr archf,fdb+.fbbbt,35,36
+defstr fbtp1,fdb+.fbtp1,35,36
+defstr fbtp2,fdb+.fbtp2,35,36
+
+
+;;;; data storage
+
+;;; jfn's
+
+ifh:	block 1			;the search list, validated
+ifh2:	block 1			;the search list, parse only
+schjfn:	z			;65 search jfn, sticky.
+jfn:	z
+ojfn:	z			;the jfn of the output file
+outfil:	.priou			;where the output will actually go
+odiver:	z			;-1 if output is diverted
+
+outflg:	z			;71 output control flags
+outstk:	z			;71 output stickies.
+outnop:	z			;71 used in parsing the output options.
+
+optflg:	-1			;non-zero if optimization is in
+				;  effect.
+opttrc:	z			;non-zero if tracing is desired.
+
+pdllen==1000			;yeah, about a page...
+pdl:	block pdllen
+
+oncep:	z			;if z, use jcl and halt
+onced:	z
+hltflg:	z			;if ne, stop in the loop.
+dirskp:	z
+strskp:	z
+ifn mit,<
+morfls:	z			;54 if ne, stop searching.
+>
+
+psstk:	z			;stack pointer at start of parse
+
+sixnum:	block 2
+sixstr: block 2
+
+count:	z
+tcount: z
+parcnt:	z
+pagcnt:	z
+
+;;; fdbsiz==^D100
+fdb:	block .fblen
+
+namsiz==^D50			;this, too
+author:	block namsiz
+writer:	block namsiz
+accnt:	block namsiz
+
+authob:	fh%aut
+	getaut
+	440700,,author
+
+writeb:	fh%wrt
+	getwrt
+	440700,,writer
+
+accntb:	fh%acc
+	getacc
+	440700,,accnt
+
+stbp:	block 1			; stbuf pointer
+stbufb:	block 1			;65 
+
+testln==200			;up to 200 tests
+tstn:	z			;36 number of tests (tp high water mark)
+tsttab:	block testln
+tsta1:	block testln		;arg1 for tests
+tsta2:	block testln		;arg2 for tests
+
+datblk:	block 3			;block for NCI parsing of the date/time
+
+srtm:	block 1			;65
+
+;; command state block
+cmstbk:	cm%wkf!reparse		;.cmflg
+	.priin,,.priou		;.cmioj <
+	-1,,[asciz /FIND>/]	;.cmrty
+	-1,,txtbuf		;.cmbfp text buffer
+	-1,,txtbuf		;.cmptr
+	tbsiz*5-1		;.cmcnt
+	z			;.cminc
+	-1,,atmbuf		;.cmabp atom buffer
+	absiz*5-1		;.cmabc atom buffer size
+	gjargs			;.cmgjb gtjfn block
+
+;; gtjfn block for comnd
+gjargs:	gj%old+gj%del+gj%ifg+gj%ofg+gj%flg+.gjall	;.gjgen
+	z			;.gjsrc
+ife psonly,<
+	point 7,[asciz /DSK*:/]	;.gjdev
+>
+ifn psonly,<
+	point 7,[asciz /PS:/]
+>
+	point 7,[asciz /*/]	;.gjdir
+	point 7,[asciz /*/]	;.gjnam
+	point 7,[asciz /*/]	;.gjext
+	repeat 3,<z>		;rest of it...
+	g1%iin			;.gjf2
+	repeat 4,<z>		;rest more...
+
+outgjb:	repeat 16,<z>		;comnd fills it in
+
+srcgjb:	srcdef			;.gjgen - default flags
+	.nulio,,.nulio		;.gjsrc
+ife psonly,<
+	point 7,[asciz /DSK*:/]	;.gjdev
+>
+ifn psonly,<
+	point 7,[asciz /PS:/]
+>
+	point 7,[asciz /*/]	;.gjdir
+	point 7,[asciz /*/]	;.gjnam
+	point 7,[asciz /*/]	;.gjext
+	repeat 3,<z>		;rest of it...
+	srcdf1			;.gjf2 - default flags
+
+takgjb:	gj%old+.gjdef		;.gjgen
+	z			;.gjsrc
+	z			;.gjdev
+	z			;.gjdir
+	point 7,[asciz /FIND/]	;.gjnam
+	point 7,[asciz /CMD/]	;.gjext
+	repeat 3,<z>		;rest of it...
+	g1%iin			;.gjf2
+	repeat 4,<z>		;rest more...
+
+
+tbsiz==200
+txtbuf:	block tbsiz		;text buffer for comnd
+absiz==100
+atmbuf:	block absiz		;atom buffer
+
+cm.cfm:	flddb. .cmcfm
+
+ioplen==20
+iopp:	iopdl
+iopdl:	block ioplen
+iopdle:
+
+mactbl:	mactab			;location of the macro table.
+
+mactab:	0,,200
+	block 200
+
+levpc1:	z
+levpc2:	z
+levpc3:	z
+
+levtab:	levpc1
+	levpc2
+	levpc3
+
+chntab:	repeat ^D36,<0>
+
+define chanl (chan,routine,level<2>)<
+	%%==.
+	.org chntab+chan
+	level,,routine
+	.org %%
+>
+
+chanl .icili,ilisrv,1		;high priority
+chanl .icqta,qtasrv,1		;high priority, too.
+
+ifn mit,<
+chanl ^D32,morsrv		;54 handle more processing
+>
+chanl ^D33,c33srv
+chanl ^D34,suspnd
+chanl ^D35,prtlast
+
+
+lgnam:	asciz /files:/
+
+dsksib:	block 1000
+dskib:	block 1000
+dskflg:	z
+
+;; start the program
+
+go:	reset
+	setzm schjfn		;the reset releases it.
+	movei t1,.priou
+	movem t1,outfil
+	setzm ojfn
+	setzm ifh
+	setzm ifh2
+	setzm jfn
+	setzm odiver
+	
+	move p,[iowd pdllen,pdl]
+	skipe stbufb
+	ifskp.
+	 move t1,.jbff##		;calculate beginning of string space
+	 addi t1,777
+	 trz t1,777		;page align
+	 movem t1,stbufb
+	endif.
+
+	txo f,f%echo		;default is to echo.
+
+	call inijcl
+	 setom oncep		;jcl exists.
+	call setintr		;set up interrupt system (but leave off)
+cmloop:	skipn oncep		;catch throws to cmlp1
+	ifskp.
+	 skipe onced	;done once?
+	  jrst done
+	endif.
+
+	call iniprs		;initialize parse
+cmlp1:	move p,[iowd pdllen,pdl];jumping here will reset the stack
+				;and restart the parse.  (jrst cmloop to start
+				;new command line)
+	skipn oncep		;catch throws to cmlp1
+	ifskp.
+	 skipe onced		;done once?
+	  jrst done
+	endif.
+	setom onced		;done (started, that is...)
+
+	txz f,f%comf		;clear command flags
+	setzm outflg		;71 clear output flags
+	move t1,outstk		;71 get sticky flags
+	movem t1,outflg		;71 and set them
+
+	call parse		;do the parse
+	ifnsk.			;parse failed
+	  call psclean		;clean up after parse
+	  jrst cmloop
+	endif.
+
+	call intron		;turn on the interrupts
+	call lpstrt		;start up the loop
+	ifnsk.			;init failed
+	  call psclean		;clean up
+	  jrst cmloop
+	endif.
+ifn mit,<
+	;; run in the background?
+	txne f,f%back
+	 call bckgnd		;tell exec to run us in the background...
+>
+	call setrtm		;remember our process run time
+	call lpfile		;loop over files...
+	call lpdone
+	call endrtm		;print the accumulated run time.
+	call introf		;then off
+	jrst cmloop
+
+done:	move t1,iopp
+	cain t1,iopdl		;can only stop if at top level
+	ifskp.
+	 setzm onced
+	 jrst cmloop
+	endif.
+	haltf
+	setzm oncep		;ok, now loop
+	jrst cmloop
+
+lpstrt:	setzm count		;zero the file count
+	setzm tcount
+	setzm pagcnt
+	setzm hltflg
+	setzm dirskp
+	setzm strskp
+ifn mit,<
+	setzm morfls		;54
+>
+	movem tp,tstn		;save number of tests
+	skipe ifh		;no file handle?
+	ifskp.
+	  call deffil
+	   ret			;error...
+	endif.
+	skipn ojfn		;redirect output
+	ifskp.
+	  call divert
+	   ret			;fail return
+	endif.
+
+	;; Start up.
+	move t1,outfil
+	hrroi t2,[asciz /Searching /]
+	setz t3,
+	sout
+
+	move t2,ifh
+	move t3,[777770,,js%paf]
+	jfns
+
+	call fcrlf
+	call fcrlf
+
+	retskp
+
+lpfile:	move t1,ifh		;get jfn
+lpfil1:
+	hrrzs t1		;just jfn part of ifh
+	movem t1,jfn
+	txz f,fh%all
+
+	call test		;perform the test
+nxtfil:
+	;; test for halt
+	skipe hltflg		;should we stop?
+	 jrst nxtabt		;OK, abort
+
+ifn mit,<
+	skipe morfls		;54
+	 callret flusho		;60 flush output, then punt search
+>
+
+	move t1,ifh
+	gnjfn
+nxtwat:	 jrst [ caie t1,gnjfx1	;no more files?
+		 call fail	;nope, lost *** make soft...
+		setzm ifh	;64 the jfn is release, might as well
+				;64 ...forget about it.
+		ret ]		;and return to say we've finished
+
+	;; test for skipping...
+	skipn dirskp
+	ifskp.
+	  txnn t1,gn%dir
+	   jrst nxtfil		;didn't step
+	endif.
+	setzm dirskp		;clear flag
+	skipn strskp
+	ifskp.
+	  txnn t1,gn%str
+	   jrst nxtfil		;didn't change structure
+	endif.
+	setzm strskp		;clear flag
+	jrst lpfil1
+
+nxtabt:	;; Abort search from the middle of a GNJFN
+	move t1,ifh
+	rljfn			;get rid of the ifh
+	 nop
+	setzm ifh		;and say we have none
+	ret
+
+;;; Clean up after loop
+
+lpdone:	move t1,outfil
+	rfmod			;let the user see the total line, even if
+	 erjmp lpdon0
+	txz t2,tt%osp		;output had been suppressed
+	sfmod
+	 erjmp lpdon0
+lpdon0:	hrroi t2,[asciz /
+Total = /]			;60 change from fmsg
+ifn mit,<
+	skipn hltflg		;60 did we abort?
+	 skipe morfls		;60 or flushed by More processing
+>
+ife mit,<
+	skipe hltflg
+>
+	  hrroi t2,[asciz /
+Total (before abort) = /]
+				;60 tell them that we didn't finish
+	setz 3,
+	sout
+
+	move t2,count
+	movei t3,^D10
+	nout
+	 nop			;(just in case)
+	sose t2			;57 was it 1?
+	 skipa t2,[-1,,[asciz / files out of /]] ;57 nope, use plural
+	  hrroi t2,[asciz / file out of /]	;57 yep, use singular
+	setz t3,		;57
+	sout			;57
+	move t2,tcount
+	movei t3,^D10
+	nout
+	 nop
+	sose t2
+	 skipa t2,[-1,,[asciz / files tested/]] ;57 nope, use plural
+	  hrroi t2,[asciz / file tested/]	;57 yep, use singular
+	setz t3,		;57
+	sout			;57
+
+	move t2,outflg		;71
+	ifxn. t2,o%totp		;71
+	  fmsg <, Blocks = >
+	  move t2,pagcnt
+	  movei t3,^D10
+	  nout
+	   nop			;63 Sigh.  I'll never remember that
+				;   nout skips...  Where, oh, where is ITS?
+	endif.
+	fmsg <, >		;62 prepare to display time
+	seto t2,		;62
+	setz t3,		;62
+	odtim			;62 display time
+	fmsg <.
+>				;57
+	;; finish redirection of output
+	skipe odiver
+	 call undvrt	
+	move t1,tstn		;release test jfn's
+	call clnjfn
+	setzm tstn		;67 no more tests
+	skipe t1,ifh		;64 ...necessary.  Happens on aborts.
+	rljfn			;64
+	 nop			;64
+	setzm ifh		;64 and clear it.
+	skipe t1,ifh2		;61 release search jfn (the parse only one).
+	rljfn			;61
+	 nop			;61
+	setzm ifh2		;64 -- make it really gone...
+	ret
+
+;;;60 begin insertion
+;;; flush output from buffer, nop if output is diverted.
+
+flusho:	move t1,outfil		;get the output jfn
+	cfobf			;flush the buffer
+	ret			;that's all
+	
+;;;60 end insertion
+
+;;; divert/undivert the output
+
+divert: move t1,ojfn
+	movx t2,of%wr+fld(7,of%bsz)
+	openf
+	 ret			;error
+repeat 0,<			;57 don't change primary jfns
+	hrro t2,t1		;-1,,jfn
+	movx t1,.fhslf
+	spjfn			;set the primary jfn...
+> ;;; 57 end repeat 0
+	move t2,outfil		;57 make sure this doesn't need to be closed
+	cain t2,.priou		;57 is it primary output?
+	ifskp.			;57 nope, flush whatever it is.
+	  exch t1,t2		;57
+	  txo t1,cz%abt		;57 abort output
+	  closf			;57
+	   nop			;57 don't worry about errors
+	  exch t1,t2		;57 get wanted jfn back
+	endif.			;57
+	movem t1,outfil		;57
+	setom odiver		;and flag it
+	retskp
+
+undvrt:	
+repeat 0,<			;57 don't change primary jfns
+	movx t1,.fhslf
+	movni t2,1
+	spjfn
+> ;;; 57 end repeat 0
+	movei t1,.priou		;57 reset the output to go to primary output
+	movem t1,outfil		;57
+	setzm odiver
+	move t1,ojfn		;close the old output file
+	closf
+	 jfcl			;forget errors
+	setzm ojfn
+	ret
+
+;;;65 Begin insertion
+
+setrtm:	movx t1,.fhslf
+	runtm
+	movem t1,srtm
+	ret
+
+endrtm:	movx t1,.fhslf
+	runtm
+	sub t1,srtm
+	push p,t1
+	idivi t1,^D1000
+	move t2,t1
+	movx t1,.priou
+	movx t3,^D10
+	nout
+	 nop 
+	tmsg <.>
+	move t1,(p)
+	idivi t1,^D100
+	idivi t1,^D10		;want just 1/10'ths digit
+	movx t1,.priou
+	nout
+	 nop
+	move t1,(p)
+	idivi t1,^D10
+	idivi t1,^D10		;want just 1/100'ths digit
+	movx t1,.priou
+	nout
+	 nop
+	pop p,t1
+	idivi t1,^D10		;want just 1/1000'ths digit
+	movx t1,.priou
+	nout
+	 nop
+	tmsg < seconds runtime.>
+	ret
+
+;;;65 End insertion
+
+;; error handling needs cleanup
+
+failx:	push p,t1
+	push p,t2
+	push p,t3
+	push p,t4		;so's I can look at em
+	skipe odiver		;output diverted?
+	 call undvrt		;yep, fix it
+	jrst fail0	
+
+fail:	push p,t1
+	push p,t2
+	push p,t3
+	push p,t4		;so's I can look at em
+	skipe odiver		;output diverted?
+	 call undvrt		;yep, fix it
+	
+	hrroi t1,[asciz /Failed: /]
+	esout
+
+	movei t1,.priou
+	move t2,[.fhslf,,-1]
+	setz t3,
+	erstr
+	 nop
+	 nop
+
+fail0:	hrroi t1,[asciz /, PC = /]
+	psout
+	movei t1,.priou
+	hrrz t2,-4(p)
+	movei t3,10
+	setz t4,
+	nout
+	 nop
+	haltf
+	 jrst .-1
+
+lose:	
+
+;;;; test setup
+
+;; get file infomation
+;; returns +1 fail
+;;	   +2 fdb in FDB:, author and writer in them, too.
+
+getfdb:	move t1,jfn
+	hrlzi t2,.fblen
+	movei t3,fdb
+	gtfdb
+	 erjmp finfer		;file information error
+	txo f,fh%fdb!fh%flg!fh%afg!fh%pag
+	retskp
+
+getflg:	move t1,jfn
+	move t2,[1,,.fbctl]
+	movei t3,fdb+.fbctl
+	gtfdb
+	 erjmp finfer
+	txo f,fh%flg
+	retskp
+
+getafg:	move t1,jfn
+	move t2,[1,,.fbbbt]
+	movei t3,fdb+.fbbbt
+	gtfdb
+	 erjmp finfer
+	txo f,fh%afg
+	retskp
+
+getpag:	move t1,jfn
+	move t2,[1,,.fbbyv]
+	movei t3,fdb+.fbbyv
+	gtfdb
+	 erjmp finfer
+	txo f,fh%pag
+	retskp
+
+
+getaut:	move t1,jfn
+	hrli t1,.gfaut
+	hrroi t2,author
+	gfust
+	 erjmp finfer
+	txo f,fh%aut
+	retskp
+
+getwrt:	move t1,jfn
+	hrli t1,.gflwr
+	hrroi t2,writer
+	gfust
+	 erjmp finfer
+	txo f,fh%wrt
+	retskp
+
+getacc:	hrrz t1,jfn
+	hrroi t2,accnt
+	gactf
+	 jrst finfer
+	 skipa			;success
+	 setzm accnt		;failed to get string, but ok
+	txo f,fh%acc
+	retskp
+
+finfer:	push p,t1
+	move t1,outfil
+	fmsg <%Error getting data for file: >
+	move t2,(p)
+	move t3,[111110,,1]
+	jfns
+	 jfcl
+	call fcrlf
+	pop p,t1
+	ret
+
+;; perform the test
+;; expects the fdb in FDB:
+;; prints the filename iff the test succeeds.
+;; returns +1 always
+
+test:	aos tcount		; count a test
+	call dotest
+	 ret			;test failed.
+	move t1,outflg
+	txnn t1,o%nofil		;61 don't print file?
+	 call prtfil
+
+	;; do accounting
+
+	move t1,outflg
+	ifxn. t1,o%totp
+	  need pag,<jrst test1>
+	  load t2,pages
+	  addm t2,pagcnt	;add to total page count
+test1:
+	endif.
+
+	aos count		;count it.
+	ret
+
+;;; Table of interesting file attributes to print.
+
+	;; Protection handled specially.
+
+define prtmac,<
+	zz o%pag,ot.pag,0
+	zz o%auth,ot.aut,0
+	zz o%cdate,ot.date,<move t2,fdb+.fbcrv>
+	zz o%swdate,ot.date,<move t2,fdb+.fbcre>
+	zz o%wdate,ot.date,<move t2,fdb+.fbwrt>
+	zz o%rdate,ot.date,<move t2,fdb+.fbref>
+	zz o%break,ot.num,<call [ call tx.break
+				  move t2,t1
+				  ret ]>
+>
+
+define zz (flag,routine,data),<
+	flag
+>
+prttab:	prtmac
+	
+prtnum==.-prttab
+
+define zz (flag,routine,data),<
+	routine
+>
+prtsub:	prtmac
+
+define zz (flag,routine,data),<
+	data
+>
+prtdat:	prtmac
+
+;;; Print the file
+
+prtfil:	;; Print deleted/invisible specification.
+
+;;;64 begin insertion
+	need flg,<jrst prtfi0>
+prtfi0:	load q1,fdbctl
+		;; Get the output file here, cuz need clobbers T1
+	move t1,outfil		;57 use the output file
+	txnn q1,fb%del!fb%inv
+	ifskp.
+	  txnn q1,fb%del
+	  ifnsk. <fmsg < >>, <fmsg <D>>
+	  txnn q1,fb%inv
+	  ifnsk. <fmsg < >>, <fmsg <I>>
+	  fmsg <  >
+	else.
+	  fmsg <    >
+	endif.
+;;;64 end insertion
+
+	;; Print filename
+
+	move t2,jfn
+	move t3,[<111110,,0>+js%paf]
+	move t4,outflg		;71
+	txne t4,o%prot		;71
+	 txo t3,js%pro		;add protection flag
+	jfns
+
+	;; Print other stuff
+
+	push p,f		;save flag word
+	push p,q1
+	move f,outflg
+
+	hrlzi q1,-prtnum
+
+prtlp:	tdnn f,prttab(q1)
+	ifskp.
+	  movei t2,.chtab
+	  bout			;tabify it.
+	  call @prtsub(q1)
+	endif.
+	aobjn q1,prtlp
+
+	pop p,q1
+	pop p,f
+
+	hrroi t2,[asciz /
+/]				;57 change t1 to t2
+	setz t3,		;57
+	sout			;57 change from psout
+
+	ret
+
+;;; output routines
+
+ot.pag: need pag,ret
+	move t1,outfile
+	load t2,pages
+	movei t3,^D10
+	nout
+	 jfcl
+	ret
+
+ot.num: need fdb,ret
+	xct prtdat(q1)
+	move t1,outfile
+	movei t3,^D10
+	nout
+	 jfcl
+	ret
+
+ot.date:
+	need fdb,ret
+	xct prtdat(q1)
+	move t1,outfile
+	setz t3,
+	odtim
+	 jfcl
+	ret
+
+ot.aut:	need aut,ret
+	move t1,outfile
+	hrroi t2,author		;57
+	setz t3,		;57
+	sout			;57
+	ret
+
+
+;; do the tests
+;; expects the FDB in the fdb buffer and the author and writer names, too.
+;; returns +1 if test fails, +2 if succeeds
+
+dotest:	setz tp,
+	call tsexp
+	 ret
+	retskp
+
+;; test expression
+tsexp:	call tstrm		;test a term
+	ifskp.
+	  call skexp		;true, the expression is true, skip rest
+	  retskp			;return true
+	else.
+	  load t1,tstcod		;get next test
+	  caie t1,t.fexp		;finish exp?
+	  ifskp.
+	    aos tp		;skip over expression finish
+	    ret			;return false
+	  endif.
+	  jrst tsexp		;try next term
+	endif.
+
+skexp:	load t1,tstcod
+	caie t1,t.fexp		;expresion finish?
+	ifskp.
+	  aos tp
+	  ret			;finish
+	endif.
+	caie t1,t.lpar		;left paren
+	ifskp.
+	  aos tp
+	  call skexp		;skip intermediate exp
+	else.			;46
+	  aos tp		;46 skexp leaves pointer after exp.
+	endif.
+;;46	aos tp
+	jrst skexp		;go for more
+
+;; test a term.
+
+tstrm:	load t1,tstcod	;next test
+	caie t1,t.ftrm		;finish term?
+	ifskp.
+	  aos tp		;skip finish term
+	  retskp		;return true
+	endif.
+	call tsfac		;test next factor
+	ifskp.
+	  jrst tstrm		;success, keep trying...
+	else.
+	  call sktrm		;failed, term false
+	  ret
+	endif.
+
+;; skip over the rest of the term
+
+sktrm:	load t1,tstcod
+	caie t1,t.ftrm
+	ifskp.			;finished
+	  aos tp
+	  ret
+	endif.
+	caie t1,t.lpar		;expression?
+	ifskp.
+	  aos tp		;skip over t.lpar
+	  call skexp		;skip over rest of exp
+	else.			;skexp leaves pointer after exp.
+	  aos tp
+	endif.
+	jrst sktrm		;do rest.
+
+;; test a factor
+
+tsfac:	call @tsttab(tp)	;do the test
+	ifskp.
+	  aos tp
+	  retskp		;passed
+	endif.
+	aos tp
+	ret			;failed
+
+;; the tests themselves:
+t.btwn: nop			;pseudo tests
+t.fexp:	nop
+t.ftrm:	nop
+t.cont: nop
+	fatal <Internal error: Invalid test executed.>
+
+;;; boolean pseudo tests
+
+t.lpar:	aos tp
+	call tsexp
+	ifskp.
+	  sos tp		;must point to last test
+	  retskp
+	else.
+	  sos tp
+	  ret
+	endif.
+
+t.not:	aos tp
+	call tsfac
+	ifskp.
+	  sos tp		;must point to last test
+	  ret			;say fail... (reverse sense)
+	else.
+	  sos tp
+	  retskp		;reverse sense
+	endif.
+
+;;; Macros for tests
+
+define t.arith (name,cond,code),<
+name:
+	need fdb,ret
+	opstr xct,targ1
+	code
+	opstr <cam'cond t1,>,targ2
+	 ret
+	retskp
+>
+
+define dat2sec,<
+	move t2,t1
+	setz t4,
+	odcnv
+	hrrz t1,t4
+>
+
+;;; specific tests
+
+t.aflg:	need afg,ret
+	load t1,archf
+	opstr <tdnn t1,>,targ1
+	 ret
+	retskp
+
+;;; This is really a subroutine for the test.  The actual evaluation is
+;;; done in t.eq and friends.
+;;; Breakage.  When number of pages is not
+;;; 1+floor(nbytes/pagesize) breakage is set to be 0, because that
+;;; probably means that the file is usually accessed by pmap, and that
+;;; there's no breakage.
+
+tx.break:
+	need fdb,ret
+	movei t1,^d36		; 36 bits per word
+	load t2,bytsiz		; bits per byte
+	idiv t1,t2		; floor(bytes/word)
+	imuli t1,1000		; bytes/page
+	load t3,size		; bytes/file
+	idiv t3,t1		; t3 := pages, t4 := bytes left over
+	move t2,t1		; save bytes/page
+	sub t1,t4		; t1 := unused bytes
+	imuli t1,^D100		; prepare to make percent
+	idiv t1,t2		; t1 := percent breakage
+	aos t3
+	opstr <came t3,>,pages	; right number of pages?
+	 setz t1,		; zero breakage
+	ret			; return the breakage.
+
+;;; backed up?
+
+t.bup:	need fdb,ret
+
+	;; Always "succeed" on directory files.
+	load t1,fdbctl
+	txne t1,fb%dir
+	 retskp
+
+	load t1,numwrt
+	opstr <camle t1,>,bunwrt
+	 ret
+	retskp
+
+t.arith (t.eq,e)
+t.arith (tt.eq,e,dat2sec)
+
+t.fcls:	need fdb,ret
+	load t1,filcls
+	opstr <came t1,>,targ1
+	 ret
+	retskp
+
+t.fail:
+t.false:
+	ret			; always fails.
+
+t.fil:	movx t1,.wljfn		;compare jfn's
+	load t2,targ1
+	move t3,jfn		;get the jfn being tested
+	wild%
+	skipe t1		;match?
+	 ret			;no
+	retskp			;yes.
+
+t.flag:	need flg,ret
+	load t1,fdbctl
+	opstr <tdnn t1,>,targ1
+	 ret
+	retskp
+
+t.arith (t.geq,ge)
+t.arith (tt.geq,ge,dat2sec)
+
+t.arith (t.grtr,g)
+t.arith (tt.grtr,g,dat2sec)
+
+t.arith (t.less,l)
+t.arith (tt.less,l,dat2sec)
+
+t.arith (t.leq,le)
+t.arith (tt.leq,le,dat2sec)
+
+;;; Multiple data test.
+;;; The test information for such tests looks like:
+;;; [ t.mult ] [ addr of coroutine ] [ coroutine data ]
+;;; [ t.cont ] [ test instruction ] [ test datum ]
+;;; [ t.cont ] [ test instruction ] [ test datum ]
+;;;    ...
+;;; (that's right: it takes multiple words)
+
+;;; The coroutine contract:
+;;; P2/ coroutine data from tsta2  (first time only)
+;;; P2/ -1 (to abort--indicates that a clean up is necessary)
+;;; Returns +1: No more data
+;;;	    +2: Next datum in T1
+;;; May use Q1, Q2, Q3, P2 for state information.
+
+;;; The test instruction can assume that T2 points to the proper tsta2 word.
+
+t.mult:	need fdb,ret
+	push p,p1		;p1 will hold the coroutine address
+	push p,p2		;p2 will hold the coroutine state variable
+	push p,p3		;p3 will hold the starting index of the tests
+	push p,q1		;for use by coroutine
+	push p,q2
+	push p,q3
+
+	load p1,targ1		;get the coroutine address
+	load p2,targ2
+	move p3,tp
+	aos p3
+
+	movei t1,t.cont		;look for the end of the test
+tmul0:	camn t1,tsttab+1(tp)
+	 aoja tp,tmul0
+
+tmul1:	call (p1)
+	 jrst tmul4		;no more data
+
+	;; OK.  Try all the comparison data.  This is effectively an "and".
+	;; (It has to pass ALL the tests)
+	move t2,p3
+tmul2:	xct tsta1(t2)
+	 jrst tmul1		;we failed a test.  Try the next datum
+	
+	aos t2
+	camg t2,tp		;done?
+	 jrst tmul2
+
+	aos -6(p)		;success, say so
+	setom p2		;indicate cleanup necessary
+	call (p1)
+	 nop
+
+tmul4:	pop p,q3
+	pop p,q2
+	pop p,q1
+	pop p,p3
+	pop p,p2
+	pop p,p1
+	ret
+
+t.arith (t.neq,n)
+t.arith (tt.neq,n,dat2sec)
+
+t.peq:	need fdb,ret
+	load t1,protect
+	load t2,targ2
+	came t1,t2
+	 ret
+	retskp
+
+t.pgtr:	need fdb,ret
+	load t1,protect		;get file protection
+	load t2,targ2
+	andcm t2,t1		;clear file's bits from test
+	skipn t2		;file has more bits set (less protected)
+	 retskp			;less bits (more protected)
+	ret
+
+t.plss:	need fdb,ret
+	load t1,protect		;get file protection
+	load t2,targ2
+	andcm t1,t2		;clear test's bits from file
+	skipn t1		;file has less bits set (more protected)
+	 retskp			;more bits (less protected)
+	ret
+
+t.true:	retskp			; always succeeds
+
+t.wst:	load t3,targ2
+	tdne f,(t3)
+	ifskp.
+	 call @1(t3)
+	 ret
+	endif.
+	move t3,2(t3)
+
+	movx t1,.wlstr		;compare jfn's
+	load t2,targ1		;get compare string (wild)
+;;;	load t3,targ2		;get the string being tested
+	wild%
+	skipe t1		;match?
+	 ret			;no
+	retskp			;yes.
+
+;;;; Disk address coroutine
+
+tx.dad:	skipe p2		;First time through?
+	 jrst txdad0		;nope, go get next word
+
+	;; Set up internal state
+	call dadset
+	 ret			;failed to set up state, return failure
+
+	movei p2,1		;say we've initialized
+
+txdad0:	skipg p2
+	 ret			;no clean up necessary
+
+	;; Get next disk address
+txdad1:	sosge q1
+	 jrst nxtibk		;get the next index block
+	move t1,dskib(q1)
+	andcm t1,dskflg
+	skipn t1		;if non-zero, then we've got it
+	 jrst txdad1		;try the next one
+	retskp			;got a word
+
+	;; get the next index block for the file
+nxtibk:	sosge q2
+	 ret			;no more
+	move t1,dsksib(q2)
+	andcm t1,dskflg
+	skipn t1		;if non-zero, then we've got a new ib
+	 jrst nxtibk		;try next word
+	movei t3,dskib
+	call getblk		;get index block
+	 ret
+	movei q1,1000
+	move t1,dsksib(q2)	;return the index block, too!
+	andcm t1,dskflg
+	retskp
+
+	;; Read a block from disk
+getblk: tlo t1,577600		;setup AC1 for DSKOP call
+	movei t2,1000
+	move t4,q3		;get structure designator
+	dskop
+	skipe t1		;an error?
+	 ret
+	retskp			;nope, go ahead
+
+dadset:	;; Set up disk address state
+	move t1,jfn		;get the jfn
+	dvchr
+	 erjmp fail
+	movem t1,q3		;got the device designator
+	movei q2,1		;assume normal file (not long)
+	move t1,fdb+.fbadr	;get the disk address
+	movem t1,dsksib		;stuff it in the "super index block"
+	movem t1,dskib		;also here, for the first test
+	setz q1,		;but we won't need it if it's a normal file
+	move t2,fdb+.fbctl
+	txnn t2,fb%lng
+	ifskp.			;it's long. go get the super index block
+	 movei t3,dsksib
+	 call getblk
+	  ret			;if it fails, so do we
+	 movei q2,1000		;do the whole block
+	 movei q1,1		;do the super index block address, too.
+	endif.
+	retskp
+
+;;;; parsing
+
+iniprs:	call inips1
+	hrroi t1,[asciz /FIND>/]	;reset the prompt
+	skipe oncep
+	 hrroi t1,[asciz //]
+	stor t1,prompt
+
+	movei t1,reparse	;reset reparse address
+	stor t1,comrep
+
+	cmcall([flddb.(.cmini)])
+	ret
+
+inips1:	setz tp,		;reset tst pointer
+	move t1,stbufb		;65
+	hrli t1,(point 7,0)	;65
+;;65	move t1,[440700,,stbuf]	;and string buffer
+	movem t1,stbp
+	setzm ifh
+	setzm ifh2
+	setzm jfn
+	setzm parcnt
+	ret
+
+reparse:
+	call psclean
+	call inips1
+	jrst cmlp1
+
+psclean:
+	skipn ifh2
+	ifskp.
+	  skipl ifh2
+	  ifskp.
+	    setzm ifh2		;just clear it
+	  else.
+	    hrrz t1,ifh2
+	    rljfn			;release the file handle
+	     jfcl
+	    setzm ifh2		;not there anymore
+	  endif.
+	endif.
+	;; release all the t.fil test jfns
+	move t1,tp
+	call clnjfn
+	skipn odiver		;output diverted (?????)
+	ifskp.
+	  call undvrt		;fix that and warn user
+	  etmsg(<Internal error: Output diverted during parse.>)
+	endif.
+	skipn ojfn		;have output jfn?
+	ifskp.
+	  move t1,ojfn
+	  rljfn			;release it
+	   jfcl
+	endif.
+	ret
+
+inijcl:	movx t1,.rsini
+	rscan
+	 ercal fail
+
+	movem t1,t3
+	movei t1,.priin
+	movei t2,.nulio
+	movei t4,40
+	sin
+
+	skipn t3		;no jcl, skip return
+	 retskp
+	ret			;there's jcl, return +1
+
+;;;65 STKSCH: Make the search parameter sticky.
+
+stksch:	skipn ifh2		;65 do we have a new search jfn?
+	 ret
+	skipn schjfn		;65 did we have one before?
+	ifskp.
+	  move t1,schjfn	;65 yep.
+	  rljfn		;65 release it
+	   nop
+	  setzm schjfn	;65 say we don't have one anymore
+	endif.
+	skipl t1,ifh2		;65 if .lt. 0 then just leave it cleared.
+	 movem t1,schjfn	;65 and save the new one.
+	setzm ifh2		;65 and don't remember it here.
+	ret
+
+deffil:	skipn optflg		;do we want optimizing?
+	ifskp.			;yup
+	 call optim
+	  jrst [ tmsg <%Conflicting tests--Can't possibly find any files!>
+		 ret ]
+	else.
+	 skipe t1,schjfn	;otherwise, say we need full wild.
+	 call cpyjfn
+	endif.
+
+	skipn t2,t1		;did we find a possible?
+	ifskp.
+	  push p,t1		;we'll want to punt it in a bit...
+	  move t1,stbp
+	  movem t1,tx		;save it
+	  movx t3,<777770,,1>	;all the important stuff
+	  jfns
+	    ercal fail
+	  setz t2,
+	  idpb t2,t1
+	  movem t1,stbp		;save new storage pointer
+	  move t2,tx		;pointer to start
+	  pop p,t1
+	  rljfn
+	   nop
+	else.
+	  hrroi t1,lgnam
+	  stdev
+ifn psonly,<
+	   skipa t2,[-1,,[asciz /ps:<*>*.*.*/]]	;no fs:, sigh.
+>
+ife psonly,<
+	   skipa t2,[-1,,[asciz /dsk*:<*>*.*.*/]]	;no fs:, sigh.
+>
+	  hrroi t2,lgnam
+	endif.
+
+	movx t1,srcdef		;set up flags
+	txne f,f%nod		;no delete?
+	 txz t1,gj%del
+	stor t1,sgjflg
+
+	movx t1,srcdf1		;second flag set
+	txne f,f%noi
+	 txz t1,g1%iin		;clear flags
+	stor t1,sgjf1
+
+	tmsg <Beginning search for >
+	move t1,t2
+	psout
+	call crlf
+
+	movx t1,srcgjb		;search gtjfn block
+	gtjfn
+defwat:	 erjmp defnof
+	movem t1,ifh
+	retskp
+
+defabt:	ret
+
+defnof:	caie t1,gjfx16		;No such device
+	 cain t1,gjfx17		;No such directory
+	  jrst defno0
+	caie t1,gjfx18		;No such filename
+	 cain t1,gjfx19		;No such file type
+	  jrst defno0
+	caie t1,gjfx20		;No such generation
+	 cain t1,gjfx24		;No such file
+	  jrst defno0
+	caie t1,gjfx32		;No files match this specification
+	 jrst deflos
+defno0:	push p,t1
+	tmsg <%No files found: >
+	pop p,t2
+	hrli t2,.fhslf
+	movx t1,.priou
+	setz t3,
+	erstr
+	 nop
+	 nop
+	callret crlf
+
+deflos: perstr (<Failed to find files: >)
+	ret
+
+;;;; Optimize the search.
+
+;;; OPTIM:  Optimize the file system search.
+;;; This routine attempts to limit the search for files based on what
+;;; is being searched for.  (Of course, if no names are being looked
+;;; for, then no optimization can be done...)
+
+;;; The optimization uses various combination methods based on the
+;;; boolean combinations of file name tests.
+
+;;; Returns +1: Can't possibly succeed.
+;;;	    +2: Success,
+;;;		    T1/ The ifh to search, or 0 if full wild.
+
+optim:	setz tp,
+	call op.exp		;find it.
+	 jrst opti2a
+	 ret			;can't possibly succeed
+
+	;; Merge with schjfn, if any
+	skipn t2,schjfn
+	ifskp.
+	 push p,t1		;save op.exp ifh
+	 call mexcl		; merge exclusive
+	 skipe chkdev		;make sure that there were no
+	  skipn chkdir		; incompatibilities.  If there
+	   jrst optim2		; were, then we punt and use schjfn
+	 skipe chkfil
+	  skipn chkext
+	   jrst optim2
+	 skipn chkext
+	  jrst optim2
+
+	 optrace <Merging with SCHJFN>,schjfn
+
+	 call merge
+	  jrst optim2		;sigh.  the merge failed.
+	 exch t1,(p)
+	 rljfn
+	  nop
+	 pop p,t1
+	endif.
+
+	optrt1 <Done>
+	retskp			;merged ifh...  (whew)
+	 
+optim2:	pop p,t1		;get op.exp ifh
+	rljfn			;get rid of it
+	 nop
+opti2a:	skipe t1,schjfn
+	call cpyjfn
+	retskp
+
+ret3:	aos (p)
+	retskp
+
+;;; Input:
+;;;   TP/ points to the beginning of an expression in the test list
+;;; Returns +1: Failed to merge.  Use full wild expression.
+;;;	    +2: Failed to merge.  No files will match.
+;;;         +3: New file spec in T1.  Old one not released.
+;;;   In any case, TP will point to after the end of the expression.
+
+
+op.exp: push p,[0]
+op.ex0:
+	load t2,tstcod
+	caie t2,t.fexp
+	ifskp.
+	 aos tp
+	 pop p,t1		; get frob back.
+	 skipn t1
+	  jrst [ optrace <OP.EXP: Failed, no match>,[0]
+	  	 retskp		;we kept looping, but ended up with a
+				;zero.  Every term must have failed.
+				;Otherwise we would have returned or
+				;put a real ifh in.
+		 ]
+	 optrt1 <OP.EXP>
+	 jrst ret3
+	endif.
+
+	call op.trm
+	 jrst [ pop p,t1
+		skipe t1	; unless nothing there
+		 rljfn
+		  nop
+		optrace <OP.EXP: Failed, need wild>,[0]
+		callret skexp ]	; if we need a full wild for any arm of
+				;   the disjunction we need it for all.
+	 jrst op.ex0		; we don't care if one arm of the
+				;   disjunction can't match, the others
+				;   might.
+	;; Here we must make the ifh as all-inclusive as we can.	
+	move t2,(p)		; get ours.  Theirs is in T1
+	;; If ours is don't care, then use theirs
+	skipn t2
+	 jrst op.ex1
+	
+	;; Now we must merge.
+	push p,t1		;save theirs for now
+	call mincl		; merge inclusively
+	call merge		;do the merge
+	 setz t1,		;if it failed, say we lose.  THis
+				;shouldn't happen.
+	exch t1,(p)		;don't need theirs anymore
+	rljfn
+	 nop
+	pop p,t1		;get the new one back
+	
+op.ex1:	exch t1,(p)
+	skipe t1		;unless zero
+	 rljfn
+	  nop
+	jrst op.ex0
+
+;;; Optimize for a term. I/O conventions as for OP.EXP
+
+op.trm: push p,[0]
+op.tr0:
+	load t2,tstcod
+	caie t2,t.ftrm
+	ifskp.
+	 aos tp
+	 pop p,t1		; get frob back.
+	 skipn t1
+	  jrst [ optrace <OP.TRM: Failed, need full wild>,[0]
+	 	 ret		;similar to the above, if we didn't
+				;make any headway, then we need full
+				;wildcarding.  Otherwise we would have
+				;either returned or got an ifh.
+		 ]
+	 optrt1 <OP.TRM>
+	 jrst ret3
+	endif.
+
+	call op.fac
+	 jrst op.tr0		;if one arm of the conjunction needs full
+				; wild, that doesn't say much about
+				; the rest.  Let's keep looking.
+	 jrst [ call sktrm	; if one arm of the conjunction can't match,
+		pop p,t1
+		skipe t1
+		 rljfn
+		  nop
+		optrace <OP.TRM: Failed, no match>,[0]
+		retskp ]	;   none of them can.
+
+	;; Here we must make the ifh as exclusive as we can.	
+	move t2,(p)		; get ours.  Theirs is in T1
+	;; If ours is don't care, then use theirs
+	skipn t2
+	 jrst op.tr1
+	
+	;; Now we must merge.
+	push p,t1		;save theirs for now
+	call mexcl		; merge exclusively
+	skipe chkdev		;make sure that there were no
+	 skipn chkdir		; incompatibilities.  If there
+	  jrst op.tr2		; were, then we punt and say
+	skipe chkfil		; we can't possibly match...
+	 skipn chkext
+	  jrst op.tr2
+	skipn chkext
+	 jrst op.tr2
+
+	call merge		;do the merge
+	 setz t1,		;if fail, lose.  Shouldn't happen
+	exch t1,(p)		;don't need theirs anymore
+	rljfn
+	 nop
+	pop p,t1		;get the new one back
+	
+	;; Jump here to make the ifh in T1 our latest.
+
+op.tr1:	exch t1,(p)		;now get rid of our old one.
+	skipe t1		;unless zero
+	 rljfn
+	  nop
+	jrst op.tr0
+
+	;; Jump here to say we can't match anything.
+
+op.tr2:	pop p,t1		;don't need the one just handed us
+	rljfn
+	 nop
+	pop p,t1		;or our old one.
+	skipe t1
+	 rljfn
+	  nop
+	call sktrm		;skip the rest of the term
+	optrace <OP.TRM: Merge failed, no match>,[0]
+	retskp			;say we can't match anything
+
+;;; Do a single factor.  This has to be slightly clever about things
+;;;like t.lpar and t.not
+
+op.fac:	load t2,tstcod
+	aos tp			;advance the test pointer
+	caie t2,t.fil		;a file....
+	ifskp.
+	 move t1,tsta1-1(tp)	;we already incremented tp...
+	 call cpyjfn		;copy the ifh.
+	 optrt1 <OP.FAC>
+	 jrst ret3
+	endif.
+
+	caie t2,t.lpar		;a sub expression
+	ifskp.
+	 call op.exp		;recur, and return just what it returned.
+	  ret
+	  retskp
+	 jrst ret3
+	endif.
+
+	caie t2,t.not		;a negated factor.  This always
+	ifskp.			;requires the full wildcard.
+	 load t2,tstcod
+	 aos tp
+	 cain t2,t.lpar
+	  call skexp		;skip over the subexpression
+	 optrace <OP.FAC: Negation: Need full wild>,[0]
+	 ret
+	endif.
+
+	;; Finally, it's a random test.  Need full wildcard.
+	ret
+
+cpyjfn:	move t2,t1
+	move t1,stbp
+	move q1,t1
+	move t3,[777770,,js%paf]
+	jfns
+
+	setz t2,
+	ildb t2,t1
+
+	movx t1,gj%ofg+gj%sht+gj%flg+.gjall
+	move t2,q1		; get start of string back
+	gtjfn
+	 nop
+	ret
+
+chkdev: z
+chkdir: z
+chkfil: z
+chkext: z
+chkgen: z
+
+chktab:	js%dev+(gj%unt)
+	js%dir+(gj%dir)
+	js%nam+(gj%nam)
+	js%typ+(gj%ext)
+	js%gen+(gj%ver)
+
+;;; returns the most inclusive ifh possible, given the two input in T1
+;;; and T2
+
+mincl:	push p,t1
+	push p,t2
+	push p,p1
+	move p1,[-5,,0]
+mincl0:	move t3,chktab(p1)
+	call chkfld
+	 setz t1,
+	movem t1,chkdev(p1)
+	dmove t1,-2(p)
+	aobjn p1,mincl0
+
+	pop p,p1
+	pop p,t2
+	pop p,t1
+	ret
+
+mexcl:	push p,t1
+	push p,t2
+	push p,p1
+	move p1,[-5,,0]
+mexcl0:	move t3,chktab(p1)
+	call chkfld
+	 setz t2,
+	movem t2,chkdev(p1)
+	dmove t1,-2(p)
+	aobjn p1,mexcl0
+
+	pop p,p1
+	pop p,t2
+	pop p,t1
+	ret
+
+;;; Merges the ifh's found in chkdev-chkgen.
+
+;;; This routine depends on the fact that B0 in an ifh is not ever
+;;;set.
+
+merge:	move q1,stbp		; get and store stbp
+	move t1,q1
+
+	move t2,chkdev
+	skiple t2
+	ifskp.
+	 hrroi t2,[asciz /DSK*/]
+	 setz t3,
+	 sout
+	else.
+	 movx t3,js%dev
+	 jfns
+	endif.
+
+	movei t2,":"
+	idpb t2,t1
+	movei t2,"<"		; >
+	idpb t2,t1
+
+	move t2,chkdir
+	skiple t2
+	ifskp.
+	 movei t2,"*"
+	 idpb t2,t1
+	else.
+	 movx t3,js%dir
+	 jfns			; <
+	endif.
+
+	movei t2,">"
+	idpb t2,t1
+
+	move t2,chkfil
+	skiple t2
+	ifskp.
+	 movei t2,"*"
+	 idpb t2,t1
+	else.
+	 movx t3,js%nam
+	 jfns
+	endif.
+
+	movei t2,"."
+	idpb t2,t1
+
+	move t2,chkext
+	skiple t2
+	ifskp.
+	 movei t2,"*"
+	 idpb t2,t1
+	else.
+	 movx t3,js%typ
+	 jfns
+	endif.
+
+	movei t2,"."
+	idpb t2,t1
+
+	move t2,chkgen
+	skiple t2
+	ifskp.
+	 movei t2,"*"
+	 idpb t2,t1
+	else.
+	 movx t3,js%gen
+	 jfns
+	endif.
+
+	setz t2,
+	idpb t2,t1
+	
+	movx t1,gj%ofg+gj%sht+gj%flg+.gjall
+	move t2,q1		; get start of string back
+	gtjfn
+	 ret			; failure.
+	retskp			; success.
+
+;;; Checks a field for compatibility.
+;;; Input:  T1/ One ifh
+;;;	    T2/ Other ifh
+;;;	    T3/ js%... ,, gj%...
+;;; Returns +1: incompatible
+;;;	    +2: compatible -- most inclusive in T1, most restrictive in T2.
+;;;		T1 and T2 may contain -1, if they were both wild and
+;;;		weren't obviously compatible, then they might still
+;;;		match, but we need to use full wild.
+
+
+;;; Two ifh's are compatible if:
+;;; They're both wild or both not wild, and the strings are identical.
+;;; One is wild, and the other's not, but the wildness matches the
+;;;   non-wildness.
+;;; If they're both wild, but one is just '*', then they're still
+;;;   compatible.
+
+chkfld:	tlnn t1,(t3)		; is the first one wild?
+	ifskp.			; 1st wild.  2nd unknown yet.
+	 tlnn t2,(t3)		; is the second one wild?
+	  jrst chkwld		; 1st wild.  2nd not wild.
+	  jrst chkbw		; both wild. check strings.
+	else.			; 1st not wild.  second wild?
+	 tlnn t2,(t3)
+	  jrst chkis		; neither one wild.  Check strings.
+	 exch t1,t2
+	 jrst chkwld		; now, 1st wild, 2nd not wild.
+	endif.
+
+;;; One wild, one not.  See if compatible.
+
+chkwld:	;; Special case for device, cuz DSK* doesn't wild match PS,
+	;; but the structure does.
+	movei t4,(gj%unt)
+	cain t4,(t3)
+	 retskp			;it's compatible.
+	;; Not device.  Go for it.
+
+	push p,t1
+	push p,t2
+	call ch.gst
+	dmove t2,q1
+	movx t1,.wlstr
+	wild%
+	jrst chkis0
+
+;;; Check for identical strings.
+
+chkis:	push p,t1
+	push p,t2
+	call ch.gst
+chkis1:	dmove t1,q1
+	stcmp
+chkis0:	move t3,t1
+	pop p,t2
+	pop p,t1
+	skipe t3		; when compatible, skip return
+	 ret
+	retskp
+
+;;; Both wild.  See if one is '*', and if not, then they must have
+;;; identical strings.
+
+chkbw:	push p,t1
+	push p,t2
+	call ch.gst		;get the strings
+	move t1,q1
+	call ch.asp		;is it an asterisk?
+	 jrst chkbw1		;nope, try the other one.
+	pop p,t2
+	pop p,t1
+	retskp			;compatible, T1 is fully wild.
+
+chkbw1:	move t1,q2
+	call ch.asp		;is the second one an asterisk?
+	 jrst chkbw2		;no, try identical strings
+	pop p,t1
+	pop p,t2
+	retskp			;compatible, T1 (formerly T2) is fully wild.
+
+chkbw2:	dmove t1,q1		;try to see if they're identical
+	stcmp
+	move t3,t1
+	pop p,t2
+	pop p,t1
+	skipe t3		; when compatible, skip return
+	 setob t1,t2		; not compatible, but pretend they are.
+	retskp
+
+
+;;; See if the string in T1 is a lonely asterisk.
+;;; Returns +1 if not, +2 if so.
+
+ch.asp:	ildb t2,t1
+	caie t2,"*"
+	 ret			;failed to even be an asterisk.
+	ildb t2,t1
+	skipe t2
+	 ret			;started ok, but it's not alone.
+	retskp			;yipee!
+
+;;; Note:  This routine does not save the updated stbp.  Callers of this
+;;; routine must be aware that any new allocation will break things.
+
+ch.gst:	push p,t1
+	hllzs t3
+	setz t4,
+	move t1,stbp
+	move q2,t1
+	jfns			; get the "second" one
+	idpb t4,t1
+	pop p,t2
+	move q1,t1		; save string pointer
+	jfns
+	idpb t4,t1
+	ret
+
+define ctry(lst)<
+	irp lst,<
+	  cain t3,f.'lst	;test for func blk
+	   jrst c.'lst>		;jump to code for that function
+>
+
+parse:	move t1,p		;get stack at start of parse
+	movem t1,psstk		;save it
+psloop:	movei t1,gjargs		;reset the getjfn argblock
+	stor t1,gjbptr
+	txz f,f%prse
+	load p1,comcnt		;save current "pointer"
+	load p4,comptr		;save real pointer
+	cmcall (f..lst)		;23 made this generic, so can shuffle list
+	prser.
+	opstr <came p1,>,comcnt
+	ifskp.			;they are equal...
+	  etmsg(<Input error: no such test: ">)
+	  movx t1,.priou
+	  load t2,comptr
+	  load t3,cominc
+	  cail t3,^D15		;15 characters max
+	   movx t3,^D15
+	  sout			;print what failed.
+	  tmsg(<">)		;close quote
+	  ret			;parse failed
+	endif.
+	hrrzs t3
+
+;;	ctry(<fil,swt,sw2,and,or,not,lpar,rpar,cfm>)	;22 files are tests
+	ctry(<fil,swt,sw2,cfm,log,usr>)
+	etmsg(<Internal error: unknown parse type>)
+
+;;; might want clean up handlers here???
+psret:	move p,psstk		;restore stack at beginning of parse
+	ret			;failure return 
+
+psrskp:	retskp
+
+c.swt:	call c.swt1
+	jrst psloop
+
+c.swt1:	move t1,(t2)
+	move t1,(t1)
+	ifxn. t1,t%flag
+	  stts1((t1))
+	  sttst(t.flag)
+	else.	  
+	ifxn. t1,t%aflg
+	  stts1((t1))
+	  sttst(t.aflg)
+	else.
+	ifxn. t1,t%rng
+	  call cs.rng
+	else.
+	ifxn. t1,t%wst
+	  call cs.wst
+	else.
+	  call (t1)		;call routine for that switch
+	endif.
+	endif.
+	endif.
+	endif.
+	ret
+
+c.sw2:	move t1,(t2)
+	move t1,(t1)		;get value
+	txne t1,t%flag
+	 tdoa f,(t1)		;set the flag and don't call it!
+	call (t1)		;call the routine
+	jrst psloop
+
+c.log:	move t1,(t2)		;get table word
+	move t1,(t1)		;get dispatch
+	jrst (t1)		;go for it.
+
+c.and:	jrst psloop		;this is the default
+
+c.or:	sttst(t.ftrm)		;finish the term
+	jrst psloop
+
+c.not:	sttst(t.not)
+	jrst psloop
+
+c.lpar:	sttst(t.lpar)		;set the left paren "test"
+	aos parcnt		;incr the paren count
+	jrst psloop
+
+c.rpar:	sttst(t.ftrm)		;finish the term
+	sttst(t.fexp)		;finish the expression
+	sos parcnt		;decr the paren count
+	jrst psloop
+
+c.cfm:	call sticky		;71 do sticky things.
+	call echo		;73 echo, if necessary.
+	skipn tp		;23 any tests?
+	 jrst psret
+
+;;;71	 jrst [ call stksch	;65 before "failing", save a /search, if any
+;;;71	        jrst psret ]	;23 no, just return as parse failure
+;;;71	call stksch
+
+	sttst(t.ftrm)
+	sttst(t.fexp)		;everything passes...
+	skipg parcnt		;unbalanced parens?
+	ifskp.
+	  etmsg(<Input error: Unmatched left parentheses>)
+	  jrst psret	  
+	else.
+	  skipl parcnt
+	  ifskp.
+	    etmsg(<Input error: Extra right parentheses>)
+	    jrst psret	  
+	  endif.
+	endif.
+	jrst psrskp		;return success!
+
+;;;71 begin addition
+
+sticky:	call stksch
+	move t1,outflg		;are the new settings sticky?
+	skipn tp		;always sticky if no tests.
+	 ;; here when no tests
+	 txze t1,o%nstick	;explicity not sticky?
+	  ;; here when tests or explicity not sticky
+	  txze t1,o%sticky	;explicity sticky overrides explicitly not
+	   ;; Here when no tests and not explicity sticky,
+	   ;; or (tests or explicitly not sticky) and explicity sticky
+	   movem t1,outstk	;set them, then
+	
+	ret
+
+;;;71 end addition
+
+echo:	move t1,iopp
+	cain t1,iopdl
+	ifskp.
+	  txnn f,f%echo
+	anskp.
+	  call freshl
+	  load t1,prompt
+	  psout
+	  load t1,comptr
+	  setz t2,
+	  idpb t2,t1
+	  hrroi t1,txtbuf
+	  psout
+	endif.
+	ret
+
+c.fil:	stts1(t2)		;save the jfn for the file spec
+	sttst(t.fil)		;the file test
+	jrst psloop
+
+prserr:	etmsg(<Input error: >)
+	hrli t2,.fhslf
+	movei t1,.priou
+	erstr
+	 jfcl
+	 jfcl
+	ret			;parse failed
+
+f..lst:				;23
+f.cfm:	flddb.(.cmcfm,,,,,f.fil)	;23 move to here confirm...
+f.fil:	flddb.(.cmfil,,,<Filename to look for,>,,f.swt)
+f.swt:	flddb.(.cmswi,,ct.swt,<Test,>,,f.sw2)
+f.sw2:	flddb.(.cmswi,,ct.sw2,<Global switch,>,,f.log)
+f.log:	fldbk.(.cmkey,,ct.log,<Boolean operator,>,<and>,bk.log,)
+
+f.usr:	flddb. .cmswi,,mactab,<User macro,>
+
+;;;; keyword and break tables
+
+bk.rng:	brmsk. keyb0.,keyb1.,keyb2.,keyb3.,(=<>),<()>	;losing MACRO-20
+
+bk.log:	brmsk. -1,-1,-1,-1,<(~|&)>,	;60 break on all but logicals
+
+define tf(name,flg),<
+T	name,t%flag,[flg]
+>
+
+define tfar(name,flag),<
+T	name,t%aflg,[flag]
+>
+
+ct.swt:	table			;the switch table
+TV	account,t%wst,accntb
+TFAR	arch-request,ar%rar
+TV	archive-tape-id-1,t%rng!t%six,[load t1,fbtp1]
+TV	archive-tape-id-2,t%rng!t%six,[load t1,fbtp2]
+TF	archived,fb%arc
+TV	author,t%wst,authob
+ifn mit,<
+T	autokeep
+T	backed-up,,.backe
+>
+TF	bad-pages,fb%bat
+TV	breakage,t%rng,[call tx.break],cm%inv
+TV	byte-size,t%rng,[load t1,bytsiz]
+TV	cdate,t%rng!t%date,.fbcrv
+T	de,,0,cm%nor
+TF	deleted,fb%del
+TA	di,tab.di
+tab.di:
+TF	directory,fb%dir
+TV	disk-address,,.diska,cm%inv
+ifn mit,<
+T	e,,0,cm%nor
+T	ephemeral
+>
+T	ex,,0,cm%nor
+T	exempt-migration,t%aflg,[ar%exm],cm%inv
+TV	generation,t%rng,[load t1,gen]
+TF	invisible,fb%inv
+T	l,,0,cm%nor
+TF	long,fb%lng
+T	no,,0,cm%nor
+T	no-delete-contents,t%aflg,[ar%1st],cm%inv
+TA	not,not.sa
+not.sa:
+TF	not-saved,fb%nod
+TV	obscure-flags,,.obscu
+TF	offline,fb%off
+TV	pages,t%rng,[load t1,pages]
+TF	permanent,fb%prm
+TF	perpetual,fb%ndl
+TV	protection
+TV	rdate,t%rng!t%date,.fbref
+TFAR	resist-migration,ar%nar
+TV	retention,t%rng,[load t1,retent]
+TV	size,t%rng,[load t1,size]
+TF	subdirectories,fb%sdr
+TV	swdate,t%rng!t%date,.fbcre
+TV	wdate,t%rng!t%date,.fbwrt
+TV	writer,t%wst,writeb
+TEND				;that's all, folks!
+
+ct.sw2:	table			;global switch table
+ifn mit,<
+T	background,t%flag,[f%back]	;57 reinsert background switch
+>
+T	de,,0,cm%nor
+T	define
+T	e,,0,cm%nor
+T	exit
+T	h,,0,cm%nor
+T	help
+T	l,,0,cm%nor
+T	list
+T	no-optimize-search,,.noptm
+TF	nodelete,f%nod
+TF	noinvisible,f%noi
+T	notropt,,,cm%inv
+T	optimize-search,,.yoptm
+TV	output
+TV	search
+T	show
+TV	take
+T	total
+T	tropt,,,cm%inv
+TEND
+
+ct.log:	table
+T	<&>,,c.and
+T	<(>,,c.lpar		;)(
+T	<)>,,c.rpar
+T	<|>,,c.or
+T	<~>,,c.not
+TEND
+
+ct.rng:	table			;table for ranges
+	xwd [asciz /</],[t.less]	;>
+	xwd [asciz /<=/],[t.leq]	;> sigh...
+	xwd [asciz /<>/],[t.neq]
+T	<=>,,t.eq		;<
+	xwd [asciz />/],[t.grtr]	;<
+	xwd [asciz /></],[t.btwn]	;><
+	xwd [asciz />=/],[t.geq]
+T	between,,t.btwn
+T	equal,,t.eq
+T	geq,,t.geq
+T	greater,,t.grtr
+T	leq,,t.leq
+T	less,,t.less
+T	not-equal,,t.neq
+TEND
+
+ct.rdt:	table			;range keys for dates
+	xwd [asciz /</],[t.less]	;>
+	xwd [asciz /<=/],[t.leq]	;> sigh...
+	xwd [asciz /<>/],[t.neq]
+T	<=>,,t.eq		;<
+	xwd [asciz />/],[t.grtr]	;<
+	xwd [asciz /></],[t.btwn]	;><
+	xwd [asciz />=/],[t.geq]
+T	after,,t.grtr
+T	before,,t.less
+T	between,,t.btwn
+T	n,,0,cm%nor
+T	no,,0,cm%nor
+T	not-on,,t.neq
+T	on,,t.eq
+T	since,,t.grtr
+TEND
+
+ct.obs:	table
+TV	address,t%rng!t%oct,[load t1,ibaddr]
+TV	backed-up-nwrites,t%rng,[load t1,bunwrt]
+TV	backed-up-times,t%rng,[load t1,butim]
+TV	breakage,t%rng,[call tx.break]
+TV	directory-number,t%rng!t%oct,[load t1,dirnum]
+TV	disk-address,,.diska
+TFAR	exempt-migration,ar%exm
+TFAR	first-pass-in-progress,ar%1st
+TFAR	no-delete-contents,ar%ndl
+TV	nreferences,t%rng,[load t1,numref]
+TV	number-of-references,t%rng,[load t1,numref]
+TV	number-of-writes,t%rng,[load t1,numwrt]
+TV	nwrites,t%rng,[load t1,numwrt]
+TV	offline-pages,t%rng,[load t1,offpgs]
+TV	offline-reason,,.ofrsn
+TV	offpages,t%rng,[load t1,offpgs]
+TV	offreason,,.ofrsn
+TFAR	resist-migration,ar%nar
+TFAR	restore-failed,ar%rfl
+TFAR	system-involuntary-migration,ar%riv
+TF	temporary,fb%tmp
+TFAR	user-requested-archive,ar%rar
+TFAR	warn-offline-expire,ar%wrn
+TEND
+
+ct.off:	table
+T	archived,,.arrar
+T	expired,,.arexp
+T	migrated,,.arrir
+TEND
+
+ct.out:	table
+T	author,o%auth,0
+T	breakage,o%break,0
+TA	c,out.cd
+T	cdate,o%cdate,0
+out.cd:
+T	creation-date,o%cdate,0
+out.no:
+T	no,,0
+T	nofiles,o%nofil!o%totp,0	;no files, implies total
+T	pages,o%pag!o%totp,0
+T	protection,o%prot,0
+TA	r,out.rd
+T	rdate,o%rdate,0
+out.rd:
+T	reference-date,o%rdate,0
+out.st:
+T	sticky,o%sticky,0
+T	swdate,o%swdate,0
+T	sytem-write-date,o%swdate,0
+T	total,o%totp,0
+TA	w,out.wd
+T	wdate,o%wdate,0
+out.wd:
+T	write-date,o%wdate,0
+TEND
+
+;;;; command table routines
+
+ifn mit,<
+
+.autok:	stts1(.fbkep,i)
+	sttst(t.fcls)		;file class
+	ret
+
+.backe:	sttst(t.bup)		;backed up test
+	ret
+
+.ephem:	stts1(.fbeph,i)
+	sttst(t.fcls)		;file class
+	ret
+>
+
+.diska:	movei t1,.fhslf
+	rpcap			;can we do it at all?
+	 erjmp diskax		;just try it...
+	txne t3,sc%whl+sc%opr	;have proper capabilities enabled?
+	ifskp.			;nope, try to enable them
+	 iorx t3,sc%whl+sc%opr	;get whichever we can
+	 epcap
+	  erjmp diskax		;oh, just try it anyway...
+	 rpcap			;did we get it now?
+	  erjmp diskax
+	 txne t3,sc%whl+sc%opr
+	 ifskp.
+	  etmsg <Must have WHEEL or OPERATOR to look for disk addresses.>
+	  jrst psret
+	 endif.
+	endif.
+
+diskax:	push p,tp		;save old tp
+	setz t1			;not strictly necessary, but, why not...
+	txo f,f%oct		;make sure we get an octal number
+	call cs.rng
+	move t1,(p)		;old TP
+	movei t2,tx.dad		;coroutine address
+	setz t3,		;no real data
+	movei t4,deftrt		;default translation table
+	call cs.fix
+	skipn dskflg
+	 call gdkflg
+	pop p,t1		;old TP
+diska0:	aos t1
+	caml t1,tp
+	 ret
+	move t2,tsta2(t1)
+	andcm t2,dskflg
+	movem t2,tsta2(t1)
+	jrst diska0
+
+gdkflg:	movei t1,.snpsy
+	move t2,[radix50 0,NCORTM]
+	setz t3,
+	snoop%
+	 jrst fail
+	ori t2,777777
+	setcam t2,dskflg
+	movei t1,.snpsy
+	move t2,[radix50 0,DSKAB]
+	snoop%
+	 jrst fail
+	orm t2,dskflg
+
+	movei t1,.snpsy
+	move t2,[radix50 0,DSKNB]
+	snoop%
+	 jrst fail
+	orm t2,dskflg
+	ret
+
+;;; obscure-flags
+.obscu:	cmcall ([flddb.(.cmswi,,ct.obs,<"Obscure" flag or value,>)])
+	prser.
+	call c.swt1		;handle it.
+	ret
+
+;;; offline-reason
+.ofrsn:	cmcall ([flddb.(.cmkey,,ct.off)])
+	prser.
+	hrrz t1,(t2)
+	stts2(t1)
+	stts1(<[load t1,offrsn]>)
+	sttst(t.eq)
+	ret
+
+.prote:	;; test a file's protection
+	txo f,f%oct		;protection is octal
+	push p,tp		;save the test pointer
+	call cs.rng		;get a range
+	pop p,tx		;old test pointer
+prot1:	caml tx,tp		;fix tests
+	 ret
+	load t1,ptcod,(tx)
+	cain t1,t.grtr
+	 movei t1,t.pgtr	;protection greater
+	cain t1,t.less
+	 movei t1,t.plss	;protection less
+	cain t1,t.eq
+	 movei t1,t.peq		;protection equal
+	stor t1,ptcod,(tx)	;store new test
+	load t1,pta2,(tx)	;get the test number
+	tlo t1,500000		;high bits for protection
+	stor t1,pta2,(tx)
+	aos tx
+;;;71	txo f,f%prot		;display file's protection
+	movx t1,o%prot		;71
+	iorm t1,outflg		;71
+	jrst prot1
+
+;;; global switch routines
+
+.exit:	haltf			;temporarily exit
+	callret cs.bck
+
+.help:	call prthlp
+	callret cs.bck
+
+.noptm:	setzm optflg
+	callret cs.bck
+
+.notro: setzm opttrc
+	callret cs.bck
+
+.outpu:	;; set output parameters
+	movei tx,outgjb		;gtjfn block for output redirection
+	stor tx,gjbptr
+outp1:	setzm outnop		;71 we don't have a no yet.
+outp2:	cmcall([flddb.(.cmkey,,ct.out,<Output parameter,>,,[flddb.(.cmofi)])])
+	prser.
+	hlrz t1,t3		;orig flddb
+	caie t1,(t3)		;compare
+	ifskp.			;keyword
+	  caie t2,out.no	;71 is it a no?
+	  ifskp.
+	    setcmm outnop
+	    jrst outp2		;71 get the negated keyword.
+	  endif.
+
+	  caie t2,out.st	;71 sticky?
+	  ifskp.
+	    skipn outnop
+	    anskp.		;71 no sticky?
+	    setzm outstk	;71 clear sticky bits.
+	    move t1,o%nstick	;71
+	    iorm t1,outflg	;71
+	  endif.
+
+	  move t1,(t2)		;get bits
+;;;71	  tdo f,(t1)		;and set them
+	  move t1,(t1)		;71
+	  iorm t1,outflg	;71 set it (we'll clear it next, if necessary)
+	  skipe outnop		;71
+	   andcam t1,outflg	;71
+	else.
+	  skipn ojfn		;already have one?
+	  ifskp.
+	    move t1,ojfn	;release it
+	    rljfn
+	     jfcl
+	  endif.
+	  movem t2,ojfn
+	endif.
+	cmcall([flddb.(.cmcma,,,<Comma and another parameter, or next field of command>)])
+	txne t1,cm%nop		;not a comma
+	  ret			;end and try next field
+	jrst outp1		;get another bit
+
+
+.searc:	skipn ifh2		;already have one?
+	ifskp.
+	  skipg ifh2		;65 see if we are "clearing" it.
+	  anskp.		;65
+	    hrrz t1,ifh2
+	    rljfn			;release it
+	     jfcl
+	    setzm ifh2		;and say none
+	endif.
+	;;65 add option to indicate no search limits.
+	cmcall [flddb. .cmtok,cm%sdh,<-1,,[asciz /#/]>,<"#", to indicate no special limitations>,,[
+		flddb. .cmfil,,,<Files to search,>]]
+	prser.
+	hlrz t1,t3		;65
+	caie t1,(t3)		;65 the token?
+	ifskp.			;65
+	  setom ifh2		;65 indicate it.
+	else.			;65
+	  movem t2,ifh2		;65
+	endif.			;65
+	ret
+
+.show:	;; Sticky stuff.
+	noise (sticky parameters)
+	call shwstk
+	jrst cs.bck
+
+.take:	move t4,iopp
+	caige t4,iopdle
+	ifskp.
+	  etmsg <Too many take files.>
+	  jrst psret
+	endif.
+
+	movei t1,takgjb
+	stor t1,gjbptr
+
+	cmcall ([flddb.(.cmfil,,,<take file,>)])
+	prser.
+
+	move t1,t2		;get the JFN
+	push p,t1		;save it, in case openf gets an error.
+
+	confirm
+	txnn t1,cm%nop
+	ifskp.
+	  pop p,t1
+	  rljfn
+	   nop
+	  call prserr
+	  jrst psret
+	endif.
+
+	move t1,(p)
+	movx t2,<fld(7,of%bsz)+of%rd>
+	openf
+	 jrst [ move t2,t1	;that's where prserr expects it.
+		call prserr
+		pop p,t1
+		rljfn
+		 nop
+		jrst psret ]
+
+	pop p,t1		;get the JFN back.
+	
+	move t2,cmstbk+.cmioj
+	movem t2,(t4)
+	aos iopp
+	
+	hrlzs t1
+	hrri t1,.nulio
+	movem t1,cmstbk+.cmioj
+
+	camn p4,cmstbk+.cmbfp
+	 jrst cmloop
+	jrst cs.bck
+
+.total:	movx t1,o%totp
+	iorm t1,outflg
+	ret
+
+.tropt: setom opttrc
+	callret cs.bck
+
+.yoptm:	setom optflg
+	callret cs.bck
+
+;;;; command table subroutines
+
+cs.wst:	;;;opstrm <hrrom t1,>,targ2	;save base string address
+	stts2(t1)
+	movei t2,accntb
+	caie t2,(t1)
+	ifskp.
+	  cmcall([flddb.(.cmqst,,,,,[flddb.(.cmact)])])
+	else.
+	  cmcall([flddb.(.cmqst,,,,,[flddb.(.cmusr,cm%po)])])
+	endif.
+	prser.
+	call cpatm
+	stts1(t1)
+	sttst(t.wst)
+	ret
+
+;;; CS.RNG
+;;;  Parse a range of numbers.  Parses a keyword to indicate the
+;;;  logical arithmetic test (less, less-or-equal, equal, etc.), and
+;;;  a number to which to compare the datum.  The datum is expected to
+;;;  come from the FDB at the offset in T1.
+;;;
+;;;  This routine saves one (or two, in the case of "between") test, in
+;;;  the form [t.<arith>] [instruction to get datum] [datum to compare to].
+;;;  The "between" test turns into "(greater than x) and (less than y)".
+
+cs.rng:	hrrzm t1,p1		;save the instruction's addr
+	txne t1,t%oct
+	 txo f,f%oct
+	txne t1,t%six		;for sixbit, get decimal number first
+	 txo f,f%six
+	ifxn. t1,t%date		;parse a date?
+	  move tx,[move t1,fdb]	;generate the instruction
+	  addm tx,p1
+	  callret cs.rdt	;61 dispatch to date parser
+	endif.
+	move p1,(p1)		;get the actual instruction
+	movei t2,[fldbk.(.cmkey,,ct.rng,,,bk.rng,[flddb.(.cmnum,,^D10)])]
+	txne f,f%oct
+	  movei t2,[fldbk.(.cmkey,,ct.rng,,,bk.rng,[flddb.(.cmnum,,^D8)])]
+	movei t1,cmstbk
+	comnd
+	 prser.
+	txnn f,f%six		;wanted sixbit number?
+	ifskp.
+	  push p,3
+	  setzm sixstr
+	  setzm sixstr+1
+	  hrroi 1,sixstr
+	  movei 3,^d10
+	  NOUT%
+	   jfcl
+	  move 1,[point 7,sixstr]
+	  move 2,[point 6,sixnum]
+	  setzm sixnum
+	  movei 4,6
+	  do.
+	   ildb 3,1
+	   skipe 3
+	    subi 3,40
+	   idpb 3,2
+	   sojg 4,top.
+	   move 2,sixnum	;converted decimal num to sixbit
+	  enddo.
+	  pop p,3
+	endif.
+	hlrz t1,t3		;addr of keyword
+	cain t1,(t3)		;different (parsed number...)
+	ifskp.
+	  movei p2,t.eq		;test is eq
+	  jrst rngsve
+	endif.
+	move t1,(t2)
+	move p2,(t1)		;get test
+
+	;; Here to parse the first number after the keyword.  If we didn't
+	;; get a keyword, then we already have the number, and have
+	;; gone to RNGSVE
+
+rngbtn:
+	ifxn. f,f%oct
+	  cmcall([flddb.(.cmnum,,^D8)])
+	else.
+	  cmcall([flddb.(.cmnum,,^D10)])
+	endif.
+	prser.
+
+	movem t2,t4		;save it for range test
+
+	;; If we have the "between" test, we really want two tests, and
+	;; we need two numbers.  Get the second one.
+
+	caie p2,t.btwn		;pseudo test
+	ifskp.
+	  stts2(t2)
+	  stts1(p1)		;fdb offset
+	  sttst(t.grtr)		;greater than lower bound
+	  noise <and>
+	  movei p2,t.less	;next test...
+	  jrst rngbtn		;get another number
+	endif.
+	caml t2,t4		;bad range???
+	ifskp.
+	  etmsg (<Input error: High bound less than low bound>)
+	  jrst psret		;error return
+	endif.
+
+	;; Here to save the data for the numerical test.
+
+rngsve:	stts2(t2)		;save values
+	stts1(p1)		;fdb offset
+	sttst(p2,)		;save test
+	ret
+
+;;;61 Begin insertion
+;;; CS.DRN
+;;;  parse a date range, with special date handling.
+;;;  Makes use of the following tests:
+;;;   t.eq, t.grtr, et cetera, for exact equality testing, when both date and
+;;;	time are entered.
+;;;   For testing equality on the date only, the test translates into a 
+;;;	range of midnight to midnight.
+;;;   For testing inequality on the date only, less (greater) than translates
+;;;	into t.less (t.geq) for 0:00 (24:00) on the date.  Less-or-equal
+;;;	(greater-or-equal) becomes t.less for 24:00 (t.geq for 0:00) on the
+;;;	date
+;;;   tt.eq, tt.gtr, etc., for testing the time only.  These tests only
+;;;	compare the seconds since midnight, on the day in question.
+
+;;;dt.today==0
+;;;dt.now==1
+
+bk.today:
+	brmsk. keyb0.,keyb1.,keyb2.,keyb3.,,<-+>	;so subtraction works
+
+ct.today:
+	table
+T	n,,0,cm%nor
+T	no,,0,cm%nor
+T	now,,dt.now
+T	today,,dt.today
+T	tomorrow,,dt.tomorrow
+T	yesterday,,dt.yesterday
+TEND
+	
+f.rdt:	fldbk. .cmkey,,ct.rdt,,,bk.rng,f.date
+f.date:	flddb. .cmtad,cm%sdh,cm%itm!cm%ida,<date and time, date (at 0:00), or time on any day>,bk.rng,f.today
+f.today:
+	fldbk. .cmkey,,ct.today,,,bk.today
+
+f.doly:	flddb. .cmtad,cm%sdh,cm%ida!cm%nci!datblk,<date (at 0:00)>,bk.rng
+f.toly:	flddb. .cmtad,cm%sdh,cm%itm,<a time on any day>,bk.rng
+
+;;;66 Begin insertion.
+;;;
+;;; CS.PDT:  Parse a date and/or time.  Expects in t2 the address of a
+;;;	field descriptor block that eventually chains to f.date.  If the
+;;;	parsed field is one of f.date, f.doly, f.toly, or f.today, then
+;;;	this routine will handle it.  Otherwise, the info is passed back to
+;;;	the caller to handle as it pleases.
+;;;  Returns: +1 -- An error occured
+;;;	      +2 -- A field other than the above was parsed, AC's as
+;;;		    from COMND
+;;;	      +3 -- A date/time was parsed.  Resulting internal format in
+;;;		    in T2, and the flddb parsed in T3.
+;;;	If COMND returns with CM%NOP set, this routine will jump to PRSERR.
+;;;
+;;; Modification in version 102:  f.date no longer chains to f.doly or
+;;; f.toly.  We only try to parse date only or time only if the first parse
+;;; fails.  If either succeeds, then we dispatch to the date-only or time-only
+;;; routines.  Otherwise we error return.
+
+cs.pdt:	movei t1,cmstbk		;call comnd.
+	comnd
+	txnn t1,cm%nop		;didn't parse.  Try doly, toly.
+	 jrst cs.pd0
+	movei t1,cmstbk
+	movx t2,f.doly
+	comnd
+	txnn t1,cm%nop
+	 jrst pd.dly		;found a date-only
+	movei t1,cmstbk
+	movx t2,f.toly
+	comnd
+	 prser.			;punt on error.
+	jrst pd.tly		;found a time only
+
+cs.pd0:	push p,t3		;save values
+	hrrzs t3		;what'd we parse?
+	cain t3,f.date		;a date?
+	 jrst pd.dat		;go do it
+;;;	cain t3,f.doly		;date only?
+;;;	 jrst pd.dly
+;;;	cain t3,f.toly		;time only?
+;;;	 jrst pd.tly
+	cain t3,f.today		;a keyword?
+	 jrst pd.tdy
+	pop p,t3		;don't know what it is.  Pass it back.
+	retskp			;return +2.
+
+;;; PD.... routines all jump to here when they've put the date/time in
+;;; T2.  If they encounter an error they jrst pd.ret
+
+pd.end:	pop p,t3
+	hrrzs t3
+	aos (p)
+	aos (p)
+	popj p,
+
+pd.ret:	pop p,t3
+	ret
+
+;;; PD.DAT: Handle parse of a date and time.
+pd.dat:	jrst pd.end		;it's already there.
+
+;;; PD.TLY: Handle parse of time only.  Return seconds since midnight.
+pd.tly: push p,t3		;this doesn't come from cs.pd0
+	setz t4,
+	odcnv
+	hrrz t2,t4		;seconds since midnight
+	jrst pd.end
+
+;;; PD.DLY: Handle parse of date only.
+pd.dly:	push p,t3		;this doesn't come from cs.pd0
+	dmove t2,datblk
+	hllz t4,datblk+2	;get idtnc stuff without odd second
+	idcnv
+	 jrst cs.rd1
+	jrst pd.end
+
+dt.now:	gtad
+	movem t1,t2
+	retskp
+
+dt.today:
+	seto t2,
+	setz t4,
+	odcnv
+	hllzs t4
+	idcnv
+	 ret
+	retskp
+
+dt.yesterday:
+	call dt.today
+	 ret
+	sub t2,[1,,0]
+	retskp
+
+dt.tomorrow:
+	call dt.today
+	 ret
+	add t2,[1,,0]
+	retskp
+
+;;; This changes t3 to pretend that we are either f.doly or f.date, 
+;;; which ever is appropriate.
+
+pd.tdy:	move t3,(t2)		;get table word
+	hrrz t3,(t3)		;just code
+
+	movei q1,f.doly		;Assume day only
+	cain t3,dt.now		;unless the keyword was "now"
+	 movei q1,f.date	;in which case it's exact.
+
+	call (t3)
+	 jrst cs.rd1
+	push p,t2		;save date/time value
+	cmcall([flddb.(.cmtok,cm%sdh,<-1,,[asciz /-/]>,<optional "-" to specify amount of time to subtract>)])
+	txnn t1,cm%nop
+	ifskp.
+	  pop p,t2		;restore date/time value
+	  movem q1,(p)
+	  jrst pd.end		;and go with it
+	endif.
+	movei q1,f.date		;we'll have a time.  This is "exact"
+	call pd.hm
+	pop p,t2		;retrieve base time
+	sub t2,t1		;subtract odd time
+	movem q1,(p)
+	jrst pd.end
+
+;;; PD.HM  Parse an HH:MM specification.  Universal date/time offset is returned in T1.
+;;; T2, T3, T4 destroyed.
+
+pd.hm:	cmcall([flddb.(.cmnum,cm%sdh,^D10,<hours or hours and minutes, (HHH or HHH:MM)>)])
+	 prser.
+	push p,t2		;save hours
+	cmcall([flddb.(.cmtok,cm%sdh,<-1,,[asciz /:/]>,<Colon, if minutes are being entered, or next field of command>)])
+	txnn t1,cm%nop
+	ifskp.
+	  pop p,t1
+	  mul t1,[1,,0]		;66
+	  divi t1,^D24		;66
+	  ret
+	endif.
+	cmcall([flddb.(.cmnum,cm%sdh,^D10,<minutes>)])
+	 prser.
+	pop p,t1		;get hours back
+	imuli t1,^D60		;make into minutes
+	add t1,t2		; add odd minutes
+	mul t1,[1,,0]		; prepare to make into internal date and time
+	divi t1,^D<24*60>	;66 [divi] and make into fraction of a day
+	ret
+
+;;; Maybe input some fuzz.  Returns +2 with fuzz in T1 if user wanted it.
+;;; Returns +1 otherwise. T2, T3 clobberred.
+
+pd.fuzz:
+	cmcall([flddb.(.cmtok,cm%sdh,<-1,,[asciz /_/]>,<optional "_" to specify amount of "fuzziness">)])
+	txne t1,cm%nop
+	 ret
+	call pd.hm		;get fuzziness
+	retskp
+
+;;;66 Moby deletion.
+
+
+;;;66 Begin insertion
+
+;;; cs.rdt:	Parse a range of date/time values.
+;;; This is where the main parser comes in.
+
+cs.rdt:	movei t2,f.rdt		;parse a range keyword or a date/time
+	call cs.pdt
+	 jrst cs.rd1		;+1 an error occured
+	 jrst cs.rd0		;+2 it was f.rdt
+
+	movei p2,t.eq
+	jrst cs.r0a
+
+cs.rd0:	;; Handle the range keyword.
+	move t2,(t2)		;table entry
+	move p2,(t2)		;the test
+	movei t2,f.date		;we really need a date, now
+	call cs.pdt
+	 jrst cs.rd1		;+1 -- error
+	 nop			;+2 -- can't happen
+
+	;; Handle date only t.neq, and t.eq
+	;; This should work for "today", too.
+cs.r0a:	movei q2,t.tab		;assume normal tests.
+	cain t3,f.toly
+	 movei q2,tt.tab	;nope, time only tests.
+
+	caie t3,f.doly
+	ifskp.
+	 movsi t4,1		;one day.
+	 call pd.drg
+	  ret
+	endif.
+
+	;; Handle EQ/NEQ of an exact time.
+	caie p2,t.eq
+	 cain p2,t.neq
+	  jrst cs.req
+
+	;; Handle t.btwn
+	cain p2,t.btwn		;is it the pseudo test?
+	 jrst cs.rbt
+
+	;; Handle the rest
+cs.r00:	caie q2,tt.tab		; a time-only run?
+	ifskp.			; yup
+	 setz t1,
+	 came p2,t.tab(t1)
+	  aoja t1,.-1
+	 move p2,tt.tab(t1)
+	endif.
+	stts2(t2)		;save the date/time
+	stts1(p1)		;fdb offset
+	sttst(p2,)		;and the test
+	ret			;and all done.
+
+tt.tab:	tt.less
+	tt.geq
+	tt.eq
+	tt.neq
+	tt.leq
+	tt.grtr
+
+t.tab:	t.less
+	t.geq
+	t.eq
+	t.neq
+	t.leq
+	t.grtr
+
+;;; Handle t.eq, t.neq of an exact time.  Try to get a fuzziness.
+cs.req: push p,t2		;save time.
+	call pd.fuzz
+	ifskp.			;got some.
+	 caie q2,tt.tab		; are we time-only?
+	 ifskp.			; yes, convert fuzz to seconds
+				; These can be imuli, because it should
+				; never overflow, and if it does, the
+				; user deserves to be shot anyway.
+	  imuli t1,^D<3600*24>	; seconds in a day
+	  hlrzs t1		; move binary point to right of word.
+	 endif.
+
+	 pop p,t2		;get time back
+	 sub t2,t1		;make past time
+	 move t4,t1
+	 add t4,t1		;twice the fuzz, to get to future time.
+	 call pd.drg
+	  ret			;should always work!!!
+	 ret
+	endif.
+	pop p,t2		;get time back
+	jrst cs.r00
+
+;;; Handle t.btwn.  Expects test table in Q2.
+cs.rbt:	 push p,t2		;save old value for range check.
+	 noise <and>
+	 move t2,f.date
+	 call cs.pdt		;get another date.
+	  jrst cs.rd1		;+1 error
+	  nop			;+2 can't happen
+	 cain q2,tt.tab		;should it be time only?
+	  cain t3,f.toly	;yes, is it?
+	   skipa		;yes, we win
+cs.rb0:	    jrst [ etmsg (<Input error: Incompatible date/time
+	 	   specifications>) jrst psret ]
+	 caie q2,tt.tab		; but, if it should not be, then it
+				; should not be.
+	  caie t3,f.toly
+	   skipa
+	    jrst cs.rb0
+
+	 pop p,t4		;restore lower bound of range
+	 caml t2,t4		;bad range???
+	 ifskp.
+	   etmsg (<Input error: High bound less than low bound>)
+	   jrst psret		;error return
+	 endif.
+	 stts2(t4)		;start of range
+	 stts1(p1)		;fdb offset
+	 sttst(1(q2),)		;after start of range
+	 stts2(t2)		;save date/time
+	 stts1(p1)		;fdb offset
+	 sttst(0(q2),)		;before end of range
+	 ret			;and all done.
+
+
+;;; Handle t.eq and t.neq of fuzzy time.  The fuzz is in T4.
+;;; Q2 should point to the appropriate test table.
+;;; Returns +1 if it put the tests in.  +2 if it didn't handle it.
+
+pd.drg: caie p2,t.neq
+	ifskp.		;it is, do it.
+	  sttst(t.lpar)	;start a sub-expression
+	  stts2(t2)		;the start of the day
+	  stts1(p1)		;fdb offset
+	  sttst(0(q2),)	;before the date?
+	  sttst(t.ftrm)	;.or.
+	  add t2,t4	;next day (sort of)
+	  stts2(t2)
+	  stts1(p1)
+	  sttst(1(q2),)	;after the date?
+	  sttst(t.ftrm)	;finish term
+	  sttst(t.fexp)	;right paren (sort of)
+	  ret			;and all done.
+	endif.
+	caie p2,t.eq
+	ifskp.
+	  stts2(t2)
+	  stts1(p1)
+	  sttst(1(q2),)
+	  add t2,t4
+	  stts2(t2)
+	  stts1(p1)
+	  sttst(0(q2),)
+	  ret
+	endif.
+	retskp					;otherwise, just leave it.
+
+cs.rd1: call prserr
+ 	jrst psret	;return error
+
+;;;66 End insertion
+
+;;; back up the parse.  Eliminates the current field from the input line.
+;;; Requires that the calling parse routine not have clobbered p1 or p4.
+
+cs.bck:	stor p1,comcnt		;restore the old count
+	stor p4,comptr		;restore the pointer
+	setz t1,
+	stor t1,cominc		;no characters in buffer to parse
+	tlce p4,-1
+	tlcn p4,-1
+	hrli p4,440700		;make an ascii pointer
+	idpb t1,p4		;ascizify the buffer
+	;; set up to redisplay the line.
+	skipe oncep
+	 jrst cs.bc1
+	hrroi t1,[asciz \
+\]
+	psout
+	load t1,prompt
+	psout
+	hrroi t1,txtbuf
+	psout			;print it (ascizified)
+cs.bc1:	ret
+
+;;;103 Begin insertion
+
+;;; CS.FIX:
+;;;  Fix range tests to handle multiple data for each file (like /disk-address)
+
+;;; The test information for such tests looks like:
+;;; [ t.mult ] [ addr of coroutine ] [ coroutine data ]
+;;; [ t.cont ] [ test instruction ] [ test datum ]
+;;; [ t.cont ] [ test instruction ] [ test datum ]
+;;;    ...
+;;; (that's right: it takes multiple words)
+
+;;; The coroutine contract:
+;;; T1/ coroutine data from tsta2 (first call)
+;;; T1/ -1 (succeeding calls)
+;;; Returns +1: No more data
+;;;	    +2: Next datum in T1
+;;; May use Q1, Q2, Q3 for state information.
+
+;;; The test instruction can assume that T2 points to the proper tsta2 word.
+
+;;; Contract:
+;;; T1/ address of start of range tests (old TP)
+;;; TP/ address of word after end of range tests
+;;; T2/ address of proper coroutine
+;;; T3/ coroutine data
+;;; T4/ address of test-to-instruction translation table
+;;;
+;;; Returns with the test tables fixed up.
+
+cs.fix:	push p,q1
+	push p,q2
+	push p,tp		;save old tp
+	push p,t2
+	push p,t3
+	move q1,t1
+	move q2,t4
+
+cs.fi0:	camg tp,q1
+	 jrst cs.fi1
+	move t1,tsttab-1(tp)
+	call cs.trt		;translate the test
+	movem t1,tsta1(tp)
+	move t1,tsta2-1(tp)
+	movem t1,tsta2(tp)
+	movei t1,t.cont
+	movem t1,tsttab(tp)
+	soja tp,cs.fi0
+
+cs.fi1:	movei t1,t.mult
+	movem t1,tsttab(tp)
+	pop p,tsta2(tp)
+	pop p,tsta1(tp)
+	pop p,tp
+	aos tp			;we now have one more test
+	pop p,q2		;restore temp registers
+	pop p,q1
+	ret
+
+deftrt:	t.eq,,[came t1,tsta2(t2)]
+	t.neq,,[camn t1,tsta2(t2)]
+	t.less,,[caml t1,tsta2(t2)]
+	t.leq,,[camle t1,tsta2(t2)]
+	t.grtr,,[camg t1,tsta2(t2)]
+	t.geq,,[camge t1,tsta2(t2)]
+	0
+
+cs.trt:	move t2,q2
+cs.tr0:	hlrz t3,(t2)
+	skipn t3
+	 jrst [ etmsg (<Input error: Illegal arithmetic test for switch>)
+		jrst psret ]
+	came t3,t1
+	 aoja t2,cs.tr0
+	hrrz t1,(t2)
+	move t1,(t1)
+	ret
+
+;;;; support subroutines
+
+ifn mit,<
+;;; Run the find in the background
+
+bckgnd:	movx t1,3		;magic number for backgroundness
+	call stparg		;set process args
+	haltf			;so exec will see our request
+	ret			;and return to do the processing
+
+;;; set process arguments (for background, etc)
+;;; t1: the argument (right half)
+;;; returns +1 always
+
+stparg:	hrlz t4,t1		;arg block
+	hrlzi t1,.prast
+	hrri t1,.fhslf		;set the args for this sprocess
+	movx t2,t4		;point to arg block
+	movx t3,1		;one word
+	prarg
+	ret
+>;end IFN MIT
+
+clnjfn:	setz t2,
+clnjfx:	movn tx,t1
+	sub tx,t2
+	jumpe tx,clnjf0
+	hrlzs tx
+	hrr tx,t2
+	do.
+	  load t1,ptcod,(tx)
+	  caie t1,t.fil
+	  ifskp.
+	    load t1,pta1,(tx)
+	    hrrzs t1
+	    rljfn
+	     jfcl
+	  endif.
+	  aobjn tx,top.
+	enddo.
+clnjf0:	ret
+
+;;; Fresh line
+
+freshl:	movei t1,.priou
+	rfpos
+	hrrzs t2
+	skipe t2
+	 callret crlf
+	ret
+
+crlf:	tmsg <
+>
+	ret
+
+fcrlf:	fmsg <
+>
+	ret
+
+cpatm:	move t1,stbp
+	push p,t1
+	hrroi t2,atmbuf
+	movx t3,.infin		;move a large number of bytes
+	setz t4,		;until a null, of course.
+	sout			;copy the string
+	setz t2,
+	idpb t2,t1		;null terminate
+	movem t1,stbp		;save the new buffer pointer
+	movni t2,1
+	adjbp t2,t1		;and return it here, too.
+	pop p,t1		;restore the original pointer
+	sub t3,[.infin-1]	;calculate length
+	movns t3
+	ret
+
+prthlp:	hrroi t1,hlptxt
+	psout
+	ret
+
+hlptxt:	asciz \
+Type a filename to search for files of that name.
+Type a test switch to search for a file with that attribute.
+  Some tests take arguments, which are usually expressible as a range
+  as in "less 40" for less than 40, or "between 40 100".  Just a number
+  is like "equal n".  Dates are standard Tops-20 syntax.
+  The /obscure-flags switch can be used to test for some esoteric fields.
+  Note that some switches are synonyms.
+Type a global switch to control the search and/or output.  Use /output: to
+  send the results to a file, or to add information to the output display.
+  Use /search: to limit the search (or define the logical name "files:").
+  /background makes FIND run as a background fork, but it is unkept.
+Type |, &, ~, (, ), to form a boolean expression of tests and/or filenames.
+Control-P report FIND's progress.  Control-A will abort the search.
+\
+
+define shws..,<
+	zz o%prot,protection
+	zz o%pag,pages
+	zz o%auth,author
+	zz o%cdate,creation-date
+	zz o%swdate,system-write-date
+	zz o%wdate,write-date
+	zz o%rdate,reference-date
+	zz o%nofil,nofiles
+	zz o%totp,total
+	zz o%break,breakage
+>
+
+define zz (bit,word),<
+	bit
+>
+
+shws.b: shws..
+	0
+
+define zz (bit,word),<
+	[asciz /word/]
+>
+
+shws.a:	shws..
+
+shwstk:	call freshl
+	skipn t2,schjfn
+	ifskp.
+	  tmsg </search:>
+	  movx t1,.priou
+	  movx t3,<111110,,1>
+	  jfns
+	   jfcl
+	  call crlf
+	endif.
+	setz t3,
+	skipn t4,outstk
+	ifskp.
+	  tmsg </output:>
+	  movx t2,shws.b
+shwst0:	  skipn t1,(t2)
+	   jrst shwst2
+	  tdnn t4,t1
+	   jrst shwst1
+	  skipn t3
+	  ifskp.
+	    tmsg < ,>
+	  else.
+	    seto t3,
+	  endif.
+	  hrro t1,shws.a-shws.b(t2)
+	  psout
+shwst1:	  aos t2
+	  jrst shwst0
+
+shwst2:	  call crlf
+	endif.
+	ret
+
+;;;; Define stuff
+
+.define:
+	;; Make sure the /define is the only thing here, so far.
+
+	load t1,combuf
+	camn t1,p4
+	ifskp.
+	  etmsg <Illegal use of /define.>
+	  jrst cs.bck
+	endif.
+
+	;; Get the name for the new macro
+
+	noise (macro named)
+	cmcall ([flddb.(.cmfld,,,<name of macro, >)])
+	prser.
+
+	;; We now copy the name of the macro.  For TBADD, the string must
+	;; start on a word boundary.  This is guaranteed iff we haven't moved
+	;; stbp since the start of the parse.  Also, the pointer we get back
+	;; will be 440700,,ADDR, instead of 010700,,ADDR-1.
+
+	call cpatm		;get the name
+	movem t1,p1		;save it.
+	movem t2,p3		;save this for a moment.
+
+	;; Get the argument count
+
+	noise (number of arguments)
+
+	setz p2,
+	cmcall ([flddb.(.cmnum,cm%sdh,^D10,<number of arguments>,,cm.cfm)])
+	prser.
+	hlrz t1,t3
+	caie t1,(t3)
+	ifskp.
+	  movem t2,p2
+	  confirm
+	  prser.
+	endif.
+
+	;; If there are arguments, put a colon in.
+
+	jumpe p2,def00
+	movei t1,":"
+	dpb t1,p3		;we saved stbp
+	setz t1,
+	idpb t1,p3
+	movem p3,stbp		;move it a bit.
+
+
+def00:	;; Get the equivalence string
+
+	tmsg <Enter the equivalence string.  Argument locations are #n,
+when n is the number of the arg (origin = 1).>
+
+	;; <
+	hrroi t1,[asciz /Def>/]
+	stor t1,prompt
+	movei t1,defrep
+	stor t1,comrep
+
+	cmcall ([flddb. .cmini])
+defrep:	cmcall ([flddb.(.cmtxt,,,<Equivalence string,>,,[
+		 flddb.(.cmcfm,cm%sdh,,<Carriage return to abort>)])])
+	prser.
+
+	ldb t1,[pointr(<(t3)>,cm%fnc)]
+	cain t1,.cmcfm
+	 jrst cmloop
+
+	call cpatm		;get the equivalence string.
+	movem t1,p3		;here it is.
+
+	confirm
+	prser.
+
+def0:	;; At this point we have:
+	;; P1/ Name of the macro
+	;; P2/ Number of arguments for the macro
+	;; P3/ Equivalence string
+
+	;; now we put in P4 the pointer to the macro descriptor block.
+
+	hrrz p4,stbp		;get the end of the used string space
+	aos p4			;start in next word
+
+	movem p2,(p4)		;store number of arguments
+	movei q1,1(p4)
+	add q1,p2		;move over argument pointer storage
+
+	;; Look for argument locations.
+
+	move t1,p3
+
+def1:	movem t1,(q1)		;save pointer to this segment
+	aos q1			;point to length,,arg# cell
+	setz t3,		;no characters, yet
+
+def1a:	ildb t2,t1		;look for #
+	jumpe t2,def2		;escape from character loop
+	cain t2,argchr
+	 jrst def1b
+	aos t3			;count it.
+	jrst def1a		;next char
+
+def1b:	setz t2,
+	dpb t2,t1		;ascizify it
+	hrlzm t3,(q1)		;save length
+
+	movei t3,12		;prepare to read argument number
+	nin			;read it
+	 jrst [ move t2,t3
+		call prserr
+		jrst psret ]
+	skiple t2
+	 camle t2,p2
+	  jrst [ etmsg <Bad argument number.  Text: >
+		 move t2,-1(q1)
+		 hlrz t1,(q1)
+		 adjbp t1,t2
+		 ibp t1
+		 psout
+		 call crlf
+		 jrst psret ]
+	hrrm t2,(q1)		;save argument number
+	aos q1			;point to next segment.
+	ldb t2,t1		;what was the offending character?
+	cain t2,"'"		;separator?
+	ifskp.			;no.  back up.
+	  movni t2,1
+	  adjbp t2,t1
+	  move t1,t2		;ok, now ready to go again.
+	endif.
+	jrst def1		;loop.
+
+def2:	;; Here when out of characters.
+	jumpe t3,def2a		;no characters?
+	hrlzm t3,(q1)
+	aosa q1
+def2a:	sos q1			;Here to forget about the bogus segment.
+
+	setzm (q1)
+	aos q1
+
+	;; OK.  It's parsed all right now.  Update the appropriate tables.
+
+	;; See if it's already there
+
+	move t1,mactbl		;address of table
+	move t2,p1
+	tbluk
+	 erjmp [ seto t2,
+		 call prserr
+		 jrst psret ]
+	txnn t2,tl%exm		;exact match?
+	ifskp.			;yes.
+	  hrrm p4,(t1)		;store new descriptor block
+	  jrst def3
+	endif.
+
+	;; Try to put it in the macro table.
+
+	move t1,mactbl
+	hlrz t2,(t1)
+	hrrz t3,(t1)
+	came t2,t3		;will it fit?
+	ifskp.			;no, relocate the table
+	  move t2,q1
+	  movem t2,mactbl
+	  hrl t2,t1		;form BLT pointer
+	  hrrz t1,(t1)		;old length
+	  addi t1,^D50
+	  addi t1,(t2)		;point to end
+	  blt t2,(t1)		;relocate (there are no abbrevs to handle)
+	  movei q1,(t2)		;save end of the new table
+	  move t2,mactbl	;get beginning again.
+	  hrrz t1,(t2)		;get length
+	  addi t1,^D50		;new length
+	  hrrm t1,(t2)
+
+	  ;; Update the function block.
+
+	  movem t2,f.usr+.cmdat
+	endif.
+	
+	hrlz t2,p1		;form tbadd entry.
+	hrr t2,p4
+	move t1,mactbl
+	tbadd
+	 ;; There should not be an error.
+	
+	;; Splice the comnd function block in, if necessary.
+	hlrz t1,@mactbl
+	caie t1,1		;the first one?
+	ifskp.
+	  hrrz t1,f.swt+.cmfnp	;where did this go?
+	  hrrm t1,f.usr+.cmfnp	;this'll go there
+	  movei t1,f.usr
+	  hrrm t1,f.swt		;and this'll point to f.usr
+	endif.
+
+def3:	movem q1,stbufb		;new beginning of string space
+	jrst cmloop		;go get a new command.
+
+;;;
+;;; List operation
+;;;
+
+.list:	move p2,mactbl
+	hlrz p3,(p2)
+	movns p3
+	jumpe p3,list0
+	aos p2
+	hrl p2,p3		;we now have an aobjn pointer
+	
+list1:	hlro t1,(p2)		;get name
+	psout
+	hrrz q1,(p2)		;get entry
+	skipn t2,(q1)		;number of args
+	ifskp.
+	  tmsg < (>		;)
+	  movx t1,.priou
+	  movx t3,^D10
+	  nout			;(
+	   jfcl
+	  tmsg < args)>
+	endif.
+	tmsg < = ">
+	add q1,t2		;advance over the argument storage
+	aos q1			;one more....
+
+list1a:	skipn t1,(q1)		;get segment string pointer
+	 jrst list1b
+	psout			;print it
+
+	aos q1
+	hrrz t2,(q1)		;get the argument number
+	jumpe t2,list1b
+	movei t1,argchr
+	pbout
+	movx t1,.priou
+	movx t3,^D10
+	nout
+	 jfcl
+	aos q1
+	jrst list1a
+
+list1b:	tmsg <"
+>
+	aobjn p2,list1
+
+list0:	jrst cs.bck
+
+;;; Handle parse of a user macro.
+
+c.usr:	;; Remember where the macro starts.
+
+	ildb t3,p4		;loop until we get to the switch
+	cain t3,"/"
+	ifskp.
+	 sos p1			;adjust the count of chars
+	 jrst c.usr
+	endif.
+	movni t3,1
+	adjbp t3,p4		;here we are...
+
+	push p,t3		;save the pointer
+	push p,p1		;save the count
+
+usrarg:	;; Parse the arguments to the macro, if any.
+
+	move q1,(t2)
+	hrrzs q1		;point to the descriptor block
+	movei q2,1(q1)		;point to the argument storage
+	skipn q3,(q1)		;get number of arguments
+	ifskp.			;there are some...
+usrar0:	  ;; Parse an argument
+	  cmcall ([flddb.(.cmfld,,,<macro argument, an unquoted string>,,[
+		   flddb.(.cmqst)])])
+	  prser.
+
+	  movei t1,440700	;force stbp to start of next word.
+	  hrlm t1,stbp
+	  aos stbp
+
+	  call cpatm
+	  hrrzm t1,(q2)		;save address of argument
+	  hrlm t3,(q2)		;save length of argument
+
+	  ;; Get next argument, if any
+
+	  aos q2
+	  sojg q3,usrar0
+
+	endif.
+
+usrar1:	;; Here we have all the arguments.
+	;; Squirrel away any unparsed text.
+
+	move t1,stbp		;string pointer
+	push p,t1		;remember it.
+	load t2,comptr		;pointer to text yet to be parsed
+	load t3,cominc		;count of characters
+	push p,t3		;remember it.
+	sout			;store
+	movem t1,stbp
+
+usrexp:	;; Now, expand the macro.
+
+	move t1,-3(p)		;get the old pointer
+	move p1,-2(p)		;get the old count
+
+usrex0:	;; Transfer the constant string
+
+	skipn t2,(q2)		;pointer to segment string
+	 jrst usrex1		;done.
+	aos q2
+	hlrz t3,(q2)		;length
+	sub p1,t3
+	skipge p1		;too big?
+	 call usrovf		;complain
+	sout			;transfer it.
+
+	;; Transfer the argument
+
+	hrrz t2,(q2)
+	jumpe t2,usrex1
+	add t2,q1		;point to argument
+	hlrz t3,(t2)		;length of argument
+	sub p1,t3
+	skipge p1
+	 call usrovf
+	hrro t2,(t2)
+	sout			;transfer the argument
+
+	;; Get next segment
+
+	aos q2
+	jrst usrex0
+
+usrex1:	;; put the unparsed text back.
+
+	pop p,t3
+	pop p,t2
+	sub p1,t3
+	skipge p1
+	 call usrovf
+	sout			;transfer the text
+
+	;; Make COMND think it has to parse all that again.
+
+	pop p,t2		;get old count back
+	stor t2,comcnt		;that's what COMND should think.
+	sub t2,p1		;this is how many characters we put in.
+	stor t2,cominc		;tell COMND
+	pop p,t2		;old pointer
+	stor t2,comptr		;tell COMND to start here.
+
+	;; For good measure, put a null at the end.
+
+	setz t2,
+	idpb t2,t1
+
+	;; Show the user what's there now (maybe).
+
+	skipe oncep
+	ifskp.
+	  call freshl
+	  load t1,prompt
+	  psout
+	  hrroi t1,txtbuf
+	  psout
+	endif.
+
+	jrst psloop		;go parse it.
+
+usrovf:	hrroi t1,[asciz /Text input buffer overflowed due to macro expansion!/]
+	esout
+	jrst cmloop
+
+;;;; interrupt stuff
+
+setintr:
+	move t1,[.ticcp,,^D35]	;^P
+	ati
+	move t1,[.ticca,,^D34]	;^A
+	ati
+	move t1,[.ticcn,,^D33]	;^N
+	ati
+ifn mit,<
+	move t1,[.ticmr,,^D32]	;54 more break
+	ati			;54
+>
+	movei t1,.fhslf
+	move t2,[levtab,,chntab]
+	sir
+	eir			;interrupts on... (none activated...)
+
+;;;60 Begin insertion
+ifn mit,<
+	;; tell the monitor we can handle --More?-- interrupts
+	movx t1,.priou		;jfn for primary output
+	rtmod			;get VTS terminal modes
+	txo t2,tm%msm		;set "smart more" bit
+	stmod			;tell the monitor
+>
+;;;60 End insertion
+
+	movx t1,.fhslf
+	movx t2,1b<.icili>+1b<.icqta>
+	aic			;activate illegal interrupt and quota channels.
+
+	ret
+
+intron:	movei t1,.fhslf		;turn on ^A interrupt
+ifn mit,<
+	movx t2,17b35
+>
+ife mit,<
+	movx t2,7b35
+>
+	aic
+	ret
+
+introf:	movei t1,.fhslf		;turn off ^A interrupt
+ifn mit,<
+	movx t2,17b35		;54
+>
+ife mit,<
+	movx t2,7b35
+>
+	dic
+	ret
+
+suspnd:	push p,t1
+	push p,t2
+	push p,t3
+
+	;; See if the user really wants to abort...
+	movei t1,.priou
+	rfmod			;make sure it goes out to the terminal
+	push p,t2		;but restore it when done.
+	txz t2,tt%osp
+	sfmod
+
+abt0:   hrroi t1,[asciz /
+   Abort search? /]
+	psout			;display on terminal, not output file.
+	pbin
+	iori t1,"a"-"A"
+	caie t1,"y"
+	 cain t1," "		;allow space, too.
+	  skipa
+	ifskp.
+	 caie t1," "
+	  skipa t1,[-1,,[asciz /es.
+OK.
+/]]
+	   hrroi t1,[asciz /Yes.
+OK.
+/]
+	 psout
+	 setom hltflg
+	else.
+	 caie t1,"n"
+	 ifskp.
+	  hrroi t1,[asciz /o.  Continuing....
+/]
+	  psout
+	  setzm hltflg	;60 clear halt flag
+	 else.
+	  hrroi t1,[asciz /XXX Please answer Y or N.
+/]
+	  psout
+	  jrst abt0
+	 endif.
+	endif.
+
+	skipn hltflg		;did we decide to halt?
+	ifskp.			;yup, see if we need to do it
+				; forceably
+	 move t1,levpc2		;this is a level 2 interrupt
+	 hrrz t2,t1		;get just address
+	 caie t2,defwat		;waiting for the searching GTJFN?
+	 ifskp.
+	  hrri t1,defabt	;make it abort
+	 else.
+	  caie t2,nxtwat	;waiting for the GNJFN?
+	  anskp.
+	  hrri t1,nxtabt	;get out of it.
+	 endif.
+	 movem t1,levpc2	;tell the monitor where we want to go.
+	endif.
+	pop p,t2
+	move t1,.priou
+	sfmod			;restore output suppression
+	pop p,t3
+	pop p,t2
+	pop p,t1
+	debrk
+
+prtlast:
+	skipn jfn
+	 jrst prtl1
+	push p,t1
+	push p,t2
+	push p,t3
+	movei t1,.priou		;60 make this come out regardless of tt%osp
+	rfmod			;60
+	 erjmp .+1		;60
+	push p,t2		;60 save old mode word
+	txz t2,tt%osp		;60 don't suppress output
+	sfmod			;60
+	 erjmp .+1		;60
+	hrroi t1,[asciz / Checking /]
+	psout			;57 this wants to go to the terminal
+	movei t1,.priou		;57 and this, too
+	move t2,jfn
+	move t3,[111110,,1]
+	jfns
+	hrroi t1,[asciz / ...
+/]
+	psout			;57 all of this
+	movei t1,.priou		;60
+	pop p,t2		;60 get old mode word back
+	sfmod			;60 and set it.
+	 erjmp .+1		;60
+	pop p,t3
+	pop p,t2
+	pop p,t1
+prtl1:	debrk
+
+c33srv:	;; skip to next directory
+	setom dirskp
+	debrk
+
+c32srv:	;; skip to next structure
+	setom strskp
+	debrk
+
+;;;54 begin insertion
+ifn mit,<
+morsrv:	;; more output flushed
+	setom morfls
+	debrk
+>
+;;;54 end insertion
+
+ilipc:	block 1
+iliacc:	block 4
+
+ilisrv:	dmovem t1,iliacc	;save accs here, so that the PDL is clear.
+	dmovem t3,iliacc+2
+	move t1,levpc1
+	movem t1,ilipc
+	move t1,-1(t1)		;this will really be the instruction
+	came t1,[comnd]		;were we in COMND?
+	 jrst ftlili
+	movei t1,.fhslf		;yes.
+	geter			;what error?
+	movei t1,iox4
+	caie t1,(t2)		;was it "End of file reached"?
+	 jrst ftlili		;nope
+
+	move t2,iopp		;is the pdl all the way popped?
+	caig t2,iopdl
+	 jrst ftleof		;yep, lose
+
+	;; everything passes.  Do it. (It = pop one take file)
+
+	sos t2
+	movem t2,iopp
+	hlrz t1,cmstbk+.cmioj
+	closf
+	 jfcl
+	move t1,(t2)
+	movem t1,cmstbk+.cmioj
+
+	load t1,comptr
+	came t1,cmstbk+.cmbfp
+	ifskp.
+	  move t1,iopp
+	  caie t1,iopdl
+	anskp.
+	  movei t1,cmloop	;just go back to the loop
+	  movem t1,levpc1
+	else.
+	  sos levpc1		;try the comnd over again
+	endif.
+
+	dmove t1,iliacc
+	debrk
+
+ftluos:	movei t1,.priou		;60 make this come out regardless of tt%osp
+	rfmod			;60
+	 erjmp .+1		;60
+	txz t2,tt%osp		;60 don't suppress output
+	sfmod			;60
+	 erjmp .+1		;60
+	ret
+
+
+ftlili:	call ftluos
+	etmsg <Fatal internal illegal instruction: >
+	movx t1,.priou
+	movx t2,<.fhslf,,-1>
+	setz t3,
+	erstr
+	 nop
+	 nop
+	haltf
+	jrst .-2
+
+ftleof:	call ftluos
+	etmsg <Fatal end of file condition.>
+	movei t1,cmloop
+	movem t1,levpc1		;start here.
+	debrk
+
+qtasrv:	push p,t1
+	hrroi t1,[asciz /Quota exceeded or disk full/]
+	esout
+	haltf
+	pop p,t1
+	debrk
+
+lits:
+
+	end go

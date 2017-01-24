@@ -1,0 +1,837 @@
+
+
+; SNDMSG.MAC.1 & <MM>SNDMSG.MAC.1 20-Apr-88 1449	PAGE 1
+
+
+
+LINE 1, PAGE 1
+1)		TITLE SNDMSG - Routines to send local and network TTY messages
+1)		SUBTTL David Eppstein/DE/KSL/MRC/WHP4
+1)	
+1)		SEARCH MONSYM,MACSYM,SNDDEF
+1)		EXTERN $WAKE
+1)		EXTERN $GTLCL,$RMREL
+1)		ASUPPRESS
+1)		SALL
+1)	IFNDEF OT%822,OT%822==:1
+1)	^L
+1)	; Definitions and Storage
+1)	
+1)	A=:1				;Temporary AC's for JSYS use etc
+1)	B=:2
+1)	C=:3
+1)	D=:4
+1)	
+LINE 1, PAGE 1
+2)	;[SRI-NIC]SRC:<MM>SNDMSG.MAC.17, 13-Aug-85 13:01:00, Edit by IAN
+2)	;[NIC001] Add header line to outgoing Internet message bodies
+2)	
+2)		TITLE SNDMSG - Routines to send local and network TTY messages
+2)		SUBTTL David Eppstein / Stanford University / 22 April 1983
+2)	
+2)		;; Taken from SEND.MAC, written March 1981 by Kirk Lougheed
+2)		;;
+2)		;; Judy Anderson of HP and Ken Olum of FLAIR wrote the Chaos support.
+2)		;; Frank Fujimoto and David Eppstein, both of Stanford, wrote
+2)		;; the TCP/SMTP support.  David Eppstein wrote the Pup Ethernet code.
+2)		;; Mark Crispin rewrote the TCP/SMTP support to use the JFN interface.
+2)	
+2)		SEARCH MONSYM,MACSYM,SNDDEF
+2)		EXTERN $GTPRO,$GTHNS,$PUPNS,$CHSNS,$RMREL
+2)		ASUPPRESS
+2)		SALL
+2)	^L
+2)	; Definitions and Storage
+2)	
+2)	A=1				;Temporary AC's for JSYS use etc
+2)	B=2
+2)	C=3
+2)	D=4
+2)	
+
+
+; SNDMSG.MAC.1 & <MM>SNDMSG.MAC.1 20-Apr-88 1449	PAGE 2
+
+
+
+LINE 12, PAGE 2
+1)	FP=:15				;TRVAR frame pointer
+1)	CX=:16				;Scratch for MACREL
+1)	P=:17				;Main stack pointer
+1)	
+1)		BUFLEN==MAXCHR/5	;Length of command buffers (for long msgs)
+1)		PDLEN==100		;Length of pushdown stack
+LINE 12, PAGE 2
+2)	FP=15				;TRVAR frame pointer
+2)	CX=16				;Scratch for MACREL
+2)	P=17				;Main stack pointer
+2)	
+2)		BUFLEN==600		;Length of command buffers (for long msgs)
+2)		PDLEN==100		;Length of pushdown stack
+
+
+LINE 11, PAGE 3
+1)		.PSECT CODE		;Rest of this file is pure code
+LINE 11, PAGE 3
+2)	
+2)		.PSECT DATA		;Uninitialized unpaged data
+2)	
+2)		NBFLEN==100
+2)	NETBUF:	BLOCK NBFLEN		;Used to build "filename" for ICP etc
+2)	
+2)	NETUSR:	BLOCK 20		;Foreign username
+2)	NETADR: BLOCK 20		;Foreign site name
+2)	NETJFN:	BLOCK 1			;JFN for net
+2)	
+2)		.ENDPS
+2)	
+2)		.PSECT CODE		;Rest of this file is pure code
+
+
+LINE 9, PAGE 4
+1)	;	  +2/Success, A, B, and C changed
+1)	;
+LINE 9, PAGE 4
+2)	;	  +2/Success, A/updated pointer, B/0, C/unchanged
+2)	;
+
+
+; SNDMSG.MAC.1 & <MM>SNDMSG.MAC.1 20-Apr-88 1449	PAGE 3
+
+
+
+LINE 45, PAGE 4
+1)		TRVAR <MSPTR,QUEJFN>	;Make some pseudo-globals
+1)		SETZM QUEJFN		;So nobody thinks random crud is a JFN
+1)		MKPTR (A)		;Turn into a byte pointer
+LINE 45, PAGE 4
+2)		TRVAR <MSPTR,MSEPTR>	;Place to save message pointer and end of it
+2)		MKPTR (A)		;Turn into a byte pointer
+
+
+LINE 63, PAGE 4
+1)		    CALL MQUEUE		;Failed, queue net sends
+1)		    MOVE B,ADR		;Get address block back
+1)		    RET			;And return failure
+1)		  ENDIF.
+1)		ENDDO.
+1)		CALL MQUEUE		;Done, finish queueing net sends
+1)		MOVE A,MSPTR		;Get message text pointer again
+1)		MOVE B,ADR		;Get final value in ADR (should be 0)
+LINE 62, PAGE 4
+2)		    MOVE B,ADR		;Failed, get address block back
+2)		    RET			;And return failure
+2)		  ENDIF.
+2)		ENDDO.
+2)		SETO A,			;Get -1
+2)		ADJBP A,MSEPTR		;So we can point to null at end of message
+2)		MOVE B,ADR		;Get final value in ADR (should be 0)
+
+
+LINE 2, PAGE 5
+1)	; Finish queueing net sends
+1)	
+1)	MQUEUE:	SAVEAC <A,B,C>		;Don't mung error code or whatever
+1)		SKIPN QUEJFN		;Are we queueing anything?
+1)		 RET			;No, done already
+1)	
+1)		;; Finish creating the queued mail file
+1)		HRROI A,BUFFER		;Get buffer back
+1)		FMSG <^L
+1)	Date: >				;Yes, start text
+1)		SETO B,
+1)		MOVX C,OT%DAY!OT%SPA!OT%TMZ!OT%SCL!OT%822 ; RFC 822 standard date/time
+1)		ODTIM%
+1)		FMSG <
+1)	From: >
+1)		CALL .DIRST		;Put in my username
+1)		FMSG <@>
+1)		PUSH P,A
+1)		CALL $GTLCL		;Local host name
+1)		IFNSK.
+
+; SNDMSG.MAC.1 & <MM>SNDMSG.MAC.1 20-Apr-88 1449	PAGE 4
+
+
+1)		  POP P,A
+1)		  RETSTR <Couldn't get local host name>,TTXNET
+1)		ENDIF.
+1)		POP P,A
+1)		CALL $RMREL
+1)		MOVE A,QUEJFN
+1)		HRROI B,BUFFER		;Get buffer back
+1)		SETZ C,			;Until null
+1)		SOUT%			;Start making file
+1)		FMSG <
+1)	
+1)	>
+1)		MOVE B,MSPTR		;Get pointer to message text
+1)		SETZ C,			;Ending on null
+1)		SOUT%			;Send it off
+1)		CLOSF%			;Close the file
+1)		 NOP
+1)		CALLRET $WAKE		;Wake up MMailr and return
+1)	^L
+1)	; SNDONE - Send one message
+LINE 2, PAGE 5
+2)	; SNDONE - Send one message
+
+
+LINE 4, PAGE 8
+1)	JSRET:	HRROI A,BUFFER+200	;Use a likely buffer
+1)		HRLOI B,.FHSLF		;With ourself
+LINE 4, PAGE 6
+2)	JSRET:	HRROI A,NETBUF		;Use a likely buffer
+2)		HRLOI B,.FHSLF		;With ourself
+
+
+LINE 10, PAGE 8
+1)		HRROI A,BUFFER+200		;Now point to the string we made
+1)		MOVX C,TTXNET		;Random network error (not called from SNDLOC)
+LINE 10, PAGE 6
+2)		HRROI A,NETBUF		;Now point to the string we made
+2)		MOVX C,TTXNET		;Random network error (not called from SNDLOC)
+
+
+LINE 43, PAGE 9
+1)		  MOVX A,.PRIOU		;To the terminal
+1)		  MOVE B,ADR		;With current address
+LINE 43, PAGE 7
+2)		  MOVEI A,.PRIOU	;To the terminal
+2)		  MOVE B,ADR		;With current address
+
+
+; SNDMSG.MAC.1 & <MM>SNDMSG.MAC.1 20-Apr-88 1449	PAGE 5
+
+
+
+LINE 5, PAGE 11
+1)	SNDNET:	SKIPE A,QUEJFN		;Do we have a queued mail file yet?
+1)		 JRST NETRCP		;Yes, just add recipient
+1)		HRROI A,BUFFER		;Into a free place
+1)		HRROI B,[ASCIZ/MAILQ:[--QUEUED-MAIL--].NEW-/]
+1)		SETZ C,
+1)		SOUT%			;Start making name
+1)		PUSH P,A		;Create frame to save string pointer
+1)		GTAD%			;Now output date/time
+1)		MOVE B,A
+1)		MOVE A,(P)
+1)		MOVEI C,^D8		;Output in octal
+1)		NOUT%
+1)		 RETSTR <Couldn't make name for queued mail file>,TTXNET
+1)		FMSG <-SNDMSG-J>
+1)		MOVEM A,(P)		;Update saved string pointer
+1)		GJINF%			;Get my job number
+1)		POP P,A			;Get string pointer back
+1)		MOVE B,C		;Get job number in B
+1)		MOVEI C,^D10		;Output in octal
+1)		NOUT%
+1)		 RETSTR <Couldn't make name for queued mail file>,TTXNET
+1)		FMSG <.-1;P770000>	;Next generation, set protection
+1)		MOVX A,GJ%SHT!GJ%FOU	;File for output
+1)		HRROI B,BUFFER		;With nice file name
+1)		GTJFN%			;Get handle on queue file
+1)		 RETSTR <Couldn't get handle on queued mail file>,TTXNET
+1)		MOVX B,FLD(7,OF%BSZ)!OF%WR ;Writing
+1)		OPENF%			;Open it up
+1)		 RETSTR <Couldn't open queued mail file>,TTXNET
+1)		MOVEM A,QUEJFN		;Save for later
+1)		HRROI A,BUFFER		;Into buffer space
+1)		FMSG <^L=DELIVERY-OPTIONS:SEND
+1)	^L_>				;This is a send, from someone
+1)		CALL $GTLCL		;Get local host name
+1)		 RETSTR <Couldn't get local host name>,TTXNET
+1)		FMSG <
+1)	>				;CRLF (still in buffer)
+1)		CALL .DIRST		;And our user name
+1)		FMSG <
+1)	>				;Another CRLF
+1)		MOVE A,QUEJFN		;Get file again
+1)		HRROI B,BUFFER		;Get buffer back
+1)		SETZ C,			;Until null
+1)		SOUT%			;Start making file
+1)	
+1)	; Here with A/QUEJFN, add one recipient to the list in the file
+1)	NETRCP:	MOVEI B,"L"-100		;Control L
+1)		BOUT%			;To start another host/recip pair
+
+; SNDMSG.MAC.1 & <MM>SNDMSG.MAC.1 20-Apr-88 1449	PAGE 6
+
+
+1)		HRROI A,BUFFER		;Get a place to buffer user name
+1)		HRROI B,1(ADR)		;With pointer from address block
+1)		CALL MOVSTR		;Copy string
+1)		MOVE A,QUEJFN		;Get JFN back again
+1)		HRROI B,1(B)		;With next string in block
+1)		SOUT%			;Send host name first
+1)		FMSG <
+1)	>				;Then a CRLF
+1)		HRROI B,BUFFER		;Then point to user name
+1)		SETZ C,			;To null
+1)		SOUT%			;Add user name
+1)		FMSG <
+1)	>				;Another CRLF to tie it off
+1)		RETSKP			;Done for now with the net send
+1)	^L
+LINE 5, PAGE 9
+2)	SNDNET:	HRROI A,NETUSR		;Into net user string
+2)		HRROI B,1(ADR)		;With pointer from address block
+2)		CALL MOVSTR		;Copy string
+2)		HRROI A,NETADR		;Now into host name
+2)		HRROI B,1(B)		;With next string in block
+2)		CALL MOVSTR		;Copy string
+2)		HRROI A,NETADR		;Point to network site name
+2)		MOVEI C,NETLST		;Get list of protocols supported
+2)		CALL $GTPRO		;Look it up
+2)		 RETSTR <Unrecognized host name>,TTXNET
+2)		HRRZ C,(C)		;Get dispatch routine for protocol
+2)		CALL (C)		;Go jump to it
+2)		 TRNA			;Non-skip
+2)		  AOS (P)		;Skip
+2)		SKIPN A,NETJFN		;If server made a JFN, be sure to clean it up
+2)		IFSKP.
+2)		  TXO A,CO%NRJ		;Yes, close it
+2)		  CLOSF%
+2)		   NOP
+2)		  HRRZ A,NETJFN		;Now flush it
+2)		  RLJFN%
+2)		   NOP
+2)		  SETZM NETJFN		;No more JFN
+2)		ENDIF.
+2)		RET
+2)	
+2)	; List of networks we know about.  For each network we have a pointer
+2)	; to a string for the name of the net and the address of a handler routine.
+2)	; The called routine gets a host number in B, should return +2 for success.
+2)	
+2)	NETLST:	[ASCIZ/TCP/],,DOINT	;TCP/IP Internet (SMTP)
+2)		[ASCIZ/Chaos/],,DOCHA	;MIT Chaosnet
+2)		[ASCIZ/Pup/],,DOETH	;Pup Ethernet (MiscService packet protocol)
+2)		0
+2)	^L
+
+; SNDMSG.MAC.1 & <MM>SNDMSG.MAC.1 20-Apr-88 1449	PAGE 7
+
+
+2)	; DOINT - Send a message over the Internet
+2)	
+2)	DOINT:	PUSH P,B		;Save address
+2)		HRROI A,NETBUF		;a := ptr to net file name str
+2)		HRROI B,[ASCIZ/TCP:./]	;Build device and default local spec
+2)		CALL CPYSTR		;Copy string
+2)		POP P,B			;Destination host number
+2)		MOVX C,^D8		;TCP: hosts are in octal
+2)		NOUT%			;Output to file string
+2)		 RETSTR <Couldn't copy host address>,TTXNET
+2)		HRROI B,[ASCIZ/-25;CONNECTION:ACTIVE;PERSIST:30/] ;Port 25, quit
+2)		CALL CPYSTR		; after 30 seconds
+2)		MOVX A,GJ%SHT		;Short form, restricted
+2)		HRROI B,NETBUF		;Pointer to file string we made
+2)		GTJFN%			;Make a JFN on it
+2)		 RETSTR <Couldn't get network connection>,TTXNET
+2)		MOVEM A,NETJFN		;Save the JFN
+2)		MOVX B,<<FLD ^D8,OF%BSZ>!<FLD .TCMWH,OF%MOD>!OF%RD!OF%WR>
+2)		OPENF%			;Open 8 read/write buffered, wait for conn.
+2)		 RETSTR <Couldn't open network connection>,TTXNET
+2)		CALL INTMSG		;Get initial hello, send the message
+2)		 IFSKP. <AOS (P)>	;On success, set up +2 return
+2)		PUSH P,A		;Save error string in case of error
+2)		MOVE A,NETJFN		;Get the JFN for our connection
+2)		HRROI B,[ASCIZ \QUIT
+2)	\]				;Say we want to go bye-bye
+2)		SETZ C,			;Stop on null
+2)		SOUTR%
+2)		 ERJMP .+1
+2)		DO.
+2)		  BIN%			;Read any following crud
+2)		   ERJMP ENDLP.
+2)		  LOOP.			;Continue until error
+2)		ENDDO.
+2)		POP P,A			;Get error string back
+2)		MOVEI C,TTXNET		;Get failure code in case we failed
+2)		RET			;Return success or failure
+2)	^L
+2)	; GETRSP - listen for responses from the foreign MAISER
+2)	; returns +2, with MAISER code in A, text in BUFFER
+2)	; if MAISER sends a code .GE. 400, returns +1
+2)	
+2)	GETRSP:	MOVE A,NETJFN		;A/foreign socket
+2)		HRROI B,BUFFER		;Into scratch buffer
+2)		MOVX C,1000*5-1		;With this many characters
+2)		CALL SMTNIN		;Read MAISER's response
+2)		IFSKP.
+2)		  CAIGE B,400		;Look at number returned
+2)		   RETSKP		;Below 400, return success
+2)		  HRROI A,BUFFER	;Else get error string
+2)		ENDIF.
+
+; SNDMSG.MAC.1 & <MM>SNDMSG.MAC.1 20-Apr-88 1449	PAGE 8
+
+
+2)		RET			;Return failure
+2)	^L
+2)	; INTMSG - build the actual message and send it
+2)	
+2)	; If this could possibly go into a user's mailbox we would have to follow
+2)	; RFC822 and build message headers.  But we use SEND instead of SOML so
+2)	; this is merely a terminal message and needs no headers.
+2)	
+2)	INTMSG:	CALL GETRSP		;Pick up 220 site ident
+2)		 RET
+2)		HRROI A,BUFFER		;Get a pointer to our output buffer
+2)		HRROI B,[ASCIZ/HELO /]	;String for hello command
+2)		CALL CPYSTR		;Start our message
+2)		SETO B,			;Local host number
+2)		CALL $GTHNS		;Get host name
+2)		 RETSTR <Couldn't get local Internet host name>,TTXNET
+2)		CALL INTGO		;Send off our hello to the other site
+2)		 RET
+2)		CALL GETRSP		;Pick up reply (most likely 250)
+2)		 RET
+2)		HRROI A,BUFFER		;Put everything in our buffer
+2)		HRROI B,[ASCIZ/SEND FROM:</]
+2)		CALL CPYSTR		;Initiate message
+2)		CALL .DIRST		;Add our user name
+2)		MOVEI B,"@"		;Append at-sign for return address
+2)		IDPB B,A		;Drop it into buffer
+2)		SETO B,			;Local host number
+2)		CALL $GTHNS		;Add our site name
+2)		 RETSTR <Couldn't get local Internet host name>,TTXNET
+2)		MOVEI B,">"		;Close with a close broket
+2)		IDPB B,A		;Drop it in
+2)		CALL INTGO		;Send the SEND command
+2)		 RET
+2)		CALL GETRSP		;Get server's response
+2)		 RET
+2)		HRROI A,BUFFER		;Where to build message to send
+2)		HRROI B,[ASCIZ/RCPT TO:</] ;Set up recipient command
+2)		CALL CPYSTR		;Throw start of command into buffer
+2)		HRROI B,NETUSR		;Get recipient user name
+2)		CALL CPYSTR		;Add it in
+2)		MOVEI B,"@"		;Get an at-sign
+2)		IDPB B,A		;Add that too
+2)		HRROI B,NETADR		;Get site name of recipient address
+2)		CALL CPYSTR		;Add it in
+2)		MOVEI B,">"		;And an angle bracket
+2)		IDPB B,A		;Closes off the recipient name
+2)		CALL INTGO		;Send off the buffer
+2)		 RET
+2)		CALL GETRSP		;Pick up reply (250 or 251)
+2)		 RET
+2)		HRROI B,[ASCIZ\DATA
+
+; SNDMSG.MAC.1 & <MM>SNDMSG.MAC.1 20-Apr-88 1449	PAGE 9
+
+
+2)	\]				;Point to start of DATA command
+2)		CALL INTSTR		;Go send it
+2)		 RET
+2)		CALL GETRSP		;Pick up reply (most likely 354)
+2)		 RET
+2)	;;
+2)	;;	[NIC001] First line of data should be header line for REPLY
+2)	;;	programs to use...
+2)	;;
+2)		HRROI A,BUFFER
+2)		CALL .DIRST		;Add our user name
+2)		MOVEI B,"@"		;Append at-sign for return address
+2)		IDPB B,A		;Drop it into buffer
+2)		SETO B,			;Local host number
+2)		CALL $GTHNS		;Add our site name
+2)		 RETSTR <Couldn't get local Internet host name>,TTXNET
+2)		MOVEI B," "
+2)		IDPB B,A
+2)		IDPB B,A
+2)		SETO B,			;B/want present time
+2)		MOVX C,OT%NSC!OT%12H!OT%TMZ!OT%SCL ;C/format
+2)		ODTIM%			;Write the time
+2)		CALL INTGO		;Add CRLF and send it off
+2)		  RET
+2)	;;
+2)	;;	End [NIC001]
+2)	;;
+2)		SETZ D,			;Clear line position
+2)		MOVE C,MSPTR		;Point to message
+2)		ILDB B,C		;Get the first character
+2)		DO.
+2)		  CALL INTCHR		;Send char out, maybe processing prefix period
+2)		   RETSTR <Couldn't send char to net>,TTXNET
+2)		  ILDB B,C		;Get another
+2)		  JUMPN B,TOP.		;Go back for the next char
+2)		ENDDO.
+2)		MOVEM C,MSEPTR		;Save pointer to end of message
+2)		SKIPE D			;If not at start of line, need extra crlf
+2)		 SKIPA B,[POINT 7,[ASCIZ \
+2)	.
+2)	\]]
+2)		  MOVE B,[POINT 7,[ASCIZ \.
+2)	\]]				;Will eventually end with a CRLF . CRLF
+2)		CALL INTSTR		;Append the trailer
+2)		 RET
+2)		CALL GETRSP		;Pick up reply (most likely 250)
+2)		 RET
+2)		RETSKP			;Success, return +2
+2)	^L
+2)	; Copy in one data character, being careful with CRLFs and dots
+2)	
+
+; SNDMSG.MAC.1 & <MM>SNDMSG.MAC.1 20-Apr-88 1449	PAGE 10
+
+
+2)	INTCHR:	MOVE A,NETJFN		;Get jfn for output
+2)		CAIE B,"."		;If we have a period
+2)		IFSKP.
+2)		  IFE. D		;If at the start of a line
+2)		    BOUT%		;Send an extra dot
+2)		     ERJMP R
+2)		  ENDIF.
+2)		  SETO D,		;In the middle of a line
+2)		  BOUT%			;Now send our first dot
+2)		   ERJMP R
+2)		  RETSKP
+2)		ENDIF.
+2)		CAIE B,.CHCRT		;Carriage return?
+2)		IFSKP.
+2)		  MOVEM B,D		;Yes, set line position positive to remember
+2)		  BOUT%			;And go send it
+2)		   ERJMP R
+2)		  RETSKP
+2)		ENDIF.
+2)		CAIN B,.CHLFD		;Line feed?
+2)		 SKIPG D		;And previous carriage return?
+2)		  CAIA			;No, go on
+2)		   TDZA D,D		;Yes, we are now at the start of a line
+2)		    SETO D,		;Else we are in the middle of a line
+2)		BOUT%			;In any case go send the char
+2)		 ERJMP R
+2)		RETSKP
+2)	^L
+2)	; INTGO - add CRLF to string in buffer and send it off
+2)	; INTSTR - send string pointed to in B
+2)	; both return +2 normally, or +1 on error
+2)	
+2)	INTGO:	MOVEI B,.CHCRT		;A carriage return
+2)		IDPB B,A		;Append it to our buffer
+2)		MOVEI B,.CHLFD		;A linefeed
+2)		IDPB B,A		;Add it, too
+2)		MOVEI B,.CHNUL		;A null
+2)		IDPB B,A		;Tie off string with it
+2)		HRROI B,BUFFER		;What to send
+2)	INTSTR:	MOVE A,NETJFN		;Where to send
+2)		SETZ C,			;End on null
+2)		SOUTR%
+2)		 RETSTR <Couldn't send string to network>,TTXNET,ERJMP
+2)		RETSKP
+2)	^L
+2)	; SMTNIN - input a number (like NIN%), break on non-digit
+2)	; call with A/SMTP connection JFN, B/pointer to line buffer, C/char count
+2)	; returns +1/failure, +2/success, number in B, C and D smashed
+2)	
+2)	SMTNIN:	TRVAR <ATMPTR,RETNUM,BUFCTR,<LINPTR,2>>
+2)		DMOVEM B,LINPTR		;Save where to start
+
+; SNDMSG.MAC.1 & <MM>SNDMSG.MAC.1 20-Apr-88 1449	PAGE 11
+
+
+2)		SETZM ATMPTR		;No continuation lines yet
+2)		SETZM RETNUM		;Nothing to return yet
+2)		DO.
+2)		  SETZ C,		;Nothing this time through
+2)		  DO.
+2)		    BIN%		;Get the next character from our stream
+2)		     RETSTR <Couldn't read SMTP server response>,TTXNET,ERJMP
+2)		    CAIL B,"0"		;Is it in range
+2)		     CAILE B,"7"	;to be a digit?
+2)		      IFSKP.
+2)			IMULI C,10	;Yes, shift result by octal radix
+2)			ADD C,B		;Add in digit
+2)			SUBI C,"0"	;Minus offset for ASCII characters
+2)			LOOP.		;Go back for the next one
+2)		      ENDIF.
+2)		  ENDDO.
+2)		  SKIPG C		;If somehow out of range
+2)		   RETSTR <SMTP input number was not positive>,TTXNET
+2)		  EXCH C,RETNUM		;Exchange with value to return
+2)		  IFG. C
+2)		    CAME C,RETNUM	;If had a number already but is not the same
+2)		     RETSTR <SMTP multi-line input had different codes>,TTXNET
+2)		  ENDIF.
+2)		  CAIE B,"-"		;If we got a dash
+2)		  IFSKP.
+2)		    CALL GETLFD		;Then read in some more
+2)		     RET		;Propagate fail return
+2)		    LOOP.
+2)		  ENDIF.
+2)		ENDDO.
+2)		CAIE B," "		;If not a space
+2)		 RETSTR <SMTP code terminator is neither a dash nor a space>,TTXNET
+2)	;	JRST GETLFD
+2)	
+2)	; GETLFD - Read in rest of server response line
+2)	
+2)	GETLFD:	SKIPE B,ATMPTR		;Get pointer
+2)		IFSKP.
+2)		  DMOVE B,LINPTR	;If none, point to start of buffer
+2)		  MKPTR (B)		;Make sure it is a byte pointer
+2)		ELSE.
+2)		  MOVEI C,.CHCRT	;Else get a CR
+2)		  DPB C,B		;Drop it in over the null we left
+2)		  MOVEI C,.CHLFD	;And a linefeed
+2)		  IDPB C,B
+2)		  MOVEI C," "		;And finally a space
+2)		  IDPB C,B		;Drop it in to make pretty
+2)		  SOS C,BUFCTR		;Count off, get old buffer counter
+2)		  SOS C,BUFCTR		;And again
+2)		ENDIF.
+2)		MOVEI D,.CHCRT		;Read to a carriage return
+
+; SNDMSG.MAC.1 & <MM>SNDMSG.MAC.1 20-Apr-88 1449	PAGE 12
+
+
+2)		SIN%			;Do the read
+2)		 ERJMP R		;Propagate fail return
+2)		MOVEM B,ATMPTR		;Save new atom buffer pointer
+2)		MOVEM C,BUFCTR		;And new buffer space counter
+2)		SETZ C,			;Get a null
+2)		DPB C,B			;Drop it in over carriage return
+2)		BIN%			;Now read in the linefeed
+2)		 ERJMP R
+2)		MOVE B,RETNUM		;Get the number to return
+2)		RETSKP
+2)	^L
+2)	; DOCHA - Send a message via the CHAOSnet
+2)	
+2)	; Chaosnet symbols abstracted from CHASYM
+2)		.CSRFS==3		;RFC sent
+2)		.CSOPN==4		;Connection is open
+2)		.MOPKR==27		;Read packet
+2)		CHPKDT==4		;???
+2)		$CPKNB==041400,,0	;???
+2)	
+2)	DOCHA:	PUSH P,B		;Save foreign host
+2)		HRROI A,NETBUF		;Set up pointer for building filename string
+2)		HRROI B,[ASCIZ/CHA:/]
+2)		CALL CPYSTR		;Start with correct device name
+2)		POP P,B			;Get host number back
+2)		MOVEI C,^D8		;Octal
+2)		NOUT%
+2)		 RETSTR <Couldn't copy host number>,TTXNET
+2)		HRROI B,[ASCIZ/.SEND_/]
+2)		CALL CPYSTR		;Put contact name into buffer too
+2)		HRROI B,NETUSR		;And net username
+2)		CALL CPYSTR
+2)		MOVX A,GJ%SHT!GJ%OLD	;Short form, old file
+2)		HRROI B,NETBUF		;Filename
+2)		GTJFN%
+2)		 RETSTR <Can't get Chaosnet connection>,TTXNET
+2)		MOVEM A,NETJFN		;Save JFN for later
+2)		MOVX B,FLD(8,OF%BSZ)!OF%WR ; write mode, 8 bits
+2)		OPENF%
+2)		 RETSTR <Can't open Chaosnet connection>,TTXNET
+2)		CALL CHAMSG		;Build the message to be sent
+2)		 RET
+2)		MOVE A,NETJFN		;A/network jfn
+2)		MOVE B,[POINT 8,BUFFER]	;B/buffer where CHAMSG left the message
+2)		SETZB C,D		;Normal SOUT, flush randomness in C & D
+2)		SOUT%
+2)		 RETSTR <Can't send Chaosnet message>,TTXNET,ERJMP
+2)		MOVE A,NETJFN
+2)		MOVEI B,.MOEOF		;Send an EOF to Chaosnet
+2)		MTOPR%
+2)		 RETSTR <Can't send Chaosnet EOF>,TTXNET,ERJMP
+
+; SNDMSG.MAC.1 & <MM>SNDMSG.MAC.1 20-Apr-88 1449	PAGE 13
+
+
+2)		MOVEI B,.MONOP		;Wait for everything to die down
+2)		MTOPR%
+2)		 RETSTR <Can't send Chaosnet NOP>,TTXNET,ERJMP
+2)		CLOSF%			;Close the Chaosnet connection
+2)		IFNJE.
+2)		  SETZM NETJFN		;Flush the JFN
+2)		  RETSKP
+2)		ENDIF.
+2)		MOVE A,NETJFN		;A/network jfn
+2)		MOVEI B,.MOPKR		;Get Los/CLS packet
+2)		HRROI C,NETBUF		;Drop it into NETBUF
+2)		MTOPR%
+2)		 RETSTR <Chaosnet connection failed>,TTXNET,ERJMP
+2)		MOVE A,[POINT 8,NETBUF+CHPKDT]
+2)		LDB B,[$CPKNB+NETBUF]	;Get length
+2)		ADJBP B,A		;To point to end of string
+2)		SETZ C,			;Get a null
+2)		DPB C,B			;And tie off message with it
+2)		MOVX C,TTXNET		;Have pointer to string, now set err code
+2)		RET
+2)	^L
+2)	; CHAMSG - build a message to be sent over the CHAOSnet into BUFFER
+2)	
+2)	CHAMSG:	MOVE A,[POINT 8,BUFFER]	;Get a pointer to our output buffer
+2)		CALL .DIRST		;Add our user name
+2)		MOVEI B,"@"		;Get an atsign
+2)		IDPB B,A		;Drop it in
+2)		SETO B,			;With local host name
+2)		MOVEM A,D		;Saving string pointer
+2)		CALL $CHSNS		;Copy local host name to our buffer
+2)		 RETSTR <Couldn't get local Chaos host name>,TTXNET
+2)		MOVE A,D		;Get pointer to host name back
+2)		CALL $RMREL		;Flush ugly relative domain
+2)		MOVE A,D		;Get pointer once more
+2)		DO.
+2)		  ILDB B,A		;Skip over
+2)		  JUMPN B,TOP.		;Until we get a null
+2)		ENDDO.
+2)	
+2)		;; Added sender, now add time
+2)		MOVEI B,.CHSPC		;A space
+2)		DPB B,A			;Add it to the buffer
+2)		SETO B,			;B/want present time
+2)		MOVX C,OT%NSC!OT%12H!OT%TMZ!OT%SCL ;C/format
+2)		ODTIM%			;Write the time
+2)		MOVEI B,215		;CHAOSnet EOL
+2)		IDPB B,A		;Drop that in
+2)	
+2)		;; Finished header, now add text of message (converting EOLs)
+2)		MOVE B,MSPTR		;Get pointer to message text
+2)		DO.
+
+; SNDMSG.MAC.1 & <MM>SNDMSG.MAC.1 20-Apr-88 1449	PAGE 14
+
+
+2)		  ILDB C,B		;Get a byte from the user
+2)		  CAIN C,15		;Carriage return?
+2)		   MOVEI C,215		;Replace with chaos EOL character
+2)		  CAIE C,12		;If linefeed, ignore it.
+2)		   IDPB C,A		;Put character in the buffer
+2)		  JUMPN C,TOP.		;And continue until we have transferred a null
+2)		ENDDO.
+2)		MOVEM B,MSEPTR		;Save pointer to end of message
+2)		MOVEI C,215		;Put another carriage return for pretty
+2)		DPB C,A			;Clobber the null we left there
+2)		SETZ C,
+2)		IDPB C,A		;And terminate string with a null
+2)		RETSKP
+2)	^L
+2)	; DOETH - Send a message via the Pup Ethernet
+2)	
+2)	; Definitions for Pup-based Ethernet (stolen from PUPPAR)
+2)	
+2)	IFNDEF PUPI%,<
+2)		OPDEF PUPI% [JSYS 441]	;JSYS to send a packet over the Ether
+2)		OPDEF PUPO% [JSYS 442]	;JSYS to pick up a packet
+2)	
+2)		PU%CHK==1B1		;Compute/check checksum
+2)		PU%MEI==1B3		;Header is in 16-bit hardware mode
+2)		PU%TIM==1B4		;(PUPI%) input timeout in ms in ac3
+2)	
+2)		.PUORW==16		;Raw I/O mode for OPENF%
+2)	>;IFNDEF PUPI%
+2)	
+2)		PBCONT==5		;Start of data in buffer
+2)	
+2)		MNPLEN==^D22		;Minimum Pup length (bytes) incl header
+2)		MXPLEN==^D554		;Maximum Pup length
+2)		MXPBLN==<MXPLEN+3>/4	;Maximum packet buffer size (words)
+2)	
+2)		DEFSTR PUPLEN,BUFFER,17,16	;Pup length
+2)		DEFSTR PUPTYP,BUFFER,35,8	;Pup type
+2)	
+2)	DOETH:	PUSH P,B		;Save net number
+2)		HRROI A,NETBUF		;Get pointer to name string area
+2)		HRROI B,[ASCIZ/PUP:!J./]
+2)		CALL CPYSTR		;Copy string
+2)		HLRZ B,(P)		;Get net num back
+2)		MOVEI C,^D8		;Octal
+2)		NOUT%			;Add the number
+2)		 RETSTR <Couldn't copy net number>,TTXNET
+2)		CALL NUMSGN		;Add a number sign
+2)		POP P,B			;Get host number back
+2)		HRRZS B			;Just the host number
+2)		NOUT%			;Add the number (8 still in C)
+2)		 RETSTR <Couldn't copy host number>,TTXNET
+
+; SNDMSG.MAC.1 & <MM>SNDMSG.MAC.1 20-Apr-88 1449	PAGE 15
+
+
+2)		CALL NUMSGN		;Another number sign
+2)		MOVEI B,"4"		;Well-known socket for misc-services
+2)		IDPB B,A		;Drop it in
+2)		SETZ B,			;Get a null
+2)		IDPB B,A		;Drop that in too
+2)		MOVX A,GJ%SHT!GJ%OLD	;Short-style gtjfn, old file
+2)		HRROI B,NETBUF		;From name we just built
+2)		GTJFN%			;Get the jfn
+2)		 RETSTR <Couldn't get network connection>,TTXNET
+2)		MOVEM A,NETJFN		;Save JFN
+2)		MOVX B,FLD(^D8,OF%BSZ)!FLD(.PUORW,OF%MOD)!OF%RD!OF%WR
+2)		OPENF%			;Open in raw packet mode
+2)		 RETSTR <Couldn't open network connection>,TTXNET
+2)		CALL BLDETH		;Build packet into buffer
+2)		HRRZ A,NETJFN		;Get JFN back
+2)		TXO A,PU%CHK!PU%MEI	;Compute checksum, MEIS headers
+2)		MOVE B,[MXPBLN,,BUFFER] ;Max length, from buffer
+2)		PUPO%			;Send it out
+2)		 ERJMP JSRET		;Random lossage
+2)		HRRZ A,NETJFN		;Get JFN again
+2)		TXO A,PU%CHK!PU%MEI!PU%TIM ;Checksum, MEIS headers, timeout
+2)		MOVE B,[MXPBLN,,BUFFER] ;Max length, into buffer
+2)		MOVX C,^D<30*1000>	;Wait for up to 30 seconds
+2)		PUPI%			;Read it back in
+2)		IFNJE.			;Got one?
+2)		  LOAD A,PUPTYP		;Get type
+2)		  CAIN A,301		;Success?
+2)		   RETSKP
+2)		  LOAD B,PUPLEN		;Get length of pup
+2)		  SUBI B,MNPLEN		;Minus minimum number is length of error string
+2)		  IFE. B		;If we have nothing
+2)		    HRROI A,[ASCIZ/Unknown network error/] ;Make up a string
+2)		  ELSE.
+2)		    MOVE A,[POINT 8,PBCONT+BUFFER] ;Get pointer to error
+2)		    ADJBP B,A		;Point to end of error message
+2)		    SETZ C,		;Get a null
+2)		    IDPB C,B		;Drop it in at end of string
+2)		  ENDIF.
+2)		  MOVX C,TTXNET		;And error code
+2)		  RET			;Return with it
+2)		ENDIF.
+2)		RETSTR <Failed to receive remote reply>,TTXNET
+2)	
+2)	NUMSGN:	MOVEI B,""		;Quote with control-V
+2)		IDPB B,A		;Drop it in
+2)		MOVEI B,"#"		;Number sign
+2)		IDPB B,A		;Drop it in
+2)		RET
+2)	^L
+2)	; Build packet into buffer for PUPO%
+2)	; returns +1/always, mungs registers A-D
+
+; SNDMSG.MAC.1 & <MM>SNDMSG.MAC.1 20-Apr-88 1449	PAGE 16
+
+
+2)	
+2)	BLDETH:	SETZM BUFFER		;Clear start of buffer
+2)		MOVE A,[BUFFER,,BUFFER+1]
+2)		BLT A,BUFFER+MXPBLN-1	;Clear it out for the length of a packet
+2)		MOVEI A,300		;Get packet type for ether send
+2)		STOR A,PUPTYP		;Save it
+2)		MOVE A,[POINT 8,PBCONT+BUFFER] ;Get dest ptr
+2)		CALL .DIRST		;Copy user name or string describing us
+2)		MOVEI B,":"		;Colon
+2)		IDPB B,A		;Drop it in
+2)		HRROI B,NETUSR		;Get net user name
+2)		CALL CPYSTR		;Add it in
+2)		MOVEI B,":"		;Another colon
+2)		IDPB B,A		;Drop it in
+2)		MOVE B,MSPTR		;Point to message
+2)		CALL CPYSTR		;Copy it in
+2)		MOVEM B,MSEPTR		;Save pointer
+2)		MOVEI D,@A		;Compute address of last word
+2)		SUBI D,BUFFER-1		;Compute # 36-bit words used
+2)		LSH D,2			;Convert to bytes
+2)		LSH A,-^D33		;Get bytes not used in last word
+2)		SUBI D,(A)		;Compute pup length
+2)		ADDI D,2		;Include checksum
+2)		STOR D,PUPLEN		;Save length
+2)		RET
+2)	^L
+

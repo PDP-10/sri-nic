@@ -1,0 +1,113 @@
+;[SRI-NIC]SRC:<LOC.LIBRARY>BLANKT.MID.11, 24-Jul-85 16:22:52, Edit by IAN
+;On the $$BNBVW switch (BLANK No-Blank Vertical-Whitespace), output some
+;vertical whitespace if the screen can't be cleared
+;[SRI-NIC]PS:<MKL>BLANKT.MID.2, 30-May-85 14:34:11, Edit by MKL
+;make a MIDAS library out of this
+;<MM>BLANKT.SU.2, 22-Apr-83 15:15:58, Edit by MRC
+; Configured for Stanford University
+
+;	TITLE BLANKT -- blank terminal screen code for mailsystem
+;	SUBTTL Written by Mark Crispin /MRC 22-Apr-83
+
+;	SEARCH MACSYM,MONSYM	; system definitions
+
+IFNDEF $$BNBVW, $$BNBVW==0
+
+;  This module contains code to blank the terminal screen.  This is
+; site-dependent and should be edited for each individual site as
+; appropriate.
+
+;A=:1				; JSYS AC's
+;B=:2
+
+.scalar ttype
+.scalar oldmod
+
+$BLANK:	
+;	SAVEAC <A,B>
+;	STKVAR <TTYPE,OLDMOD>
+	push p,1
+	push p,2
+
+	MOVEI 1,.PRIOU		; get terminal type index
+	GTTYP%
+	MOVEM 2,TTYPE		; save for later
+	CAIGE 2,NCLRSC		; more than the number supported?
+	 SKIPN CLRSCN(2)	; yes, able to blank on this type?
+IFE $$BNBVW,jrst blkret		; no, return
+IFN $$BNBVW,[
+	  jrst [hrroi 1,[asciz "
+
+
+
+
+"] ?		psout%
+		jrst blkret]
+];IFN $$BNBVW
+	RFMOD%			; get current terminal mode
+	MOVEM 2,OLDMOD		; save for later
+	TRZ 2,TT%DAM		; change to binary mode
+	SFMOD%
+	MOVE 2,TTYPE		; get type index back again
+	MOVE 1,CLRSCN(2)	; get blanking sequence or address
+	TXOE 1,.LHALF		; was it an address (LH=0)?
+	 HRROI 1,CLRSCN(2)	; no, sequence 4 chars or less, set up address
+	PSOUT%			; output the sequence
+	MOVEI 1,.PRIOU		; wait for it to get out
+	DOBE%
+	SETZ 2,			; tell monitor we are at top of page
+	SFPOS%
+	MOVEI 1,500.		; give terminal a chance to do it
+	DISMS%
+	MOVEI 1,.PRIOU		; restore former terminal mode
+	MOVE 2,OLDMOD
+	SFMOD%
+blkret:	pop p,2
+	pop p,1
+	RET			; now return
+
+DEFINE CLRASCII 
+	Asciz "HJ"		; ASCII screen clear
+TERMIN
+DEFINE CLRANSI
+	[Asciz "[H[J"]		; ANSI standard
+TERMIN
+
+CLRSCN:	0			; 0 TTY33
+	0			; 1 TTY35
+	0			; 2 TTY37
+	0			; 3 TI
+	<.BYTE 7 ? .CHCNZ>	; 4 ADM-3
+	<.BYTE 7 ? .CHCRB ? .CHCCF> ; 5 Datamedia 2500
+	CLRASCII		; 6 HP2640
+	<.BYTE 7 ? 176 ? .CHCBS>	; 7 Hazeltine 1500
+	0			; 8 default
+	0			; 9 PTY, NVT (aka "ideal")
+	<.BYTE 7 ? .CHCRB ? .CHCUN ? .CHCUN ? .CHCUN > ;10 VT05
+	CLRASCII		; 11 VT50
+	0			; 12 LA30
+	<.BYTE 7 ? .CHCRB ? .CHCUN> ;13 GT40
+	0			; 14 LA36
+	CLRASCII		; 15 VT52
+	CLRANSI			; 16 VT100
+	0			; 17 LA38
+	0			; 18 LA120
+	0			; 19 TTY43
+	<.BYTE 7 ? .CHESC ? "+>	; 20 Soroc 120
+	<.BYTE 7 ? .CHCNE ? .CHCNY> ; 21 Gillotine
+	CLRASCII		; 22 Teleray 1061
+	[<.BYTE 7 ? .CHCBS ? "E ? "R ? "A ? "; ? 0>] ; 23 Tektronix 4025
+	<.BYTE 7 ? .CHFFD>	; 24 Ann Arbor
+	CLRASCII		; 25 Heath 19
+	<.BYTE 7 ? .CHESC ? "? ? .CHESC ? .CHCNC> ; 26 Concept 100
+	<.BYTE 7 ? .CHESC ? "K>	; 27 IBM 3101
+	<.BYTE 7 ? .CHESC ? "*>	; 28 Televideo 912
+	0			; 29 Textronix 4023
+	<.BYTE 7 ? .CHCNY ? .CHVTB> ; 30 Datamedia 1520
+	CLRANSI			; 31 Ann Arbor Ambassador
+	<.BYTE 7 ? .CHCNP ? .CHCNR ? .CHCNP ? .CHCNV> ; 32 DTC 382
+	0			; 33 reserved for customer definition
+	0			; 34 reserved for customer definition
+	CLRANSI			; 35 VT125
+	CLRANSI			; 36 VK100 (GIGI)
+NCLRSC==.-CLRSCN		; maximum # of terminal types

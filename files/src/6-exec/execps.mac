@@ -1,0 +1,564 @@
+;<4.EXEC>EXECPS.MAC.22,  9-Mar-81 17:30:17, Edit by DK32
+;More prompts
+;<4.EXEC>EXECPS.MAC.21, 12-Jan-81 21:50:29, Edit by DK32
+;Give optional timeout to $ReadBinary
+;<4.EXEC>EXECPS.MAC.20,  7-Jan-81 18:09:23, Edit by DK32
+;$Append
+;<4.EXEC>EXECPS.MAC.19, 23-Dec-80 02:29:52, Edit by DK32
+;$Typeahead_Count
+;<4.EXEC>EXECPS.MAC.18, 10-Dec-80 21:35:24, Edit by DK32
+;$Input, $Output, $Wait
+;<4.EXEC>EXECPS.MAC.17,  4-Dec-80 15:28:44, Edit by DK32
+;$File_Dev ... $File_Typ
+;<4.EXEC>EXECPS.MAC.16, 30-Nov-80 00:44:03, Edit by DK32
+;Rearrange
+;<4.EXEC>EXECPS.MAC.15, 29-Oct-80 16:11:35, Edit by DK32
+;Names for $FileInfo, $Account, Runtime channel list
+;<4.EXEC>EXECPS.MAC.14, 21-Oct-80 16:07:56, Edit by DK32
+;$FileInfo, Rearrange
+;<4.EXEC>EXECPS.MAC.13, 15-Oct-80 21:30:10, Edit by DK32
+;$NextFile
+;<4.EXEC>EXECPS.MAC.12,  7-Oct-80 15:17:16, Edit by DK32
+;Adjust $Filex variables for parsed file list
+;<4.EXEC>EXECPS.MAC.11,  2-Oct-80 19:23:37, Edit by DK32
+;Prompt strings
+;<4.EXEC>EXECPS.MAC.10, 25-Sep-80 18:18:41, Edit by DK32
+;I/O
+;<4.EXEC>EXECPS.MAC.9,  6-Sep-80 22:29:39, Edit by DK32
+;Add $SearchRaised
+;<4.EXEC>EXECPS.MAC.8, 20-Aug-80 17:01:59, Edit by DK32
+;Add $TermNumber, $EmacsTerminal
+;<DK32.CG>EXECPS.MAC.7, 10-Jul-80 10:40:12, Edit by DK32
+;Add $ConnectedDirectory and $Quote
+;<DK32.CG>EXECPS.MAC.6,  3-Jul-80 12:53:05, Edit by DK32
+;Make MERGETAD and OUTPUTTAD functions, Add INPUTTAD
+;<DK32.CG>EXECPS.MAC.5, 27-Jun-80 09:29:14, Edit by DK32
+;Change IDCNV, ODCNV, ODTIM to MERGETAD, EXPANDTAD, OUTPUTTAD, Fix Readbinary
+;<DK32.CG>EXECPS.MAC.4, 20-Jun-80 03:30:54, Edit by DK32
+;Add $READBINARY
+;<DK32.CG>EXECPS.MAC.3, 20-Jun-80 00:21:09, Edit by DK32
+;Fix $USERNAME
+;<DK32.CG>EXECPS.MAC.1, 11-Jun-80 22:43:51, Edit by DK32
+
+	TITLE EXECPS
+	SEARCH MONSYM, MACSYM
+
+; The Programmable Command Language System Variables and Procedures
+;
+; Copyright (C) 1980, Carnegie-Mellon University
+;
+; This module defines all the system variables and procedures for PCL.
+; The actual routines implementing many of the standard features are in
+; module EXECPX; this module contains the fundamental definitions.
+
+T1==1
+T2==2
+T3==3
+T4==4
+P1==10
+P2==11
+P3==12
+P4==13
+P==17
+
+OPDEF CALLRET [JRST]
+OPDEF RET [POPJ P,]
+
+; System name table
+;
+; This table contains the name of each procedure and variable,
+; along with specific information on the procedure or variable
+; location, status, etc.  The ordering of the table is critical.
+; Internally, a procedure or variable is referenced only by its
+; index in this table; these indices are in the program texts of
+; compiled PCL routines, so if you change this list indiscriminately
+; existing environments may not work.  Since it should not be
+; necessary to delete any of the entries in the table as it is
+; distributed, you should be simply be able to append entries to
+; the end, accordingly giving your installation's routines all
+; new indices.
+;
+; Each entry in the table takes two words; one word contains status
+; information, and the other contains two addresses in the right
+; and left halves.
+;
+
+; Word 1, Bit 0 - Routine	;If the entry defines a Variable, a one
+;				;in this bit indicates that the variable
+;				;is implemented by a routine which is called
+;				;and which returns a value; if this bit is
+;				;off, the Variable is simply a word in memory.
+;
+; Word 1, Bit 1 - Writeable	;If the entry defines a Variable, a one
+;				;in this bit indicates that a write into
+;				;the Variable is legal.
+;
+; Word 1, bits 12-14 - Data type if variable or typed procedure
+
+	TYPINT==0		;Integer
+	TYPSTR==1		;String
+
+; Word 1, bits 15-17 - Class
+
+	CLSPRC==0		;Untyped Procedure
+	CLSFCN==1		;Typed procedure
+	CLSVAR==2		;Variable
+
+; Word 1, right half - Name length
+; Word 2, left half - Address of ASCII string containing the name
+; Word 2, right half - Address of routine, or of data word if ordinary Variable
+
+DEFINE SYNDEF (NAME,LEN,CLASS,ADDR,TYPE,RTN,WRT) <
+	..STAT==0
+	IFNB <RTN>,<
+	..STAT==400000>
+	IFNB <WRT>,<
+	..STAT==..STAT+200000>
+	..STAT==..STAT+CLS'CLASS
+	IFNB <TYPE>,<
+	..STAT==..STAT+<TYP'TYPE>B32>
+	..STAT,,LEN
+	[ASCII/NAME/] ,, ADDR>
+
+PSDEFN::
+
+;Constants
+	SYNDEF (CRLF,4,VAR,CRLFST,STR)
+	SYNDEF (CR,2,VAR,CRTSTR,STR)
+	SYNDEF (NUL,3,VAR,DIVNUL##,STR,RTN,WRT)
+	SYNDEF (QUOTE,5,VAR,QUOTST,STR)
+	SYNDEF (PARSE,5,VAR,[-1],INT)
+	SYNDEF (FBCTL,5,VAR,[.FBCTL],INT)
+	SYNDEF (FBADR,5,VAR,[.FBADR],INT)
+	SYNDEF (FBPRT,5,VAR,[.FBPRT],INT)
+	SYNDEF (FBCRE,5,VAR,[.FBCRE],INT)
+	SYNDEF (FBGEN,5,VAR,[.FBGEN],INT)
+	SYNDEF (FBBYV,5,VAR,[.FBBYV],INT)
+	SYNDEF (FBSIZ,5,VAR,[.FBSIZ],INT)
+	SYNDEF (FBCRV,5,VAR,[.FBCRV],INT)
+	SYNDEF (FBWRT,5,VAR,[.FBWRT],INT)
+	SYNDEF (FBREF,5,VAR,[.FBREF],INT)
+	SYNDEF (FBCNT,5,VAR,[.FBCNT],INT)
+	SYNDEF (FBBK0,5,VAR,[.FBBK0],INT)
+	SYNDEF (FBBBT,5,VAR,[.FBBBT],INT)
+	SYNDEF (FBNET,5,VAR,[.FBNET],INT)
+	SYNDEF (FBUSW,5,VAR,[.FBUSW],INT)
+	SYNDEF (FBTDT,5,VAR,[.FBTDT],INT)
+	SYNDEF (FBFET,5,VAR,[.FBFET],INT)
+	SYNDEF (AUTHOR,6,VAR,[1],INT)
+	SYNDEF (WRITER,6,VAR,[2],INT)
+	SYNDEF (FILEACCOUNT,^D11,VAR,[3],INT)
+
+;System information
+	SYNDEF (JOBNO,5,VAR,JOBNO##,INT)
+	SYNDEF (TERMNUMBER,^D10,VAR,DIVTTN##,INT,RTN)
+	SYNDEF (TTYPE,5,VAR,DIVTTP,INT,RTN)
+	SYNDEF (CURTAD,6,VAR,DIVCTD##,INT,RTN)
+	SYNDEF (LASTERRCODE,^D11,VAR,DIVLEC##,INT,RTN)
+	SYNDEF (TERMWIDTH,9,VAR,DIVTWD##,INT,RTN)
+	SYNDEF (USERNAME,8,VAR,DIVUNM,STR,RTN)
+	SYNDEF (ACCOUNT,7,VAR,DIVACC##,STR,RTN)
+	SYNDEF (LASTERROR,9,VAR,DIVLER##,STR,RTN)
+	SYNDEF (TIME,4,VAR,DIVTIM##,STR,RTN)
+	SYNDEF (DATE,4,VAR,DIVDAT##,STR,RTN)
+	SYNDEF (CONNECTEDDIRECTORY,^D18,VAR,DIVCDR##,STR,RTN)
+	SYNDEF (PROMPTREG,^D9,VAR,DIVPMR##,STR,RTN,WRT)
+	SYNDEF (PROMPTSUB,^D9,VAR,DIVPMS##,STR,RTN,WRT)
+
+;Simple manipulations
+	SYNDEF (LENGTH,6,FCN,DINLNS,INT)
+	SYNDEF (CVCTI,5,FCN,DINCTI##,INT)
+	SYNDEF (INTEGER,7,FCN,DINSTI##,INT)
+	SYNDEF (STRING,6,FCN,DINITS,STR)
+	SYNDEF (CVITC,5,FCN,DINITC##,STR)
+
+;Parse results
+	SYNDEF (VALUE,5,VAR,PCVVAL##,INT)
+	SYNDEF (FILEV,5,VAR,DIVFNV##,INT,RTN)
+	SYNDEF (ATOM,4,VAR,PCVATM##,STR)
+	SYNDEF (FILEN,5,VAR,DIVFNM##,STR,RTN)
+	SYNDEF (FILES,5,VAR,DIVFNS##,STR,RTN)
+	SYNDEF (FILEL,5,VAR,DIVFNL##,STR,RTN)
+	SYNDEF (NEXTFILE,^D8,FCN,DINNFL##,INT)
+
+;Time/Date converters
+	SYNDEF (EXPANDTAD,9,PRC,DINODC)	
+	SYNDEF (MERGETAD,8,FCN,DINIDC##,INT)
+	SYNDEF (INPUTTAD,8,FCN,DINITD##,INT)
+	SYNDEF (OUTPUTTAD,9,FCN,DINODT,STR)
+
+;Search
+	SYNDEF (SEARCH,6,FCN,DINSCH##,INT)
+	SYNDEF (SEARCHRAISED,^D12,FCN,DINSCR##,INT)
+
+;Input/output
+	SYNDEF (READBINARY,^D10,FCN,DINRBN,STR)
+	SYNDEF (OPEN,4,FCN,DINOPN##,INT)
+	SYNDEF (CLOSE,5,PRC,DINCLS##)
+	SYNDEF (READ,4,FCN,DINRED##,STR)
+	SYNDEF (EOF,3,FCN,DINEOF##,INT)
+	SYNDEF (WRITE,5,PRC,DINWRT##)
+	SYNDEF (FILEINFO_I,^D10,FCN,DINFII##,INT)
+	SYNDEF (FILEINFO_S,^D10,FCN,DINFIS##,STR)
+
+;This definition is only for CMU; we don't expect anyone else
+;to be able to use it unmodified since it depends on the terminal
+;indices used at CMU
+
+	SYNDEF (EMACSTERMINAL,^D13,VAR,DIVETM,INT,RTN)
+
+;Recent inserts
+;REMEMBER TO EXPAND COD_LNO AND SHRINK COD_OPR
+	SYNDEF (FILE_DEV,8,FCN,DINFDV##,STR)
+	SYNDEF (FILE_DIR,8,FCN,DINFDR##,STR)
+	SYNDEF (FILE_NAM,8,FCN,DINFNM##,STR)
+	SYNDEF (FILE_TYP,8,FCN,DINFTY##,STR)
+	SYNDEF (INPUT,5,VAR,[0],INT)
+	SYNDEF (OUTPUT,6,VAR,[1],INT)
+	SYNDEF (WAIT,4,PRC,DINWAI##)
+	SYNDEF (TYPEAHEAD_COUNT,^D15,VAR,DIVTAH##,INT,RTN)
+	SYNDEF (APPEND,6,VAR,[2],INT)
+	SYNDEF (PROMPTENB,^D9,VAR,DIVPME##,STR,RTN,WRT)
+	SYNDEF (PROMPTENBSUB,^D12,VAR,DIVPMU##,STR,RTN,WRT)
+
+PSDEFL==:<.-PSDEFN>/2		;Length of definition table
+
+; Some simple definitions
+
+; Everywhere in PCL a string is referenced in terms of a "stringvalue"
+; which can not simply be an address of an ASCIZ string.  Instead,
+; a stringvalue has the length of the string in the right half and
+; the address of the ASCIZ string in the right half.  This string
+; length does NOT include the final null.
+
+; Here are the definitions of two rather simple system string variables;
+; since they are strings, their values are stringvalues.
+
+CRLFST:	2,,[BYTE(7) .CHCRT,.CHLFD,.CHNUL]	; $CRLF
+CRTSTR:	1,,[BYTE(7) .CHCRT,.CHNUL]		; $CR
+QUOTST:	1,,[BYTE(7) ^D34,.CHNUL] ; $QUOTE
+
+; Some symbols used here and there
+
+EXTERN CSBUFP			;Common string buffer pointer
+EXTERN SUBBP			;Subtract two byte pointers
+
+
+; System Procedure definitions
+
+; All system procedures are called from module EXECPX during execution
+; of a PCL "CAL" pseudo-instruction.  The address of the user's actual
+; argument list is passed in AC1, and its length in AC2.  The procedure
+; fetches the parameters as it wishes, performs its calculations, and
+; stores its results back in the user's parameters.  System procedures
+; should follow the standard register conventions: AC1 through AC4 are
+; free for use by the called routine, along with AC16; all other AC's
+; must be saved and restored if they are modified.
+
+; A user's actual parameter list contains one word for each parameter;
+; actually only the right half contains information.  The parameter is
+; represented by a general operand descriptor, which contains several
+; codes in the high order three bits and an index in the low order 15
+; bits.  This index is NOT an address and is actually useless to you
+; in this module.  The way a procedure fetches and stores parameters is
+; by calling two utility routines defined in EXECPX, and described below.
+; Since the number and types of the parameters are not known until the
+; procedure is called, the procedure must specify the required type
+; of each parameter at the time it calls these utilities to fetch and
+; store them.  An integer operand is specified by the symbol TYPINT,
+; and a string by TYPSTR. (Defined above)
+
+; Routine PCEGOP takes an actual parameter descriptor in AC1 and a type
+; code in AC2 and returns the value in AC1; if the parameter is a string
+; then the value will be a "stringvalue" as described above.
+
+EXTERN PCEGOP			;Get operand
+
+; Routine PCESOP takes an actual parameter descriptor in AC1, a value in
+; AC2 (an integer number or a stringvalue), and a type code in AC3,
+; and stores the value in the parameter.  If the actual parameter is not
+; suitable for a store (for instance, if it was a procedure value or
+; a computed number) an error will result.
+
+EXTERN PCESOP			;Set operand
+
+; When strings are involved a complication arises.  Strings are allocated
+; from a common string space pool, and every string is pointed to by
+; one and only one user variable.  Thus, if you want to store a string in
+; a user parameter, almost certainly you want to really want to store
+; a unique COPY of that string.  To make a unique copy in a newly-allocated
+; string block, you call routine PCECST with a stringvalue in AC1; it will
+; return in AC1 a stringvalue to the new string, all ready to be stored
+; by PCESOP.  Or, if you know the length and want to do the copy yourself,
+; a call to PCEAST with a length in AC1 will allocate a string block suitable
+; for storing that many characters (plus one for the null) and return the
+; stringvalue in AC1.
+
+EXTERN PCECST			;Copy string
+EXTERN PCEAST
+
+; A further complication arises because of the possibility that some
+; actual parameters may have been dynamically generated, and thus may
+; reside on the stack.  During normal execution, such temporary variables
+; are popped from the stack the instant they are fetched (e.g., by an ADD
+; pseudo-instruction).  A system Procedure must take care to fetch its
+; actual parameters in the proper order in order to pop the right parameter
+; at the right time.  That is, if your system Procedure is called by
+;
+;	CALL $CONCATENATE( "first "+"string", "second "+"string")
+;
+; then "first string" will be pushed on the stack before "second string"
+; and you had best be sure to fetch them in the opposite order.
+
+; Because of these temporary variables, a system Procedure has one more
+; responsibility: It must free the string block contained in such a
+; temporary.  So, whenever you use PCEGOP to obtain a string parameter,
+; whenever you are done with its contents you must check the actual
+; parameter descriptor to see if it is the code for a temporary string
+; (symbol CLSTMS below); if it is, then you should call routine PCEFST
+; with the stringvalue of the string in AC1 to release the string.
+
+EXTERN PCEFST			;Free string
+CLSTMS==700000			;Temporary string
+
+; You may wish to issue an error, for instance because of bad parameters.
+; Remember that all PCL execution errors are fatal.  All you do is jump
+; to routine PCEERR with the address of an ASCIZ error message in AC1.
+
+EXTERN PCEERR			;Execution error
+
+; Procedure $EXPANDTAD - Convert TAD to several integers
+
+;   CALL $EXPANDTAD(TAD, Year, Month, DayMonth, DayWeek, Hour, Minute: Integer)
+
+DINODC:	CAIE T2,7		;Correct number of parameters?
+	JRST [	MOVEI T1,[ASCIZ/Bad arguments to EXPANDTAD/]
+		JRST PCEERR]	;No
+	SAVEAC <P1,P2,P3,P4>
+	MOVE P1,T1		;Save parameter list pointer
+	MOVE T1,(T1)		;Get first parameter descriptor
+	MOVEI T2,TYPINT		;Must be an integer
+	CALL PCEGOP		;Get TAD
+	MOVE T2,T1		;Get TAD to proper AC
+	SETZ T4,		;Default options
+	ODCNV			;Break it up
+	DMOVE P2,T2		;Save the results
+	MOVE P4,T4
+	MOVE T1,1(P1)		;Store year
+	HLRZ T2,P2
+	MOVEI T3,TYPINT
+	CALL PCESOP
+	MOVE T1,2(P1)		;Store month
+	HRRZ T2,P2
+	MOVEI T3,TYPINT
+	CALL PCESOP
+	MOVE T1,3(P1)		;Store day of month
+	HLRZ T2,P3
+	MOVEI T3,TYPINT
+	CALL PCESOP
+	MOVE T1,4(P1)		;Store day of week
+	HRRZ T2,P3
+	MOVEI T3,TYPINT
+	CALL PCESOP
+	MOVE T1,5(P1)		;Store hour
+	HRRZ T2,P4		;Get seconds
+	IDIVI T2,^D60		;Make minutes
+	IDIVI T2,^D60		;Now make hours
+	MOVE P4,T3		;Save remaining minutes
+	MOVEI T3,TYPINT
+	CALL PCESOP
+	MOVE T1,6(P1)		;Store minute
+	MOVE T2,P4
+	MOVEI T3,TYPINT
+	CALLRET PCESOP
+
+; String Procedure $OUTPUTTAD - Convert TAD to a string
+
+;  LET STR = $OUTPUTTAD (TAD: Integer)
+
+DINODT:	CAIE T2,1		;Right parameter count?
+	JRST [	MOVEI T1,[ASCIZ/Bad arguments to OUTPUTTAD/]
+		JRST PCEERR]	;No
+	MOVE T1,(T1)		;Get TAD
+	MOVEI T2,TYPINT
+	CALL PCEGOP
+	MOVE T2,T1
+	MOVE T1,CSBUFP		;Ordinary buffer area
+	SETZ T3,		;Standard format
+	ODTIM
+	MOVE T2,CSBUFP		;See how long it is
+	CALL SUBBP
+	CALL PCEAST		;Allocate string
+	MOVE T4,T1		;Save stringvalue
+	MOVE T2,CSBUFP		;Copy the string
+	HRLI T1,(<POINT 7,0>)
+	ILDB T3,T2
+	IDPB T3,T1
+	JUMPN T3,.-2
+	MOVE T1,T4		;Return the stringvalue
+	RET
+
+; Integer Procedure $LENGTH - Return length of string
+
+;    LET integer = $LENGTH(string)
+
+DINLNS:	CAIE T2,1		;One parameter?
+	JRST [	MOVEI T1,[ASCIZ/Bad argument to $Length/]
+		JRST PCEERR]	;No
+	SAVEAC <P1,P2>
+	MOVE P1,T1		;Save pointer
+	MOVE T1,(T1)		;Get descriptor
+	MOVEI T2,TYPSTR
+	CALL PCEGOP		;Get string
+	HLRZ P2,T1		;Get length
+	MOVE T2,(P1)		;Get designator again
+	CAIN T2,CLSTMS		;Temporary?
+	CALL PCEFST		;Free it
+	MOVE T1,P2		;Return length
+	RET
+
+; String Procedure $STRING - Convert integer to string
+
+;  LET string = $STRING(Number:Integer)   or
+;  LET string = $STRING(Number, radix: Integer)
+
+DINITS:	CAIL T2,1		;Too few arguments?
+	CAILE T2,2		;Too many?
+	JRST [	MOVEI T1,[ASCIZ/Bad arguments to $STRING/]
+		JRST PCEERR]	;Yes
+	SAVEAC <P1,P2>
+	MOVEI P2,^D10		;Default radix
+	MOVE P1,T1
+	CAIE T2,2		;Radix provided?
+	JRST ITS1		;No
+	MOVE T1,1(T1)		;Get it
+	MOVEI T2,TYPINT
+	CALL PCEGOP
+	MOVE P2,T1		;Save it
+ITS1:	MOVE T1,(P1)		;Get number
+	MOVEI T2,TYPINT
+	CALL PCEGOP
+	MOVE T2,T1		;Save it
+	MOVE T1,CSBUFP		;Use common buffer
+	JUMPGE P1,INT2		;Negative?
+	MOVEI T3,"-"		;Yes
+	IDPB T3,T1
+	MOVMS T2
+INT2:	MOVE T3,P2		;Default format with requested radix
+	NOUT			;Convert it
+	 NOP
+	MOVE T2,CSBUFP		;See how long it is
+	CALL SUBBP
+	CALL PCEAST		;Allocate string
+	MOVE T2,T1		;Copy strings
+	HRLI T2,(<POINT 7,0>)
+	MOVE T3,CSBUFP
+	ILDB T4,T3
+	IDPB T4,T2
+	JUMPN T4,.-2
+	RET			;Return stringvalue
+
+; String Procedure $READBINARY - Read from terminal
+
+;   LET string = $READBINARY(NumberofBytes:Integer, BreakCharacter:String,
+;			TimeOut:Integer)
+
+DINRBN:	CAILE T2,1		;Two or three arguments?
+	CAILE T2,3
+	JRST [	MOVEI T1,[ASCIZ/Bad arguments to $ReadBinary/]
+		JRST PCEERR]	;No
+	SAVEAC <P1,P2,P3>
+	MOVE P1,T1		;Save pointer to arguments
+	MOVEI P3,^D1000		;Default timeout
+	CAIE T2,3		;Is timeout specified?
+	JRST DINRB1		;No
+	MOVE T1,2(P1)		;Get timeout
+	MOVEI T2,TYPINT
+	CALL PCEGOP
+	MOVE P3,T1		;Save timeout
+DINRB1:	MOVE T1,1(P1)		;Get break string
+	MOVEI T2,TYPSTR
+	CALL PCEGOP
+	HLRZ T2,T1		;Check the length
+	CAIE T2,1		;Exactly one character?
+	JRST [	MOVEI T1,[ASCIZ/Break string may have only one character/]
+		JRST PCEERR]	;No
+	LDB P2,[POINT 7,0(T1),6] ;Get the character
+	MOVE T2,1(P1)		;Get the designator again
+	CAIN T2,CLSTMS		;Temporary?
+	CALL PCEFST		;Yes, free it
+	MOVE T1,(P1)		;Get descriptor of count
+	MOVEI T2,TYPINT
+	CALL PCEGOP		;Get character count
+	MOVE P1,T1		;Save it
+	JUMPLE P3,DINRB3	;Need I wait?
+DINRB2:	MOVX T1,.CTTRM		;Check terminal
+	SIBE			;Is there something ready?
+	JRST DINRB3		;Yes, read it
+	MOVEI T1,^D100		;Pause 100 msec
+	DISMS
+	SUBI P3,^D100
+	JUMPG P3,DINRB2		;Check again
+	SETZ T1,		;Return empty string
+	RET
+
+DINRB3:	MOVX T1,.CTTRM		;Get controlling terminal
+	RFMOD			;Get current modes
+	MOVE T4,T2		;Save them
+	SETZRO TT%DAM,T2	;Set to binary mode
+	SFMOD
+	MOVE T2,CSBUFP		;Read into a common buffer
+	MOVE T3,P1		;Up to this many characters
+	EXCH T4,P2		;Or until this character is read
+	SIN
+	MOVE T2,P2		;Get back former modes
+	SFMOD
+	MOVE T1,P1		;Get space for this many characters
+	SUB T1,T3		;Although this many weren't read
+	CALL PCEAST
+	MOVE T4,T1		;Copy the string
+	HRLI T4,(POINT 7,0)
+	MOVE T2,CSBUFP
+	ILDB T3,T2
+	IDPB T3,T4
+	SOJG P1,.-2
+	RET			;Return the stringvalue in T1
+
+; Integer variable $TTYPE - Terminal type index
+
+DIVTTP:	MOVEI T1,.PRIIN		;Current terminal
+	GTTYP
+	MOVE T1,T2		;Return index
+	RET
+
+; String variable $USERNAME - Logged-in user name
+
+DIVUNM:	GJINF			;See who I am
+	MOVE T2,T1		;Copy it
+	HRRZ T1,CSBUFP		;Point to a buffer
+	HRLI T1,010700		;Use the next word since it must on a word
+	PUSH P,T1		;Save it
+	DIRST			;Convert it
+	 NOP
+	MOVE T2,(P)		;See how long it is
+	CALL SUBBP
+	POP P,T2		;Get back address
+	HRL T1,T1		;Make a stringvalue
+	HRRI T1,1(T2)
+	RET
+
+;CMU local variable
+
+; Integer variable $EmacsTerminal - nonzero if current terminal
+;				    can be used effectively by Emacs
+
+DIVETM:	MOVEI T1,.PRIIN		;Current terminal
+	GTTYP
+	ADJBP T2,[POINT 1,EMCTRM,0] ;Point to corresponding bit
+	LDB T1,T2		;Get yes or no
+	RET
+
+EMCTRM:	000006,,017277		;This is a bitvector based on the CMU
+	534000,,0		;terminal types.
+
+	END

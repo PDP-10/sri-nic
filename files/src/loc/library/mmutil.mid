@@ -1,0 +1,262 @@
+	.BEGIN MMUTIL
+
+;;GZ, 26-Sep-83 01:54:36,  MMAILER utility routines.
+;; All routines require P to be the stack pointer and preserve all registers
+;; except as described.  All routines are pure.
+
+IFNDEF $$WAKE,$$WAKE==0
+IFNDEF $$QDIR,$$QDIR==0
+IFNDEF $$QNAME,$$QNAME==0
+IFNDEF $$QJFN,$$QJFN==0
+
+;;MMUTIL"QJFN: (Conditional on $$QJFN==1)
+;;  Get a JFN for a queue file
+;;  Accepts: 1/ GTJFN% flags
+;;	     2/ BP to name of program (e.g. "MAIL" or "BABYL" or ...)
+;;  		The program name can have at most 17. chars.
+;;  Returns: +1: GTJFN% error, AC1 has error code
+;;	     +2: Win, AC1 has jfn, AC2 advanced.
+;;  Requires about 25. words of stack space.
+;;
+;;MMUTIL"QNAME: (Conditional on $$QJFN\$$QNAME==1)
+;;  Conses up a proper queue file name in the output buffer.
+;;  Accepts: 1/ BP to output buffer, at least 80. characters long.
+;;	     2/ BP to name of program (e.g. "MAIL" or "BABYL" or ...)
+;;		The program name can have at most 17. chars.
+;; Returns: +1 always, AC's 1 and 2 advanced.
+;;
+;; MMUTIL"WAKE: (Conditional on $$WAKE==1)
+;;  Tells the mailer to start scanning for newly queued mail.
+;;  Returns:
+;;   +1: JSYS error, AC1 has jsys error code, AC2 clobbered
+;;   +1: AC1 always contains 0.  If mailer could not be contacted, AC2
+;;	 contains an error code from <SYSTEM>INFO (e.g. .IPCNN, etc.)
+;;	 Otherwise, all went well and AC2 contains 0.
+;;  Requires about 12. words of stack space.
+;;
+;; MMUTIL"PICKUP: (Conditional on $$WAKE==1)
+;;  Like WAKE, but also gets a status response from the mailer.
+;;  Returns:
+;;    +1: JSYS error, AC1 contains jsys error code, AC2 clobbered
+;;    +2: If mailer couldn't be contacted, AC1 contains 0 and AC2 contains
+;;	  an error code from <SYSTEM>INFO (e.g. .IPCNN, etc.).  Otherwise
+;;	  all went well, AC2 contains 0 and AC1 has the response from the
+;;	  mailer:
+;;		SIXBIT/GOING/ means was idle, will wake up now
+;;		SIXBIT/BUSY/ means wasn't idle anyhow.
+;; Requires about 12. words of stack space.
+;;
+;;
+;; MMUTIL"QDIR: (Conditional on $$QDIR==1)
+;;  Accepts:  1/ temp page #,,PS directory #
+;;    Tells the mailer that there is queued mail in the specified PS: directory
+;;    so that the mailer will check there next time it looks for new mail.
+;;    (This is not necessary if the directory is MAILQ:, as it is for files
+;;     created via QJFN or QFILE).
+;;    Uses the specified page to map mailer flags.
+;;  Returns: +1: Jsys error
+;;	     +2: Won.
+
+IFE $$WAKE\$$QDIR\$$QNAME\$$QJFN,printx/(No MMUTIL routines included)/
+
+IFN $$QJFN,[
+QJFN:	push p,1
+	adjsp p,20		;Make a buffer for filename
+	hrroi 1,-17(p)
+	pushj p,QNAME
+	move 1,-20(p)		;Get flags
+	movem 2,-20(p)		;Save advanced pointer
+	hrroi 2,-17(p)
+	GTJFN%
+	 skipa
+	   aos -21(p)
+	adjsp p,-20
+	pop p,2
+	popj p,
+];$$QJFN
+
+IFN $$QNAME\$$QJFN,[
+QNAME:	push p,4		;GJINF clobbers this
+	push p,3		;Save a scratch register
+	tlce 2,-1		; 0,,address?
+	 tlcn 2,-1		;-1,,address?
+	   hrli 2,440700	;Normalize
+	push p,2
+	tlce 1,-1
+	 tlcn 1,-1
+	   hrli 1,440700
+	move 2,[440700,,[asciz/MAILQ:[--QUEUED-MAIL--].NEW-/]]
+	ildb 3,2
+	jumpn 3,[idpb 3,1 ? jrst .-1]
+	move 4,1
+	GTAD%
+	  erjmp [seto 2, ? jrst .+2]
+	move 2,1
+	move 1,4
+	movei 3,8
+	NOUT%
+	  jrst .+3
+	movei 3,"-
+	idpb 3,1
+	ildb 3,(p)
+	jumpn 3,.-2
+	movei 3,"-
+	idpb 3,1
+	movei 3,"J
+	idpb 3,1
+	push p,1
+	GJINF%
+	  erjmp [movei 2,999. ? jrst .+2]
+	hrrz 2,3
+	move 3,[3,,10.]
+	pop p,1
+	NOUT%
+	  nop
+	move 2,[440700,,[asciz/.-1;P770000/]]
+	ildb 3,2
+	jumpn 3,[idpb 3,1 ? jrst .-1]
+	move 2,1
+	idpb 3,2
+	pop p,2
+	pop p,3
+	pop p,4
+	popj p,
+];$$QNAME\$$QJFN
+
+IFN $$WAKE,[
+KILL:	push p,[1]
+	jrst wake0
+
+PICKUP:	push p,[-1]
+	skipa
+WAKE:	 push p,[0]
+wake0:	adjsp p,9		;Get us some room
+    rcvflg==-9			;Receive flag offset
+    ipblk==-8			;Packet descriptor block offset
+    ippak==-4			;Actual packet offset
+    .kill rcvflg,ipblk,ippak
+	movsi 1,(ip%cpd)	;Create us a PID while at it
+	movem 1,ipblk+.IPCFL(p)
+	setzm ipblk+.IPCFS(p)
+	setzm ipblk+.IPCFR(p)	;Talking to <SYSTEM>INFO
+	movei 1,ippak(p)	;And here's what we're asking
+	hrli 1,.IPCI2+3
+	movem 1,ipblk+.IPCFP(p)
+	movei 1,.IPCIW		;Find the PID
+	movem 1,ippak+.IPCI0(p)
+	setzm ippak+.IPCI1(p)	;Nobody else needs to know
+	dmove 1,[asciz/[SYSTEM]MMAILR/]	;Name whose PID we want
+	dmovem 1,ippak+.IPCI2(p)
+	move 1,[asciz/[SYSTEM]MMAILR/]+2	;(three words total)
+	movem 1,ippak+.IPCI2+2(p)
+	movei 1,4
+	movei 2,ipblk(p)
+	MSEND%
+	  jrst waker
+	move 1,ipblk+.IPCFS(p)	;Now receive reply
+	movem 1,ipblk+.IPCFR(p)
+	setzm ipblk+.IPCFL(p)
+	movei 1,4
+	MRECV%
+	  jrst waker
+	setz 1,
+	ldb 2,[.bp ip%cfe,ipblk+.IPCFL(p)]
+	jumpn 2,wake1		;Can't contact it
+	move 1,ipblk+.IPCFR(p)	;Else send again
+	movem 1,ipblk+.IPCFS(p)
+	setzm ipblk+.IPCFL(p)
+	move 1,ippak+.IPCI1(p)	;To MMAILR's PID
+	movem 1,ipblk+.IPCFR(p)
+	movei 1,1		;Only one word's worth
+	hrlm 1,ipblk+.IPCFP(p)
+	move 1,[sixbit/PICKUP/]	;The magic word
+	skipge rcvflg(p)
+	  move 1,[sixbit/WAKEUP/]
+	skiple rcvflg(p)
+	  move 1,[sixbit/DIE/]
+	movem 1,ippak(p)
+	movei 1,4
+	movei 2,ipblk(p)
+	MSEND%
+	  jrst waker
+	setzm ippak(p)
+	skipl rcvflg(p)
+	  jrst wake2
+	move 1,ipblk+.IPCFS(p)	;Now receive
+	movem 1,ipblk+.IPCFR(p)
+	movsi 1,(ip%ttl)	;Truncate if sends more than a word
+	movem 1,ipblk+.IPCFL(p)
+	movei 1,4
+	MRECV%
+	  jrst waker
+wake2::	setz 2,
+	move 1,ippak(p)
+wake1::	aos -10.(p)
+waker::	adjsp p,-10.
+	popj p,
+.kill wake2,wake1,waker
+];$$WAKE
+
+IFN $$QDIR,[
+QDIR:	push p,3
+	push p,2
+	push p,1
+	adjsp p,2
+    jfn==0
+    wrd==-1
+    arg==-2		;page#,,dir#
+    .kill jfn,wrd,arg
+	movsi 1,(gj%old\gj%sht)
+	hrroi 2,[asciz/MAIL:MAILER.FLAGS/]
+	GTJFN%
+	  erjmp [movsi 1,(gj%old\gj%sht)
+		 hrroi 2,[asciz/SYSTEM:MAILER.FLAGS/]
+		 GTJFN%
+		   erjmp qdirx
+		 jrst .+1]
+	hrrzm 1,jfn(p)
+	movei 2,of%rd\of%wr\of%thw
+	OPENF%
+	  erjmp [move 1,(p)
+		 RLJFN
+		   nop
+		 jrst qdirx]
+	hrrz 1,arg(p)		;Compute page to get
+	idivi 1,44000
+	movem 2,wrd(p)		;Save remainder
+	hrl 1,jfn(p)
+	hlr 2,arg(p)
+	hrli 2,.fhslf
+	movsi 3,(pm%rd\pm%wr)
+	PMAP%
+	  erjmp [move 1,jfn(p)
+		 CLOSF
+		   nop
+		 jrst qdirx]
+	hlrz 1,arg(p)		;Figure address to modify
+	lsh 1,9
+	move 2,wrd(p)
+	idivi 2,44
+	add 1,2
+	movns 3			;and bit to turn on
+	movsi 2,400000
+	lsh 2,(3)
+	iorm 2,(1)		;Turn it on.
+	seto 1,			;Flush mapped page and done.
+	hlr 2,arg(p)
+	hrli 2,.fhslf
+	setz 3,
+	PMAP%
+	  erjmp qdirx
+	move 1,jfn(p)
+	CLOSF%
+	  erjmp qdirx
+	aos -5(p)
+qdirx::	adjsp p,-2
+	pop p,1
+	pop p,2
+	pop p,3
+	popj p,
+];$$QDIR
+
+	.END MMUTIL

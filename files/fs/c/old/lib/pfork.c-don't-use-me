@@ -1,0 +1,117 @@
+entry pfork;
+
+/*
+ * pfork(program_name,command_block,command_block_length,start_offset,chainf);
+ *
+ *	create inferior fork, runs a program on it, and
+ *	  wait for the program to terminate. if chainf is nonzero,
+ *	  we chain to program instead and never return.
+ *
+ *	command_block is the argument block for the
+ *	  inferior process,
+ *	command_block_length is the length of the argument 
+ *	  block in words,
+ *	entry_offset is an offset that can be added to the
+ *	  usual starting location.
+ */
+
+/*
+ *  Bill Palmer / Stanford University / February 4, 1985 
+ *
+ *  Disclaimer:  I wrote this in a temporary fit of madness.
+ *  It works, but I do not recommend that you use it.  The
+ *  assembler (FAIL) version is much more straightforward.
+ *
+ */
+
+#include <stdio.h>
+#include <setjmp.h>
+#define GJOLD 0100000000000		/* gj%old */
+#define CRCAP 0200000000000		/* cr%cap */
+#define CFORK 0152			/* cfork% */
+#define SFORK 0157			/* sfork% */
+#define WFORK 0163			/* wfork% */
+#define KFORK 0153			/* kfork% */
+#define GET   0200			/* get% */
+#define GEVEC 0205			/* gevec% */
+#define PRARG 0545			/* prarg% */
+#define PRAST 02			/* .prast */
+#define JSYSLH 0104000000000		/* 104000,,0 */
+
+pfork(prgnam,prgblk,blklen,evecoff,chainf)
+char *prgnam;
+int *prgblk,blklen,evecoff,chainf;
+{
+    int *reg,jfn,frk,pc,temp,acs[4],core[30];
+    jmp_buf fakeenv;			/* fake setjmp env for chaining */
+
+    if ((jfn = _gtjfn(prgnam,GJOLD)) == NULL) {
+	return(0);			/* failed to get jfn, error return */
+    }
+    if (!chainf) {			/* chain or run subfork? */
+	acs[1] = jfn;			/* move 1,jfn */
+	acs[1] |= CRCAP;		/* hrli 1,cr%cap */
+	if (!jsys(CFORK,acs)) {		/* cfork% */
+	    return(0);			/* erjmp error */
+	}
+	frk = acs[1];			/* movem 1,frk */
+	acs[1] <<= 18;			/* hrl 1,frk */
+	acs[1] += jfn;			/* hrr 1,jfn */
+	if (!jsys(GET,acs)) {		/* get% */
+	    return(0);			/* erjmp error */
+	}    
+	acs[1] = (frk & 0777777);	/* hrrz 1,frk */
+        if (!jsys(GEVEC,acs)) {		/* gevec */
+	    return(0);			/* erjmp error */
+	}
+	acs[2] += evecoff;		/* add 2,-4(p) */
+	acs[2] &= 0777777;		/* hrrz 2,2 */
+	pc = acs[2];			/* movem 2,pc */
+	if (blklen) {
+	    acs[1] = frk | (PRAST << 18); /* hrli 1,.prast, hrr 1,frk  */
+	    acs[3] = blklen;		/* move 3,-3(p) */
+	    acs[2] = prgblk;		/* move 2,-2(p) */
+	    if (!jsys(PRARG,acs)) {
+		return(0);
+	    }
+    	}
+    	acs[1] = frk & 0777777;
+	acs[2] = pc;
+	jsys(SFORK,acs);
+        jsys(WFORK,acs);
+	jsys(KFORK,acs);
+	return(1);
+    } else {				/* chain case */
+	frk = 0400000;			/* .fhslf */
+	if (blklen) {
+	    acs[1] = frk | (PRAST << 18); /* hrli 1,.prast, hrr 1,frk  */
+	    acs[3] = blklen;		/* move 3,-3(p) */
+	    acs[2] = prgblk;		/* move 2,-2(p) */
+	    if (!jsys(PRARG,acs)) {
+		return(0);
+	    }
+    	}
+	reg = &core;
+	temp = reg;
+	*(reg++) = 0505040000000 | temp+4; /* hrli 1,core+4 */
+	*(reg++) = 0541040000004;	/* hrri 1,4 */
+	*(reg++) = 0251040000000 | 17;	/* blt 1,17 */
+					/* don't clobber sp */
+	*(reg++) = 0254000000004;	/* jrst 4 */
+	temp = jfn;
+	*(reg++) = 0201040000000 | temp; /* movei 1,(jfn) */
+	*(reg++) = 0505040400000;	/* hrli 1,.fhslf */
+	*(reg++) = JSYSLH|GET;		/* get */
+	*(reg++) = 0201040400000;	/* movei 1,.fhslf */
+	*(reg++) = JSYSLH|GEVEC;	/* gevec */
+	temp = evecoff;
+	*(reg++) = (temp | 0271100000000); /* addi 2,evecoff */
+	*(reg++) = 0254002000000;	/* jrst (2) */
+		
+	reg = &fakeenv;			/* watch my hands carefully... */
+	*(reg) = &core;
+	*(reg+1) = &fakeenv;
+	longjmp(fakeenv);		/* hack! */
+    }
+}
+

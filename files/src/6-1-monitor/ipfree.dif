@@ -1,0 +1,1041 @@
+
+
+; IPFREE.MAC.12 & IPFREE.NEW.7  6-Nov-87 0205	PAGE 1
+
+
+
+LINE 1, PAGE 1
+1)	;[SRI-NIC]SRC:<6-1-MONITOR>IPFREE.MAC.11,  6-Jul-87 00:19:22, Edit by MKL
+1)	; try replacing last two edits with different fix from Stanford
+1)	;[SRI-NIC]SRC:<6-1-MONITOR>IPFREE.MAC.10, 11-Mar-87 14:31:08, Edit by MKL
+1)	; install temporary gross hack at GETBK2-1 until real bug is found
+1)	;[SRI-NIC]SRC:<6-1-MONITOR>IPFREE.MAC.7, 17-Feb-87 23:05:41, Edit by MKL
+1)	; In GETBBK, call GETBL0 instead of GETBK0 to preserve SIZ.
+1)	;[SRI-NIC]SRC:<6-1-MONITOR>IPFREE.MAC.3, 13-Feb-87 13:01:52, Edit by MKL
+1)	; Don't call GC more than every 30 seconds
+1)	;SIERRA::SRC:<6.1.MONITOR.STANFORD>IPFREE.MAC.5,  2-Dec-86 18:19:47, Edit by GROSSMAN
+1)	;Clean up buffer management considerably.  Also, add more paranoia code to
+1)	;catch smashing of tail of buffers.
+1)	;PS:<6-1-MONITOR>XPFREE.MAC.11, 25-Feb-86 18:52:13, Edit by BILLW
+1)	;1 include some defs from BBN's ANADPY. redo some things so that this
+1)	;1 will run under 6.1 with the rest of "normal" monitor modules.
+1)	;********** Code imported to Stanford from BBN **********
+1)	; UPD ID= 276, SNARK:<TCPIP.5.4.MONITOR>IPFREE.MAC.8,   7-Sep-84 22:54:50 by PAETZOLD
+LINE 1, PAGE 1
+2)	;[SRI-NIC]SRC:<6-1-MONITOR>IPFREE.NEW.2,  6-Nov-87 00:20:28, Edit by MKL
+2)	; make new 6.1 IPFREE module from BBN source code
+2)	
+2)	; UPD ID= 276, SNARK:<TCPIP.5.4.MONITOR>IPFREE.MAC.8,   7-Sep-84 22:54:50 by PAETZOLD
+
+
+LINE 20, PAGE 2
+1)		IF1 <IFN IPFDSW,<PRINTX Assembling IP Free Space Debugging>>
+1)	
+1)	IFNDEF REL6,<REL6==1>		; default is release 6
+1)	IFN STANSW,<;1
+1)	INTBLS==:2
+1)	IFNDEF MNTMN,<MNTMN==0>
+LINE 20, PAGE 2
+2)		IF1 <IFN IPFDSW,<PRINTX Assembling Debuging IP Free Space>>
+2)	
+2)	IFNDEF REL6,<REL6==1>		; default is release 6
+2)	IFNDEF MNTMN,<MNTMN==0>
+
+
+LINE 32, PAGE 2
+1)	>;IFN STANSW
+1)	
+LINE 30, PAGE 2
+2)	
+
+
+; IPFREE.MAC.12 & IPFREE.NEW.7  6-Nov-87 0205	PAGE 2
+
+
+
+LINE 10, PAGE 3
+1)	; Note: INTBLK(*) contains BSIZE & BLIST
+1)	
+1)	; Definitions common to both used and free blocks
+1)	
+1)	DEFSTR(BUSED,0,0,1)		; Block is in use if this is set
+1)	DEFSTR(BSIZE,0,17,17)		; Block size including header
+1)	DEFSTR(BCHEK,0,17,18)		; Check pattern at end of block
+1)	DEFSTR(BBACK,0,35,18)		; Pointer to start of block (BSIZE)
+1)	CHKPAT=='STU'			; Unique pattern for BCHEK
+1)	
+1)	; Definitions for FREE block header structure:
+1)	
+1)	DEFSTR(BLIST,1,35,36)		; List of other blocks
+1)	;INTBLS==2			; Words per INTBLK entry (see ANAUNV)
+1)	FBLKSZ==3			; Size of a FREE block header
+LINE 10, PAGE 3
+2)	; Note: INTBLK(*) contains FSIZE & FLIST;  i.e. a header w/o FNEXT
+2)	; Definitions for FREE block header structure:
+2)	
+2)	DEFSTR(FSIZE,0,17,18)		; (User) Block size (excluding UBLKSZ)
+2)	DEFSTR(FLIST,1,35,36)		; List of other blocks
+2)	;INTBLS==2			; Words per INTBLK entry (see ANAUNV)
+2)	DEFSTR(FNEXT,2,35,36)		; Next block higher in memory
+2)	FBLKSZ==3			; Size of a FREE block header
+
+
+LINE 28, PAGE 3
+1)	DEFSTR(BHASH,0,35,18)		; Hash. Guards against user clobbering
+1)	DEFSTR(BDATA,1,35,36)		; Start of data area
+1)	UBLKSZ==2			; Size of a USED block header
+1)	
+LINE 21, PAGE 3
+2)	DEFSTR(USIZE,0,17,18)		; (User) Block size (excluding UBLKSZ header)
+2)	DEFSTR(UHASH,0,35,18)		; Hash. Guards against user clobbering
+2)	UBLKSZ==1			; Size of a USED block header
+2)	
+
+
+LINE 8, PAGE 5
+1)		SETZRO BLIST,+ODDBLK	; No odd size blocks returned yet
+1)		MOVE T1,[INTBLK,,INTBLK+1] ; Set for a BLT
+1)		SETZM INTBLK		; Clear 1st word of table
+1)		BLT T1,INTBLK+<NFIXED*INTBLS>-1	; Clear rest
+1)	IFE STANSW,<
+1)		MOVE T2,[INTFRE]	; Extended address of the INT free area
+1)		MOVEM T2,BULKST		; Beginning of bulk storage
+1)		MOVE T4,[INTFRZ]
+1)		MOVEM T4,BULKND		; End of the bulk storage
+
+; IPFREE.MAC.12 & IPFREE.NEW.7  6-Nov-87 0205	PAGE 3
+
+
+1)		SUB T4,T2		; Size-1
+1)		ADDI T4,1		; Size
+1)		MOVEM T4,INTFSP		; Amount of free space available
+1)		SETZM MRGFLG		; No block merging possible yet.
+1)		SETZM INSVC		; Count of scavenges done
+1)		SETZM INSVT		; TODCLK filter of excessive BUGINF's
+1)		SETZM INSVR		; Scavenge request flag
+1)	>;IFE STANSW
+1)	IFN STANSW,<;;; Different STG doesnt have extended addresses
+1)		MOVE T2,[INTSEC,,INTFRE] ; Pointer to the INT free area
+LINE 8, PAGE 5
+2)		SETZRO FLIST,+ODDBLK	; No odd size blocks returned yet
+2)		MOVE T1,[INTBLK,,INTBLK+1] ; Set for a BLT
+2)		SETZM INTBLK		; Clear 1st word of table
+2)		BLT T1,INTBLK+<NFIXED*INTBLS>-1	; Clear rest
+2)		MOVE T2,[INTSEC,,INTFRE] ; Pointer to the INT free area
+
+
+LINE 39, PAGE 5
+1)	>;IFN STANSW
+1)		IFN IPFDSW,<SETZM IPFADR> ; IF DEBUGING RESET THE RING POINTER
+LINE 25, PAGE 5
+2)		IFN IPFDSW,<SETZM IPFADR> ; IF DEBUGING RESET THE RING POINTER
+
+
+LINE 12, PAGE 6
+1)		XMOVEI T3,-$BDATA(T1)	; Pointer to free header
+1)		XMOVEI T2,RETBL1	; Get address of worker routine
+1)	IFE STANSW,<;1
+1)		SKIPN PROC		; Have a TCP ID?
+1)		  TXO T2,<100B8>	; No, use our ID (ought to fix all calls!)
+1)	>;IFE STANSW
+1)		MOVEI T1,FRELCK		; Lock to set
+LINE 12, PAGE 6
+2)		XMOVEI T3,-UBLKSZ(T1)	; Pointer to free header
+2)		XMOVEI T2,RETBL1	; Get address of worker routine
+2)		SKIPN PROC		; Have a TCP ID?
+2)		  TXO T2,<100B8>	; No, use our ID (ought to fix all calls!)
+2)		MOVEI T1,FRELCK		; Lock to set
+
+
+LINE 25, PAGE 6
+1)		LOAD SIZ,BSIZE,(BLK)	; and size
+1)		CALL RETBK0		; Do the returning
+LINE 23, PAGE 6
+2)		LOAD SIZ,USIZE,(BLK)	; and size (excluding header)
+2)		CALL RETBK0		; Do the returning
+
+
+; IPFREE.MAC.12 & IPFREE.NEW.7  6-Nov-87 0205	PAGE 4
+
+
+
+LINE 31, PAGE 6
+1)	;SIZ/	Size of the block
+1)	;	CALL RETBK0
+LINE 29, PAGE 6
+2)	;SIZ/	Size of the block, excluding header
+2)	;	CALL RETBK0
+
+
+LINE 36, PAGE 6
+1)		TMNN BUSED,(BLK)	; Is this block supposedly in use?
+1)		 CALL IPFSTP		;  No, it should be - die.
+1)		SETZRO <BUSED,BHASH>,(BLK) ; Mark this as free and invalidate hash code
+1)		MOVE T1,BLK		; Get the block address
+1)		ADDI T1,-1(SIZ)		; Point at last word of block
+1)		SETZRO <BBACK,BCHEK>,(T1) ; Zapp backup pointer and check code
+1)		ADDM SIZ,INTFSP		; Update amount of free storage now available
+1)		SETZRO BLIST,(BLK)	; Block may become the end of a list
+1)		SETOB T1,MRGFLG		; Say common size and merging possible
+LINE 34, PAGE 6
+2)		MOVEI T1,UBLKSZ(SIZ)	; Total length of the block
+2)		ADDM T1,INTFSP		; Amount of free storage now available
+2)		ADD T1,BLK		; Next location in memory
+2)		STOR T1,FNEXT,(BLK)	; Save in free block
+2)		SETZRO FLIST,(BLK)	; Block may become the end of a list
+2)		SETOB T1,MRGFLG		; Say common size and merging possible
+
+
+LINE 3, PAGE 7
+1)	;BLK/	(Extended) Block	; with BSIZE setup
+1)	;T1/	UserCall Flag		; Non-zero says to create a slot in
+LINE 3, PAGE 7
+2)	;BLK/	(Extended) Block	; with FSIZE & FNEXT
+2)	;T1/	UserCall Flag		; Non-zero says to create a slot in
+
+
+LINE 12, PAGE 7
+1)		LOAD SIZ,BSIZE,(BLK)	; Size
+1)		CALL HASHX		; Get -1 or index to INTBLK
+LINE 12, PAGE 7
+2)		LOAD SIZ,USIZE,(BLK)	; Size excluding header
+2)		CALL HASHX		; Get -1 or index to INTBLK
+
+
+; IPFREE.MAC.12 & IPFREE.NEW.7  6-Nov-87 0205	PAGE 5
+
+
+
+LINE 18, PAGE 7
+1)		LOAD LST,BLIST,(T2)	; Pointer to the list itself
+1)		STOR LST,BLIST,(BLK)	; Make block point to current tail
+1)		STOR BLK,BLIST,(T2)	; Make head point to new front of list
+1)		STOR SIZ,BSIZE,(T2)	; Be sure size is right in the table
+1)		RET
+1)					; No entry in INTBLK table
+1)	RETB1:	LOAD LST,BLIST,+ODDBLK	; The appropriate (extended) list
+1)		CALL SPUT		; Put block on that list
+1)		STOR LST,BLIST,+ODDBLK	; New list with block on it
+1)		RET
+1)	
+LINE 18, PAGE 7
+2)		LOAD LST,FLIST,(T2)	; Pointer to the list itself
+2)		STOR LST,FLIST,(BLK)	; Make block point to current tail
+2)		STOR BLK,FLIST,(T2)	; Make head point to new front of list
+2)		STOR SIZ,FSIZE,(T2)	; Be sure size is right in the table
+2)		JRST RETBX
+2)					; No entry in INTBLK table
+2)	RETB1:	LOAD LST,FLIST,+ODDBLK	; The appropriate (extended) list
+2)		CALL SPUT		; Put block on that list
+2)		STOR LST,FLIST,+ODDBLK	; New list with block on it
+2)	RETBX:	RET
+2)	
+
+
+LINE 4, PAGE 8
+1)	;BLK/	(Extended) Block pointer (with BSIZE setup)
+1)	;LST/	(Extended) List pointer
+LINE 4, PAGE 8
+2)	;BLK/	(Extended) Block pointer  with FSIZE & FNEXT
+2)	;LST/	(Extended) List pointer
+
+
+LINE 14, PAGE 8
+1)		SETZRO BLIST,(BLK)	; Clear list pointer in block
+1)		MOVE LST,BLK		; New list has only this block
+1)		RET			; Return LST as new list
+1)	
+1)	SPUT1:	CAML BLK,LST		; Adding to front of list?
+1)		 JRST SPUT2		; No. Search for right spot.
+1)	
+1)		STOR LST,BLIST,(BLK)	; Make BLK be first on the list
+1)		MOVE SUC,LST		; Init so rest works
+LINE 14, PAGE 8
+2)		SETZRO FLIST,(BLK)	; Clear list pointer in block
+2)		MOVE LST,BLK		; New list has only this block
+2)		JRST SPUTX		; Return LST as new list
+2)	
+
+; IPFREE.MAC.12 & IPFREE.NEW.7  6-Nov-87 0205	PAGE 6
+
+
+2)	SPUT1:	CAML BLK,LST		; Adding to front of list?
+2)		 JRST SPUT2		; No. Search for right spot.
+2)	;	could check that FNEXT(BLK) le LST
+2)		STOR LST,FLIST,(BLK)	; Make BLK be first on the list
+2)		MOVE SUC,LST		; Init so rest works
+
+
+LINE 29, PAGE 8
+1)		LOAD SUC,BLIST,(CUR)	; Get the successor to CUR
+1)		CAML BLK,SUC		; BLK must be below SUC
+LINE 29, PAGE 8
+2)		LOAD SUC,FLIST,(CUR)	; Get the successor to CUR
+2)		CAML BLK,SUC		; BLK must be below SUC
+
+
+LINE 36, PAGE 8
+1)		STOR SUC,BLIST,(BLK)	; Patch in BLK between CUR and SUC
+1)		STOR BLK,BLIST,(CUR)
+1)	^L
+LINE 36, PAGE 8
+2)	;	could check that FNEXT(CUR) le BLK & FNEXT(BLK) le SUC
+2)		STOR SUC,FLIST,(BLK)	; Patch in BLK between CUR and SUC
+2)		STOR BLK,FLIST,(CUR)
+2)	^L
+
+
+LINE 5, PAGE 9
+1)	SPUT4:	LOAD T4,BSIZE,(BLK)	; Size of BLK
+1)		ADD T4,BLK		; Address of word after BLK
+1)		CAME T4,SUC		; Combine BLK and SUC ?
+1)		 JRST SPUT5		; No
+1)		LOAD T3,BSIZE,(BLK)	; SUC is real block, not section,,0
+1)		LOAD T4,BSIZE,(SUC)	; end pointer
+1)		ADD T3,T4		; Size of combined block
+1)		STOR T3,BSIZE,(BLK)
+1)		LOAD SUC,BLIST,(SUC)	; Successor of SUC is new SUC
+1)		STOR SUC,BLIST,(BLK)	; and successor of combined BLK
+1)	
+1)	; Try to merge CUR and BLK together
+1)	; CUR may equal BLK,  SUC may equal (section,,0)
+1)	
+1)	SPUT5:	LOAD T3,BSIZE,(CUR)	; Length of CUR
+1)		ADD T3,CUR		; Address following CUR
+1)		CAME T3,BLK		; Combine CUR and BLK?
+1)		 RET
+1)		LOAD T3,BSIZE,(CUR)
+1)		LOAD T4,BSIZE,(BLK)
+1)		ADD T3,T4
+1)		STOR T3,BSIZE,(CUR)	; Set size of combined block
+1)		LOAD T4,BLIST,(BLK)	; Successor of BLK
+1)		STOR T4,BLIST,(CUR)	; Is successor of combined block
+
+; IPFREE.MAC.12 & IPFREE.NEW.7  6-Nov-87 0205	PAGE 7
+
+
+1)		RET
+1)	
+LINE 5, PAGE 9
+2)	SPUT4:	LOAD T4,FNEXT,(BLK)	; Word address following BLK
+2)		TRNN T4,-1
+2)		  JRST SPUT5		; Beware match on section,,0
+2)		CAME T4,SUC		; Combine BLK and SUC ?
+2)		 JRST SPUT5		; No
+2)		LOAD T3,FSIZE,(BLK)	; SUC is real block, not section,,0
+2)		LOAD T4,FSIZE,(SUC)	; end pointer
+2)		ADDI T3,UBLKSZ(T4)	; Size of combined block
+2)		STOR T3,FSIZE,(BLK)
+2)		LOAD T4,FNEXT,(SUC)	; End of SUC
+2)		STOR T4,FNEXT,(BLK)	; Is new end of combined block
+2)		LOAD SUC,FLIST,(SUC)	; Successor of SUC is new SUC
+2)		STOR SUC,FLIST,(BLK)	; and successor of combined BLK
+2)	
+2)	; Try to merge BLK and SUC together
+2)	; CUR may equal BLK,  SUC may equal (section,,0)
+2)	
+2)	SPUT5:	LOAD T3,FNEXT,(CUR)	; Address following CUR
+2)		CAME T3,BLK		; Combine CUR and BLK?
+2)		 JRST SPUTX
+2)		LOAD T3,FSIZE,(CUR)
+2)		LOAD T4,FSIZE,(BLK)
+2)		ADDI T3,UBLKSZ(T4)
+2)		STOR T3,FSIZE,(CUR)	; Set size of combined block
+2)		LOAD T4,FLIST,(BLK)	; Successor of BLK
+2)		STOR T4,FLIST,(CUR)	; Is successor of combined block
+2)		LOAD T4,FNEXT,(BLK)	; Get thing following BLK in memory
+2)		STOR T4,FNEXT,(CUR)	; That is what follows compbined block
+2)	SPUTX:	RET
+2)	
+
+
+LINE 28, PAGE 10
+1)	IFE STANSW,<;1
+1)		SKIPN PROC		; Have a TCP ID?
+1)		  TXO T2,<120B8>	; No, use our ID (ought to fix all calls!)
+1)	>;IFE STANSW
+1)		CALL LCKCAL		; Call the function with the lock set
+LINE 28, PAGE 10
+2)		SKIPN PROC		; Have a TCP ID?
+2)		  TXO T2,<120B8>	; No, use our ID (ought to fix all calls!)
+2)		CALL LCKCAL		; Call the function with the lock set
+
+
+; IPFREE.MAC.12 & IPFREE.NEW.7  6-Nov-87 0205	PAGE 8
+
+
+
+LINE 40, PAGE 10
+1)	;SIZ/	Max. size
+1)	;FRELCK set
+LINE 38, PAGE 10
+2)	;SIZ/	Max. size, excluding header
+2)	;FRELCK set
+
+
+LINE 48, PAGE 10
+1)		CALL GETBK0		; Use normal GETBLK routine  
+1)		JUMPN BLK,GETBBX	; Exit if we got the max. size block
+LINE 46, PAGE 10
+2)		CALL GETBK0		; Use normal GETBLK routine
+2)		JUMPN BLK,GETBBX	; Exit if we got the max. size block
+
+
+LINE 56, PAGE 10
+1)		LOAD T2,BLIST,<+ODDBLK>	; Init pointer to first block
+1)		DO.
+1)		  JUMPE T2,ENDLP.	; Jump if at end of list
+1)		  LOAD T3,BSIZE,(T2)	; Get size of current block
+1)		  CAMLE T3,SIZ		; Bigger than seen before?
+1)		   MOVE SIZ,T3		; Yes.  Save max.
+1)		  LOAD T2,BLIST,(T2)	; Point to next block
+1)		  LOOP.
+1)		ENDDO.
+1)	
+1)		CAIG SIZ,BSMALL		; If its a small block,
+1)		  JRST GETBB3		; Proceed, otherwise,
+1)		SUBI SIZ,BSQUAN		; Round down to
+1)		ANDCMI SIZ,BSQUAN-1	; Smaller quantization
+1)	GETBB3:
+1)	IFN NICSW,<
+1)		SUBI SIZ,UBLKSZ		; Reduce to useable portion
+1)	>
+1)		CAMGE SIZ,MINSIZ	; Is the biggest block acceptable?
+1)		 JRST GETBB9		; No.  Tell caller.
+1)		CALL GETBK0
+1)		JUMPN BLK,GETBBX	; Return if all went well.
+1)		IFN IPFDSW,<BUG.(HLT,INTFR7,IPFREE,SOFT,
+1)	
+1)	<ODDBLK list fouled - want/have>,<<SIZ,D>,<MINSIZ,D>>,<
+1)	
+LINE 54, PAGE 10
+2)		LOAD T2,FLIST,<+ODDBLK>	; Init pointer to first block
+2)		DO.
+2)		  JUMPE T2,ENDLP.	; Jump if at end of list
+2)		  LOAD T3,FSIZE,(T2)	; Get size of current block
+2)		  CAMLE T3,SIZ		; Bigger than seen before?
+
+; IPFREE.MAC.12 & IPFREE.NEW.7  6-Nov-87 0205	PAGE 9
+
+
+2)		   MOVE SIZ,T3		; Yes.  Save max.
+2)		  LOAD T2,FLIST,(T2)	; Point to next block
+2)		  LOOP.
+2)		ENDDO.
+2)	
+2)	;;;	CAIG SIZ,BSMALL		; If its a small block,
+2)	;;;	  JRST GETBB3		; Proceed, otherwise,
+2)	;;;	SUBI SIZ,BSQUAN		; Round down to
+2)	;;;	ANDCMI SIZ,BSQUAN-1	; Smaller quantization
+2)		CAILE SIZ,BSMALL	; If it's a small block..
+2)		 TRNN SIZ,BSQUAN-1	;   ..or an exact quantum,
+2)		  JRST GETBB3		;     then leave it alone.
+2)		SUBI SIZ,FBLKSZ		;  we will need this much extra to split it,
+2)		CAILE SIZ,BSMALL	;  and unless it's now a small block,
+2)		 ANDCMI SIZ,BSQUAN-1	;   round down to the next smaller quantization
+2)	GETBB3:	CAMGE SIZ,MINSIZ	; Is the biggest block acceptable?
+2)		 JRST GETBB9		; No.  Tell caller.
+2)		CALL GETBK0
+2)		JUMPN BLK,GETBBX	; Return if all went well.
+2)		IFE IPFDSW,<BUG.(CHK,INTFR7,IPFREE,SOFT,
+2)	
+2)	<Internet Free Space - ODDBLK list fouled - want/have>,<<SIZ,D>,<MINSIZ,D>>,<
+2)	
+
+
+LINE 92, PAGE 10
+1)	GETBB9:	SETZB BLK,SIZ		; Failure indication
+LINE 92, PAGE 10
+2)		IFN IPFDSW,<BUG.(HLT,INTFR7,IPFREE,SOFT,
+2)	
+2)	<Internet Free Space - ODDBLK list fouled - want/have>,<<SIZ,D>,<MINSIZ,D>>,<
+2)	
+2)	Cause:	After searching for the largest available block of Internet free
+2)		storage, the largest block can not be found.  The ODDBLK chain of
+2)		available storage blocks has probably been fouled.
+2)	
+2)	Action:	Follow the chain, to see if the reported size is wrong, or whether
+2)		the list has been fouled.
+2)	
+2)	Data:	Reported size of largest block, Size actually available.
+2)	
+2)	>)>
+2)	GETBB9:	SETZB BLK,SIZ		; Failure indication
+
+
+; IPFREE.MAC.12 & IPFREE.NEW.7  6-Nov-87 0205	PAGE 10
+
+
+
+LINE 18, PAGE 11
+1)	IFE STANSW,<;1
+1)		SKIPN PROC		; Have a TCP ID?
+1)		  TXO T2,<110B8>	; No, use our ID (ought to fix all calls!)
+1)	>;IFE STANSW
+1)		CALL LCKCAL		; Call routine with lock set
+LINE 18, PAGE 11
+2)		SKIPN PROC		; Have a TCP ID?
+2)		  TXO T2,<110B8>	; No, use our ID (ought to fix all calls!)
+2)		CALL LCKCAL		; Call routine with lock set
+
+
+LINE 9, PAGE 12
+1)	;SIZ/	Size of block to be assigned
+1)	;	CALL GETBK0
+1)	;Ret+1:	Always.  0 or Extended Pointer to block in BLK. 
+1)	;       SIZ reflects actual size of user portion of block.
+1)	
+LINE 9, PAGE 12
+2)	;SIZ/	Size of block to be assigned, excluding header
+2)	;	CALL GETBK0
+2)	;Ret+1:	Always.  0 or Extended Pointer to block in BLK. Must save SIZ.
+2)	
+
+
+LINE 17, PAGE 12
+1)	<Block size requested too small - siz>,<<SIZ,D>>,<
+1)	
+LINE 16, PAGE 12
+2)	<Internet Free Space - Block size requested too small - siz>,<<SIZ,D>>,<
+2)	
+
+
+LINE 29, PAGE 12
+1)	GETBK1:	ADDI SIZ,UBLKSZ		; Add in overhead
+1)		CAILE SIZ,INTFSZ	; Max size
+1)		 BUG.(HLT,INTFR5,IPFREE,SOFT,
+1)	
+1)	<Block size requested too large - siz>,<<SIZ,D>>,<
+1)	
+LINE 28, PAGE 12
+2)	GETBK1:	CAILE SIZ,INTFSZ-UBLKSZ	; Max size
+2)		 BUG.(HLT,INTFR5,IPFREE,SOFT,
+2)	
+2)	<Internet Free Space - Block size requested too large - siz>,<<SIZ,D>>,<
+2)	
+
+
+; IPFREE.MAC.12 & IPFREE.NEW.7  6-Nov-87 0205	PAGE 11
+
+
+
+LINE 49, PAGE 12
+1)		JUMPE BLK,RTN		; Couldn't get the block
+1)		MOVN T2,SIZ		; Size of block we will hand out
+1)		ADDM T2,INTFSP		; Decrease amt of free space available
+1)		CALL HASH		; Get a random number
+1)		STOR T1,BHASH,(BLK)	; Check this when block returned
+1)		SETONE BUSED,(BLK)	; Make this block be in use
+1)		STOR SIZ,BSIZE,(BLK)	; Set the block size
+1)		MOVE T2,BLK		; Get the block address
+1)		ADDI T2,-1(SIZ)		; Get the last word of the block
+1)		MOVX T1,CHKPAT		; Get the check pattern
+1)		STOR T1,BCHEK,(T2)	; Install it in the word after the user portion
+1)		STOR BLK,BBACK,(T2)	; Save back pointer there also
+1)		OPSTR <XMOVEI BLK,>,BDATA,(BLK)	; Value is user area of the block
+1)	IFN NICSW,<
+1)		SUBI SIZ,UBLKSZ		; Fix SIZ to reflect actual useable area
+1)	>
+1)		RET
+1)	
+LINE 47, PAGE 12
+2)		JUMPE BLK,GETBKX	; Couldn't get the block
+2)		MOVNI T2,UBLKSZ(SIZ)	; Size of block we will hand out
+2)		ADDM T2,INTFSP		; Decrease amt of free space available
+2)		CALL HASH		; Get a random number
+2)		STOR T1,UHASH,(BLK)	; Check this when block returned
+2)		STOR SIZ,USIZE,(BLK)	; Set the block size
+2)		XMOVEI BLK,UBLKSZ(BLK)	; Value is user area of the block
+2)	GETBKX:	RET
+2)	
+
+
+LINE 4, PAGE 13
+1)	;SIZ/	Size
+1)	;	CALL GETB
+LINE 4, PAGE 13
+2)	;SIZ/	Size, excluding header
+2)	;	CALL GETB
+
+
+LINE 12, PAGE 13
+1)		LOAD T4,BLIST,(T3)	; Pointer to list of blocks of this size
+1)		JUMPE T4,GETB2		; None.  Try something else.
+1)		LOAD T2,BLIST,(T4)	; Successor of 1st block on list
+1)		STOR T2,BLIST,(T3)	; Is now first thing on list
+1)		SKIPA BLK,T4		; This block is the result
+LINE 12, PAGE 13
+2)		LOAD T4,FLIST,(T3)	; Pointer to list of blocks of this size
+2)		JUMPE T4,GETB2		; None.  Try something else.
+2)		LOAD T2,FLIST,(T4)	; Successor of 1st block on list
+
+; IPFREE.MAC.12 & IPFREE.NEW.7  6-Nov-87 0205	PAGE 12
+
+
+2)		STOR T2,FLIST,(T3)	; Is now first thing on list
+2)		SKIPA BLK,T4		; This block is the result
+
+
+LINE 21, PAGE 13
+1)	;SIZ/	Size
+1)	;	CALL GCARVE
+LINE 21, PAGE 13
+2)	;SIZ/	Size, excluding header
+2)	;	CALL GCARVE
+
+
+LINE 30, PAGE 13
+1)		LOAD BLK,BLIST,(PRV)	; Pointer to first odd block
+1)		JUMPLE BLK,GCARV4	; None.  Try something else
+1)	
+1)		DO.
+1)		  LOAD T2,BSIZE,(BLK)	; Get size of this odd block
+1)		  CAME T2,SIZ		; Same as required?
+1)		  IFSKP.		; Yes.
+1)		    LOAD T3,BLIST,(BLK)	; Pointer to block after this one
+1)		    STOR T3,BLIST,(PRV)	; Is new successor to one before this
+1)		    RET
+LINE 30, PAGE 13
+2)		LOAD BLK,FLIST,(PRV)	; Pointer to first odd block
+2)		JUMPLE BLK,GCARV4	; None.  Try something else
+2)	
+2)		DO.
+2)		  LOAD T2,FSIZE,(BLK)	; Get size of this odd block
+2)		  CAME T2,SIZ		; Same as required?
+2)		  IFSKP.		; Yes.
+2)		    LOAD T3,FLIST,(BLK)	; Pointer to block after this one
+2)		    STOR T3,FLIST,(PRV)	; Is new successor to one before this
+2)		    RET
+
+
+LINE 43, PAGE 13
+1)		    LOAD T3,BLIST,(BLK)	; Successor of this one
+1)		    STOR T3,BLIST,(PRV)	; Snip it out
+1)		    CALLRET CSPLIT	; Split into required plus extra
+LINE 43, PAGE 13
+2)		    LOAD T3,FLIST,(BLK)	; Successor of this one
+2)		    STOR T3,FLIST,(PRV)	; Snip it out
+2)		    CALLRET CSPLIT	; Split into required plus extra
+
+
+; IPFREE.MAC.12 & IPFREE.NEW.7  6-Nov-87 0205	PAGE 13
+
+
+
+LINE 49, PAGE 13
+1)		  LOAD BLK,BLIST,(PRV)	; Move to next odd block
+1)		  JUMPG BLK,TOP.	; And look at it
+LINE 49, PAGE 13
+2)		  LOAD BLK,FLIST,(PRV)	; Move to next odd block
+2)		  JUMPG BLK,TOP.	; And look at it
+
+
+LINE 4, PAGE 14
+1)	;SIZ/	Required size
+1)	;	CALL CSPLIT
+LINE 4, PAGE 14
+2)	;SIZ/	Required size, excluding header
+2)	;	CALL CSPLIT
+
+
+LINE 10, PAGE 14
+1)		LOAD T3,BSIZE,(BLK)	; Get size of block to be split
+1)		MOVE T1,BLK		; Get whole block
+1)		ADD T1,SIZ		; Start of fragment
+1)		STOR SIZ,BSIZE,(BLK)	; Store size of block to be returned
+1)		SUB T3,SIZ		; Size of fragment
+1)		STOR T3,BSIZE,(T1)	; Store size of fragment
+1)		PUSH P,BLK
+LINE 10, PAGE 14
+2)		LOAD T3,FSIZE,(BLK)	; Get size of block to be split
+2)		MOVE T1,BLK		; Get whole block
+2)		ADDI T1,UBLKSZ(SIZ)	; Start of fragment
+2)		STOR SIZ,FSIZE,(BLK)	; Store size of block to be returned
+2)		SUBI T3,UBLKSZ(SIZ)	; Size of fragment
+2)		STOR T3,FSIZE,(T1)	; Store size of fragment
+2)		LOAD T4,FNEXT,(BLK)	; Block following this in memory
+2)		STOR T4,FNEXT,(T1)
+2)		PUSH P,BLK
+
+
+LINE 4, PAGE 15
+1)	;SIZ/	Size required
+1)	;	CALL BULKCV
+LINE 4, PAGE 15
+2)	;SIZ/	Size required, excluding header
+2)	;	CALL BULKCV
+
+
+; IPFREE.MAC.12 & IPFREE.NEW.7  6-Nov-87 0205	PAGE 14
+
+
+
+LINE 16, PAGE 15
+1)		    CAME T2,SIZ		; Exactly what we need?	(-1)
+1)		    IFSKP.		; Yes
+LINE 16, PAGE 15
+2)		    CAIE T2,UBLKSZ(SIZ)	; Exactly what we need?	(-1)
+2)		    IFSKP.		; Yes
+
+
+LINE 24, PAGE 15
+1)		    CAIGE T2,FBLKSZ+1+1(SIZ) ; Big enough to carve? (-1)
+1)		    IFSKP.		; Yes
+1)		      ADDM SIZ,BULKST	; Remove from bulk area
+1)		      JRST BULKCX
+LINE 24, PAGE 15
+2)		    MOVEI T3,UBLKSZ(SIZ) ; What is needed
+2)		    CAIGE T2,FBLKSZ+1+1(T3) ; Big enough to carve? (-1)
+2)		    IFSKP.		; Yes
+2)		      ADDM T3,BULKST	; Remove from bulk area
+2)		      JRST BULKCX
+
+
+LINE 32, PAGE 15
+1)		      STOR T2,BSIZE,(BLK) ; Convert what is left into a block
+1)		      CALL RETB0	; Return the piece
+LINE 33, PAGE 15
+2)		      SUBI T2,UBLKSZ	; User SIZ
+2)		      STOR T2,FSIZE,(BLK) ; Convert what is left into a block
+2)		      MOVE T3,BULKND	; Current End (extended)
+2)		      ADDI T3,1		; Next location there after
+2)		      STOR T3,FNEXT,(BLK) ; Fix up the block to be returned
+2)		      CALL RETB0	; Return the piece
+
+
+LINE 3, PAGE 16
+1)	IFE STANSW,<
+1)		CAMG T1,INSVT		; OK  to give another typeout?
+1)	>;IFE STANSW
+1)	IFN STANSW,<;;;1
+1)		CAMG T1,INTSVT		; OK  to give another typeout?
+1)	>;IFN STANSW
+1)		IFSKP.			; Yes
+LINE 3, PAGE 16
+2)		CAMG T1,INTSVT		; OK  to give another typeout?
+2)		IFSKP.			; Yes
+
+
+; IPFREE.MAC.12 & IPFREE.NEW.7  6-Nov-87 0205	PAGE 15
+
+
+
+LINE 13, PAGE 16
+1)	<Free storage exhausted - siz/fre>,<<T2,D>,<INTFSP,D>>,<
+1)	
+LINE 8, PAGE 16
+2)	<Internet Free Space - Free storage exhausted - siz/fre>,<<T2,D>,<INTFSP,D>>,<
+2)	
+
+
+LINE 29, PAGE 16
+1)	IFE STANSW,<
+1)		  MOVEM T1,INSVT	; Next deadline
+1)	>;IFE STANSW
+1)	IFN STANSW,<;1
+1)		  MOVEM T1,INTSVT	; Next deadline
+1)	>;IFN STANSW
+1)		ENDIF.
+1)	IFE STANSW,<
+1)		SETOM INSVR		; And request everybody to do it
+1)	>;IFE STANSW
+1)	IFN STANSW,<;1
+1)		SETOM INTSVR		; And request everybody to do it
+1)	>;IFN STANSW
+1)		MOVEI BLK,0		; None available.  Let caller handle it.
+LINE 24, PAGE 16
+2)		  MOVEM T1,INTSVT	; Next deadline
+2)		ENDIF.
+2)		SETOM INTSVR		; And request everybody to do it
+2)		MOVEI BLK,0		; None available.  Let caller handle it.
+
+
+LINE 5, PAGE 17
+1)	GC:	
+1)	IFN NICSW<
+LINE 5, PAGE 17
+2)	GC:
+2)	IFN NICSW<
+
+
+LINE 14, PAGE 17
+1)	>;IFN NICSW
+1)	
+LINE 14, PAGE 17
+2)	
+
+
+; IPFREE.MAC.12 & IPFREE.NEW.7  6-Nov-87 0205	PAGE 16
+
+
+
+LINE 19, PAGE 17
+1)	<Reclaiming Internet free space nth time>,<<T1,D>>,<
+1)	
+LINE 18, PAGE 17
+2)	<Internet Free Space - Reclaiming Internet free space nth time>,<<T1,D>>,<
+2)	
+
+
+LINE 31, PAGE 17
+1)		EXCH LST,ODDBLK+$BLIST	; Get and clear odd block list
+1)		MOVSI SIZ,-NFIXED      	; AOBJN pointer to INTBLK table
+1)		DO.
+1)		  MOVEI T1,INTBLK(SIZ)	; Pointer to current list header
+1)		  LOAD ILST,BLIST,(T1)	; Pointer to first block on list
+1)		  IFN. ILST		; Don't copy nul list
+LINE 30, PAGE 17
+2)		EXCH LST,ODDBLK+$FLIST	; Get and clear odd block list
+2)		MOVSI SIZ,-NFIXED      	; AOBJN pointer to INTBLK table
+2)		DO.
+2)		  MOVEI T1,INTBLK(SIZ)	; Pointer to current list header
+2)		  LOAD ILST,FLIST,(T1)	; Pointer to first block on list
+2)		  IFN. ILST		; Don't copy nul list
+
+
+LINE 44, PAGE 17
+1)		        LOAD ILST,BLIST,(BLK) ; Get successor for next time
+1)		        CALL SPUT
+LINE 43, PAGE 17
+2)		        LOAD ILST,FLIST,(BLK) ; Get successor for next time
+2)		        CALL SPUT
+
+
+LINE 50, PAGE 17
+1)		  SETZRO BSIZE,+INTBLK(SIZ) ; Nullify the list
+1)		  SETZRO BLIST,+INTBLK(SIZ) ; Nullify the list
+1)		  ADDI SIZ,INTBLS-1
+LINE 49, PAGE 17
+2)		  SETZRO FSIZE,+INTBLK(SIZ) ; Nullify the list
+2)		  SETZRO FLIST,+INTBLK(SIZ) ; Nullify the list
+2)		  ADDI SIZ,INTBLS-1
+
+
+; IPFREE.MAC.12 & IPFREE.NEW.7  6-Nov-87 0205	PAGE 17
+
+
+
+LINE 63, PAGE 17
+1)		    LOAD ILST,BLIST,(BLK) ; Successor is what to do next time
+1)		    CALL RETB0		; Return first block on the list
+LINE 62, PAGE 17
+2)		    LOAD ILST,FLIST,(BLK) ; Successor is what to do next time
+2)		    CALL RETB0		; Return first block on the list
+
+
+LINE 5, PAGE 18
+1)	;SIZ/	Size of the block
+1)	;	CALL CHKBLK
+1)	;Ret+1:	Always.
+1)	
+1)	CHKBLK:
+1)	IFE STANSW,<
+1)		CAML BLK,[INTFRE]	; Range check pointer
+1)		 CAMLE BLK,[INTFRZ]
+1)	>;IFE STANSW
+1)	IFN STANSW,<;1
+1)		CAML BLK,[INTSEC,,INTFRE]	; Range check pointer
+1)		 CAMLE BLK,[<INTSEC,,INTFRE>+<INTFSZ-1>]
+1)	>;IFN STANSW
+1)		  BUG.(HLT,INTFR2,IPFREE,SOFT,
+1)	
+1)	<Invalid block pointer - blk>,<<BLK,D>>,<
+1)	
+1)	Cause:	Attempt to return a block to internet free storage with a pointer not
+1)		between INTFRE and INTFRZ.
+1)	
+LINE 5, PAGE 18
+2)	;SIZ/	Size of the block, excluding UBLKSZ header
+2)	;	CALL CHKBLK
+2)	;Ret+1:	Always.
+2)	
+2)	CHKBLK:	CAML BLK,[INTSEC,,INTFRE]	; Range check pointer
+2)		 CAMLE BLK,[<INTSEC,,INTFRE>+<INTFSZ-1>]
+2)		  BUG.(HLT,INTFR2,IPFREE,SOFT,
+2)	
+2)	<Internet Free Space - Invalid block pointer - blk>,<<BLK,D>>,<
+2)	
+2)	Cause:	Attempt to return a block to internet free storage with a pointer not
+2)		between INTFRE and INTFSZ.
+2)	
+
+
+; IPFREE.MAC.12 & IPFREE.NEW.7  6-Nov-87 0205	PAGE 18
+
+
+
+LINE 32, PAGE 18
+1)		CAIL SIZ,UBLKSZ+1	; Min size block ever handed out
+1)		 CAILE SIZ,INTFSZ	; Max size block ever handed out
+1)		  BUG.(HLT,INTFR0,IPFREE,SOFT,
+1)	
+1)	<Block size clobbered - siz/blk>,<<SIZ,D>,<BLK,D>>,<
+1)	
+LINE 25, PAGE 18
+2)		CAIL SIZ,UBLKSZ		; Min size block ever handed out
+2)		 CAIL SIZ,INTFSZ-UBLKSZ	; Max size block ever handed out
+2)		  BUG.(HLT,INTFR0,IPFREE,SOFT,
+2)	
+2)	<Internet Free Space - Block size clobbered - siz/blk>,<<SIZ,D>,<BLK,D>>,<
+2)	
+
+
+LINE 48, PAGE 18
+1)		LOAD T2,BHASH,(BLK)	; Get the mark we left there
+1)		CAME T1,T2		; Is it still there?
+1)		 BUG.(HLT,INTFR1,IPFREE,SOFT,
+1)	
+1)	<Block hash clobbered - sb/is/blk>,
+1)	
+LINE 41, PAGE 18
+2)		LOAD T2,UHASH,(BLK)	; Get the mark we left there
+2)		CAME T1,T2		; Is it still there?
+2)		 BUG.(HLT,INTFR1,IPFREE,SOFT,
+2)	
+2)	<Internet Free Space - Block hash clobbered - sb/is/blk>,
+2)	
+
+
+LINE 65, PAGE 18
+1)		MOVE T1,BLK		; Get the block address
+1)		ADDI T1,-1(SIZ)		; Point to last word of block
+1)		LOAD T2,BCHEK,(T1)	; Get the check value
+1)		CAXE T2,CHKPAT		; Is it the expected pattern?
+1)		 CALL IPFSTP		;  No, die
+1)		LOAD T1,BBACK,(T1)	; Get the backup pointer
+1)		CAIE T1,(BLK)		; Does it point to the start of the block?
+1)		 CALL IPFSTP		;  No, die
+1)		RET
+1)	
+1)	IPFSTP:	 BUG.(HLT,INTSUC,IPFREE,SOFT,<Block corrupted>,<>)
+1)	^L
+LINE 58, PAGE 18
+2)		RET
+2)	^L
+
+
+; IPFREE.MAC.12 & IPFREE.NEW.7  6-Nov-87 0205	PAGE 19
+
+
+
+LINE 8, PAGE 19
+1)	;This number is stored in the block header (BHASH) while the block is
+1)	;in the hands of the user. When he returns the block, a check is made
+LINE 8, PAGE 19
+2)	;This number is stored in the block header (UHASH) while the block is
+2)	;in the hands of the user. When he returns the block, a check is made
+
+
+LINE 24, PAGE 20
+1)		  LOAD Q,BSIZE,(L)	; Get size of blocks on this one
+1)		  IFE. Q		; If slot free
+1)		    JUMPE FLAG,HASHXM	; Return -1 if not supposed to create it
+1)		    STOR SIZ,BSIZE,(L)	; Create the list
+1)		    EXIT.
+LINE 24, PAGE 20
+2)		  LOAD Q,FSIZE,(L)	; Get size of blocks on this one
+2)		  IFE. Q		; If slot free
+2)		    JUMPE FLAG,HASHXM	; Return -1 if not supposed to create it
+2)		    STOR SIZ,FSIZE,(L)	; Create the list
+2)		    EXIT.
+
+
+LINE 5, PAGE 24
+1)	
+1)	;[STANSW] repeat 0,<
+1)	GETNIB::			; Get an NI Buffer
+LINE 5, PAGE 24
+2)	repeat 0,<
+2)	GETNIB::			; Get an NI Buffer
+
+
+LINE 15, PAGE 24
+1)	;;;[STANSW]> ; end of repeat 0
+1)	
+1)	IFN STANSW,<;;; OLD 1822 routines...
+1)		SUBTTL 1822 Buffer Handling
+1)	
+1)	NETINI::			; Initialize 1822 buffer area in INTSEC
+1)		MOVEI T1,BF18SZ		; Get the number of buffers possible
+1)		MOVEI T2,BF1822		; Get the initial buffer addess
+1)		MOVE T3,MAXWPM		; Get the number of words per buffer
+1)		ADDI T3,(T2)		; Get the initial link word
+1)		SETSEC T2,INTSEC	; Buffer is in INTSEC
+1)		MOVEM T2,BF18BO		; Save the initial head pointer
+1)	NETIN2:				; Loop for initializing buffers
+1)		STOR T3,NBQUE,(T2)	; Store the forward link
+1)		ADD T2,MAXWPM		; Get the address of the next buffer
+1)		ADD T3,MAXWPM		; Get the new link word
+1)		SOJG T1,NETIN2		; Initialize all the buffers
+
+; IPFREE.MAC.12 & IPFREE.NEW.7  6-Nov-87 0205	PAGE 20
+
+
+1)		SUB T2,MAXWPM		; Fix up Buffer address
+1)		SETZRO NBQUE,(T2)	; This buffer is the last
+1)		MOVEM T2,BF18BI		; Save the tail pointer word
+1)		RET			; And return to caller
+1)	
+1)	^L
+1)	
+1)	;Get an 1822 Buffer. Here via LCKCAL with FRELCK set
+1)	
+1)	GET18B::			; Get an 1822 buffer. 
+1)		SKIPN T1,BF18BO		; Buffer Available?
+1)		 RET			; nope.
+1)		SETSEC T1,INTSEC	; Buffer is in INTSEC
+1)		LOAD T2,NBQUE,(T1)	; get the buffer's link word
+1)		MOVEM T2,BF18BO		; set the new head word
+1)		SKIPN T2		; was the link zero?
+1)		 SETZM BF18BI		; yes so zero the tail pointer
+1)		SETZRO NBQUE,(T1)	; clear forward link
+1)		RET			; and return
+1)	
+1)	;Return an 1822 buffer.  Here via LCKCAL with FRELCK set.
+1)	
+1)	RET18B::			; Return an 1822 Buffer
+1)		CAML T1,[INTSEC,,BF1822] ; Does this buffer look ok?
+1)		CAML T1,[INTSEC,,BF1822+<BF18SZ*INTBSZ>] ; ?
+1)		BUG.(HLT,IMPBAD,IMPDV,SOFT,<IMPDV: Attempt to return a buffer not in range>,,<
+1)	
+1)	Cause:	The internet 1822 buffer facility has been called to return a buffer
+1)		which is not an 1822 buffer.
+1)	
+1)	>)
+1)		MOVN T2,[INTSEC,,BF1822] ; Get the begining of the buffer space
+1)		ADD T2,T1		; Get the offset of this buffer
+1)		IDIV T2,MAXWPM		; Get the number of this buffer
+1)		SKIPE T3		; Any remainder?
+1)		BUG.(HLT,IMPVBD,IPFREE,SOFT,<IMPDV: Attempt to return a buffer with the address smashed>,,<
+1)	
+1)	Cause:	The internet 1822 buffer facility has been called to return a buffer
+1)		which has a bad address.
+1)	
+1)	>)
+1)		SETZRO NBQUE,(T1)	; No forward link on this buffer
+1)		MOVE T2,BF18BI		; Get the old tail pointer
+1)		SETSEC T2,INTSEC	; In INTSEC
+1)		MOVEM T1,BF18BI		; We are the new tail
+1)		STOR T1,NBQUE,(T2)	; Fix up the old tails queue
+1)		SKIPN BF18BO		; Any buffers on the head?
+1)		 MOVEM T1,BF18BO	; no so this is now the head
+1)		RET			; and return 
+1)	
+1)	>;IFN STANSW
+
+; IPFREE.MAC.12 & IPFREE.NEW.7  6-Nov-87 0205	PAGE 21
+
+
+1)	;NIPLKB - LOCK BUFFER
+LINE 14, PAGE 24
+2)	> ; end of repeat 0
+2)	
+2)	;NIPLKB - LOCK BUFFER
+
+
+LINE 59, PAGE 25
+1)	NIPLKB::SAVEAC <T1,T2>
+LINE 28, PAGE 24
+2)	
+2)	NIPLKB::SAVEAC <T1,T2>
+

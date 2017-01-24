@@ -1,0 +1,242 @@
+!	ScanFileName;
+
+
+!	S C A N   F I L E   N A M E
+!
+! **********************************************************************
+! Scans string s for TOPS20 file name syntax, placing device or structure
+! or logical name in logname, directory name in directory, file name in
+! filename, file name extension in extension, and generation count (as a
+! string) in gencount.  The procedure checks that the string s has proper
+! syntax and ask the user to replace it with a new string.  This had better
+! not occur if calling program does strange things to the print command or
+! the job is being run in batch mode;
+! **********************************************************************;
+
+internal procedure ScanFileName (reference string s, logname, directory, 
+					      filename, extension, gencount);
+	Begin "-- scan file name --"
+
+	define freescan 	= 	1, 
+	       anglescan 	=	2, 
+	       squarescan 	= 	3, 
+	       extensionscan 	=	4,
+	       gencountscan 	= 	5; 
+			! Indicates what is currently being
+			  scanned.  Note that square and angle-bracketed 
+			  directories are handled separately;
+		
+	define nothing 		=	1, 
+	       logscnd 		=	2, 
+	       dirscnd 		= 	3;
+				! Indicates what has been scanned.  Only 
+				three states are necessary because others 
+				are implied by what is being scanned (i.e.,
+				if an extension is being scanned the
+				filename must already have been scanned); 
+
+	define error 		=      -1, 
+	       fieldscanned 	= 	0, 
+	       scanend 		= 	1; ! indicates nature of return;
+
+
+	define curchar = "s[d for 1]"; ! current character;
+
+	define normal  = "begin curbuff_curbuff&cur; return(scanfield); end";
+
+	define normall = "curbuff_curbuff&cur; return(scanfield)";
+						! Normal recursive step;
+
+	label   start; 	     ! Place to return to after error recovery;
+
+	boolean quotescan;   ! If true, next character is quoted;
+
+	integer d, 	     ! Pointer into string for current character;
+		e, 	     ! Start of string after stripping initial spaces;
+		scantype,    ! Type of field being scanned;
+		scannedtype, ! Type of field already scanned;
+		returntype;  ! Type of return;
+
+	string  curbuff,     ! Holds scanned portion of field being scanned;
+	        cur;         ! Next character to be scanned;
+
+
+	recursive integer procedure scanfield; ! This does the real work;
+		begin "-- scan --"
+		d_d+1;
+		if d > length(s) then cur_" " else cur_curchar;
+			! all strings act as though ended by a terminator;
+
+		if (quotescan) then ! quote next character;
+			begin "-- quote one char --"
+			quotescan_FALSE;
+			normall
+			end   "-- quote one char --"
+
+		else 
+			begin "-- field scan --"
+			quotescan_FALSE; 
+			case cur of begin "-- field scan case statement --"
+
+			NUMBERS normal;
+
+			LETTERS case scantype of begin "-- case statement --"
+				[freescan] 
+				[anglescan] 
+				[squarescan]
+				[extensionscan] normal;
+
+				[gencountscan] return(error)
+				end 		       "-- case statement __";
+
+		    TERMINATORS case scantype of begin "-- case --"
+				[freescan] begin "-- end scan --"
+					   filename_curbuff;
+					   if length(filename) > 0 then
+					   	return(scanend)
+					   else return(error)
+					   end   "-- end scan --";
+
+			   [extensionscan] begin "-- end scan --"
+					   extension_curbuff;
+					   return(scanend)
+					   end   "-- end scan --";
+
+			    [gencountscan] begin "-- end scan --"
+					   gencount_curbuff;
+					   return(scanend)
+					   end   "-- end scan --";
+
+			       [anglescan] 
+			      [squarescan] return(error)
+				end		       "-- case --";
+
+			  ["<"] case scannedtype of begin "-- case --"
+
+				 [nothing] 
+				 [logscnd] begin "-- anglescan --"
+					   if equ(curbuff,"") then
+					   	begin "-- a scan --"
+						scantype_anglescan;
+						normall
+						end   "-- a scan --"
+					   else return(error)
+					   end   "-- anglescan --";
+				 [dirscnd] return(error)
+				end			  "-- case --";
+
+			  ["["] case scannedtype of begin "-- case --"
+				 [nothing] 
+				 [logscnd] begin "-- square scan --"
+					   if equ(curbuff,"") then
+					   	begin "-- a scan --"
+						scantype_squarescan;
+						normall
+						end   "-- a scan --"
+					   else return(error)
+					   end   "-- square scan --";
+				 [dirscnd] return(error)
+				end			  "-- case --";
+
+			  [">"] case scantype of begin "-- case --"
+			       [anglescan] begin "-- end angle scan --"
+					   directory_curbuff&cur;
+					   scannedtype_dirscnd;
+					   scantype_freescan;
+					   if length(directory) > 2 then
+				      	  		return(fieldscanned) 
+					   else return(error)
+					   end   "-- end angle scan --";
+
+				[freescan] 
+			      [squarescan] 
+			   [extensionscan]
+			    [gencountscan] return(error)
+				end	       	       "-- case --";
+
+			  ["]"] case scantype of begin "-- case --"
+			      [squarescan] begin "-- end square scan --"
+					   directory_curbuff&cur;
+					   scannedtype_dirscnd;
+					   scantype_freescan;
+					   if length(directory) > 2 then
+				      			return(fieldscanned) 
+					   else return(error)
+					   end   "-- end square scan --";
+
+				[freescan] 
+			       [anglescan] 
+			   [extensionscan]
+			    [gencountscan] return(error)
+				end		       "-- case --";
+
+			  [":"] case scantype of begin "-- case --"
+				[freescan] case scannedtype of begin "- c -"
+					[nothing] begin "-- end l scan --"
+						  logname_curbuff&cur;
+						  scannedtype_logscnd;
+						  if length(logname) > 1 then
+						         return(fieldscanned)
+						  else return(error)
+						  end   "-- end l scan --";
+					[logscnd] 
+					[dirscnd] return(error)
+					   end 			     "- c -";
+			       [anglescan] 
+			      [squarescan] 
+			   [extensionscan]
+			    [gencountscan] return(error)
+				end		       "-- case --";
+
+			  ["."] case scantype of begin "-- case --"
+				[freescan] begin "-- change scan --"
+					   filename_curbuff;
+					   scantype_extensionscan;
+					   if length(filename) > 0 then
+					 		return(fieldscanned)
+					   else return(error)
+					   end   "-- change scan --";
+			       [anglescan] 
+			      [squarescan] normal;
+
+			   [extensionscan] begin "-- change scan --"
+					   extension_curbuff;
+					   scantype_gencountscan;
+					   return(fieldscanned)
+					   end   "-- change scan --";
+
+			    [gencountscan] return(error)
+				end 		       "-- case --";
+
+		       ILLEGALS return(error);
+
+			  QUOTE begin "-- quote --"
+				quotescan_TRUE; 
+				return(scanfield)
+				end   "-- quote --"
+			end               "-- field scan case statement --"
+			end   "-- field scan --"
+		end "-- scan --";
+
+
+start:	d_1; curbuff_logname_directory_filename_extension_gencount_"";
+	print5(<nl,"Scan file name, input name is ",s>)
+	scannedtype_nothing; scantype_freescan; quotescan_FALSE;returntype_0;
+
+	while (equ(curchar," ") or equ(curchar,'11)) and d  length(s) 
+								do d_d+1;
+	if (d > length(s)) then return else d_d-1;
+	e_d; ! Strip off leading spaces;
+
+	! the interesting stuff starts here;
+	while not((error = returntype_scanfield) or 
+				(scanend = returntype)) do curbuff_"";
+	if (returntype = error) then 
+		begin "-- error --"
+		print(nl,"Can't parse filename: ",s[e to d-1]&'12&s[d to ]);
+		print(nl,nl,"New file name: "); s_s[1 to e-1]&intty;
+		go start
+		end   "-- error --"
+	else return
+	end "-- scan file name --";
+

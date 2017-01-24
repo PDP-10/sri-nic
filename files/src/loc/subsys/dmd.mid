@@ -1,0 +1,286 @@
+;-*-Midas-*-
+
+	Title  DMD	-- Duplicate Message Destroyer
+	Subttl          -- by Mark K. Lottor, February 1988
+
+.DECSAV
+
+A=1				;AC1-4 temporary
+B=2
+C=3
+D=4
+HdSize==14
+MSize==15
+P=17
+
+;insertions
+.INSRT	MID:MACROS
+.INSRT	MID:SYMBOLS
+.INSRT	MID:SOUT
+.INSRT	MID:STCMP
+
+Define RetSkp
+	Jrst Popj1
+Termin
+
+asciip==440700
+
+PDLen==40
+PDL:	Block PDLen
+
+HdJFN:	0
+InJFN:	0			;input JFN
+OutJFN:	0			;output JFN
+
+GTHd:	GJ%OLD\GJ%CFM\GJ%MSG
+	.PRIIN,,.PRIOU
+	0			;default structure
+	0			;dir
+	0
+	-1,,[asciz /TXT/]
+	0
+	0
+	0
+
+GTIN:	GJ%OLD\GJ%CFM\GJ%MSG
+	.PRIIN,,.PRIOU
+	0			;default structure
+	0			;dir
+	-1,,[asciz /MAIL/]
+	-1,,[asciz /TXT/]
+	0
+	0
+	0
+
+GTOUT:	GJ%FOU\GJ%NEW\GJ%MSG\GJ%CFM\GJ%FNS
+	.PRIIN,,.PRIOU
+	0			;default structure
+	0			;dir
+	-1,,DONAM
+	-1,,DOEXT
+	0
+	0
+	0
+
+DONAM:	Asciz /MAIL/	
+	Block	40
+DOEXT:	Asciz /OUT/
+	Block	40
+
+InBuf:	Block	1000
+OutBuf:	Block	10000
+OutPtr:	0
+MsgBit:	Block	10
+MDate:	0
+
+HdTab:	0,,HdLn
+	Block	10000
+HdLn==.-HdTab-1
+
+HdPtr:	0
+HdSpc:	Block	200000
+
+
+
+Start:	RESET%
+	Move	P,[PDL(-PDLen)]	;init stack
+	TypeCR	"Duplicate Message Destroyer"
+
+	Movei	1,HdSpc
+	Movem	1,HdPtr		;setup header space ptr
+
+Gt1:	Type	"Input file [MAIL.TXT]: "
+	Movei	1,GTIN
+	Setz	2,
+	GTJFN%
+	 Erjmp	Gt1
+	Movem	1,InJFN
+	Move	2,[Field(7,OF%BSZ)\OF%RD]
+	OPENF%
+	 Erjmp	Die
+
+	Hrroi	1,DONAM
+	Move	2,InJFN
+	Movx	3,[Field(.JSAOF,JS%NAM)]
+	Setz	4,
+	JFNS%
+	 Erjmp	Die
+
+Gt2:	Type	"Output file ["
+	Movei	1,.PRIOU
+	Move	2,InJFN
+	Movx	3,[Field(.JSSSD,JS%DEV)\Field(.JSAOF,JS%NAM)\JS%PAF]
+	Setz	4,
+	JFNS%
+	 Erjmp	Gt2
+	Type	".OUT"
+	Type	"]: "
+	Movei	1,GTOUT
+	Setz	2,
+	GTJFN%
+	 Erjmp	Die
+	Movem	1,OutJFN
+	Move	2,[Field(7,OF%BSZ)\OF%WR]
+	OPENF%
+	 Erjmp	Die
+
+
+	Type	"Crunch crunch..."
+
+Loop:	Move	1,InJFN
+	Setz	2,
+	IDTIM%
+	 Erjmp	[Caie	2,DILFX1
+		  Jrst	Die
+		 GTSTS%
+		  Erjmp	Die
+		 Txnn	2,GS%EOF
+		  Jrst	Die
+		 TypeCR	"done."
+		 Jrst	Done]
+	Movem	2,MDate		;save message date
+	Move	1,InJFN
+	Movei	3,10.
+	NIN%			;parse message length
+	 Erjmp	Die
+	Move	MSize,2		;save message length
+	Hrroi	2,MsgBit
+	Movni	3,14.		;12 digits + CRLF
+	SIN%			;read message bits
+	 Erjmp	Die
+	Setz	3,
+	Idpb	3,2
+
+	Move	1,InJFN
+	Hrroi	2,MsgSpc
+	Movn	3,MSize
+	SIN%
+	 Erjmp	Die
+	Setz	1,
+	Idpb	1,2
+
+  ;copy a line from msg to inbuf
+	Move	1,[asciip,,OutBuf]
+	Movem	1,OutPtr
+	Move	1,[asciip,,MsgSpc]
+Cp2:	Setz	HdSize,
+	Move	2,[asciip,,InBuf]
+Cp1:	Ildb	3,1
+	Idpb	3,2
+	Addi	HdSize,1
+	Cain	3,.CHLFD
+	 Jrst	[Move	4,1
+		 Ildb	3,4
+		 Caie	3,.CHSPC
+		  Cain	3,.CHTAB
+		   Jrst	.+1	;white space, continue with split-line header
+		 Push	P,3
+		 Setz	3,
+		 Idpb	3,2
+		 Push	P,1
+		 Call	DoHdr	;have a header, process the line
+		  Jrst	[Pop P,1
+			 Pop P,3	;copied msg, so go to next msg
+			 Jrst Loop]
+		 Pop	P,1
+		 Pop	P,3
+		 Cain	3,.CHCRT ;was it end of headers?
+		  Jrst	[Call CpyMsg	 ;yeah, done with headers
+			 Jrst Loop]
+		 Jrst	Cp2]
+	Jrst	Cp1
+
+;see if header is "subject", if so process
+;returns if msg copied to output, else skip returns
+DoHdr:	Hrroi	1,[asciz /Subject/]
+	Move	2,[asciip,,InBuf]	;current header line
+	$STCMP			;is this one to nuke?
+	Txnn	1,SC%SUB
+	 Jrst	Popj1		;no, skip it
+
+;header is "subject"; if we haven't seen this subject then
+;copy message, else skip this message
+	Movei	1,HdTab		;saved subjects
+	Hrroi	2,InBuf		;header line
+	TBLUK%			;you thar?
+	 Erjmp	Die
+	Txnn	2,TL%EXM	;exact match?
+	 Jrst	NewMsg		;nope, new message to copy
+	Ret			;pretend copied msg so we go to next one
+
+;save subject line, then output message
+NewMsg:	Move   	1,HdPtr
+	Hrli	1,asciip
+	Push	P,1
+	Move	2,[asciip,,InBuf]
+	Setz	3,
+	$SOUT			;save this header
+	Idpb	3,1
+	Addi	1,1		;next word is next free space
+	Hrrzm	1,HdPtr
+	Movei	1,HdTab
+	Pop	P,2
+	Hrlz	2,2		;table word format
+	TBADD%
+	 Erjmp	Die
+	Call	CpyMsg		;and now copy the message
+	Ret
+
+
+CpyMsg:	Move	1,OutJFN
+	Move	2,MDate
+	Movx	3,OT%TMZ
+	ODTIM%
+	 Erjmp	Die
+	Move	1,OutJFN
+	Movei	2,",
+	BOUT%
+	Move	2,MSize
+	Movei	3,10.
+	NOUT%
+	 Erjmp	Die
+	Movei	2,";
+	BOUT%
+	Hrroi	2,MsgBit
+	Setz	3,
+	SOUT%
+	 Erjmp	Die
+
+;copy body
+	Move	1,OutJFN
+	Hrroi	2,MsgSpc
+	Setz	3,
+	SOUT%
+	 Erjmp	Die
+	Ret
+
+
+;; Miscellany
+
+Popj1:	Aos	(P)
+R:	Ret
+
+ErrRet:	Type	"%"
+Error:	Movei	1,.PRIOU
+	Hrloi	2,.FHSLF
+	Setz	3,
+	ERSTR%
+	 jfcl
+	 jfcl
+	TypeCR	"."
+	Ret
+
+Die:	Type	"?"
+	Call	Error
+Done:	Move	1,InJFN
+	CLOSF%
+	 Erjmp	.+1
+	Move	1,OutJFN
+	CLOSF%
+	 Erjmp	.+1
+DieHlt:	Haltf%
+	Jrst	DieHlt
+
+MsgSpc:	Block	200000
+
+	End Start

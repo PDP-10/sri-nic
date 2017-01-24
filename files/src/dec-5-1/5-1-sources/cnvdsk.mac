@@ -1,0 +1,597 @@
+;<5.UTILITIES>CNVDSK.MAC.3, 28-Oct-81 14:44:19, EDIT BY GRANT
+;Change major version to 5
+;<4.UTILITIES>CNVDSK.MAC.14, 13-Jul-81 13:21:38, EDIT BY BLOUNT
+;add version number
+;<4.UTILITIES>CNVDSK.MAC.13,  3-Jan-80 15:24:56, EDIT BY R.ACE
+;UPDATE COPYRIGHT DATE
+;<HELLIWELL>CNVDSK.MAC.3, 13-Aug-79 11:02:26, EDIT BY HELLIWELL
+;GET/SET GENERATION RETENTION COUNT AT SAVUSR/RSTUSR
+;<HELLIWELL>CNVDSK.MAC.2, 13-Aug-79 10:20:04, EDIT BY HELLIWELL
+;ADD JS%TMP TO SAVE STATE OF TEMPORARY FILES
+;<4.UTILITIES>CNVDSK.MAC.11, 14-Jun-79 15:32:33, EDIT BY KIRSCHEN
+;SAVE AND RESTORE LAST WRITER AND CREATOR STRINGS WHEN CONVERTING A FILE
+;<HURLEY.CALVIN>CNVDSK.MAC.1, 12-Mar-79 12:33:47, EDIT BY HURLEY.CALVIN
+; cause default device name to be set up as well as default dir name
+
+;THIS SOFTWARE IS FURNISHED UNDER A LICENSE AND MAY ONLY BE USED
+;  OR COPIED IN ACCORDANCE WITH THE TERMS OF SUCH LICENSE.
+;
+;COPYRIGHT (C) 1979,1980 BY DIGITAL EQUIPMENT CORPORATION, MAYNARD, MASS.
+
+	TITLE CNVDSK
+	SUBTTL Convert all disk files to new format FDB
+
+	SEARCH MONSYM,MACSYM
+	SALL
+
+; VERSION NUMBER DEFINITIONS
+
+	VMAJOR==5		;MAJOR VERSION OF CNVDSK
+	VMINOR==0		;MINOR VERSION NUMBER
+	VEDIT==1		;EDIT NUMBER
+
+	T1=1
+	T2=2
+	T3=3
+	T4=4
+	FDB=5
+	P=17
+
+	NPDL==20
+	MAXERR==^D10		; Max # errors per dir before aborting
+
+	OPDEF CALL [PUSHJ P,]
+	OPDEF RET [POPJ P,]
+	OPDEF RETSKP [JRST RSKP]
+
+	DEFSTR FBLEN,.FBHDR,35,12 ; Fish out length of the FDB
+
+	FILNB==:1B3		; New file bit
+
+CNVDSK:	RESET
+	MOVE P,[IOWD NPDL,PDL]
+	MOVX T1,.FHSLF
+	RPCAP
+	TXNN T3,SC%WHL+SC%OPR	; WHEEL or OPERATOR turned on?
+	JRST [	HRROI T1,[ASCIZ /?WHEEL or OPERATOR capabilities required
+/]
+		PSOUT
+		HALTF
+		JRST .-1]
+	MOVX T1,GJ%FOU+GJ%SHT
+	HRROI T2,[ASCIZ /FOO.FILE/]
+	GTJFN
+	 JRST [	HRROI T1,[ASCIZ /?Unable to GTJFN test file
+/]
+		PSOUT
+		HALTF
+		JRST .-1]
+	PUSH P,T1		; Save JFN
+	CALL GETFDB
+	LOAD T1,FBLEN,(FDB)	; Get FDB length
+	CAIGE T1,.FBLXT		; Length large enough?
+	JRST [	HRROI T1,[ASCIZ /?Current monitor is not producing FDBs of the necessary length for this
+ program to work properly
+/]
+		PSOUT
+		HALTF
+		JRST .-1]
+	POP P,T1		; Recover JFN
+	TXO T1,DF%EXP		; Expunge it
+	DELF
+	 JFCL			; No problem if it fails
+CNVDS1:	HRROI T1,[ASCIZ /
+ Output errors to file: /]
+	MOVEM T1,OUTBLK+.GJRTY
+	PSOUT
+	MOVEI T1,OUTBLK
+	SETZ T2,
+	GTJFN
+	 JRST [	CALL GTJERR
+		JRST CNVDS1]
+	MOVEM T1,JFN
+	MOVX T2,<FLD(7,OF%BSZ)+OF%WR>
+	OPENF
+	 JRST [	MOVE T1,JFN
+		RLJFN
+		 JFCL
+		JRST CNVDS1]
+	;...
+
+; Get a JFN on the world
+
+	;...
+CNVDS2:	HRROI T1,[ASCIZ / Convert files: /]
+	MOVEM T1,STRBLK+.GJRTY	; Drop in the retype string ptr
+	PSOUT
+	MOVEI T1,STRBLK
+	SETZ T2,
+	GTJFN
+	 JRST [	CALL GTJERR
+		JRST CNVDS2]
+	MOVEM T1,INDJFN		; Save indexable JFN
+	TXO T1,GN%STR+GN%DIR+GN%NAM+GN%EXT ; Everything has changed
+
+LOOP:	SETOM ERRFLG		; No error yet
+	TXNE T1,GN%STR+GN%DIR	; Structure or directory changed?
+	JRST [	MOVX T1,.PRIOU
+		HRRZ T2,INDJFN
+		MOVX T3,<FLD(.JSAOF,JS%DEV)+FLD(.JSAOF,JS%DIR)+JS%PAF>
+		JFNS
+		HRROI T2,CRLF
+		SETZB T3,T4
+		SOUT
+		hrroi t1,defdev
+		hrrz t2,indjfn
+		movx t3,<fld(.jsaof,js%dev)>
+		jfns
+		HRROI T1,DEFDIR	; Setup default directory
+		MOVX T3,<FLD(.JSAOF,JS%DIR)>
+		JFNS
+		MOVNI T1,MAXERR	; # errors allowed per directory
+		MOVEM T1,DIRERR
+		SETOM ABTFLG
+		JRST .+1]
+	SKIPL DIRERR		; Used up the error count on this directory?
+	JRST [	AOSE ABTFLG	; Have we done the abort message?
+		JRST LOPEND	; Yes, don't do it again
+		MOVE T1,JFN
+		HRRZ T2,INDJFN
+		MOVX T3,<FLD(.JSAOF,JS%DEV)+FLD(.JSAOF,JS%DIR)+JS%PAF>
+		JFNS		; Write str:<name>
+		HRROI T2,[ASCIZ / Aborted - too many errors attempting to process the directory
+
+/]
+		SETZB T3,T4
+		SOUT
+		JRST LOPEND]
+	HRRZ T1,INDJFN
+	CALL GETFDB		; Get info on the file
+	LOAD T1,FBLEN,(FDB)	; Get it's length
+	MOVE T2,.FBCTL(FDB)	; Get control bits too
+	TXNN T2,FB%DIR+FB%NEX+FB%NXF+FB%NOD
+	CAIL T1,.FBLXT		; FDB long enough?
+	JRST LOPEND		; Yes, don't bother with it
+	CALL CNVFIL		; Convert this file
+
+LOPEND:	MOVE T1,INDJFN
+	GNJFN
+	 JRST [	CAIN T1,GNJFX1	; Done?
+		JRST DONE	; Yes close things out
+		HRROI T2,[ASCIZ / GNJFN failed /]
+		CALL ERRORX
+		JFCL
+		HALTF]
+	JRST LOOP		; And do next file
+
+DONE:	MOVE T1,JFN
+	CLOSF
+	 JFCL
+	HALTF
+	JRST .-1
+
+; Rename the current file to a scratch file, then rename it back
+; to the original name & fix up anything in the FDB we might have
+; changed...
+
+CNVFIL:	HRROI T1,TEMP		; Place for a file name
+	HRRZ T2,INDJFN		; Current file
+	MOVX T3,<FLD(.JSAOF,JS%DEV)+FLD(.JSAOF,JS%DIR)+FLD(.JSAOF,JS%NAM)+FLD(.JSAOF,JS%TYP)+FLD(.JSAOF,JS%GEN)+FLD(.JSAOF,JS%PRO)+FLD(.JSAOF,JS%ACT)+JS%TMP+JS%PAF>
+	JFNS
+	CALL SAVUSR		; Save user strings
+LOOP1:	MOVEI T1,GTBLK
+	HRROI T2,TEMP
+	GTJFN			; Get a 2nd JFN on the file
+	 JRST [	HRROI T2,[ASCIZ / Could not get 2nd JFN on file /]
+		CALL ERROR	; Log the problem
+		 RET		; And go on with no re-try
+		JRST LOOP1]	; Retry pls
+	SETOM ERRFLG		; Say we won if error re-try
+	HRRZS T1		; Ditch any bits
+	PUSH P,T1		; Save the JFN
+	CALL PRMCHK		; Check for a permanent file
+	MOVEM T1,PRMFLG		; Remember the sense
+	MOVE T1,0(P)		; JFN
+	SETZ T3,
+	SKIPE PRMFLG		; Don't clear it if already clear
+	CALL PRMSET		; Clear the prm bit
+	SKIPN T1,.FBADR(FDB)	; File have an address block?
+	JRST CNVEMP		; No, convert an empty file
+	TXNE T1,FILNB		; Address valid?
+	JRST CNVEMP		; No, treat as an empty file
+LOOP2:	MOVEI T1,DEFBLK		; Block pointing to the right defaults
+	HRROI T2,[ASCIZ /RENAME.SCRATCH-FILE/]
+	GTJFN			; Get scratch file JFN
+	 JRST [	HRROI T2,[ASCIZ / Could not get JFN on scratch file /]
+		CALL ERROR	; Log it
+		 CAIA		; No re-try
+		JRST LOOP2	; Re-try operation
+		POP P,T1	; 2nd JFN we had acquired
+		SKIPE T3,PRMFLG	; Reset sense of permanent bit?
+		CALL PRMSET
+		RLJFN
+		 JFCL
+		RET]		; Bail out now
+	;...
+
+	;...
+	HRRZ T2,T1		; Name to rename TO
+	MOVE T1,0(P)		; Get the JFN
+	RNAMF			; Do the rename
+	 JRST [	EXCH T1,0(P)	; Swap error # for JFN
+		PUSH P,T2	; Save 2nd JFN
+		SKIPE T3,PRMFLG	; Need to make the file permanent?
+		CALL PRMSET	; Yes, do that
+		HRRZS T1
+		RLJFN		; Release JFN
+		 JFCL
+		POP P,T1	; Recover JFN
+		RLJFN		; Release 2nd JFN
+		 JFCL		; We tried
+		POP P,T1	; Recover error #
+		HRROI T2,[ASCIZ / Rename from file name to scratch file failed /]
+		CALL ERRORX	; Log the problem
+		 RET		; Go on - no retry
+		RET]		; Go on - no retry even if ERROR says to
+	EXCH T2,0(P)		; Swap scratch JFN for bogus original file JFN
+	MOVE T1,0(P)
+	HRLI T1,.FBBYV
+	MOVX T2,FLD(77,FB%RET)	; Want the generation retention count
+	SETZ T3,		;  to be 0 (infinite)
+	CHFDB
+	SETOM ERRFLG		; Rename won
+LOOP3:	MOVEI T1,GTBLK
+	HRROI T2,TEMP		; File to rename back TO
+	GTJFN
+	 JRST [	HRROI T2,[ASCIZ / Failed to GTJFN original file for 2nd rename /]
+		CALL ERROR	; Log problem
+		 CAIA		; No retry, leave remains in the directory
+		JRST LOOP3	; Try again
+		POP P,T1	; JFN on scratch file
+		RLJFN
+		 JFCL
+		RET]
+	HRRZ T2,T1		; Old name, now new name
+	MOVE T1,0(P)		; JFN on scratch file
+	RNAMF			; Do the rename
+	 JRST [	EXCH T1,0(P)	; Swap error # for scratch file JFN
+		RLJFN		; Release JFN
+		 JFCL
+		POP P,T2
+		MOVE T1,JFN	; Output JFN
+		MOVX T3,<FLD(.JSAOF,JS%DEV)+FLD(.JSAOF,JS%DIR)+FLD(.JSAOF,JS%NAM)+FLD(.JSAOF,JS%TYP)+FLD(.JSAOF,JS%GEN)+FLD(.JSAOF,JS%PRO)+FLD(.JSAOF,JS%ACT)+JS%TMP+JS%PAF>
+		JFNS		; Include name of scratch file
+		MOVE T1,T2	; JFN or original file name
+		RLJFN		; Release it
+		 JFCL
+		POP P,T1	; Error #
+		HRROI T2,[ASCIZ /
+  is the name of the original file; the RNAMF from it to the original file name failed/]
+		CALL ERRORX	; Log it
+		 RET		; No retry
+		RET]		; Even if suggested
+	SETOM ERRFLG
+	MOVE T1,T2
+	SKIPE T3,PRMFLG		; Was the original permanent?
+	CALL PRMSET		; Yes, do that again
+	CALL FIXTDT		; FIX THE TAPE DATE AND TIME
+	CALL RSTUSR		; Restore user strings
+	RLJFN			; Release the JFN
+	 JFCL
+	POP P,0(P)		; JFN no longer useful
+	RET
+
+; Here to process an empty file
+
+CNVEMP:	MOVE T1,0(P)		; JFN of the file
+	TXO T1,DF%EXP		; Expunge it while we're at it
+	DELF
+	 JRST [	POP P,T1	; JFN
+		SKIPE T3,PRMFLG
+		CALL PRMSET	; Make it permanent again if necessary
+		RLJFN
+		 JFCL
+		HRROI T2,[ASCIZ / Failed to delete and expunge an empty file that needed to be converted/]
+		CALL ERRORX	; No retry
+		 JFCL
+		RET]
+	POP P,(P)		; JFN is no longer valid
+CNVEM1:	MOVX T1,GJ%SHT
+	HRROI T2,TEMP		; Now re-create the file
+	GTJFN
+	 JRST [	HRROI T2,[ASCIZ / GTJFN failed to recreate an empty file/]
+		CALL ERROR
+		 RET		; Do if no retry suggested
+		JRST CNVEM1]	; Try again
+	PUSH P,T1		; Save the JFN
+	MOVX T2,OF%WR		; Open for write
+	OPENF			; Cause file to exist
+	 JRST [	EXCH T1,0(P)	; Swap error for JFN
+		RLJFN
+		 JFCL
+		POP P,T1	; Error #
+		HRROI T2,[ASCIZ / OPENF failed to create previously empty file/]
+		CALL ERROR
+		 RET		; Done if no retry to be attempted
+		JRST CNVEM1]	; Try it again
+	SETOM ERRFLG		; Finally won it
+	TXO T1,CO%NRJ		; Keep the JFN
+	CLOSF
+	 JFCL
+	POP P,T1		; JFN
+	HRLI T1,.FBCTL		; Word to change
+	MOVE T3,.FBCTL(FDB)	; Get control bits
+	MOVX T2,<FB%TMP+FB%PRM+FB%DEL+FB%NOD+FB%INV+FLD(17,FB%FCF)>
+	CHFDB			; Make it what it used to be...
+	HRRZS T1		; Just the JFN
+	RLJFN
+	 JFCL
+	RET
+
+; Here to log or account for errors
+
+ERRORX:	SETZM ERRFLG		; Make like 2nd error
+ERROR:	AOSN ERRFLG		; 1st error?
+	JRST ERR1ST		; Yes, check to see if caller should retry
+ERRBMB:	AOS DIRERR		; Count against the directory
+	PUSH P,T1		; SAVE ERROR #
+	MOVE T1,JFN		; Is 2nd error, log it & tell caller to give up
+	SETZB T3,T4
+	SOUT			; Write the comment
+	HRROI T2,[ASCIZ /
+  - /]
+	SOUT
+	MOVE T2,0(P)		; Get error
+	HRLI T2,.FHSLF
+	SETZ T3,
+	ERSTR			; Now the reason
+	 JFCL
+	 JRST [	HRROI T2,[ASCIZ /?ERSTR failed/]
+		SOUT
+		JRST .+1]
+	HRROI T2,[ASCIZ /
+ File: /]
+	SOUT
+	HRROI T2,TEMP
+	SOUT
+	HRROI T2,CRLF
+	SOUT
+	HRROI T2,CRLF
+	SOUT
+	POP P,T1		; Get error #
+	RET			; Done, return to caller
+
+ERR1ST:	CAIN T1,GJFX21		; File expunged?
+	RETSKP			; Yes, may be worth a try
+	CAIE T1,GJFX23		; Directory full?
+	CAIN T1,IOX11		; Quota exceeded?
+	JRST ERROR1		; One of those
+	CAIe T1,RNAMX4		; Dest quota exceeded?
+	CAIN T1,RNMX13		; Insufficient system recources?
+	JRST ERROR1
+	caie t1,gjfx30		; check to see if bad account
+	cain t1,vaccx0
+	jrst error2		; one of those
+	caie t1,vaccx2
+	cain t1,vaccx1
+	jrst error2		; or one of those
+	JRST ERRBMB		; Doesn't deserve a second try
+
+error2:	move t1,[point 7,temp]	; scan file name and
+erro21:	ildb t2,t1		;  delete account since illegal
+	jumpe t2,r		; if end, we loose
+	caie t2,";"		; looking for ";a"
+	jrst erro21		; loop until ;
+	ildb t2,t1		; now try "A"
+	caie t2,"A"		; is it?
+	jrst erro21		; no, keep on going
+	movni t3,2		; back up by 2 chars
+	adjbp t3,t1
+	setz t2,
+	dpb t2,t3		; end the file name
+	retskp			; say to try again
+
+; Here to expunge a directory in hope of making some space available
+
+ERROR1:	PUSH P,T1		; Save error
+	PUSH P,T2		; And pointer to msg
+	MOVE T1,[POINT 7,TEMP]
+	MOVE T2,[POINT 7,DIR]
+LP:	ILDB T3,T1		; Get a byte
+	IDPB T3,T2
+	CAIE T3,">"		; End of directory name?
+	CAIN T3,0		; Or end of string?
+	CAIA
+	JRST LP			; Neither, continue
+	SETZ T3,
+	IDPB T3,T2		; Make sure is ended
+	MOVX T1,RC%EMO
+	HRROI T2,DIR
+	SETZ T3,
+	RCDIR			; Get the directory #
+	 ERJMP .+2
+	TXNE T1,RC%NOM+RC%AMB+RC%NMD
+	JRST [	HRROI T1,[ASCIZ /?RCDIR failed in ERROR
+/]
+		PSOUT
+		HALTF
+		JRST .-1]
+	MOVX T1,DD%DNF+DD%DTF+DD%RST
+	MOVE T3,T2		; Dir to do
+	DELDF			; Do it
+	 ERJMP [POP P,T2	; RECOVER ERROR MESSAGE
+		POP P,T1	; AND ERROR #
+		JRST ERRBMB]
+	POP P,T2		; NO LONGER NEED MESSAGE
+	POP P,T1		; OR ERROR #
+RSKP:	AOS 0(P)
+R:	RET			; Done
+
+; ROUTINES TO SAVE AND RESTORE USER NAMES FOR FILE BEING CONVERTED
+
+; SAVUSR - SAVE USER STRINGS AND GENERATION RETENTION COUNT
+
+SAVUSR:	HRRZ T1,INDJFN		;GET JFN OF FILE BEING CONVERTED
+	HRLI T1,.GFAUT		;GET AUTHOR OF FILE
+	HRROI T2,CREATR		;GET POINTER TO WHERE CREATOR STRING GOES
+	GFUST			;GET FILE USER STRING
+	 ERJMP [ TMSG <? CNVDSK: Could not get creator of file being converted
+>
+		 SETZM CREATR	;CLEAR THE STRING
+		 JRST .+1 ]	;CONTINUE
+	HRRZ T1,INDJFN
+	HRLI T1,.GFLWR		;LAST WRITER
+	HRROI T2,WRITER		;POINT TO WHERE THE WRITER GOES
+	GFUST			;GET LAST WRITER OF FILE
+	 ERJMP [ TMSG <? CNVDSK: Could not get last writer of file being converted
+>
+		 SETZM WRITER	;CLEAR THE STRING
+		 JRST .+1 ]	;CONTINUE
+	HRRZ T1,INDJFN
+	MOVE T2,[1,,.FBBYV]
+	MOVEI T3,GENRET
+	GTFDB
+	 ERJMP [ TMSG <? CNVDSK: Could not get generation retention count of file being converted
+>
+		 SETZM GENRET	;CLEAR COUNT
+		 JRST .+1]
+	RET			;DONE, RETURN
+
+
+
+; RESTORE USER STRINGS AND GENERATION RETENTION COUNT
+;
+;ACCEPTS IN T1/ JFN OF CONVERTED FILE
+;	CALL RSTUSR
+;RETURNS: +1 ALWAYS
+
+
+RSTUSR:	HRLI T1,.SFAUT		;SET AUTHOR OF FILE
+	HRROI T2,CREATR		;GET POINTER TO WHERE CREATOR STRING IS
+	SFUST			;SET FILE USER STRING
+	 ERJMP [ TMSG <? CNVDSK: Could not set creator of file being converted
+>
+		 SETZM CREATR	;CLEAR THE STRING
+		 JRST .+1 ]	;CONTINUE
+	HRLI T1,.SFLWR		;LAST WRITER
+	HRROI T2,WRITER		;POINT TO WHERE THE WRITER IS
+	SFUST			;SET LAST WRITER OF FILE
+	 ERJMP [ TMSG <? CNVDSK: Could not set last writer of file being converted
+>
+		 SETZM WRITER	;CLEAR THE STRING
+		 JRST .+1 ]	;CONTINUE
+	HRLI T1,.FBBYV
+	MOVX T2,FB%RET
+	MOVE T3,GENRET
+	CHFDB
+	 ERJMP [TMSG <? CNVDSK: Could not set generation retention count of file being converted
+>
+		SETZM GENRET
+		JRST .+1]
+	RET			;DONE, RETURN
+
+; Misc routines
+
+GETFDB:	MOVE T2,[.FBLN0,,.FBHDR]
+	MOVEI T3,FDBBLK
+	GTFDB
+	MOVEI FDB,FDBBLK
+	RET
+
+PRMCHK:	MOVE T2,[1,,.FBCTL]
+	MOVEI T3,T3
+	GTFDB			; Get word with FB%PRM in it
+	MOVX T1,FB%PRM
+	ANDB T1,T3
+	RET
+
+PRMSET:	HRLI T1,.FBCTL
+	MOVX T2,FB%PRM
+	CHFDB
+	RET
+
+;ERROR ROUTINE FOR BAD FILE SPEC
+
+GTJERR:	HRROI T1,[ASCIZ /?Invalid specification: /]
+	PSOUT
+	MOVX T1,.PRIOU		;OUTPUT TO TERMINAL
+	MOVE T2,[.FHSLF,,-1]
+	ERSTR
+	 JFCL
+	 JFCL
+	HRROI T1,CRLF
+	PSOUT
+	RET
+
+FIXTDT:	MOVX T2,.ARDIS		; DISCARD ANY BOGUS INFO
+	MOVX T3,AR%CR1+AR%CR2	; CLEAR BOTH OF 'EM
+	ARCF
+	 ERJMP .+1
+	RET
+
+CRLF:	ASCIZ /
+/
+GTBLK:	GJ%IFG+GJ%DEL+GJ%XTN ; * ok, find del, find invisible
+	.NULIO,,.NULIO	; No I/O
+	0		; No Device
+	0		; No Directory
+	0		; No Name
+	0		; No type
+	0		; No Protection
+	0		; No Account
+	0		; No JFN
+	G1%IIN		; Find invisible files
+DEFBLK:	GJ%IFG+GJ%DEL+GJ%XTN ; * ok, find del, find invisible
+	.NULIO,,.NULIO	; No I/O
+	-1,,defdev	; default device
+	-1,,DEFDIR	; Default directory
+	0		; No Name
+	0		; No type
+	0		; No Protection
+	0		; No Account
+	0		; No JFN
+	G1%IIN		; Find invisible files
+STRBLK:	GJ%OLD+GJ%CFM+GJ%MSG+GJ%IFG+GJ%DEL+GJ%XTN+.GJALL ; * ok, find del, find invisible
+	.PRIIN,,.PRIOU	; I/O to primary
+	-1,,[ASCIZ /DSK*/] ; All Devices
+	-1,,STAR	; All Directories
+	-1,,STAR	; All Names
+	-1,,STAR	; All types
+	0		; No Protection
+	0		; No Account
+	0		; No JFN
+	G1%IIN+3	; Find invisible files
+	0		; No typescript pointer
+	0		; No bytes available
+	.-.		; Retype pointer (fill in when blk used)
+OUTBLK:	GJ%FOU+GJ%CFM+GJ%MSG+GJ%XTN
+	.PRIIN,,.PRIOU
+	0		; Default device
+	0		; Default directory
+	0		; Default name
+	0		; Default type
+	0		; Default protection
+	0		; Default Account
+	0		; JFN
+	3		; # of words following this word
+	0		; No typescript pointer
+	0		; No bytes available in typescript buffer
+	.-.		; Retype point to be filled in later
+STAR:	ASCIZ /*/
+JFN:	0
+DIRERR:	0		; # errors left for this directory
+ABTFLG:	0		; Flag for deciding if to send abt msg to file
+INDJFN:	0		; Indexable JFN
+ERRFLG:	0
+PRMFLG:	0		; Sense of this file's permanent bit
+defdev:	block 11	; for default device name
+DEFDIR:	BLOCK 11	; For default directory name
+WRITER:	BLOCK 10	; last writer of file being converted
+CREATR:	BLOCK 10	; Creator of file being converted
+GENRET:	0	; Generation retention count
+PDL:	BLOCK NPDL
+FDBBLK:	BLOCK .FBLN0	; For getting FDB's of files
+TEMP:	BLOCK 100	; Place for current file name
+DIR:	BLOCK 40	; Current STR:<DIR> for RCDIRing it
+
+	END CNVDSK

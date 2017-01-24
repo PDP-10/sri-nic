@@ -1,0 +1,3604 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                            P M L    U S E R S   G U I D E
+
+
+                      P o r t a b l e   M a t h   L i b r a r y
+
+
+                                     Version 1.1
+
+
+                                  February 10, 1983
+
+
+
+
+                                     by Fred Fish
+
+
+                                       G.A.C.A.
+        PML --- C Portable Math Library                                 Page 2
+        Introduction
+
+
+
+        1.0  INTRODUCTION
+
+
+
+
+        1.1  Document structure
+
+
+             This document describes the PML library, a mathematical  function
+        library for C programs.  It contains the following major sections:
+
+             o  Introduction to the document (this section).
+
+             o  A module description section which is  automagically  produced
+                from  documentation  in  each  module's source code by the DEX
+                (Documentation Extractor) task and "runoff", a text formatting
+                program.
+
+             o  An index also produced from information in the source code.
+
+
+
+
+        1.2  Design Considerations
+
+
+             In writing this library many tradeoffs had to be considered.  The
+        primary  design  goal  was  transportability.  It was desired that the
+        final library be easily transportable among a wide class of  machines.
+        As  of this release, the library has been used with only minor modifi-
+        cations on a DECSYSTEM-20 (a 36 bit machine), a VAX-11/780 under  com-
+        patibility mode, and various PDP-11's.
+
+             This portability was achieved by careful isolation of machine de-
+        pendencies  and  parameterization of the environment (see references).
+        The only assumption made is that the C compiler  can  generate  proper
+        code for the four basic operations (+,-,/,*).
+
+             Even though efficiency was considered to be of only secondary im-
+        portance,  the final routines compared favorably with an informal test
+        "race" against the DECSYSTEM-20 FORTRAN, which has optimized  assembly
+        language  library routines.  The PML library routines seldom took more
+        than twice as long as the FORTRAN library, and many were close  enough
+        to call a draw.
+
+             There are currently only four highly machine  dependent  routines
+        in  the Portable Math Library.  When transporting the library to a new
+        machine, these should be the only ones in which recoding is necessary.
+        These routines, written in machine targeted C, are:
+
+             o  dscale --- scale a double precision floating point number by a
+                specified power of two.  Equivalent to multiplication or divi-
+        PML --- C Portable Math Library                                 Page 3
+        Introduction
+
+
+
+                sion by a power of two,  depending  upon  sign  of  the  scale
+                value.
+
+             o  dxexp --- extract exponent of double precision floating  point
+                number and return it as an integer.
+
+             o  dxmant --- extract mantissa of double precision floating point
+                number  and  return  it  as  a double precision floating point
+                number.
+
+             o  dint --- discard fractional part of double  precision  number,
+                returning  integer  part  as a double precision floating point
+                number.
+
+
+             The entire Portable Math Library is built upon  six  "primitives"
+        which compute their values from polynomial approximations.  All others
+        can be defined in terms of the primitives  using  various  identities.
+        The  primitives  are (1) datan, (2) dexp, (3) dln, (4) dsin, (5) dcos,
+        and (6) dsqrt.  Strictly speaking, only one of dsin and dcos could  be
+        chosen  as a primitive and the other defined with an appropriate iden-
+        tity.  In this implementation however, dsin and dcos  call  themselves
+        recursively, and each other, to perform range reduction.
+
+
+
+        1.3  Error Handling
+
+
+             No assumptions are made about whether the four  basic  operations
+        are  done by hardware or software.  Any overflows or underflows in the
+        basic operations are assumed to be handled by the environment,  if  at
+        all.  Pathological cases in the library routines are trapped internal-
+        ly and control is passed to an error handler routine  "pmlerr"  (which
+        may be replaced with one of the user's choosing) for error recovery.
+
+             The default error handler is conceptually similar to the one used
+        by DEC for the FORTRAN compilers.  It contains an internal table which
+        allows  various  actions  to  be  taken  for  each  error  recognized.
+        Currently  each  error  has a corresponding flag word with three bits,
+        each bit assigned as follows:
+
+             o  CONTINUE --- If the bit is set control is returned to the cal-
+                ling  routine after completion of error processing.  Otherwise
+                the task exits with an error status.
+
+             o  LOG --- If the log bit is set then an error warning message is
+                written  to the standard error output channel prior to exiting
+                or continuing.  If reset, no message is given.
+
+             o  COUNT --- If the count bit is set then the  task's  PML  error
+                count  (internal to the error handler) is incremented.  If the
+        PML --- C Portable Math Library                                 Page 4
+        Introduction
+
+
+
+                total error count exceeds the maximum allowed  then  the  task
+                exits  with  error status.  If the count bit is reset then the
+                error is ignored with respect to the error count and  exit  on
+                limit.
+
+
+             The default conditions in the error handler  for  all  errors  is
+        that  the  CONTINUE, LOG, and COUNT bits are all set.  The error limit
+        is set at 10.  These values can be changed  by  suitably  editing  the
+        header file "pml.h" and <pmluser.h>.
+
+             The error handler responses can also be changed  dynamically  via
+        the following routines:
+
+             o  PMLSFS --- Sets the specified bits in  the  specified  error's
+                flag  word.   For  example, "pmlsfs(NEG_DSQRT,CONTINUE | LOG)"
+                sets the CONTINUE and  LOG  bits  for  the  "double  precision
+                square root of a negative number" error.  The COUNT bit is not
+                affected.   The  manifest  constant  values  are  defined   in
+                <pmluser.h>.
+
+             o  PMLCFS --- Clears the specified bits in the specified  error's
+                flag  word.   For  example, "pmlcfs(NEG_DSQRT,CONTINUE | LOG)"
+                clears the CONTINUE and LOG bits  for  the  "double  precision
+                square root of a negative number" error.  The COUNT bit is not
+                affected.   The  manifest  constant  values  are  defined   in
+                <pmluser.h>.
+
+             o  PMLLIM --- Changes the task's PML error limit to the specified
+                value and returns the previous value.
+
+             o  PMLCNT --- Returns the current value of the  PML  error  count
+                and resets it back to zero.
+
+
+
+
+        1.4  Function Names
+
+
+             In general, FORTRAN naming conventions  were  followed  since  no
+        other  more  obvious convention was apparent.  There is one strong ex-
+        ception however, and that is the natural logarithm functions  use  the
+        generic name "ln" while the logarithm to the base 10 functions use the
+        name "log".  This is consistent with the normal usage in virtually all
+        modern  mathematical  and  engineering texts.  How FORTRAN came to use
+        "log" and "log10" respectively is beyond me.  This  usage  has  bitten
+        many a starting FORTRAN programmer.
+
+
+
+        PML --- C Portable Math Library                                 Page 5
+        Introduction
+
+
+
+        1.5  Installation
+
+
+             As part of the installation kit, some simple minded testing  pro-
+        grams  are  provided.   They  are by no means exhaustive tests or ones
+        that carefully check possible trouble areas.   They  are  intended  to
+        provide  a  quick  and dirty way of verifying that no gross errors are
+        inadvertently incorporated in the library as a result of  improvements
+        or  bug  fixes,  and  that the installation is successful.  Future re-
+        leases may incorporate more extensive test  routines  and  suggestions
+        are solicited.
+
+
+
+        1.6  Bugs
+
+
+             On the subject of bugs, all exterminators are encouraged to noti-
+        fy the author of any problems or fixes so that they can be incorporat-
+        ed into the next release and renegade versions of the library  can  be
+        minimized.  Contact:
+
+
+                         Fred Fish
+                         1346 W 10th Place
+                         Tempe, Arizona 85281
+
+                         (602) 894-6881   (home)
+                         (602) 932-7000   (work @ GACA)
+
+             Those users with strong numerical analysis backgrounds or experi-
+        ence  may  be  able  to suggest better methods for some of the library
+        routines.  Many of the higher level routines are simple minded  imple-
+        mentations of identities, and may not be nearly as stable as some more
+        obscure methods.
+
+
+
+        1.7  Transporting To Other Machines
+
+
+             To transport the Portable Math Library to a processor other  than
+        the PDP11 or DECSYSTEM-20, do the following:
+
+             o  Define the machine dependent parameters in "pml.h".
+
+             o  implement the four machine dependent modules listed  previous-
+                ly, possibly by using the current versions as a guide.
+
+             o  Compile the rest of the library modules and the  testing  rou-
+                tines.   Then link and run the testing routines to verify suc-
+                cessful installation.
+        PML --- C Portable Math Library                                 Page 6
+        Introduction
+
+
+
+             o  Repeat as required.
+
+        PML --- C Portable Math Library                                 Page 7
+        Runtime modules
+
+
+
+        2.0  RUNTIME MODULES
+
+
+             The PML modules are documented on the following pages.   All  the
+        rest of this section was produced by the DEX (documentation extractor)
+        utility directly from the source files.  Thus the information reflects
+        the current state of the runtime modules.
+        PML --- C Portable Math Library                                 Page 8
+        CABS
+
+
+
+        2.1  Double precision complex absolute value
+
+
+
+
+                                       ********
+                                       * CABS *
+                                       ********
+
+
+
+
+        DESCRIPTION:
+
+                 Computes double precision absolute value of a  double  preci-
+                 sion  complex  argument,  where  "absolute value" is taken to
+                 mean magnitude.  The result replaces the argument.
+
+
+        USAGE:
+
+                 double cabs(z)
+                 COMPLEX *z;
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        INTERNALS:
+
+                 Computes CABS(z) where z = (x) + j(y) from:
+
+                         CABS(z) = DSQRT(x*x + y*y)
+
+        PML --- C Portable Math Library                                 Page 9
+        CACOS
+
+
+
+        2.2  Complex double precision arc cosine
+
+
+
+
+
+                                      *********
+                                      * CACOS *
+                                      *********
+
+
+
+
+        DESCRIPTION:
+
+                 Computes double precision complex arc cosine of a double pre-
+                 cision complex argument.  The result replaces the argument.
+
+
+        USAGE:
+
+                 cacos(z)
+                 COMPLEX *z;
+
+
+        REFERENCES:
+
+
+
+        RESTRICTIONS:
+
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        INTERNALS:
+
+                 Computes complex arc cosine of Z = x + j y from:
+
+                    CACOS(z) = -j * CLN(z + j * CSQRT(1-z*z))
+
+        PML --- C Portable Math Library                                Page 10
+        CADD
+
+
+
+        2.3  Double precision complex addition
+
+
+
+
+
+                                       ********
+                                       * CADD *
+                                       ********
+
+
+
+
+        DESCRIPTION:
+
+                 Computes double precision complex result of addition of first
+                 double  precision  complex argument with second double preci-
+                 sion complex argument.  The result replaces the  first  argu-
+                 ment.   Note  that the complex addition function is so simple
+                 that it would not normally be called as a function but simply
+                 done "inline".  It is supplied mostly for completeness.
+
+
+        USAGE:
+
+                 double cadd(z1,z2)
+                 COMPLEX *z1;
+                 COMPLEX *z2;
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        INTERNALS:
+
+                 Computes CADD(z1,z2) from:
+
+                         1.      Let z1 = a + j b
+                                 Let z2 = c + j d
+
+                         2.      Then CADD(z1,z2) = (a + c) + j (b + d)
+
+        PML --- C Portable Math Library                                Page 11
+        CASIN
+
+
+
+        2.4  Complex double precision arc sine
+
+
+
+
+
+                                      *********
+                                      * CASIN *
+                                      *********
+
+
+
+
+        DESCRIPTION:
+
+                 Computes double precision complex arc sine of a double preci-
+                 sion complex argument.  The result replaces the argument.
+
+
+        USAGE:
+
+                 casin(z)
+                 COMPLEX *z;
+
+
+        REFERENCES:
+
+
+
+        RESTRICTIONS:
+
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        INTERNALS:
+
+                 Computes complex arc sine of Z = x + j y from:
+
+                    CASIN(z) = -j * CLN(CSQRT(1-z*z) + j*z)
+
+        PML --- C Portable Math Library                                Page 12
+        CATAN
+
+
+
+        2.5  Complex double precision arc tangent
+
+
+
+
+
+                                      *********
+                                      * CATAN *
+                                      *********
+
+
+
+
+        DESCRIPTION:
+
+                 Computes double precision complex arc  tangent  of  a  double
+                 precision  complex  argument.   The result replaces the argu-
+                 ment.
+
+
+        USAGE:
+
+                 catan(z)
+                 COMPLEX *z;
+
+
+        REFERENCES:
+
+
+
+        RESTRICTIONS:
+
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        INTERNALS:
+
+                 Computes complex arc tangent of Z = x + j y from:
+
+                    CATAN(z) = -j/2 * CLN( (j+z) / (j-z) )
+
+        PML --- C Portable Math Library                                Page 13
+        CCOS
+
+
+
+        2.6  Complex double precision cosine
+
+
+
+
+
+                                       ********
+                                       * CCOS *
+                                       ********
+
+
+
+
+        DESCRIPTION:
+
+                 Computes double precision complex cosine of a  double  preci-
+                 sion complex argument.  The result replaces the argument.
+
+
+        USAGE:
+
+                 ccos(z)
+                 COMPLEX *z;
+
+
+        REFERENCES:
+
+                 Fortran 77 user's guide, Digital Equipment Corp.  pp B-12
+
+
+        RESTRICTIONS:
+
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        INTERNALS:
+
+                 Computes complex cosine of Z = x + j y from:
+
+                         1.      R_CCOS = DCOS(x) * DCOSH(y)
+
+                         2.      I_CCOS = -DSIN(x) * DSINH(y)
+
+                         Then    CCOS(z) = R_CCOS + j I_CCOS
+
+        PML --- C Portable Math Library                                Page 14
+        CCOSH
+
+
+
+        2.7  Complex double precision hyperbolic cosine
+
+
+
+
+
+                                      *********
+                                      * CCOSH *
+                                      *********
+
+
+
+
+        DESCRIPTION:
+
+                 Computes double precision complex hyperbolic cosine of a dou-
+                 ble  precision complex argument.  The result replaces the ar-
+                 gument.
+
+
+        USAGE:
+
+                 ccosh(z)
+                 COMPLEX *z;
+
+
+        REFERENCES:
+
+
+
+        RESTRICTIONS:
+
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        INTERNALS:
+
+                 Computes complex hyperbolic cosine of Z = x + j y from:
+
+                    CCOSH(z) = 0.5 * ( CEXP(z) + CEXP(-z) )
+
+        PML --- C Portable Math Library                                Page 15
+        CDIV
+
+
+
+        2.8  Double precision complex division
+
+
+
+
+
+                                       ********
+                                       * CDIV *
+                                       ********
+
+
+
+
+        DESCRIPTION:
+
+                 Computes double precision complex result of division of first
+                 double  precision complex argument by second double precision
+                 complex argument.  The result replaces the numerator.
+
+
+        USAGE:
+
+                 double cdiv(numerator,denominator)
+                 COMPLEX *numerator;
+                 COMPLEX *denominator;
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        INTERNALS:
+
+                 Computes CDIV(znum,zden) from:
+
+                         1.      Let znum = a + j b
+                                 Let zden = c + j d
+
+                         2.      denom = c*c + d*d
+
+                         3.      If denom is zero then log error,
+                                 set r_cdiv = maximum floating value,
+                                 i_cdiv = 0, and go to step 5.
+
+                         4.      r_cdiv = (a*c + b*d) / denom
+                                 i_cdiv = (c*b - a*d) / denom
+
+                         5.      Then CDIV(znum,zden) = r_cdiv + j i_cdiv
+        PML --- C Portable Math Library                                Page 16
+        CDIV
+
+
+
+        2.9  Complex double precision exponential
+
+
+
+
+
+                                       ********
+                                       * CEXP *
+                                       ********
+
+
+
+
+        DESCRIPTION:
+
+                 Computes double precision complex  exponential  of  a  double
+                 precision complex argument.
+
+
+        USAGE:
+
+                 cexp(z)
+                 COMPLEX *z;
+
+
+        REFERENCES:
+
+                 Fortran 77 user's guide, Digital Equipment Corp.  pp B-13
+
+
+        RESTRICTIONS:
+
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        INTERNALS:
+
+                 Computes complex exponential of Z = x + j y from:
+
+                         1.      R_CEXP = DEXP(x) * DCOS(y)
+
+                         2.      I_CEXP = DEXP(x) * DSIN(y)
+
+                         Then    CEXP(z) = R_CEXP + j I_CEXP
+
+        PML --- C Portable Math Library                                Page 17
+        CLN
+
+
+
+        2.10  Complex double precision natural logarithm
+
+
+
+
+
+                                       *******
+                                       * CLN *
+                                       *******
+
+
+
+
+        DESCRIPTION:
+
+                 Computes double precision complex natural logarithm of a dou-
+                 ble  precision complex argument.  The result replaces the ar-
+                 gument.
+
+
+        USAGE:
+
+                 cln(z)
+                 COMPLEX *z;
+
+
+        REFERENCES:
+
+                 Fortran 77 user's guide, Digital Equipment Corp.  pp B-13
+
+
+        RESTRICTIONS:
+
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        INTERNALS:
+
+                 Computes complex natural logarithm of Z = x + j y from:
+
+                         1.      R_CLN = DLN(CABS(z))
+
+                         2.      I_CLN = DATAN2(x,y)
+
+                         Then    CLN(z) = R_CLN + j I_CLN
+        PML --- C Portable Math Library                                Page 18
+        CLN
+
+
+
+        2.11  Double precision complex multiplication
+
+
+
+
+
+                                      *********
+                                      * CMULT *
+                                      *********
+
+
+
+
+        DESCRIPTION:
+
+                 Computes double precision complex result of multiplication of
+                 first double precision complex argument by second double pre-
+                 cision complex argument.  The result replaces the first argu-
+                 ment.
+
+
+        USAGE:
+
+                 double cmult(z1,z2)
+                 COMPLEX *z1;
+                 COMPLEX *z2;
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        INTERNALS:
+
+                 Computes CMULT(z1,z2) from:
+
+                         1.      Let z1 = a + j b
+                                 Let z2 = c + j d
+
+                         2.      r_cmult = (a*c - b*d)
+                                 i_cmult = (a*d + c*b)
+
+                         3.      Then CMULT(z1,z2) = r_cmult + j i_cmult
+
+        PML --- C Portable Math Library                                Page 19
+        CRCP
+
+
+
+        2.12  complex double precision reciprocal
+
+
+
+
+
+                                       ********
+                                       * CRCP *
+                                       ********
+
+
+
+
+        DESCRIPTION:
+
+                 Computes double precision complex reciprocal of a double pre-
+                 cision complex argument.  The result replaces the argument.
+
+
+        USAGE:
+
+                 crcp(z)
+                 COMPLEX *z;
+
+
+        REFERENCES:
+
+
+
+        RESTRICTIONS:
+
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        INTERNALS:
+
+                 Computes complex reciprocal of Z = x + j y from:
+
+                         1.      Compute denom = x*x + y*y
+
+                         2.      If denom = 0.0 then flag error
+                                 and return MAX_POS_DBLF + j 0.0
+
+                         3.      Else CRCP(z) = (x/denom) + j (-y/denom)
+
+        PML --- C Portable Math Library                                Page 20
+        CSIN
+
+
+
+        2.13  Complex double precision sine
+
+
+
+
+
+                                       ********
+                                       * CSIN *
+                                       ********
+
+
+
+
+        DESCRIPTION:
+
+                 Computes double precision complex sine of a double  precision
+                 complex argument.  The result replaces the argument.
+
+
+        USAGE:
+
+                 csin(z)
+                 COMPLEX *z;
+
+
+        REFERENCES:
+
+                 Fortran 77 user's guide, Digital Equipment Corp.  pp B-12
+
+
+        RESTRICTIONS:
+
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        INTERNALS:
+
+                 Computes complex sine of Z = x + j y from:
+
+                         1.      R_CSIN = DSIN(x) * DCOSH(y)
+
+                         2.      I_CSIN = DCOS(x) * DSINH(y)
+
+                         Then    CSIN(z) = R_CSIN + j I_CSIN
+
+        PML --- C Portable Math Library                                Page 21
+        CSINH
+
+
+
+        2.14  Complex double precision hyperbolic sine
+
+
+
+
+
+                                      *********
+                                      * CSINH *
+                                      *********
+
+
+
+
+        DESCRIPTION:
+
+                 Computes double precision complex hyperbolic sine of a double
+                 precision  complex  argument.   The result replaces the argu-
+                 ment.
+
+
+        USAGE:
+
+                 csinh(z)
+                 COMPLEX *z;
+
+
+        REFERENCES:
+
+
+
+        RESTRICTIONS:
+
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        INTERNALS:
+
+                 Computes complex hyperbolic sine of Z = x + j y from:
+
+                    CSINH(z) = 0.5 * ( CEXP(z) - CEXP(-z) )
+
+        PML --- C Portable Math Library                                Page 22
+        CSQRT
+
+
+
+        2.15  Complex double precision square root
+
+
+
+
+
+                                      *********
+                                      * CSQRT *
+                                      *********
+
+
+
+
+        DESCRIPTION:
+
+                 Computes double precision complex square  root  of  a  double
+                 precision  complex  argument.   The result replaces the argu-
+                 ment.
+
+
+        USAGE:
+
+                 csqrt(z)
+                 COMPLEX *z;
+
+
+        REFERENCES:
+
+                 Fortran 77 user's guide, Digital Equipment Corp.  pp B-12
+
+
+        RESTRICTIONS:
+
+                 The relative error in the double precision square root compu-
+                 tation  is  10**(-30.1)  after  three applications of Heron's
+                 iteration for the square root.
+
+                 However, this assumes exact arithmetic in the iterations  and
+                 initial  approximation.   Additional  errors may occur due to
+                 truncation, rounding, or machine precision limits.
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        PML --- C Portable Math Library                                Page 23
+        CSQRT
+
+
+
+        INTERNALS:
+
+                 Computes complex square root of Z = x + j y from:
+
+                         1.      ROOT = DSQRT((DABS(x) + CABS(Z)) / 2)
+
+                         2.      Q = y / (2 * ROOT)
+
+                         3.      If x >= 0 then
+                                 CSQRT(Z) = (ROOT,Q)
+
+                         4.      If x < 0 and y >= 0 then
+                                 CSQRT(Z) = (Q,ROOT)
+
+                         5.      If x < 0 and y < 0 then
+                                 CSQRT(Z) = (-Q,ROOT)
+
+        PML --- C Portable Math Library                                Page 24
+        CSUBT
+
+
+
+        2.16  Double precision complex subtraction
+
+
+
+
+
+                                      *********
+                                      * CSUBT *
+                                      *********
+
+
+
+
+        DESCRIPTION:
+
+                 Computes double precision complex result  of  subtraction  of
+                 second  double  precision  complex argument from first double
+                 precision complex argument.  The result  replaces  the  first
+                 argument.   Note  that the complex subtraction function is so
+                 simple that it would not normally be called as a function but
+                 simply  done  "inline".   It is supplied mostly for complete-
+                 ness.
+
+
+        USAGE:
+
+                 double csubt(z1,z2)
+                 COMPLEX *z1;
+                 COMPLEX *z2;
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        INTERNALS:
+
+                 Computes CSUBT(z1,z2) from:
+
+                         1.      Let z1 = a + j b
+                                 Let z2 = c + j d
+
+                         2.      Then CSUBT(z1,z2) = (a - c) + j (b - d)
+
+        PML --- C Portable Math Library                                Page 25
+        CTAN
+
+
+
+        2.17  Complex double precision tangent
+
+
+
+
+
+                                       ********
+                                       * CTAN *
+                                       ********
+
+
+
+
+        DESCRIPTION:
+
+                 Computes double precision complex tangent of a double  preci-
+                 sion complex argument.  The result replaces the argument.
+
+
+        USAGE:
+
+                 ctan(z)
+                 COMPLEX *z;
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        INTERNALS:
+
+                 Computes complex tangent of Z = x + j y from:
+
+                         1.      Compute CCOS(z)
+
+                         2.      If CCOS(z) = 0 + j0 then the
+                                 result is MAX_POS_DBLF + j0
+
+                         3.      Else CTAN(z) = CSIN(z) / CCOS(z)
+
+        PML --- C Portable Math Library                                Page 26
+        CTANH
+
+
+
+        2.18  Complex double precision hyperbolic tangent
+
+
+
+
+
+                                      *********
+                                      * CTANH *
+                                      *********
+
+
+
+
+        DESCRIPTION:
+
+                 Computes double precision complex  hyperbolic  tangent  of  a
+                 double  precision  complex argument.  The result replaces the
+                 argument.
+
+
+        USAGE:
+
+                 ctanh(z)
+                 COMPLEX *z;
+
+
+        REFERENCES:
+
+
+
+        RESTRICTIONS:
+
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        INTERNALS:
+
+                 Computes complex hyperbolic tangent of Z = x + j y from:
+
+                    CTANH(z) = (1 - CEXP(-2z)) / (1 + CEXP(-2z))
+
+        PML --- C Portable Math Library                                Page 27
+        DABS
+
+
+
+        2.19  Double precision absolute value
+
+
+
+
+
+                                       ********
+                                       * DABS *
+                                       ********
+
+
+
+
+        DESCRIPTION:
+
+                 Returns absolute value of double precision number.
+
+
+        USAGE:
+
+                 double dabs(x)
+                 double x;
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+        PML --- C Portable Math Library                                Page 28
+        DACOS
+
+
+
+        2.20  Double precision arc cosine
+
+
+
+
+
+                                      *********
+                                      * DACOS *
+                                      *********
+
+
+
+
+        DESCRIPTION:
+
+                 Returns double precision arc cosine of double precision  flo-
+                 ating point argument.
+
+
+        USAGE:
+
+                 double dacos(x)
+                 double x;
+
+
+        REFERENCES:
+
+                 Fortran IV-plus user's guide, Digital Equipment Corp.  pp  B-
+                 1.
+
+
+        RESTRICTIONS:
+
+                 The maximum relative error for the  approximating  polynomial
+                 in DATAN is 10**(-16.82).  However, this assumes exact arith-
+                 metic in the polynomial evaluation.  Additional rounding  and
+                 truncation errors may occur as the argument is reduced to the
+                 range over which the polynomial approximation is  valid,  and
+                 as  the polynomial is evaluated using finite-precision arith-
+                 metic.
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        PML --- C Portable Math Library                                Page 29
+        DACOS
+
+
+
+        INTERNALS:
+
+                 Computes arccosine(X) from:
+
+                         (1)     If X = 0.0 then DACOS(X) = PI/2.
+
+                         (2)     If X = 1.0 then DACOS(X) = 0.0
+
+                         (3)     If X = -1.0 then DACOS(X) = PI.
+
+                         (4)     If 0.0 < X < 1.0 then
+                                 DACOS(X) = DATAN(Y)
+                                 Y = DSQRT[1-(X**2)] / X
+
+                         (4)     If -1.0 < X < 0.0 then
+                                 DACOS(X) = DATAN(Y) + PI
+                                 Y = DSQRT[1-(X**2)] / X
+
+        PML --- C Portable Math Library                                Page 30
+        DACOSH
+
+
+
+        2.21  Double precision hyperbolic arc cosine
+
+
+
+
+
+                                      **********
+                                      * DACOSH *
+                                      **********
+
+
+
+
+        DESCRIPTION:
+
+                 Returns double precision hyperbolic arc cosine of double pre-
+                 cision floating point number.
+
+
+        USAGE:
+
+                 double dacosh(x)
+                 double x;
+
+
+        REFERENCES:
+
+
+
+        RESTRICTIONS:
+
+                 The range of the ACOSH function is all real  numbers  greater
+                 than  or equal to 1.0 however large arguments may cause over-
+                 flow in the x squared portion of the function evaluation.
+
+                 For precision information refer to documentation of the  flo-
+                 ating point library primatives called.
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        INTERNALS:
+
+                 Computes DACOSH(X) from:
+
+                         1.      If X < 1.0 then report illegal
+        PML --- C Portable Math Library                                Page 31
+        DACOSH
+
+
+
+                                 argument and return zero.
+
+                         2.      If X > DSQRT(MAX_POS_DBLF) then
+                                 set X = DSQRT(MAX_POS_DBLF and
+                                 continue after reporting overflow.
+
+                         3.      DACOSH(X) = LN [X+DSQRT(X**2 - 1)]
+
+        PML --- C Portable Math Library                                Page 32
+        DASIN
+
+
+
+        2.22  Double precision arc sine
+
+
+
+
+
+                                      *********
+                                      * DASIN *
+                                      *********
+
+
+
+
+        DESCRIPTION:
+
+                 Returns double precision arc sine of double precision  float-
+                 ing point argument.
+
+
+        USAGE:
+
+                 double dasin(x)
+                 double x;
+
+
+        REFERENCES:
+
+                 Fortran IV-plus user's guide, Digital Equipment Corp.  pp  B-
+                 2.
+
+
+        RESTRICTIONS:
+
+                 For precision information refer to documentation of the  flo-
+                 ating point library primatives called.
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        INTERNALS:
+
+                 Computes arcsine(X) from:
+
+                         (1)     If X = 0.0 then DASIN(X) = 0.0
+
+                         (2)     If X = 1.0 then DASIN(X) = PI/2.
+        PML --- C Portable Math Library                                Page 33
+        DASIN
+
+
+
+                         (3)     If X = -1.0 then DASIN(X) = -PI/2
+
+                         (4)     If -1.0 < X < 1.0 then
+                                 DASIN(X) = DATAN(Y)
+                                 Y = X / DSQRT[1-(X**2)]
+
+        PML --- C Portable Math Library                                Page 34
+        DASINH
+
+
+
+        2.23  Double precision hyperbolic arc sine
+
+
+
+
+
+                                      **********
+                                      * DASINH *
+                                      **********
+
+
+
+
+        DESCRIPTION:
+
+                 Returns double precision hyperbolic arc sine of double preci-
+                 sion floating point number.
+
+
+        USAGE:
+
+                 double dasinh(x)
+                 double x;
+
+
+        REFERENCES:
+
+
+
+        RESTRICTIONS:
+
+                 The domain of the ASINH function  is  the  entire  real  axis
+                 however  the  evaluation  of x squared may cause overflow for
+                 large magnitudes.
+
+                 For precision information refer to documentation of the  flo-
+                 ating point library routines called.
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        INTERNALS:
+
+                 Computes DASINH(X) from:
+
+                         1.      Let XMAX = DSQRT(MAX_POS_DBLF - 1)
+        PML --- C Portable Math Library                                Page 35
+        DASINH
+
+
+
+
+                         2.      If X < -XMAX or XMAX < X then
+                                 let X = XMAX and flag overflow.
+
+                         3.      DASINH(X) = LN [X+DSQRT(X**2 + 1)]
+
+        PML --- C Portable Math Library                                Page 36
+        DATAN
+
+
+
+        2.24  Double precision arc tangent
+
+
+
+
+
+                                      *********
+                                      * DATAN *
+                                      *********
+
+
+
+
+        DESCRIPTION:
+
+                 Returns double precision arc tangent of double precision flo-
+                 ating point argument.
+
+
+        USAGE:
+
+                 double datan(x)
+                 double x;
+
+
+        REFERENCES:
+
+                 Fortran 77 user's guide, Digital Equipment Corp.  pp B-3
+
+                 Computer Approximations, J.F.  Hart et al, John Wiley & Sons,
+                 1968, pp.  120-130.
+
+
+        RESTRICTIONS:
+
+                 The maximum relative error for the  approximating  polynomial
+                 is  10**(-16.82).   However, this assumes exact arithmetic in
+                 the polynomial evaluation.  Additional rounding  and  trunca-
+                 tion errors may occur as the argument is reduced to the range
+                 over which the polynomial approximation is valid, and as  the
+                 polynomial is evaluated using finite-precision arithmetic.
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        PML --- C Portable Math Library                                Page 37
+        DATAN
+
+
+
+        INTERNALS:
+
+                 Computes arctangent(X) from:
+
+                         (1)     If X < 0 then negate X, perform steps
+                                 2, 3, and 4, and negate the returned
+                                 result.  This makes use of the identity
+                                 DATAN(-X) = -DATAN(X).
+
+                         (2)     If argument X > 1 at this point then
+                                 test to be sure that X can be inverted
+                                 without underflowing.  If not, reduce
+                                 X to largest possible number that can
+                                 be inverted, issue warning, and continue.
+                                 Perform steps 3 and 4 with arg = 1/X
+                                 and subtract returned result from
+                                 pi/2.  This makes use of the identity
+                                 DATAN(X) = pi/2 - DATAN(1/X) for X>0.
+
+                         (3)     At this point 0 <= X <= 1.  If
+                                 X > DTAN(pi/12) then perform step 4
+                                 with arg = (X*DSQRT(3)-1)/(DSQRT(3)+X)
+                                 and add pi/6 to returned result.  This
+                                 last transformation maps arguments
+                                 greater than DTAN(pi/12) to arguments
+                                 in range 0...DTAN(pi/12).
+
+                         (4)     At this point the argument has been
+                                 transformed so that it lies in the
+                                 range -DTAN(pi/12)...DTAN(pi/12).
+                                 Since very small arguments may cause
+                                 underflow in the polynomial evaluation,
+                                 a final check is performed.  If the
+                                 argument is less than the underflow
+                                 bound, the function returns x, since
+                                 ATAN(X) approaches ASIN(X) which
+                                 approaches X as X goes to zero.
+
+                         (5)     DATAN(X) is now computed by one of the
+                                 approximations given in the cited
+                                 reference (Hart).  That is:
+
+                                 DATAN(X) = X * SUM [ C[i] * X**(2*i) ]
+                                 over i = {0,1,...8}.
+
+                                 Where:
+
+                                 C[0] =  .9999999999999999849899
+                                 C[1] =  -.333333333333299308717
+                                 C[2] =  .1999999999872944792
+                                 C[3] =  -.142857141028255452
+                                 C[4] =  .11111097898051048
+        PML --- C Portable Math Library                                Page 38
+        DATAN
+
+
+
+                                 C[5] =  -.0909037114191074
+                                 C[6] =  .0767936869066
+                                 C[7] =  -.06483193510303
+                                 C[8] =  .0443895157187
+                                 (coefficients from HART table #4945 pg 267)
+
+        PML --- C Portable Math Library                                Page 39
+        DATAN2
+
+
+
+        2.25  Double precision arc tangent of two arguments
+
+
+
+
+
+                                      **********
+                                      * DATAN2 *
+                                      **********
+
+
+
+
+        DESCRIPTION:
+
+                 Returns double precision arc tangent of two double  precision
+                 floating point arguments ( DATAN(Y/X) ).
+
+
+        USAGE:
+
+                 double datan2(x,y)
+                 double x;
+                 double y;
+
+
+        REFERENCES:
+
+                 Fortran 77 user's guide, Digital Equipment Corp.  pp B-4.
+
+
+        RESTRICTIONS:
+
+                 Note that the argument usage is exactly the  reverse  of  the
+                 common  FORTRAN  usage where DATAN2(x,y) computes DATAN(x/y).
+                 The usage here is less confusing than remembering that  x  is
+                 really y and y is really x.
+
+                 For precision information refer to documentation of the other
+                 floating point library routines called.
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        PML --- C Portable Math Library                                Page 40
+        DATAN2
+
+
+
+        INTERNALS:
+
+                 Computes DATAN(Y/X) from:
+
+                         1.      If X = 0 then
+                                 DATAN(X,Y) = PI/2 * (SIGN(Y))
+
+                         2.      If X > 0 then
+                                 DATAN(X,Y) = DATAN(Y/X)
+
+                         3.      If X < 0 then DATAN2(X,Y) =
+                                 PI*(SIGN(Y)) + DATAN(Y/X)
+        PML --- C Portable Math Library                                Page 41
+        DATANH
+
+
+
+        2.26  Double precision hyperbolic arc tangent
+
+
+
+
+
+                                      **********
+                                      * DATANH *
+                                      **********
+
+
+
+
+        DESCRIPTION:
+
+                 Returns double precision hyperbolic  arc  tangent  of  double
+                 precision floating point number.
+
+
+        USAGE:
+
+                 double datanh(x)
+                 double x;
+
+
+        REFERENCES:
+
+
+
+        RESTRICTIONS:
+
+                 The range of the ATANH function is -1.0  to  +1.0  exclusive.
+                 Certain  pathological  cases  near  1.0 may cause overflow in
+                 evaluation of 1+x /  1-x,  depending  upon  machine  exponent
+                 range and mantissa precision.
+
+                 For precision information refer to documentation of the other
+                 floating point library routines called.
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        INTERNALS:
+
+                 Computes DATANH(X) from:
+
+        PML --- C Portable Math Library                                Page 42
+        DATANH
+
+
+
+                         1.      If X <= -1.0 or X >= 1.0
+                                 then report argument out of
+                                 range and return 0.0
+
+                         2.      DATANH(X) = 0.5 * DLN((1+X)/(1-X))
+
+        PML --- C Portable Math Library                                Page 43
+        DCOS
+
+
+
+        2.27  Double precision cosine
+
+
+
+
+
+                                       ********
+                                       * DCOS *
+                                       ********
+
+
+
+
+        DESCRIPTION:
+
+                 Returns double precision cosine of double precision  floating
+                 point argument.
+
+
+        USAGE:
+
+                 double dcos(x)
+                 double x;
+
+
+        REFERENCES:
+
+                 Computer Approximations, J.F.  Hart et al, John Wiley & Sons,
+                 1968, pp.  112-120.
+
+
+        RESTRICTIONS:
+
+                 The DSIN and DCOS routines are interactive in the sense  that
+                 in the process of reducing the argument to the range -PI/4 to
+                 PI/4, each may call the other.  Ultimately one or  the  other
+                 uses a polynomial approximation on the reduced argument.  The
+                 DSIN approximation has a maximum  relative  error  of  10**(-
+                 17.59)  and  the  DCOS  approximation  has a maximum relative
+                 error of 10**(-16.18).
+
+                 These error bounds assume exact arithmetic in the  polynomial
+                 evaluation.   Additional  rounding  and truncation errors may
+                 occur as the argument is reduced to the range over which  the
+                 polynomial  approximation  is valid, and as the polynomial is
+                 evaluated using finite-precision arithmetic.
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+        PML --- C Portable Math Library                                Page 44
+        DCOS
+
+
+
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        INTERNALS:
+
+                 Computes DCOS(X) from:
+
+                         (1)     Reduce argument X to range -PI to PI.
+
+                         (2)     If X > PI/2 then call DCOS recursively
+                                 using relation DCOS(X) = -DCOS(X - PI).
+
+                         (3)     If X < -PI/2 then call DCOS recursively
+                                 using relation DCOS(X) = -DCOS(X + PI).
+
+                         (4)     If X > PI/4 then call DSIN using
+                                 relation DCOS(X) = DSIN(PI/2 - X).
+
+                         (5)     If X < -PI/4 then call DCOS using
+                                 relation DCOS(X) = DSIN(PI/2 + X).
+
+                         (6)     If X would cause underflow in approx
+                                 evaluation arithmetic then return
+                                 sqrt(1.0 - X**2).
+
+                         (7)     By now X has been reduced to range
+                                 -PI/4 to PI/4 and the approximation
+                                 from HART pg. 119 can be used:
+
+                                 DCOS(X) = ( P(Y) / Q(Y) )
+                                 Where:
+
+                                 Y    =  X * (4/PI)
+
+                                 P(Y) =  SUM [ Pj * (Y**(2*j)) ]
+                                 over j = {0,1,2,3}
+
+                                 Q(Y) =  SUM [ Qj * (Y**(2*j)) ]
+                                 over j = {0,1,2,3}
+
+                                 P0   =  0.12905394659037374438571854e+7
+                                 P1   =  -0.3745670391572320471032359e+6
+                                 P2   =  0.134323009865390842853673e+5
+                                 P3   =  -0.112314508233409330923e+3
+                                 Q0   =  0.12905394659037373590295914e+7
+                                 Q1   =  0.234677731072458350524124e+5
+                                 Q2   =  0.2096951819672630628621e+3
+                                 Q3   =  1.0000...
+                                 (coefficients from HART table #3843 pg 244)
+
+
+        PML --- C Portable Math Library                                Page 45
+        DCOS
+
+
+
+                 **** NOTE **** The range reduction  relations  used  in  this
+                 routine  depend  on  the final approximation being valid over
+                 the negative argument range in addition to the positive argu-
+                 ment  range.   The  particular approximation chosen from HART
+                 satisfies this requirement, although not explicitly stated in
+                 the text.  This may not be true of other approximations given
+                 in the reference.
+
+        PML --- C Portable Math Library                                Page 46
+        DCOSH
+
+
+
+        2.28  Double precision hyperbolic cosine
+
+
+
+
+
+                                      *********
+                                      * DCOSH *
+                                      *********
+
+
+
+
+        DESCRIPTION:
+
+                 Returns double precision hyperbolic cosine of  double  preci-
+                 sion floating point number.
+
+
+        USAGE:
+
+                 double dcosh(x)
+                 double x;
+
+
+        REFERENCES:
+
+                 Fortran IV plus user's guide, Digital Equipment Corp.  pp B-4
+
+
+        RESTRICTIONS:
+
+                 Inputs greater  than  LN(MAX_POS_DBLF)  result  in  overflow.
+                 Inputs less than LN(MIN_POS_DBLF) result in underflow.
+
+                 For precision information refer to documentation of the  flo-
+                 ating point library routines called.
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        INTERNALS:
+
+                 Computes hyperbolic cosine from:
+
+                         DCOSH(X) = 0.5 * (DEXP(X) + DEXP(-X))
+        PML --- C Portable Math Library                                Page 47
+        DCOSH
+
+
+
+        2.29  Double precision exponential
+
+
+
+
+
+                                       ********
+                                       * DEXP *
+                                       ********
+
+
+
+
+        DESCRIPTION:
+
+                 Returns double precision exponential of double precision flo-
+                 ating point number.
+
+
+        USAGE:
+
+                 double dexp(x)
+                 double x;
+
+
+        REFERENCES:
+
+                 Fortran IV plus user's guide, Digital Equipment Corp.  pp B-3
+
+                 Computer Approximations, J.F.  Hart et al, John Wiley & Sons,
+                 1968, pp.  96-104.
+
+
+        RESTRICTIONS:
+
+                 Inputs greater  than  LN(MAX_POS_DBLF)  result  in  overflow.
+                 Inputs less than LN(MIN_POS_DBLF) result in underflow.
+
+                 The maximum relative error for the  approximating  polynomial
+                 is  10**(-16.4).   However,  this assumes exact arithmetic in
+                 the polynomial evaluation.  Additional rounding  and  trunca-
+                 tion errors may occur as the argument is reduced to the range
+                 over which the polynomial approximation is valid, and as  the
+                 polynomial is evaluated using finite-precision arithmetic.
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+        PML --- C Portable Math Library                                Page 48
+        DEXP
+
+
+
+        INTERNALS:
+
+                 Computes exponential from:
+
+                         EXP(X)  =       2**Y  *  2**Z  *  2**W
+
+                 Where:
+
+                         Y       =       INT ( X * LOG2(e) )
+
+                         V       =       16 * FRAC ( X * LOG2(e))
+
+                         Z       =       (1/16) * INT (V)
+
+                         W       =       (1/16) * FRAC (V)
+
+                 Note that:
+
+                         0 =< V < 16
+
+                         Z = {0, 1/16, 2/16, ...15/16}
+
+                         0 =< W < 1/16
+
+                 Then:
+
+                         2**Z is looked up in a table of 2**0, 2**1/16, ...
+
+                         2**W is computed from an approximation:
+
+                                 2**W    =  (A + B) / (A - B)
+
+                                 A       =  C + (D * W * W)
+
+                                 B       =  W * (E + (F * W * W))
+
+                                 C       =  20.8137711965230361973
+
+                                 D       =  1.0
+
+                                 E       =  7.2135034108448192083
+
+                                 F       =  0.057761135831801928
+
+                         Coefficients are from HART, table #1121, pg 206.
+
+                         Effective multiplication by 2**Y is done by a
+                         floating point scale with Y as scale argument.
+
+        PML --- C Portable Math Library                                Page 49
+        DFRAC
+
+
+
+        2.30  Double precision fractional portion
+
+
+
+
+
+                                      *********
+                                      * DFRAC *
+                                      *********
+
+
+
+
+        DESCRIPTION:
+
+                 Returns fractional portion of double precision number as dou-
+                 ble precision number.
+
+
+        USAGE:
+
+                 double dfrac(x)
+                 double x;
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        RESTRICTIONS:
+
+        PML --- C Portable Math Library                                Page 50
+        DINT
+
+
+
+        2.31  Double precision integer portion
+
+
+
+
+                                       ********
+                                       * DINT *
+                                       ********
+
+
+
+
+        DESCRIPTION:
+
+                 Returns integer portion of double precision number as  double
+                 precision number.
+
+
+        USAGE:
+
+                 double dint(x)
+                 double x;
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        RESTRICTIONS:
+
+                 The current DEC-20 C system treats  double  as  float.   This
+                 routine  will  need to be modified when true double precision
+                 is implemented.
+
+        PML --- C Portable Math Library                                Page 51
+        DLN
+
+
+
+        2.32  Double precision natural log
+
+
+
+
+                                       *******
+                                       * DLN *
+                                       *******
+
+
+
+
+        DESCRIPTION:
+
+                 Returns double precision natural log of double precision flo-
+                 ating point argument.
+
+
+        USAGE:
+
+                 double dln(x)
+                 double x;
+
+
+        REFERENCES:
+
+                 Computer Approximations, J.F.  Hart et al, John Wiley & Sons,
+                 1968, pp.  105-111.
+
+
+        RESTRICTIONS:
+
+                 The absolute error in the approximating polynomial is  10**(-
+                 19.38).   Note  that  contrary  to DEC's assertion in the F4P
+                 user's guide, the error is absolute and not relative.
+
+                 This error bound assumes exact arithmetic in  the  polynomial
+                 evaluation.   Additional  rounding  and truncation errors may
+                 occur as the argument is reduced to the range over which  the
+                 polynomial  approximation  is valid, and as the polynomial is
+                 evaluated using finite-precision arithmetic.
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        PML --- C Portable Math Library                                Page 52
+        DLN
+
+
+
+        INTERNALS:
+
+                 Computes DLN(X) from:
+
+                         (1)     If argument is zero then flag an error
+                                 and return minus infinity (or rather its
+                                 machine representation).
+
+                         (2)     If argument is negative then flag an
+                                 error and return minus infinity.
+
+                         (3)     Given that x = m * 2**k then extract
+                                 mantissa m and exponent k.
+
+                         (4)     Transform m which is in range [0.5,1.0]
+                                 to range [1/sqrt(2), sqrt(2)] by:
+
+                                         s = m * sqrt(2)
+
+                         (4)     Compute z = (s - 1) / (s + 1)
+
+                         (5)     Now use the approximation from HART
+                                 page 111 to find ln(s):
+
+                                 DLN(s) = z * ( P(z**2) / Q(z**2) )
+
+                                 Where:
+
+                                 P(z**2) =  SUM [ Pj * (z**(2*j)) ]
+                                 over j = {0,1,2,3}
+
+                                 Q(z**2) =  SUM [ Qj * (z**(2*j)) ]
+                                 over j = {0,1,2,3}
+
+                                 P0 =  -0.240139179559210509868484e2
+                                 P1 =  0.30957292821537650062264e2
+                                 P2 =  -0.96376909336868659324e1
+                                 P3 =  0.4210873712179797145
+                                 Q0 =  -0.120069589779605254717525e2
+                                 Q1 =  0.19480966070088973051623e2
+                                 Q2 =  -0.89111090279378312337e1
+                                 Q3 =  1.0000
+
+                                 (coefficients from HART table #2705 pg 229)
+
+                 (5)     Finally, compute DLN(x) from:
+
+                                 DLN(x) = (k * dln(2)) - dln(sqrt(2)) + dln(s)
+
+        PML --- C Portable Math Library                                Page 53
+        DLOG
+
+
+
+        2.33  Double precision common log
+
+
+
+
+
+                                       ********
+                                       * DLOG *
+                                       ********
+
+
+
+
+        DESCRIPTION:
+
+                 Returns double precision common log of double precision  flo-
+                 ating point argument.
+
+
+        USAGE:
+
+                 double dlog(x)
+                 double x;
+
+
+        REFERENCES:
+
+                 PDP-11 Fortran IV-plus users guide,  Digital  Equip.   Corp.,
+                 1975, pp.  B-3.
+
+
+        RESTRICTIONS:
+
+                 For precision information refer to documentation of the  flo-
+                 ating point library routines called.
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        INTERNALS:
+
+                 Computes DLOG(X) from:
+
+                         DLOG(X) = DLOG(e) * DLN(X)
+
+        PML --- C Portable Math Library                                Page 54
+        DMAX
+
+
+
+        2.34  double precision maximum of two arguments
+
+
+
+
+
+                                       ********
+                                       * DMAX *
+                                       ********
+
+
+
+
+        DESCRIPTION:
+
+                 Returns maximum value of two double precision numbers.
+
+
+        USAGE:
+
+                 double dmax(x,y)
+                 double x;
+                 double y;
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+        PML --- C Portable Math Library                                Page 55
+        DMIN
+
+
+
+        2.35  double precision minimum of two arguments
+
+
+
+
+
+                                       ********
+                                       * DMIN *
+                                       ********
+
+
+
+
+        DESCRIPTION:
+
+                 Returns minimum value of two double precision numbers.
+
+
+        USAGE:
+
+                 double dmin(x,y)
+                 double x;
+                 double y;
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+        PML --- C Portable Math Library                                Page 56
+        DMOD
+
+
+
+        2.36  Double precision modulo
+
+
+
+
+
+                                       ********
+                                       * DMOD *
+                                       ********
+
+
+
+
+        DESCRIPTION:
+
+                 Returns double precision modulo of two double precision argu-
+                 ments.
+
+
+        USAGE:
+
+                 double dmod(value,base)
+                 double value;
+                 double base;
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+        PML --- C Portable Math Library                                Page 57
+        DPOLY
+
+
+
+        2.37  Double precision polynomial evaluation
+
+
+
+
+
+                                      *********
+                                      * DPOLY *
+                                      *********
+
+
+
+
+        DESCRIPTION:
+
+                 Evaluates a polynomial and returns double  precision  result.
+                 Is  passed  a  the  order  of the polynomial, a pointer to an
+                 array of double precision polynomial coefficients (in ascend-
+                 ing order), and the independent variable.
+
+
+        USAGE:
+
+                 double dpoly(order,coeffs,x)
+                 int order;
+                 double *coeffs;
+                 double x;
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        INTERNALS:
+
+                 Evalates the polynomial using recursion and the form:
+
+                         P(x) = P0 + x(P1 + x(P2 +...x(Pn)))
+
+        PML --- C Portable Math Library                                Page 58
+        DSCALE
+
+
+
+        2.38  Scale a double precision number by power of 2
+
+
+
+
+
+                                      **********
+                                      * DSCALE *
+                                      **********
+
+
+
+
+        DESCRIPTION:
+
+                 Adds a specified integer to a double precision number's expo-
+                 nent,  effectively  multiplying  by a power of 2 for positive
+                 scale values and divided by a power of 2 for  negative  scale
+                 values.
+
+
+        USAGE:
+
+                 double dscale(value,scale)
+                 double value;
+                 integer scale;
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        INTERNALS:
+
+                 This routine is highly machine dependent.  As  such,  no  at-
+                 tempt  was  made  to make it general, hence it may have to be
+                 completely rewritten  when  transportation  of  the  floating
+                 point library is attempted.
+
+                 For the DECSYSTEM-20 the double precision word format is:
+
+                 WORD N  =>      SEEEEEEEEMMMMMMMMMMMMMMMMMMMMMMMMMMM
+                 WORD N+1 =>     XMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM
+
+                 For the PDP-11 the double precision word format is:
+
+                 WORD N =>       SEEEEEEEEMMMMMMM
+                 WORD N+1 =>     MMMMMMMMMMMMMMMM
+        PML --- C Portable Math Library                                Page 59
+        DSCALE
+
+
+
+                 WORD N+2 =>     MMMMMMMMMMMMMMMM
+                 WORD N+3 =>     MMMMMMMMMMMMMMMM
+
+                 Where:          S =>    Sign bit
+                                 E  =>   Exponent
+                                 X  =>   Ignored (set to 0)
+                                 M  =>   Mantissa bit
+
+                 DSCALE extracts the exponent, shifts it into the lower  order
+                 bits,  adds  the scale value to it, checks for exponent over-
+                 flow or underflow, shifts it back into the high bits, and in-
+                 serts it back into the value.
+
+                 NOTE:  On the DECSYSTEM-20, the exponent for negative numbers
+                 is complemented.  This is not true for the PDP-11.
+
+        PML --- C Portable Math Library                                Page 60
+        DSIGN
+
+
+
+        2.39  Transfer of sign
+
+
+
+
+                                      *********
+                                      * DSIGN *
+                                      *********
+
+
+
+
+        DESCRIPTION:
+
+                 Returns first argument with same sign as second argument.
+
+
+        USAGE:
+
+                 double dsign(x,y)
+                 double x;
+                 double y;
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+        PML --- C Portable Math Library                                Page 61
+        DSIN
+
+
+
+        2.40  Double precision sine
+
+
+
+
+
+                                       ********
+                                       * DSIN *
+                                       ********
+
+
+
+
+        DESCRIPTION:
+
+                 Returns double precision sine of  double  precision  floating
+                 point argument.
+
+
+        USAGE:
+
+                 double dsin(x)
+                 double x;
+
+
+        REFERENCES:
+
+                 Computer Approximations, J.F.  Hart et al, John Wiley & Sons,
+                 1968, pp.  112-120.
+
+
+        RESTRICTIONS:
+
+                 The DSIN and DCOS routines are interactive in the sense  that
+                 in the process of reducing the argument to the range -PI/4 to
+                 PI/4, each may call the other.  Ultimately one or  the  other
+                 uses a polynomial approximation on the reduced argument.  The
+                 DSIN approximation has a maximum  relative  error  of  10**(-
+                 17.59)  and  the  DCOS  approximation  has a maximum relative
+                 error of 10**(-16.18).
+
+                 These error bounds assume exact arithmetic in the  polynomial
+                 evaluation.   Additional  rounding  and truncation errors may
+                 occur as the argument is reduced to the range over which  the
+                 polynomial  approximation  is valid, and as the polynomial is
+                 evaluated using finite-precision arithmetic.
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+        PML --- C Portable Math Library                                Page 62
+        DSIN
+
+
+
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        INTERNALS:
+
+                 Computes DSIN(X) from:
+
+                         (1)     Reduce argument X to range -PI to PI.
+
+                         (2)     If X > PI/2 then call DSIN recursively
+                                 using relation DSIN(X) = -DSIN(X - PI).
+
+                         (3)     If X < -PI/2 then call DSIN recursively
+                                 using relation DSIN(X) = -DSIN(X + PI).
+
+                         (4)     If X > PI/4 then call DCOS using
+                                 relation DSIN(X) = DCOS(PI/2 - X).
+
+                         (5)     If X < -PI/4 then call DCOS using
+                                 relation DSIN(X) = -DCOS(PI/2 + X).
+
+                         (6)     If X is small enough that polynomial
+                                 evaluation would cause underflow
+                                 then return X, since SIN(X)
+                                 approaches X as X approaches zero.
+
+                         (7)     By now X has been reduced to range
+                                 -PI/4 to PI/4 and the approximation
+                                 from HART pg. 118 can be used:
+
+                                 DSIN(X) = Y * ( P(Y) / Q(Y) )
+                                 Where:
+
+                                 Y    =  X * (4/PI)
+
+                                 P(Y) =  SUM [ Pj * (Y**(2*j)) ]
+                                 over j = {0,1,2,3}
+
+                                 Q(Y) =  SUM [ Qj * (Y**(2*j)) ]
+                                 over j = {0,1,2,3}
+
+                                 P0   =  0.206643433369958582409167054e+7
+                                 P1   =  -0.18160398797407332550219213e+6
+                                 P2   =  0.359993069496361883172836e+4
+                                 P3   =  -0.2010748329458861571949e+2
+                                 Q0   =  0.263106591026476989637710307e+7
+                                 Q1   =  0.3927024277464900030883986e+5
+                                 Q2   =  0.27811919481083844087953e+3
+                                 Q3   =  1.0000...
+                                 (coefficients from HART table #3063 pg 234)
+
+        PML --- C Portable Math Library                                Page 63
+        DSIN
+
+
+
+                 **** NOTE ****   The range reduction relations used  in  this
+                 routine  depend  on  the final approximation being valid over
+                 the negative argument range in addition to the positive argu-
+                 ment  range.   The  particular approximation chosen from HART
+                 satisfies this requirement, although not explicitly stated in
+                 the text.  This may not be true of other approximations given
+                 in the reference.
+
+        PML --- C Portable Math Library                                Page 64
+        DSINH
+
+
+
+        2.41  Double precision hyperbolic sine
+
+
+
+
+
+                                      *********
+                                      * DSINH *
+                                      *********
+
+
+
+
+        DESCRIPTION:
+
+                 Returns double precision hyperbolic sine of double  precision
+                 floating point number.
+
+
+        USAGE:
+
+                 double dsinh(x)
+                 double x;
+
+
+        REFERENCES:
+
+                 Fortran IV plus user's guide, Digital Equipment Corp.  pp B-5
+
+
+        RESTRICTIONS:
+
+                 Inputs greater  than  LN(MAX_POS_DBLF)  result  in  overflow.
+                 Inputs less than LN(MIN_POS_DBLF) result in underflow.
+
+                 For precision information refer to documentation of the  flo-
+                 ating point library routines called.
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        INTERNALS:
+
+                 Computes hyperbolic sine from:
+
+                         DSINH(X) = 0.5 * (DEXP(X) - DEXP(-X))
+        PML --- C Portable Math Library                                Page 65
+        DSINH
+
+
+
+        2.42  Double precision square root
+
+
+
+
+
+                                      *********
+                                      * DSQRT *
+                                      *********
+
+
+
+
+        DESCRIPTION:
+
+                 Returns double precision square root of double precision flo-
+                 ating point argument.
+
+
+        USAGE:
+
+                 double dsqrt(x)
+                 double x;
+
+
+        REFERENCES:
+
+                 Fortran IV-PLUS user's guide, Digital Equipment Corp.  pp  B-
+                 7.
+
+                 Computer Approximations, J.F.  Hart et al, John Wiley & Sons,
+                 1968, pp.  89-96.
+
+
+        RESTRICTIONS:
+
+                 The relative error is 10**(-30.1) after three applications of
+                 Heron's iteration for the square root.
+
+                 However, this assumes exact arithmetic in the iterations  and
+                 initial  approximation.   Additional  errors may occur due to
+                 truncation, rounding, or machine precision limits.
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        PML --- C Portable Math Library                                Page 66
+        DSQRT
+
+
+
+        INTERNALS:
+
+                 Computes square root by:
+
+                         (1)     Range reduction of argument to [0.5,1.0]
+                                 by application of identity:
+
+                                 sqrt(x)  =  2**(k/2) * sqrt(x * 2**(-k))
+
+                                 k is the exponent when x is written as
+                                 a mantissa times a power of 2 (m * 2**k).
+                                 It is assumed that the mantissa is
+                                 already normalized (0.5 =< m < 1.0).
+
+                         (2)     An approximation to sqrt(m) is obtained
+                                 from:
+
+                                 u = sqrt(m) = (P0 + P1*m) / (Q0 + Q1*m)
+
+                                 P0 = 0.594604482
+                                 P1 = 2.54164041
+                                 Q0 = 2.13725758
+                                 Q1 = 1.0
+
+                                 (coefficients from HART table #350 pg 193)
+
+                 (3)     Three applications of Heron's iteration are
+                         performed using:
+
+                                 y[n+1] = 0.5 * (y[n] + (m/y[n]))
+
+                                 where y[0] = u = approx sqrt(m)
+
+                 (4)     If the value of k was odd then y is either
+                         multiplied by the square root of two or
+                         divided by the square root of two for k positive
+                         or negative respectively.  This rescales y
+                         by multiplying by 2**frac(k/2).
+
+                 (5)     Finally, y is rescaled by int(k/2) which
+                         is equivalent to multiplication by 2**int(k/2).
+
+                         The result of steps 4 and 5 is that the value
+                         of y between 0.5 and 1.0 has been rescaled by
+                         2**(k/2) which removes the original rescaling
+                         done prior to finding the mantissa square root.
+
+        PML --- C Portable Math Library                                Page 67
+        DTAN
+
+
+
+        2.43  Double precision tangent
+
+
+
+
+
+                                       ********
+                                       * DTAN *
+                                       ********
+
+
+
+
+        DESCRIPTION:
+
+                 Returns tangent of double precision floating point number.
+
+
+        USAGE:
+
+                 double dtan(x)
+                 double x;
+
+
+        INTERNALS:
+
+                 Computes the tangent from tan(x) = sin(x) / cos(x).
+
+                 If cos(x) = 0 and sin(x) >= 0, then returns largest  floating
+                 point number on host machine.
+
+                 If cos(x) = 0 and sin(x) < 0, then returns smallest  floating
+                 point number on host machine.
+
+
+        REFERENCES:
+
+                 Fortran IV plus user's guide, Digital  Equipment  Corp.   pp.
+                 B-8
+
+        PML --- C Portable Math Library                                Page 68
+        DTANH
+
+
+
+        2.44  Double precision hyperbolic tangent
+
+
+
+
+                                      *********
+                                      * DTANH *
+                                      *********
+
+
+
+
+        DESCRIPTION:
+
+                 Returns double precision hyperbolic tangent of double  preci-
+                 sion floating point number.
+
+
+        USAGE:
+
+                 double dtanh(x)
+                 double x;
+
+
+        REFERENCES:
+
+                 Fortran IV plus user's guide, Digital Equipment Corp.  pp B-5
+
+
+        RESTRICTIONS:
+
+                 For precision information refer to documentation of the  flo-
+                 ating point library routines called.
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        INTERNALS:
+
+                 Computes hyperbolic tangent from:
+
+                         DTANH(X) = 1.0 for X > DTANH_MAXARG
+                                  = -1.0 for X < -DTANH_MAXARG
+                                  =  DSINH(X) / DCOSH(X) otherwise
+
+        PML --- C Portable Math Library                                Page 69
+        DXEXP
+
+
+
+        2.45  extract double precision numbers exponent
+
+
+
+
+
+                                      *********
+                                      * DXEXP *
+                                      *********
+
+
+
+
+        DESCRIPTION:
+
+                 Extracts exponent from a double precision number and  returns
+                 it as a normal length integer.
+
+
+        USAGE:
+
+                 int dxexp(value)
+                 double value;
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        INTERNALS:
+
+                 This routine is highly machine dependent.  As  such,  no  at-
+                 tempt  was  made  to make it general, hence it may have to be
+                 completely rewritten  when  transportation  of  the  floating
+                 point library is attempted.
+
+                 For the DECSYSTEM-20 the double precision word format is:
+
+                 WORD N  =>      SEEEEEEEEMMMMMMMMMMMMMMMMMMMMMMMMMMM
+                 WORD N+1 =>     XMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM
+
+                 For the PDP-11 the double precision word format is:
+
+                 WORD N =>       SEEEEEEEEMMMMMMM
+                 WORD N+1 =>     MMMMMMMMMMMMMMMM
+                 WORD N+2 =>     MMMMMMMMMMMMMMMM
+                 WORD N+3 =>     MMMMMMMMMMMMMMMM
+
+        PML --- C Portable Math Library                                Page 70
+        DXEXP
+
+
+
+                 Where:          S =>    Sign bit
+                                 E  =>   Exponent
+                                 X  =>   Ignored (set to 0)
+                                 M  =>   Mantissa bit
+
+
+        PML --- C Portable Math Library                                Page 71
+        DXMANT
+
+
+
+        2.46  Extract double precision number's mantissa
+
+
+
+
+
+                                      **********
+                                      * DXMANT *
+                                      **********
+
+
+
+
+        DESCRIPTION:
+
+                 Extracts a double precision number's mantissa and returns  it
+                 as a double precision number with a normalized mantissa and a
+                 zero exponent.
+
+
+        USAGE:
+
+                 double dxmant(value)
+                 double value;
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+        INTERNALS:
+
+                 This routine is highly machine dependent.  As  such,  no  at-
+                 tempt  was  made  to make it general, hence it may have to be
+                 completely rewritten  when  transportation  of  the  floating
+                 point library is attempted.
+
+                 For the DECSYSTEM-20 the double precision word format is:
+
+                 WORD N  =>      SEEEEEEEEMMMMMMMMMMMMMMMMMMMMMMMMMMM
+                 WORD N+1 =>     XMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM
+
+                 For the PDP-11 the double precision word format is:
+
+                 WORD N =>       SEEEEEEEEMMMMMMM
+                 WORD N+1 =>     MMMMMMMMMMMMMMMM
+                 WORD N+2 =>     MMMMMMMMMMMMMMMM
+                 WORD N+3 =>     MMMMMMMMMMMMMMMM
+        PML --- C Portable Math Library                                Page 72
+        DXMANT
+
+
+
+                 Where:          S =>    Sign bit
+                                 E  =>   Exponent
+                                 X  =>   Ignored (set to 0)
+                                 M  =>   Mantissa bit
+
+        PML --- C Portable Math Library                                Page 73
+        PMLCFS
+
+
+
+        2.47  Clear specified PML error handler flags
+
+
+
+
+
+                                      **********
+                                      * PMLCFS *
+                                      **********
+
+
+
+
+        DESCRIPTION:
+
+                 Clear the specified PML error handler flags for the specified
+                 error.   Two  or  more flags may be cleared simultaneously by
+                 "or-ing" them in the call, for example "LOG | CONTINUE".  The
+                 manifest  constants for the flags and error codes are defined
+                 in <pmluser.h>.
+
+
+        USAGE:
+
+                 pmlcfs(err_code,flags)
+                 int err_code;
+                 int flags;
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+        PML --- C Portable Math Library                                Page 74
+        PMLCNT
+
+
+
+        2.48  Get PML error count and reset it to zero
+
+
+
+
+
+                                      **********
+                                      * PMLCNT *
+                                      **********
+
+
+
+
+        DESCRIPTION:
+
+                 Returns the total number of PML  errors  seen  prior  to  the
+                 call, and resets the error count to zero.
+
+
+        USAGE:
+
+                 int pmlcnt()
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+        PML --- C Portable Math Library                                Page 75
+        PMLERR
+
+
+
+        2.49  Portable Math Library error handler
+
+
+
+
+
+                                      **********
+                                      * PMLERR *
+                                      **********
+
+
+
+
+        DESCRIPTION:
+
+                 Provides a sample PML error handler.  Does not use any avail-
+                 able  hardware  "traps" so is machine independent.  Generally
+                 only called internally by the other PML routines.
+
+                 There are currently three flags which  control  the  response
+                 for specific errors:
+
+                 (1)  LOG      When set an error message is sent
+                               to the user terminal.
+
+                 (2)  COUNT    When set the error is counted
+                               against the PML error limit.
+
+                 (3) CONTINUE  When set the task continues
+                               providing the error count has not
+                               exceeded the PML error limit.
+
+                 Each of these flags can be  set  or  reset  independently  by
+                 "pmlsfs" or "pmlcfs" respectively.
+
+
+        USAGE:
+
+                 pmlerr(err_code)
+                 int err_code;
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+        PML --- C Portable Math Library                                Page 76
+        PMLLIM
+
+
+
+        2.50  Set Portable Math Library error limit
+
+
+
+
+
+                                      **********
+                                      * PMLLIM *
+                                      **********
+
+
+
+
+        DESCRIPTION:
+
+                 Sets the PML error limit to the specified value  and  returns
+                 it  previous  value.  Does not affect the current error count
+                 (which may be reset to zero by a  call  to  "pmlcnt").   Note
+                 that  the  default  error limit is set at compile time by the
+                 value in "pml.h".
+
+
+        USAGE:
+
+                 int pmllim(limit)
+                 int limit;
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+        PML --- C Portable Math Library                                Page 77
+        PMLSFS
+
+
+
+        2.51  Set specified PML error handler flags
+
+
+
+
+
+                                      **********
+                                      * PMLSFS *
+                                      **********
+
+
+
+
+        DESCRIPTION:
+
+                 Set the specified PML error handler flags for  the  specified
+                 error.   Two  or more flags may be set simultaneously by "or-
+                 ing" them in the call, for example  "LOG  |  CONTINUE".   The
+                 manifest  constants for the flags and error codes are defined
+                 in <pmluser.h>.
+
+
+        USAGE:
+
+                 pmlsfs(err_code,flags)
+                 int err_code;
+                 int flags;
+
+
+        PROGRAMMER:
+
+                 Fred Fish
+                 Goodyear Aerospace Corp, Arizona Div.
+                 (602) 932-7000 work
+                 (602) 894-6881 home
+
+
+
+
+
+
+
+
+
+                                      APPENDIX A
+
+                                      REFERENCES
+
+
+
+
+             1.  P.  A.  Fox, A.  D.  Hall, and N.  L.  Schryer, The PORT  Ma-
+                 thematical Subroutine Library, ACM Transactions on Mathemati-
+                 cal Software, Vol 4, No.  2, June 1978, pp 104-126.
+
+             2.  Brian Ford, Parameterization of  the  Environment  for  Tran-
+                 sportable  Numerical Software, ACM Transactions on Mathemati-
+                 cal Software, Vol 4, No.  2, June 1978, pp 100-103.
+
+
+
+
+
+
+
+
+                                        INDEX
+
+
+
+        CABS  . . . . . . . . . . . . . . . 8
+        CACOS . . . . . . . . . . . . . . . 9
+        CADD  . . . . . . . . . . . . . . . 10
+        CASIN . . . . . . . . . . . . . . . 11
+        CATAN . . . . . . . . . . . . . . . 12
+        CCOS  . . . . . . . . . . . . . . . 13
+        CCOSH . . . . . . . . . . . . . . . 14
+        CDIV  . . . . . . . . . . . . . . . 15
+        CEXP  . . . . . . . . . . . . . . . 16
+        CLN . . . . . . . . . . . . . . . . 17
+        CMULT . . . . . . . . . . . . . . . 18
+        complex functions . . . . . . . . . 8, 9, 10, 11, 12, 13, 14, 15, 16,
+                                            17, 18, 19, 20, 21, 22, 24, 25, 26
+        CRCP  . . . . . . . . . . . . . . . 19
+        CSIN  . . . . . . . . . . . . . . . 20
+        CSINH . . . . . . . . . . . . . . . 21
+        CSQRT . . . . . . . . . . . . . . . 22
+        CSUBT . . . . . . . . . . . . . . . 24
+        CTAN  . . . . . . . . . . . . . . . 25
+        CTANH . . . . . . . . . . . . . . . 26
+
+        DABS  . . . . . . . . . . . . . . . 27
+        DACOS . . . . . . . . . . . . . . . 28
+        DACOSH  . . . . . . . . . . . . . . 30
+        DASIN . . . . . . . . . . . . . . . 32
+        DASINH  . . . . . . . . . . . . . . 34
+        DATAN . . . . . . . . . . . . . . . 36
+        DATAN2  . . . . . . . . . . . . . . 39
+        DATANH  . . . . . . . . . . . . . . 41
+        DCOS  . . . . . . . . . . . . . . . 43
+        DCOSH . . . . . . . . . . . . . . . 46
+        DEXP  . . . . . . . . . . . . . . . 47
+        DFRAC . . . . . . . . . . . . . . . 49
+        DINT  . . . . . . . . . . . . . . . 50
+        DLN . . . . . . . . . . . . . . . . 51
+        DLOG  . . . . . . . . . . . . . . . 53
+        DMAX  . . . . . . . . . . . . . . . 54
+        DMIN  . . . . . . . . . . . . . . . 55
+        DMOD  . . . . . . . . . . . . . . . 56
+        document topics . . . . . . . . . . 2
+        DPOLY . . . . . . . . . . . . . . . 57
+        DSCALE  . . . . . . . . . . . . . . 58
+        DSIGN . . . . . . . . . . . . . . . 60
+        DSIN  . . . . . . . . . . . . . . . 61
+        DSINH . . . . . . . . . . . . . . . 64
+        DSQRT . . . . . . . . . . . . . . . 65
+        INDEX                                                         Page I-2
+
+
+
+
+        DTAN  . . . . . . . . . . . . . . . 67
+        DTANH . . . . . . . . . . . . . . . 68
+        DXEXP . . . . . . . . . . . . . . . 69
+        DXMANT  . . . . . . . . . . . . . . 71
+
+        machine dependent routines  . . . . 49, 50, 58, 69, 71
+        machine independent functions . . . 25
+        machine independent routines  . . . 8, 9, 10, 11, 12, 13, 14, 15, 16,
+                                            17, 18, 20, 21, 22, 24, 26, 27, 28,
+                                            30, 32, 34, 36, 39, 41, 43, 46, 47,
+                                            51, 53, 54, 55, 56, 57, 60, 61, 64,
+                                            65, 67, 68, 73, 74, 75, 76, 77
+        math libraries  . . . . . . . . . . 8, 9, 10, 11, 12, 13, 14, 15, 16,
+                                            17, 18, 19, 20, 21, 22, 24, 25, 26,
+                                            27, 28, 30, 32, 34, 36, 39, 41, 43,
+                                            46, 47, 49, 50, 51, 53, 54, 55, 56,
+                                            57, 58, 60, 61, 64, 65, 67, 68, 69,
+                                            71, 73, 74, 75, 76, 77
+
+        PMLCFS  . . . . . . . . . . . . . . 73
+        PMLCNT  . . . . . . . . . . . . . . 74
+        PMLERR  . . . . . . . . . . . . . . 75
+        PMLLIM  . . . . . . . . . . . . . . 76
+        PMLSFS  . . . . . . . . . . . . . . 77
+
+        trigonometric functions . . . . . . 28, 32, 36, 39, 43, 61, 67
+
+
+
+
+
+
+
+                                       CONTENTS
+
+
+             1.0  INTRODUCTION . . . . . . . . . . . . . . . . . . . . . .   2
+                  1.1   Document structure . . . . . . . . . . . . . . . .   2
+                  1.2   Design Considerations  . . . . . . . . . . . . . .   2
+                  1.3   Error Handling . . . . . . . . . . . . . . . . . .   3
+                  1.4   Function Names . . . . . . . . . . . . . . . . . .   4
+                  1.5   Installation . . . . . . . . . . . . . . . . . . .   5
+                  1.6   Bugs . . . . . . . . . . . . . . . . . . . . . . .   5
+                  1.7   Transporting To Other Machines . . . . . . . . . .   5
+             2.0  RUNTIME MODULES  . . . . . . . . . . . . . . . . . . . .   7
+                  2.1   Double precision complex absolute value  . . . . .   8
+                  2.2   Complex double precision arc cosine  . . . . . . .   9
+                  2.3   Double precision complex addition  . . . . . . . .  10
+                  2.4   Complex double precision arc sine  . . . . . . . .  11
+                  2.5   Complex double precision arc tangent . . . . . . .  12
+                  2.6   Complex double precision cosine  . . . . . . . . .  13
+                  2.7   Complex double precision hyperbolic cosine . . . .  14
+                  2.8   Double precision complex division  . . . . . . . .  15
+                  2.9   Complex double precision exponential . . . . . . .  16
+                  2.10  Complex double precision natural logarithm . . . .  17
+                  2.11  Double precision complex multiplication  . . . . .  18
+                  2.12  complex double precision reciprocal  . . . . . . .  19
+                  2.13  Complex double precision sine  . . . . . . . . . .  20
+                  2.14  Complex double precision hyperbolic sine . . . . .  21
+                  2.15  Complex double precision square root . . . . . . .  22
+                  2.16  Double precision complex subtraction . . . . . . .  24
+                  2.17  Complex double precision tangent . . . . . . . . .  25
+                  2.18  Complex double precision hyperbolic tangent  . . .  26
+                  2.19  Double precision absolute value  . . . . . . . . .  27
+                  2.20  Double precision arc cosine  . . . . . . . . . . .  28
+                  2.21  Double precision hyperbolic arc cosine . . . . . .  30
+                  2.22  Double precision arc sine  . . . . . . . . . . . .  32
+                  2.23  Double precision hyperbolic arc sine . . . . . . .  34
+                  2.24  Double precision arc tangent . . . . . . . . . . .  36
+                  2.25  Double precision arc tangent of two arguments  . .  39
+                  2.26  Double precision hyperbolic arc tangent  . . . . .  41
+                  2.27  Double precision cosine  . . . . . . . . . . . . .  43
+                  2.28  Double precision hyperbolic cosine . . . . . . . .  46
+                  2.29  Double precision exponential . . . . . . . . . . .  47
+                  2.30  Double precision fractional portion  . . . . . . .  49
+                  2.31  Double precision integer portion . . . . . . . . .  50
+                  2.32  Double precision natural log . . . . . . . . . . .  51
+                  2.33  Double precision common log  . . . . . . . . . . .  53
+                  2.34  double precision maximum of two arguments  . . . .  54
+                  2.35  double precision minimum of two arguments  . . . .  55
+                  2.36  Double precision modulo  . . . . . . . . . . . . .  56
+                  2.37  Double precision polynomial evaluation . . . . . .  57
+                  2.38  Scale a double precision number by power of 2  . .  58
+
+
+
+
+
+                  2.39  Transfer of sign . . . . . . . . . . . . . . . . .  60
+                  2.40  Double precision sine  . . . . . . . . . . . . . .  61
+                  2.41  Double precision hyperbolic sine . . . . . . . . .  64
+                  2.42  Double precision square root . . . . . . . . . . .  65
+                  2.43  Double precision tangent . . . . . . . . . . . . .  67
+                  2.44  Double precision hyperbolic tangent  . . . . . . .  68
+                  2.45  extract double precision numbers exponent  . . . .  69
+                  2.46  Extract double precision number's mantissa . . . .  71
+                  2.47  Clear specified PML error handler flags  . . . . .  73
+                  2.48  Get PML error count and reset it to zero . . . . .  74
+                  2.49  Portable Math Library error handler  . . . . . . .  75
+                  2.50  Set Portable Math Library error limit  . . . . . .  76
+                  2.51  Set specified PML error handler flags  . . . . . .  77
+
+        A.0  REFERENCES  . . . . . . . . . . . . . . . . . . . . . . . . . A-1
+
+
+        INDEX  . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . I-1

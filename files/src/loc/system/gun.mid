@@ -1,0 +1,379 @@
+;-*-Midas-*-
+
+	Title @GUN/@DROP -- Gun down a job or detach a TTY
+
+.DECSAV
+
+T=10
+TT=11
+T3=12
+T4=13
+
+CALL=<PUSHJ P,>
+RETURN=<POPJ P,>
+
+.INSRT MID:MACROS
+.INSRT MID:PRARG
+
+define lstr &str
+	.length str,,[asciz str]
+termin
+
+.SCALAR PDL(PDLen==100), JCL(JCLen==100), JINF(.JIMAX+1)
+.SCALAR JobNo, TTYdes, MyJob, CTY, Againp, Detach, DidDet
+
+prompt:	lstr "[<space> for target update, <CR> to do it] "
+crlf:	asciz "
+"
+
+Begin:	RESET%
+	Move P,[-PDLen,,PDL]
+
+	Movei 1,.RSINI
+	RSCAN%			;Make JCL available for reading
+	  .Lose
+
+	Movei 1,.PRIIN
+	Hrroi 2,JCL
+	Movei 3,JCLen*5-1
+	Movei 4,^J		;JCL from EXEC always ends in bare LF
+	SIN%			;slurp it in.
+	  .Lose
+	Setzb 1,Againp
+	Dpb 1,2			;Clobber LF to null
+
+	Move 3,[440700,,JCL]
+SkpPrg:	Move 1,3		;skip first part of JCL which is the
+	Ildb 2,3		;program-name.
+	Jumpe 2,chknam
+	Caie 2,40
+	  Cain 2,^I
+	    Skipa
+	   Jrst SkpPrg
+	Setz 2,
+	DPB 2,3			;Tie off program-name
+	move 4,3		;save bp to next part of jcl
+
+chknam:	Hrroi 1,JCL
+	Hrroi 2,[asciz "DROP"]
+	STCMP%
+	jumpe 1,[setom detach	;if matched, we're running as "DROP", so detach
+		setzm diddet	;haven't done detach call yet
+		move 1,4	;bp to rest of jcl
+		movei 3,8.	;user, don't log them out.
+		NIN%		;slurp in tty# to drop
+		  jrst howto
+		addi 2,.ttdes	;turn into tty designator
+		movem 2,TTYdes
+		jrst fndcty]
+	setzm detach		;not detaching, so gunning
+	move 1,4		;bp to rest of jcl
+	Movei 3,10.		;get decimal
+	NIN%			;job#
+	  jrst howto		;  oops
+	Movem 2,JobNo
+
+;;
+;;	done with parsing
+;;
+
+fndcty:	hrroi 1,[asciz "CTY:"]
+	STDEV%			;define this...
+	  setz 2,		;  uh?
+	hrrzm 2,cty		;this is the cty's tty# (in the RH)
+	GJINF%			;get our job info
+	movem 3,myjob		;our job#
+
+;;
+;;	collect data on target
+;;
+
+outlin:	skipn detach		;if detaching, gunning
+	  skipa 1,jobno		;straight Job# for by-job
+	    move 1,ttydes	;  or tty-designator
+	Move 2,[-<.JIMAX+1>,,JINF]
+	Setz 3,			;Start with first word
+	GETJI%			;Get info about that job
+	  .Lose			;  probably no such job or invalid job#
+	skipe detach
+	  jrst [move 1,jinf+.jijno
+		came 1,[-1]	;no job really there?
+		  jrst .+1	;  yes there is, so carry on
+		typecr "?No job for that TTY"
+		jrst die]
+
+;;
+;;	start typeout
+;;
+
+	move 2,JINF+.JIJNO	;job#
+	came 2,jobno		;same as user specified?  (user may give -1)
+	  jrst [type "Job "	;  nope, so show it
+		movem 2,jobno	;  this is real job#
+		movei 1,.priou
+		movei 3,10.	;show job # as decimal
+		NOUT%
+		  nop
+		typecr ":"
+		jrst .+1]
+	move 2,jinf+.jiuno
+	call outusr
+ol0:	skipg 2,JINF+.JICPJ	;of a pty controlled by a job
+	  jrst ol00a
+	move 1,2		;job# to get info on
+	move 2,[-1,,4]		;put result in ac4
+	movei 3,.jiuno		;fetch user#
+	GETJI%
+	  jrst [ctype "?
+		jrst ol00a]
+	camn 4,jinf+.jiuno	;controller user same as pty logged in as?
+	  jrst ol00a		;  yes, so don't be redundant
+	ctype "/
+	move 2,4
+	call outusr	
+ol00a:	skipg 2,JINF+.JITNO
+	  jrst [type ", det"
+		jrst ol1]
+	camn 2,CTY
+	  jrst [type ", CTY!"
+		jrst ol0a]
+	Type ", TTY"
+	Movei 1,.PRIOU
+	Movei 3,8.
+	NOUT%
+	  .Lose
+ol0a:	skipg 2,JINF+.JICPJ	;of a pty controlled by a job
+	  jrst ol1
+	type "/J"		;then show the controlling job#
+	movei 1,.priou
+	movei 3,10.
+	NOUT%
+	  nop
+ol1:	Type ", "
+	Skipe 3,JINF+.JISNM	;subsystem name
+	  Camn 3,[sixbit |(PRIV)|]	;stupid meaningless thing
+	    Jrst [Skipe 3,JINF+.JIPNM
+		    Jrst ol1a
+		  Type "prog?"
+		  Jrst ol1b]
+	Call 6PRINT
+	Skipe 3,JINF+.JIPNM	;program name
+	  Camn 3,JINF+.JISNM
+	    Jrst ol1b
+	ctype "/
+ol1a:	Call 6PRINT
+ol1b:	type ", idle ("
+	move 1,JINF+.JIJNO
+	IDLE%			;get idle time in ms
+	  Erjmp [seto 1,	;  where'd they go?
+		 jrst .+1]	;  logged out maybe
+	move t,1		;t/ time in ticks
+	movei tt,1000.		;ticks/second
+	call timout		;output time
+	type " CPU)"
+	skipg JINF+.JITNO	;any tty?
+	  jrst overp		;  no, so no TTY idle
+	type " ("
+	move 1,JINF+.JIJNO
+	txo 1,ID%TTY		;want tty idle time
+	IDLE%
+	  erjmp [seto 1,
+		 jrst .+1]
+	move t,1
+	movei tt,1000.
+	call timout
+	type " TTY)"
+overp:	skipn againp		;writing over old line?
+	  jrst ol2		;  nope
+	movei 1,.cttrm
+	RFPOS%			;get tty position
+	tlz 2,-1		;col in RH now
+	hlrz 3,prompt		;length of prompt
+	subi 3,1(2)		;# spaces we need to overwrite
+	jumple 3,ol2		;don't need any
+clob:	movei 1,40		;no, need to blast it
+	PBOUT%			;write a space
+	sojg 3,clob
+
+ol2:	atype crlf
+	hrro 1,prompt
+	PSOUT%
+
+Conf:	PBIN%
+	Cain 1,^M
+	  PBIN%
+	cain 1,40		;space?
+	  jrst [movei 1,^M	;yes, so back to start
+		PBOUT%		;of line and display the users state
+		setom againp	;say we're doing it again
+		jrst outlin]
+	Caie 1,^J
+	  Jrst [TypeCR " Aborted"
+		Jrst Die]
+
+	skipe detach
+	  jrst loop0
+
+	type "Gunning..."
+	Move 1,JINF+.JIJNO
+	camn 1,myjob		;logging out ourself?
+	  seto 1,		;  yes, need to do it this way.
+	LGOUT%			;bye-bye!
+	  ercal [atype crlf	;  probably whopr
+		 jrst $lose]
+	jrst loop0
+
+Loop:	movei 1,".		;show progress
+	PBOUT%
+	Movei 1,<1000./3>	;1/3 of a second
+	DISMS%			;wait a bit.
+loop0:	Move 1,JINF+.JIJNO
+	Move 2,[-1,,4]		;Put tty# in AC4
+	Movei 3,.JITNO
+	GETJI%			;See if job's still there
+	  call [cain 1,GTJIX4	;no such job?
+		  jrst [TypeCR "gone!"
+			jrst die]
+		jrst $lose]	;some random error occured...
+	jumpl 4,[skipn detach	;no tty, detached
+		  jrst loop	;  if not detaching, then don't care
+		typecr "detached!"
+		jrst die]
+	txo 1,.TTDES
+	SOBE%
+	  erjmp loop
+	cail 2,600000		;error code?
+	  jrst loop		;  yes...
+	jumpe 2,empty
+	movei 1,.PRIOU
+	movei 3,10.
+	nout%			;show how many bytes in output buffer
+	  jfcl
+	Move 1,JINF+.JITNO	;Still there.
+	txo 1,.ttdes
+	CFOBF%			;Clear its output buffer...
+	 erjmp [ctype "?
+		jrst loop]	;  must have gone away?
+	ctype "!		;
+	Jrst Loop
+
+empty:	skipe detach		;if not detaching,
+	  skipe diddet		;  or already did detach
+	    jrst loop		;    then don't do this, just loop
+	type "Detaching user..."
+	move 1,jinf+.jijno	;job# to detach
+	txo 1,at%nat		;detach job, don't attach it
+	move 2,jinf+.jiuno	;user# of who's gonna get it
+	ATACH%			;do it
+	  ercal [atype crlf
+		jrst $lose]
+	setom diddet		;we've done the detach call now
+	jrst loop
+
+;;
+;;	type out the sixbit word given to us in AC3
+;;
+
+6PRINT:	Setz 4,
+	ROTC 3,6		;Get character into AC4
+	Movei 1,40(4)		;Turn into ASCII
+	PBOUT%
+	Jumpn 3,6PRINT
+	return
+
+;;
+;;	output time as nnd hh:mm:ss.s or nnnms if real small
+;;
+
+timout:	cail t,100.
+	  jrst timprt		;calret
+	movei 1,.priou
+	movei 2,(t)
+	movei 3,10.
+	NOUT%
+	  jfcl
+	type "ms"
+	ret
+
+;TIME PRINTER
+
+;	T:	TIME TO BE PRINTED IN SECONDS
+;	TT:	NUMBER OF TICKS PER SECOND
+
+tquant:	<60.*60.>			;hours
+	60.				;minutes
+	1				;seconds
+ntquant==.-tquant
+
+TIMPRT:	jumpl t,[movei 1,"?
+		 PBOUT%
+		 return]			
+	pushn p,[t,tt,t3,t4]
+	IDIVI	T,0(TT)		;GET SECONDS
+	PUSH	P,T+1
+	idivi t,<24.*60.*60.>	;get days
+	skipg 2,t		;any?
+	  jrst tp0		;  nope...
+	movei 1,.priou
+	movei 3,10.
+	NOUT%
+	  nop
+	type "d "
+tp0:	move t,tt		;use remainder from days
+	setz t4,		;use temp flag to say first non-0 quanta found
+	movsi t3,-ntquan	;aobjn to quant table
+timpr0:	move 1,tquant(t3)	;divisor
+	idivi t,(1)		;see how many of this size quanta
+	caig 1,1		;if 1 (seconds)
+	  jrst timpr1		;  then always show, even if 0
+	jumpn t,timpr1		;some...
+	jumpe t4,timpr2		;need to see 0's now?  no, so ignore
+timpr1:	movei 1,":
+	skipe t4		;first one?
+	  PBOUT%		;  no, so colon as separator
+	movei 1,.priou
+	move 2,t		;the units
+	skipe t4		;first one?
+	 skipa 3,[no%lfl+no%zro+no%oov+field(2,no%col)+10.]
+	  movei 3,10.		;yes, floating width decimal
+	NOUT%			;output it
+	  nop			;  shouldn't fail
+	seto t4,		;not the first one anymore
+timpr2:	move t,t+1		;work on the remainer now
+	aobjn t3,timpr0		;go do the next quanta
+	movei 2,".		;decimal point
+	BOUT%			;now
+	move 2,-3(p)		;get ticks/sec
+	idivi 2,10.		;TICKS PER 1/10 TH OF A SECOND
+	pop p,t			;fractions of seconds (in ticks)
+	idivi t,(2)		;FIND OUT HOW MANY TENTHS
+	movei 2,"0(t)		;turn into a char
+	BOUT%			;blast it out
+	popn p,[t4,t3,tt,t]
+	return
+
+;;
+;;	given user# in AC2, output username string
+;;
+
+outusr:	jumpe 2,[Type "not logged in"
+		return]
+	Movei 1,.PRIOU
+	DIRST%
+	  jrst [type "user#"
+		movei 1,.priou
+		tlz 2,-1	;keep only rh of user#
+		movei 3,8.
+		NOUT%
+		  nop
+		return]
+	return
+
+howto:	skipe detach
+	  jrst [typecr "usage: DROP <octal tty#>"
+		jrst die]
+	TypeCR "usage: GUN <decimal job#>"
+Die:	HALTF%
+	Jrst Die
+
+	End Begin

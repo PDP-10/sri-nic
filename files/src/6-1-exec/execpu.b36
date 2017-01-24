@@ -1,0 +1,2167 @@
+!<5.1.EXEC>EXECPU.B36.3, 13-Nov-82 09:07:41, Edit by PA0B
+!(Hopefully) make $DECnet_Node work on non-DECnet systems.
+!Since I don't have any, this has never been tested...
+!<5.1.EXEC>EXECPU.B36.2, 30-Oct-82 23:15:19, Edit by PA0B
+!Allow optional second argument to $INTEGER.  This argument
+!is the radix; if omitted, the default is 10.
+!<4.EXEC>EXECPU.B36.19,  8-Mar-82 01:09:02, Edit by PA0B
+!Add $DECnet_Node, which returns the local DECnet node name
+!and $ARPAnet_Node, which returns the local ARPAnet node
+!name (or a null string if the system is not an Arpanet
+!host).  Add $Resume_Output, which resumes output to .PRIOU
+!which was aborted by ^O (note: ^O aborts output to COJFN,
+!so it is not clear whether this is the right thing to do).
+!<4.EXEC>EXECPU.B36.18,  6-Apr-81 17:29:18, Edit by DK32
+!Permit prompt-setting outside PCL
+!<4.EXEC>EXECPU.B36.17, 24-Mar-81 20:16:36, Edit by DK32
+!Have $PromptReg set CSB correctly
+!<4.EXEC>EXECPU.B36.16,  9-Mar-81 17:31:27, Edit by DK32
+!More prompts
+!<4.EXEC>EXECPU.B36.15,  5-Mar-81 17:11:00, Edit by DK32
+!Allow for longer filenames, Make prompt variables
+!return original prompts also
+!<4.EXEC>EXECPU.B36.14,  1-Mar-81 12:40:09, Edit by DK32
+!Changes for Bliss 2.1
+!<4.EXEC>EXECPU.B36.13, 23-Jan-81 13:35:43, Edit by DK32
+!Allow longer filenames in $Filex
+!<4.EXEC>EXECPU.B36.12,  7-Jan-81 18:09:06, Edit by DK32
+!Append mode to $Open
+!<4.EXEC>EXECPU.B36.11, 22-Dec-80 23:16:08, Edit by DK32
+!Use Exec linkage, Release JFN in $NextFile,
+!$Typeahead_Count
+!<4.EXEC>EXECPU.B36.10, 10-Dec-80 21:25:14, Edit by DK32
+!Fix some error messages, $Wait
+!<4.EXEC>EXECPU.B36.9,  9-Dec-80 16:03:57, Edit by DK32
+!Rework $LastError, $ConnectedDirectory, $Filexxx,
+!$Account to dynamically allocate string space
+!<4.EXEC>EXECPU.B36.8,  5-Dec-80 16:15:41, Edit by DK32
+!$File_Dev ... $File_Typ
+!<4.EXEC>EXECPU.B36.7, 26-Nov-80 13:57:16, Edit by DK32
+!Set CMRTY when $PromptReg changed
+!<4.EXEC>EXECPU.B36.6, 30-Oct-80 16:40:56, Edit by DK32
+!$Account, Runtime channel list
+!<4.EXEC>EXECPU.B36.5, 21-Oct-80 16:25:45, Edit by DK32
+!$FileInfo
+!<4.EXEC>EXECPU.B36.4, 18-Oct-80 15:53:15, Edit by DK32
+!Parse List and NextFile, Fix count in $SearchRaised
+!<4.EXEC>EXECPU.B36.3,  7-Oct-80 15:18:21, Edit by DK32
+!New $FileV etc for parsed file list
+!<4.EXEC>EXECPU.B36.2,  2-Oct-80 19:26:43, Edit by DK32
+!Prompt strings
+!<4.EXEC>EXECPU.B36.1, 26-Sep-80 14:03:47, Edit by DK32
+!Create module, Add I/O services
+MODULE EXECPU =
+BEGIN
+
+!++
+!
+!  This is the first attempt at the Programmable Command Language utilities
+!
+!  Dave King, Carnegie-Mellon University Computation Center
+!
+!  September, 1980
+!
+!  Copyright (C) 1980, Carnegie-Mellon University
+!
+!--
+
+!++
+!    This module contains the system service routines which are provided
+!  as part of the standard Exec.
+!--
+
+!
+! Standard definitions
+!
+
+LIBRARY 'EXECPD';		!Get common definitions
+LIBRARY 'BLI:TENDEF';		!There are JSYS's in this module
+LIBRARY 'BLI:MONSYM';
+SWITCHES LINKAGE(EXEC);
+
+BUILTIN JSYS;
+
+!
+! Table of contents:
+!
+
+FORWARD ROUTINE
+    DINIDC,			! Integer procedure $MERGETAD
+    DINCTI,			! Integer procedure $CVCTI
+    DINSTI,			! Integer procedure $INTEGER
+    DINSCH,			! Integer procedure $SEARCH
+    DINSCR,			! Integer procedure $SEARCHRAISED
+    DINSCC,			! Common search routine
+    DINITD,			! Integer procedure $INPUTTAD
+    DINITC,			! String procedure $CVITC
+    DIVCTD,			! Variable $CURTAD
+    DIVLEC,			! Variable $LASTERRCODE
+    DIVTTN,			! Variable $TermNumber
+    DIVTWD,			! Variable $TERMWIDTH
+    DIVNUL,			! Variable $NUL
+    DIVLER,			! Variable $LASTERROR
+    DIVTAD,			! Variables $TIME and $DATE
+    DIVTIM,			! Variable $TIME
+    DIVDAT,			! Variable $DATE
+    DIVCDR,			! Variable $ConnectedDirectory
+    DIVPMR,			! Variable $PromptReg
+    DIVPMS,			! Variable $PromptSub
+    DIVPME,			! Variable $PromptEnb
+    DIVPMU,			! Variable $PromptEnbSub
+    DIVPMC,			! Common $Prompt routine
+    DIVFNV,			! Variable $FileV
+    DIVFNM,			! Variable $FileN
+    DIVFNS,			! Variable $FileS
+    DIVFNL,			! Variable $FileL
+    DIVFNC,			! Common $File routine
+    DINOPN,			! Integer procedure $Open
+    DINCLS: NOVALUE,		! Procedure $Close
+    DINRED,			! String procedure $Read
+    DINEOF,			! Integer procedure $EOF
+    DINWRT: NOVALUE,		! Procedure $Write
+    DINNFL,			! Integer procedure $NextFile
+    DINFII,			! Integer procedure $FileInfo_I
+    DINFIS,			! String procedure $FileInfo_S
+    DINFDV,			! String procedure $File_Dev
+    DINFDR,			! String procedure $File_Dir
+    DINFNM,			! String procedure $File_Nam
+    DINFTY,			! String procedure $File_Typ
+    DINJFN,			! Common JFNS routine
+    DIVACC,			! Variable $Account
+    DINWAI: NOVALUE,		! Procedure $Wait
+    DIVTAH,			! Integer $Typeahead_Count
+    DIVDND,			! Variable $DECnet_Node
+    DIVAND,			! Variable $ARPAnet_Node
+    DINROU: NOVALUE;		! Procedure $Resume_Output
+
+!
+! Macros:
+!
+
+MACRO ERROR(TXT) = PCEERR(UPLIT(%ASCIZ TXT)) %;
+
+!
+! External references:
+!
+
+EXTERNAL ROUTINE
+    PCEERR,			! EXECPX Report execution error
+    PCEAST,			! EXECPX Allocate string space
+    PCECST,			! EXECPX Make copy of a string
+    PCEGOP,			! EXECPX Get value of operand
+    PCEFST: NOVALUE,		! EXECPX Free string storage
+    PCMGMM,			! EXECPM General memory allocator
+    PCMSTI,			! CVTDBO routine
+    RETMEM,			! EXECSU General memory release
+    SUBBP;			! EXECSU Subtract two byte pointers
+
+EXTERNAL
+    PCCURC: REF ECB_BLK,	! Current Execution Context Block
+    PCLPMT: VECTOR,		! Prompt string table
+    XDICT,			! Permanent storage pool
+    REDPMT: VECTOR,		! Regular prompt table
+    JOBNO,			! Job number of this job
+    CUSRNO,			! User number
+    CSBUFP: STR_VAL;		! Temporary string buffer pointer
+
+GLOBAL ROUTINE DINIDC(AP,CNT) =	! Integer procedure $MERGETAD
+
+!++
+! Functional description:
+!	Convert five integers (Year, Month, Day of month, Hour, Minute)
+!	into an internal date and time.
+!
+! Formal parameters:
+!	Usual for system procedure
+!
+! Implicit inputs:
+!	User's integers
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	TAD
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    LOCAL
+	RR2: HLF_WRD,		! Temporaries
+	RR3: HLF_WRD,
+	RR4;
+    IF .CNT NEQ 5 THEN ERROR('Bad arguments to $MERGETAD');
+    RR4 = PCEGOP(.(.AP+4), STE_TYP_INT) * 60
+	  + PCEGOP(.(.AP+3), STE_TYP_INT) * 3600;
+    RR3[HLF_LFT] = PCEGOP(.(.AP+2), STE_TYP_INT);
+    RR3[HLF_RGT] = 0;
+    RR2[HLF_RGT] = PCEGOP(.(.AP+1), STE_TYP_INT);
+    RR2[HLF_LFT] = PCEGOP(.(.AP), STE_TYP_INT);
+	BEGIN
+	BUILTIN JSYS;
+	REGISTER R2=2,R3=3,R4=4;
+	R2 = .RR2;
+	R3 = .RR3;
+	R4 = .RR4;
+	IF NOT JSYS(1,IDCNV,R2,R3,R4) THEN R2 = 0;
+	RR2 = .R2
+	END;
+    .RR2
+    END;
+
+GLOBAL ROUTINE DINCTI(AP,CNT) =	! Internal procedure CVCTI
+
+!++
+! Functional description:
+!	Return to integer format of the character in String1.
+!
+! Formal parameters:
+!	Usual for system procedure
+!
+! Implicit inputs:
+!	User's string
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Character input
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    LOCAL
+	STR: STR_VAL,		! String value
+	CHR;			! Character
+    IF .CNT NEQ 1 THEN ERROR('Bad arguments to $CVCTI');
+    STR = PCEGOP(.(.AP),STE_TYP_STR);
+    CHR = CH$RCHAR(BYTPTR(.STR[STV_ADR]));
+    IF .(.AP) EQL OPN_TMP_STR THEN PCEFST(.STR);
+    .CHR
+    END;
+
+GLOBAL ROUTINE DINSTI(AP,CNT) =	! Integer procedure STRING
+
+!++
+! Functional description:
+!	Return the integer value of the decimal contained in String1.
+!	Errors are ignored.
+!
+! Formal parameters:
+!	Usual for system procedure
+!
+! Implicit inputs:
+!	User's string
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Number
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    LOCAL
+	STR: STR_VAL,		! String
+	RADIX,			! Radix of number
+	NUM;			! Accumulated number
+    IF (.CNT NEQ 1) AND (.CNT NEQ 2)
+	THEN ERROR('Bad arguments to $INTEGER');
+    IF .CNT EQL 1
+    THEN
+	RADIX = 10		! Use default radix
+    ELSE
+	RADIX = PCEGOP(.(.AP+1),STE_TYP_INT); ! Get user's radix
+    IF (.RADIX LEQ 1) OR (.RADIX GEQ 11)
+	THEN ERROR('Illegal radix specified for $INTEGER');
+    STR = PCEGOP(..AP,STE_TYP_STR);
+    IF .STR[STV_LEN] EQL 0 THEN RETURN 0;
+	BEGIN
+	REGISTER
+	    R1=1,R2=2,R3=3;
+	R1 = BYTPTR(.STR[STV_ADR]);
+	R3 = 10;
+	IF NOT JSYS(1,NIN,R1,R2,R3) THEN R2=0;
+	NUM = .R2
+	END;
+    IF ..AP EQL OPN_TMP_STR THEN PCEFST(.STR);
+    .NUM
+    END;
+
+GLOBAL ROUTINE DINSCH(AP,CNT) =	! Internal procedure SEARCH
+
+!++
+! Functional description:
+!	Search String1 for an instance of String2; return index of
+!	first character of match, or 0 if not found.  If Integer3
+!	provided, start search with Integer3'th character (first is 1)
+!
+! Formal parameters:
+!	Usual for system procedure
+!
+! Implicit inputs:
+!	User's strings
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Index or 0
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    IF .CNT LSS 2 OR .CNT GTR 3 THEN ERROR('Bad arguments to $SEARCH');
+    DINSCC(.AP,.CNT,0)
+    END;
+
+GLOBAL ROUTINE DINSCR(AP,CNT) =	! Internal procedure SEARCHRAISED
+
+!++
+! Functional description:
+!	Search String1 for an instance of String2; return index of
+!	first character of match, or 0 if not found.  If Integer3
+!	provided, start search with Integer3'th character (first
+!	is 1).  Search is insensitive to alphabetic case.
+!
+! Formal parameters:
+!	Usual for system procedure
+!
+! Implicit inputs:
+!	User's strings
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Index or 0
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    IF .CNT LSS 2 OR .CNT GTR 3 THEN ERROR('Bad arguments to $SEARCHRAISED');
+    DINSCC(.AP,.CNT,1)
+    END;
+
+ROUTINE DINSCC(AP,CNT,FLG) =	! Common search routine
+
+!++
+! Functional description:
+!	Search String1 for an instance of String2; return index
+!	of first character of match, or 0 if not found.
+!	If FLG nonzero, make search insensitive to alphabetic
+!	case.  If Integer3 provided, start search with Integer3'th
+!	character (first is 1).
+!
+! Formal parameters:
+!	Usual for system procedure
+!	Flag: 0=Case sensitive, nonzero=Case insensitive
+!
+! Implicit inputs:
+!	User's strings
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Index or 0
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    LOCAL
+	MSTR: STR_VAL,		! Master string
+	MPTR,			! Pointer
+	TSTR: STR_VAL,		! Target string
+	TPTR,			! Pointer
+	TLEN,			! Length
+	IDX,			! Current index
+	VAL;			! Value to return
+    IF .CNT EQL 3
+    THEN
+	BEGIN
+	IDX = PCEGOP(.(.AP+2),STE_TYP_INT)-1;
+	IF .IDX LSS 0 THEN IDX = 0
+	END
+    ELSE
+	IDX = 0;
+    TSTR = PCEGOP(.(.AP+1),STE_TYP_STR);
+    MSTR = PCEGOP(..AP,STE_TYP_STR);
+    TPTR = BYTPTR(.TSTR[STV_ADR]);
+    MPTR = BYTPTR(.MSTR[STV_ADR]);
+    IF .IDX NEQ 0 THEN MPTR = CH$PLUS(.MPTR,.IDX);
+    TLEN = .TSTR[STV_LEN];
+    VAL = (WHILE .MSTR[STV_LEN] GEQ .TLEN+.IDX DO
+	IF (IF .FLG EQL 0
+	    THEN
+		CH$EQL(.TLEN, .MPTR, .TLEN, .TPTR)
+	    ELSE
+		BEGIN
+		LOCAL
+		    LPTR,
+		    RPTR,
+		    RCHR,
+		    LCHR,
+		    TCNT;
+		LPTR = .MPTR;
+		RPTR = .TPTR;
+		TCNT = .TLEN;
+		WHILE .TCNT GTR 0 DO
+		    BEGIN
+		    LCHR = CH$RCHAR_A(LPTR);
+		    RCHR = CH$RCHAR_A(RPTR);
+		    IF .LCHR GEQ %C'a' AND .LCHR LEQ %C'z'
+		    THEN
+			LCHR = .LCHR - %C'a' + %C'A';
+		    IF .RCHR GEQ %C'a' AND .RCHR LEQ %C'z'
+		    THEN
+			RCHR = .RCHR - %C'a' + %C'A';
+		    IF .LCHR NEQ .RCHR THEN EXITLOOP 0;
+		    TCNT = .TCNT - 1
+		    END
+		END)
+	THEN
+	    EXITLOOP .IDX
+	ELSE
+	    BEGIN
+	    IDX = .IDX + 1;
+	    MPTR = CH$PLUS(.MPTR,1)
+	    END);
+    IF ..AP EQL OPN_TMP_STR THEN PCEFST(.MSTR);
+    IF .(.AP+1) EQL OPN_TMP_STR THEN PCEFST(.TSTR);
+    .VAL+1
+    END;
+
+
+GLOBAL ROUTINE DINITD(AP,CNT) =	! Internal integer procedure INPUTTAD
+
+!++
+! Functional description:
+!	Convert date and time in String1 to TAD.
+!
+! Formal parameters:
+!	Usual for system procedure
+!
+! Implicit inputs:
+!	User's string
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	TAD
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    LOCAL
+	STR: STR_VAL;		! String
+    IF .CNT NEQ 1 THEN ERROR('Bad arguments to $INPUTTAD');
+    STR = PCEGOP(..AP,STE_TYP_STR);
+	BEGIN
+	REGISTER R1=1,R2=2;
+	R1 = BYTPTR(.STR[STV_ADR]);
+	R2 = 0;
+	IF NOT JSYS(1,IDTIM,R1,R2) THEN R2 = 0;
+	.R2
+	END
+    END;
+
+GLOBAL ROUTINE DINITC(AP,CNT) =	! Internal procedure CVITC
+
+!++
+! Functional description:
+!	Return the character equivalent of the number in Integer1.
+!
+! Formal parameters:
+!	Usual for system procedure
+!
+! Implicit inputs:
+!	User's integer
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Character
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    LOCAL
+	CHR,			! Character
+	STR,			! String
+	STV: STR_VAL;		! Stringvalue
+    IF .CNT NEQ 1 THEN ERROR('Bad arguments to $CVITC');
+    CHR = PCEGOP(.(.AP),STE_TYP_INT);
+    CH$WCHAR(.CHR, BYTPTR(STR));
+    STV[STV_LEN] = 1;
+    STV[STV_ADR] = STR;
+    PCECST(.STV)
+    END;
+
+GLOBAL ROUTINE DIVCTD =		! Internal variable $CURTAD
+
+!++
+! Functional description:
+!	Return current internal format date and time
+!
+! Formal parameters:
+!	None
+!
+! Implicit inputs:
+!	None
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	TAD
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    REGISTER R1=1;
+    JSYS(0,GTAD,R1);
+    .R1
+    END;
+
+GLOBAL ROUTINE DIVLEC =		! Internal variable $LASTERRCODE
+
+!++
+! Functional description:
+!	Return last JSYS error code
+!
+! Formal parameters:
+!	None
+!
+! Implicit inputs:
+!	None
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Error code
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    LOCAL
+	HLF: HLF_WRD;
+    REGISTER
+	R1=1,R2=2;
+    R1 = $FHSLF;
+    JSYS(0,GETER,R1,R2);
+    HLF = .R2;
+    .HLF[HLF_RGT]
+    END;
+
+GLOBAL ROUTINE DIVTTN =		! Internal variable $TermNumber
+
+!++
+! Functional description:
+!	Return number of controlling terminal
+!
+! Formal parameters:
+!	None
+!
+! Implicit inputs:
+!	None
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Number
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    REGISTER R1=1,R2=2,R3=3,R4=4;
+    JSYS(0,GJINF,R1,R2,R3,R4);
+    .R4
+    END;
+
+GLOBAL ROUTINE DIVTWD =		! Internal variable $TERMWIDTH
+
+!++
+! Functional description:
+!	Return width of controlling terminal
+!
+! Formal parameters:
+!	None
+!
+! Implicit inputs:
+!	None
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Width
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    REGISTER R1=1,R2=2,R3=3;
+    R1 = $CTTRM;
+    R2 = $MORLW;
+    JSYS(0,MTOPR,R1,R2,R3);
+    .R3
+    END;
+
+GLOBAL ROUTINE DIVNUL(STR,FLG) =	! Internal variable $NUL
+
+!++
+! Functional description:
+!	If fetched, returns empty string; if set, discards string.
+!
+! Formal parameters:
+!	Stringvalue to set to
+!	Flag: -1 to set, 0 to fetch
+!
+! Implicit inputs:
+!	None
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Empty stringvalue
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    IF .FLG NEQ 0 THEN PCEFST(.STR);
+    0
+    END;
+
+GLOBAL ROUTINE DIVLER =		! Internal variable $LASTERROR
+
+!++
+! Functional description:
+!	Return stringvalue of text of last JSYS error.
+!
+! Formal parameters:
+!	None
+!
+! Implicit inputs:
+!	Last error code
+!
+! Implicit outputs:
+!	String space
+!
+! Routine value:
+!	Stringvalue of text
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    LOCAL
+	STR: STR_VAL,		! Stringvalue being generated
+	CCT,			! Character count
+	BUFF: VECTOR[10];	! String buffer
+    REGISTER
+	R1=1,R2=2,R3=3;
+    R1 = BYTPTR(BUFF);
+    R2 = $FHSLF^18 + %O'777777';
+    R3 = 0;
+    JSYS(2,ERSTR,R1,R2,R3);
+    CCT = SUBBP(.R1, BYTPTR(BUFF));
+    STR = PCEAST(.CCT);
+    CH$COPY(.CCT, BYTPTR(BUFF[0]), 0, .CCT+1, BYTPTR(.STR[STV_ADR]));
+    .STR
+    END;
+
+ROUTINE DIVTAD(OPT) =		! Internal variables $TIME and $DATE
+
+!++
+! Functional description:
+!	Return the current time or date, in the form HH:MM:SS or DD-MON-YY
+!
+! Formal parameters:
+!	Option flags to give to ODTIM%
+!
+! Implicit inputs:
+!	None
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Stringvalue
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    LOCAL
+	STR: STR_VAL,		! Stringvalue
+	CCT,			! Character count
+	BUFF: VECTOR[2];	! String buffer
+
+	BEGIN
+	REGISTER R1=1,R2=2,R3=3;
+	R1 = BYTPTR(BUFF);
+	R2 = -1;
+	R3 = .OPT;
+	JSYS(0,ODTIM,R1,R2,R3);
+	CCT = .R1
+	END;
+
+    CCT = SUBBP(.CCT, BYTPTR(BUFF));
+    STR = PCEAST(.CCT);
+    CH$COPY(.CCT, BYTPTR(BUFF[0]), 0, .CCT+1, BYTPTR(.STR[STV_ADR]));
+    .STR
+    END;
+
+GLOBAL ROUTINE DIVTIM =		! Internal variable $TIME
+
+!++
+! Functional description:
+!	Return the current time, in the form HH:MM:SS.
+!
+! Formal parameters:
+!	None
+!
+! Implicit inputs:
+!	None
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Stringvalue
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    DIVTAD(OT_NDA)
+    END;
+
+GLOBAL ROUTINE DIVDAT =		! Internal variable $DATE
+
+!++
+! Functional description:
+!	Return the current date, in the form DD-MON-YY.
+!
+! Formal parameters:
+!	None
+!
+! Implicit inputs:
+!	None
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Stringvalue
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    DIVTAD(OT_NTM)
+    END;
+
+GLOBAL ROUTINE DIVCDR =		! Internal variable $ConnectedDirectory
+
+!++
+! Functional description:
+!	Return the name of the connected directory.
+!
+! Formal parameters:
+!	None
+!
+! Implicit inputs:
+!	None
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Stringvalue
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    LOCAL
+	STR: STR_VAL,		! Stringvalue to be returned
+	LEN,			! Length
+	BUFF: VECTOR[10];	! String buffer
+    REGISTER
+	R1=1,R2=2,R3=3,R4=4;
+    JSYS(0,GJINF,R1,R2,R3,R4);
+    R1 = BYTPTR(BUFF);
+    JSYS(1,DIRST,R1,R2);
+    LEN = SUBBP(.R1, BYTPTR(BUFF));
+    STR = PCEAST(.LEN);
+    CH$COPY(.LEN, BYTPTR(BUFF), 0, .LEN+1, BYTPTR(.STR[STV_ADR]));
+    .STR
+    END;
+
+GLOBAL ROUTINE DIVPMR(STR,FLG) =	! Internal variable $PromptReg
+
+!++
+! Functional description:
+!	Fetches or stores regular prompt string from table.
+!
+! Formal parameters:
+!	Stringvalue to set to
+!	nonzero to set, zero to fetch
+!
+! Implicit inputs:
+!	Prompt string
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Stringvalue
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    DIVPMC(.STR, .FLG, 0)
+    END;
+
+GLOBAL ROUTINE DIVPMS(STR,FLG) =	! Internal variable $PromptSub
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    DIVPMC(.STR, .FLG, 3)
+    END;
+
+GLOBAL ROUTINE DIVPME(STR,FLG) =	! Internal variable $PromptEnb
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    DIVPMC(.STR, .FLG, 1)
+    END;
+
+GLOBAL ROUTINE DIVPMU(STR,FLG) =	! Internal variable $PromptEnbSub
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    DIVPMC(.STR, .FLG, 4)
+    END;
+
+ROUTINE DIVPMC(STR,FLG,IDX) =	! Common $Prompt routine
+
+!++
+! Functional description:
+!	Fetches or stores specified prompt string from table
+!
+! Formal parameters:
+!	Stringvalue to set to
+!	nonzero to set, zero to fetch
+!	Index of prompt in question
+!
+! Implicit inputs:
+!	Prompt string
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Stringvalue
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    IF .FLG NEQ 0
+    THEN
+	BEGIN
+	MAP STR: STR_VAL;
+	IF .PCLPMT[.IDX] NEQ 0
+	THEN
+	    BEGIN
+	    LOCAL OLD: STR_VAL;
+	    OLD = .PCLPMT[.IDX];
+	    RETMEM((.OLD[STV_LEN]+5)/5, .OLD[STV_ADR], XDICT);
+	    PCLPMT[.IDX] = 0
+	    END;
+	IF .STR NEQ 0
+	THEN
+	    BEGIN
+	    LOCAL NEW: STR_VAL;
+	    NEW[STV_LEN] = .STR[STV_LEN];
+	    NEW[STV_ADR] = PCMGMM((.NEW[STV_LEN]+5)/5, XDICT);
+	    CH$MOVE(.NEW[STV_LEN]+1, BYTPTR(.STR[STV_ADR]),
+		    BYTPTR(.NEW[STV_ADR]));
+	    PCLPMT[.IDX] = .NEW;
+	    PCEFST(.STR);
+	    IF .IDX EQL 0 AND .PCCURC NEQ 0 THEN PCCURC[ECB_OPM] = BYTPTR(.NEW)
+	    END;
+	0
+	END
+    ELSE
+	IF .PCLPMT[.IDX] NEQ 0
+	THEN
+	    .PCLPMT[.IDX]
+	ELSE
+	    BEGIN
+	    LOCAL PTR,CNT,CPY: STR_VAL;
+	    PTR = CH$PTR(REDPMT[.IDX]);
+	    CNT = 0;
+	    DO CNT = .CNT + 1 WHILE CH$RCHAR_A(PTR) NEQ 0;
+	    CPY = PCEAST(.CNT);
+	    CH$MOVE(.CNT, CH$PTR(REDPMT[.IDX]), BYTPTR(.CPY[STV_ADR]));
+	    .CPY
+	    END
+    END;
+
+GLOBAL ROUTINE DIVFNV =		! Internal variable $FileV
+
+!++
+! Functional description:
+!	Return version number of current parsed file.
+!
+! Formal parameters:
+!	None
+!
+! Implicit inputs:
+!	Parsed JFN list
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Version number of current parsed file
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    LOCAL
+	LST: REF JLS_WRD,	! JFN list entry
+	JFN: HLF_WRD,		! JFN
+	LEN,
+	BUFF: VECTOR[3];
+    REGISTER
+	R1=1,R2=2,R3=3;
+    LST = .PCCURC[ECB_PFL];
+    IF .LST EQL 0 THEN RETURN 0;
+    R1 = BYTPTR(BUFF);
+    JFN = .LST[JLS_JFN];
+    R2 = (IF .LST[JLS_WLD] THEN .JFN ELSE .JFN[HLF_RGT]);
+    R3 = FLD(1,JS_GEN);
+    JSYS(0,JFNS,R1,R2,R3);
+    LEN = SUBBP(.R1, BYTPTR(BUFF));
+    PCMSTI(.LEN, BYTPTR(BUFF))
+    END;
+
+GLOBAL ROUTINE DIVFNM =		! Internal variable $FileN
+
+!++
+! Functional description:
+!	Return stringvalue of ordinary name of currently parsed file.
+!
+! Formal parameters:
+!	None
+!
+! Implicit inputs:
+!	Parsed JFN list
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Stringvalue of name
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    DIVFNC(0)
+    END;
+
+GLOBAL ROUTINE DIVFNS =		! Internal variable $FileS
+
+!++
+! Functional description:
+!	Return stringvalue of short name of currently parsed file.
+!
+! Formal parameters:
+!	None
+!
+! Implicit inputs:
+!	Parsed JFN list
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Stringvalue of name
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    DIVFNC(FLD(2,JS_DEV)+FLD(2,JS_DIR)+FLD(1,JS_NAM)+FLD(1,JS_TYP)+JS_PAF)
+    END;
+
+GLOBAL ROUTINE DIVFNL =		! Internal variable $FileL
+
+!++
+! Functional description:
+!	Return stringvalue of long name of currently parsed file.
+!
+! Formal parameters:
+!	None
+!
+! Implicit inputs:
+!	Parsed JFN list
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Stringvalue of name
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    DIVFNC(FLD(1,JS_DEV) + FLD(1,JS_DIR) + FLD(1,JS_NAM) +
+	   FLD(1,JS_TYP) + FLD(1,JS_GEN) + JS_PAF)
+    END;
+
+ROUTINE DIVFNC(BITS) =	! Common $File routine
+
+!++
+! Functional description:
+!	Return stringvalue of name of currently parsed file, according
+!	to JFNS argument provided by caller.
+!
+! Formal parameters:
+!	Argument to JFNS JSYS
+!
+! Implicit inputs:
+!	Parsed JFN list
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Stringvalue of file name
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    LOCAL
+	STR: STR_VAL,		! Stringvalue being created
+	BUFF: VECTOR[CH$ALLOCATION(120)],	! String buffer
+	LEN,			! String length
+	LST: REF JLS_WRD;	! Parsed JFN list
+    REGISTER
+	R1=1,R2=2,R3=3;
+    LST = .PCCURC[ECB_PFL];
+    IF .LST EQL 0 THEN RETURN 0;
+    R1 = BYTPTR(BUFF);
+    IF .LST[JLS_WLD]
+    THEN
+	R2 = .LST[JLS_JFN]
+    ELSE
+	BEGIN
+	LOCAL
+	    JFN: HLF_WRD;
+	JFN = .LST[JLS_JFN];
+	R2 = .JFN[HLF_RGT]
+	END;
+    R3 = .BITS;
+    JSYS(0,JFNS,R1,R2,R3);
+    LEN = SUBBP(.R1, BYTPTR(BUFF));
+    STR = PCEAST(.LEN);
+    CH$COPY(.LEN, BYTPTR(BUFF), $CHNUL, .LEN+1, BYTPTR(.STR[STV_ADR]));
+    .STR
+    END;
+
+GLOBAL ROUTINE DINOPN(AP,CNT) =	! Internal integer procedure $Open
+
+!++
+! Functional description:
+!	Open the file named in String1, according to the mode described
+!	by Integer2 (0=input, 1=output, 2=append).  Return the channel number.
+!
+! Formal parameters:
+!	Usual for system procedure
+!
+! Implicit inputs:
+!	None
+!
+! Implicit outputs:
+!	ECB
+!
+! Routine value:
+!	Channel number, or zero if unsuccessful
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    LOCAL
+	FNM: STR_VAL,		! Filename string
+	MODE,			! Desired mode
+	JFN,			! JFN
+	ENT: REF RCL_WRD;	! Entry in channel list
+    BIND
+	GTJFN_MODE = UPLIT(GJ_SHT+GJ_OLD,GJ_SHT+GJ_FOU,GJ_SHT): VECTOR,
+	OPEN_MODE = UPLIT(FLD(7,OF_BSZ)+OF_RD, FLD(7,OF_BSZ)+OF_WR,
+			    FLD(7,OF_BSZ)+OF_APP): VECTOR;
+    IF .CNT NEQ 2 THEN ERROR('Bad arguments to $Open');
+    MODE = PCEGOP(.(.AP+1), STE_TYP_INT);
+    IF .MODE LSS 0 OR .MODE GTR 2 THEN ERROR('Bad arguments to $Open');
+    FNM = PCEGOP(.(.AP), STE_TYP_STR);
+    IF .FNM[STV_LEN] EQL 0 THEN RETURN 0;
+	BEGIN
+	REGISTER
+	    R1=1,R2=2;
+	R1 = .GTJFN_MODE[.MODE];
+	R2 = BYTPTR(.FNM[STV_ADR]);
+	IF JSYS(1,GTJFN,R1,R2)
+	THEN
+	    BEGIN
+	    JFN = .R1;
+	    R2 = .OPEN_MODE[.MODE];
+	    IF NOT JSYS(1,OPENF,R1,R2)
+		THEN
+		    BEGIN
+		    R1 = .JFN;
+		    JSYS(1,RLJFN,R1);
+		    RETURN 0
+		    END
+	    END
+	ELSE
+	    RETURN 0
+	END;
+    ENT = PCMGMM(2, XDICT);
+    ENT[RCL_NXT] = 0;
+    ENT[RCL_JFN] = .JFN;
+    ENT[RCL_OUT] = .MODE NEQ 0;
+    IF .PCCURC[ECB_RCL] EQL 0
+    THEN
+	BEGIN
+	ENT[RCL_CHN] = 1;
+	PCCURC[ECB_RCL] = .ENT
+	END
+    ELSE
+	BEGIN
+	LOCAL
+	    PTR: REF RCL_WRD,	! Channel list entry
+	    CHN;		! Channel mask
+	BUILTIN
+	    FIRSTONE;
+	CHN = -1;
+	PTR = .PCCURC[ECB_RCL];
+	WHILE .PTR NEQ 0 DO
+	    BEGIN
+	    CH$WCHAR(0, CH$PTR(CHN, .PTR[RCL_CHN], 1));
+	    PTR = .PTR[RCL_NXT]
+	    END;
+	CH$WCHAR(0, CH$PTR(CHN, 0, 1));
+	CHN = FIRSTONE(.CHN);
+	IF .CHN LSS 0 THEN ERROR('Too many files open');
+	ENT[RCL_CHN] = .CHN;
+	ENT[RCL_NXT] = .PCCURC[ECB_RCL];
+	PCCURC[ECB_RCL] = .ENT
+	END;
+    IF ..AP EQL OPN_TMP_STR THEN PCEFST(.FNM);
+    .ENT[RCL_CHN]
+    END;
+
+GLOBAL ROUTINE DINCLS(AP,CNT): NOVALUE =	! Internal procedure $Close
+
+!++
+! Functional description:
+!	Closes the channel given in Integer1, or all channels if -1
+!	or if no argument given.
+!
+! Formal parameters:
+!	Usual for system procedure
+!
+! Implicit inputs:
+!	ECB
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	None
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    LOCAL
+	CHN,			! Channel number
+	PRED: REF RCL_WRD,	! Channel list entry
+	PTR: REF RCL_WRD;	! Channel list entry
+    IF .CNT NEQ 1 AND .CNT NEQ 0 THEN ERROR('Bad argument to $Close');
+    IF .CNT EQL 0 THEN CHN = -1 ELSE CHN = PCEGOP(..AP, STE_TYP_INT);
+    IF .PCCURC[ECB_RCL] EQL 0 THEN RETURN;
+    IF .CHN GTR 0
+    THEN
+	BEGIN
+	LOCAL
+	    PTR: REF RCL_WRD,
+	    PRED: REF RCL_WRD;
+	PRED = 0;
+	PTR = .PCCURC[ECB_RCL];
+	WHILE .PTR NEQ 0 DO
+	    BEGIN
+	    IF .PTR[RCL_CHN] EQL .CHN THEN EXITLOOP;
+	    PRED = .PTR;
+	    PTR = .PTR[RCL_NXT]
+	    END;
+	IF .PTR EQL 0 THEN RETURN;
+	    BEGIN
+	    REGISTER
+		R1=1;
+	    R1 = .PTR[RCL_JFN];
+	    JSYS(-1,CLOSF,R1)
+	    END;
+	IF .PRED EQL 0
+	THEN
+	    PCCURC[ECB_RCL] = .PTR[RCL_NXT]
+	ELSE
+	    PRED[RCL_NXT] = .PTR[RCL_NXT];
+	RETMEM(2, .PTR, XDICT)
+	END
+    ELSE
+	BEGIN
+	LOCAL
+	    PTR: REF RCL_WRD,
+	    NXT: REF RCL_WRD;
+	PTR = .PCCURC[ECB_RCL];
+	WHILE .PTR NEQ 0 DO
+	    BEGIN
+		BEGIN
+		REGISTER
+		    R1=1;
+		R1 = .PTR[RCL_JFN];
+		JSYS(-1,CLOSF,R1)
+		END;
+	    NXT = .PTR[RCL_NXT];
+	    RETMEM(2, .PTR, XDICT);
+	    PTR = .NXT
+	    END;
+	PCCURC[ECB_RCL] = 0
+	END
+    END;
+
+GLOBAL ROUTINE DINRED(AP,CNT) =	! Internal string procedure Read
+
+!++
+! Functional description:
+!	Read a record from the input file whose channel is Integer1,
+!	return a string	containing that record.
+!
+! Formal parameters:
+!	Usual for system procedure
+!
+! Implicit inputs:
+!	Input file
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Stringvalue of record
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    LOCAL
+	CHN,			! Channel
+	ENT: REF RCL_WRD,	! Channel list entry
+	JFN,			! JFN
+	REC: STR_VAL,
+	LEN;
+    IF .CNT NEQ 1 THEN ERROR('Read requires a parameter');
+    CHN = PCEGOP(..AP, STE_TYP_INT);
+    ENT = .PCCURC[ECB_RCL];
+    WHILE .ENT NEQ 0 DO
+	IF .ENT[RCL_CHN] EQL .CHN THEN EXITLOOP ELSE ENT = .ENT[RCL_NXT];
+    IF .ENT EQL 0 THEN ERROR('No file with that channel open');
+    IF .ENT[RCL_OUT] THEN ERROR('File is open for output');
+    JFN = .ENT[RCL_JFN];
+	BEGIN
+	REGISTER
+	    R1=1,R2=2,R3=3,R4=4;
+	R1 = .JFN;
+	R2 = .CSBUFP;
+	R3 = 5*512;
+	R4 = $CHLFD;
+	IF NOT JSYS(-1,SIN,R1,R2,R3,R4) THEN RETURN 0;
+	LEN = 5*512 - .R3
+	END;
+    IF .LEN NEQ 0
+    THEN
+	BEGIN
+	REC = PCEAST(.LEN-2);
+	CH$COPY(.LEN-2, .CSBUFP, $CHNUL, .LEN-1, BYTPTR(.REC[STV_ADR]))
+	END
+    ELSE
+	REC = 0;
+    .REC
+    END;
+
+GLOBAL ROUTINE DINEOF(AP,CNT) =	! Internal integer procedure EOF
+
+!++
+! Functional description:
+!	Examine file specified in by channel Integer1.  Return nonzero if
+!	file has reached end of file, or if an output file, or if nonexistent.
+!
+! Formal parameters:
+!	Usual for system procedure
+!
+! Implicit inputs:
+!	Input file
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Zero or -1
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    LOCAL
+	CHN,			! Channel number
+	ENT: REF RCL_WRD;	! Channel list entry
+    IF .CNT NEQ 1 THEN ERROR('EOF requires channel number');
+    CHN = PCEGOP(..AP, STE_TYP_INT);
+    ENT = .PCCURC[ECB_RCL];
+    WHILE .ENT NEQ 0 DO
+	IF .ENT[RCL_CHN] EQL .CHN THEN EXITLOOP ELSE ENT = .ENT[RCL_NXT];
+    IF .ENT EQL 0 THEN ERROR('No file with that channel open');
+    IF .ENT[RCL_OUT] THEN RETURN -1;
+	BEGIN
+	REGISTER
+	    R1=1,R2=2;
+	R1 = .ENT[RCL_JFN];
+	JSYS(0,GTSTS,R1,R2);
+	IF .POINTR(R2,GS_EOF) THEN -1 ELSE 0
+	END
+    END;
+
+GLOBAL ROUTINE DINWRT (AP,CNT): NOVALUE =	! Internal procedure Write
+
+!++
+! Functional description:
+!	Write the record in String2 to the output file in channel Integer1.
+!
+! Formal parameters:
+!	Usual for system procedure
+!
+! Implicit inputs:
+!	None
+!
+! Implicit outputs:
+!	Output file
+!
+! Routine value:
+!	None
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    LOCAL
+	CHN,			! Channel
+	ENT: REF RCL_WRD,	! Channel list entry
+	REC: STR_VAL,
+	JFN;
+    IF .CNT NEQ 2 THEN ERROR('Bad arguments to $Write');
+    REC = PCEGOP(.(.AP+1),STE_TYP_STR);
+    CHN = PCEGOP(..AP, STE_TYP_INT);
+    ENT = .PCCURC[ECB_RCL];
+    WHILE .ENT NEQ 0 DO
+	IF .ENT[RCL_CHN] EQL .CHN THEN EXITLOOP ELSE ENT = .ENT[RCL_NXT];
+    IF .ENT EQL 0 THEN ERROR('Channel not in use');
+    IF .ENT[RCL_OUT] EQL 0 THEN ERROR('File not open for output');
+	BEGIN
+	REGISTER
+	    R1=1,R2=2,R3=3;
+	R1 = .ENT[RCL_JFN];
+	R2 = BYTPTR(.REC[STV_ADR]);
+	R3 = -.REC[STV_LEN];
+	JSYS(0,SOUT,R1,R2,R3);
+	R2 = CH$PTR(UPLIT(%CHAR($CHCRT,$CHLFD)));
+	R3 = -2;
+	JSYS(0,SOUT,R1,R2,R3)
+	END;
+    IF .(.AP) EQL OPN_TMP_STR THEN PCEFST(.REC)
+    END;
+
+GLOBAL ROUTINE DINNFL =	! Internal integer procedure NextFile
+
+!++
+! Functional description:
+!	Steps parsed JFN list to next file, either through GNJFN of the
+!	current entry or by discarding it and moving to the next.
+!	Returns zero if there is no next file, 1 if there is.
+!
+! Formal parameters:
+!	None
+!
+! Implicit inputs:
+!	Parsed JFN list
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Nonzero if done, zero if no more files
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    LOCAL
+	ENT: REF JLS_WRD,	! Parsed JFN list
+	JFN;			! JFN
+    ENT = .PCCURC[ECB_PFL];
+    IF .ENT EQL 0 THEN RETURN 0;
+    IF .ENT[JLS_WLD]
+    THEN
+	BEGIN
+	REGISTER
+	    R1=1;
+	R1 = .ENT[JLS_JFN];
+	JSYS(1,RLJFN,R1);
+	JFN = 0
+	END
+    ELSE
+	BEGIN
+	REGISTER
+	    R1=1;
+	R1 = .ENT[JLS_JFN];
+	IF NOT JSYS(1,GNJFN,R1) THEN JFN = 0 ELSE JFN = .ENT[JLS_JFN]
+	END;
+    IF .JFN EQL 0
+    THEN
+	BEGIN
+	PCCURC[ECB_PFL] = .ENT[JLS_LNK];
+	RETMEM(2, .ENT, XDICT)
+	END;
+    IF .PCCURC[ECB_PFL] EQL 0 THEN 0 ELSE 1
+    END;
+
+GLOBAL ROUTINE DINFII(AP,CNT) =	! Internal integer procedure FileInfo_I
+
+!++
+! Functional description:
+!	Return the datum regarding file Integer1 which is indexed by
+!	Integer2.  The file index is the channel number, or -1 for the
+!	currently parsed file.
+!
+! Formal parameters:
+!	Usual for system procedure
+!
+! Implicit inputs:
+!	File
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Datum
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    LOCAL
+	COD,			! Datum index
+	CHN,			! Channel
+	JFN;			! JFN
+    IF .CNT NEQ 2 THEN ERROR('Bad arguments to $FileInfo_I');
+    COD = PCEGOP(.(.AP+1), STE_TYP_INT);
+    JFN = 0;
+    CHN = PCEGOP(..AP, STE_TYP_INT);
+    IF .CHN LSS 0
+    THEN
+	BEGIN
+	LOCAL
+	    LST: REF JLS_WRD,	! Parsed JFN list
+	    HLF: HLF_WRD;
+	LST = .PCCURC[ECB_PFL];
+	IF .LST NEQ 0
+	THEN
+	    IF .LST[JLS_WLD]
+	    THEN
+		JFN = .LST[JLS_JFN]
+	    ELSE
+		BEGIN
+		HLF = .LST[JLS_JFN];
+		JFN = .HLF[HLF_RGT]
+		END
+	END
+    ELSE
+	BEGIN
+	LOCAL
+	    ENT: REF RCL_WRD;
+	ENT = .PCCURC[ECB_RCL];
+	WHILE .ENT NEQ 0 DO
+	    IF .ENT[RCL_CHN] EQL .CHN THEN EXITLOOP ELSE ENT = .ENT[RCL_NXT];
+	IF .ENT NEQ 0 THEN JFN = .ENT[RCL_JFN]
+	END;
+    IF .JFN EQL 0 THEN ERROR('Requested file channel not in use');
+    CASE .COD FROM $FBHDR TO $FBSS2 OF
+	SET
+[INRANGE]:
+	BEGIN
+	! Get word from FDB
+	LOCAL
+	    DATUM;
+	REGISTER
+	    R1=1,R2=2,R3=3;
+	R1 = .JFN;
+	R2 = .COD + 1^18;
+	R3 = DATUM;
+	IF NOT JSYS(-1,GTFDB,R1,R2,R3) THEN 0 ELSE .DATUM
+	END;
+[OUTRANGE]:
+	ERROR('Invalid word index')
+	TES
+    END;
+
+GLOBAL ROUTINE DINFIS(AP,CNT) =	! Internal string procedure $FileInfo_S
+
+!++
+! Functional description:
+!	Returns the datum regarding file Integer1 which is indexed by
+!	Integer2.  The file index is the channel number, or -1 for the
+!	currently parsed file.
+!
+! Formal parameters:
+!	Usual for system procedure
+!
+! Implicit inputs:
+!	File
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Stringvalue of datum
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    LOCAL
+	FIL,			! File index
+	COD;			! Datum index
+    IF .CNT NEQ 2 THEN ERROR('Bad arguments to $FileInfo_S');
+    COD = PCEGOP(.(.AP+1), STE_TYP_INT);
+    FIL = PCEGOP(.(.AP), STE_TYP_INT);
+    DINJFN(.FIL, .COD)
+    END;
+
+GLOBAL ROUTINE DINFDV(AP,CNT) =	! Internal string procedure $File_Dev
+
+!++
+! Functional description:
+!	Returns the device name of file Integer1.  The file index is
+!	the channel number, or -1 for the currently parsed file.
+!
+! Formal parameters:
+!	Usual for system procedure
+!
+! Implicit inputs:
+!	File
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Stringvalue of datum
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    LOCAL
+	FIL;
+    IF .CNT NEQ 1 THEN ERROR('Bad argument to $File_Dev');
+    FIL = PCEGOP(.(.AP), STE_TYP_INT);
+    DINJFN(.FIL, FLD($JSAOF,JS_DEV)+64 )
+    END;
+
+GLOBAL ROUTINE DINFDR(AP,CNT) =	! Internal string procedure $File_Dir
+
+!++
+! Functional description:
+!	Returns the directory name of file Integer1.  The file index
+!	is the channel number, or -1 for the currently parsed file.
+!
+! Formal parameters:
+!	Usual for system procedure
+!
+! Implicit inputs:
+!	File
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Stringvalue of datum
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    LOCAL
+	FIL;
+    IF .CNT NEQ 1 THEN ERROR('Bad argument to $File_Dev');
+    FIL = PCEGOP(.(.AP), STE_TYP_INT);
+    DINJFN(.FIL, FLD($JSAOF,JS_DIR)+64 )
+    END;
+
+GLOBAL ROUTINE DINFNM(AP,CNT) =	! Internal string procedure $File_Nam
+
+!++
+! Functional description:
+!	Returns the file name of file Integer1.  The file index is
+!	the channel number, or -1 for the currently parsed file.
+!
+! Formal parameters:
+!	Usual for system procedure
+!
+! Implicit inputs:
+!	File
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Stringvalue of datum
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    LOCAL
+	FIL;
+    IF .CNT NEQ 1 THEN ERROR('Bad argument to $File_Dev');
+    FIL = PCEGOP(.(.AP), STE_TYP_INT);
+    DINJFN(.FIL, FLD($JSAOF,JS_NAM)+64 )
+    END;
+
+GLOBAL ROUTINE DINFTY(AP,CNT) =	! Internal string procedure $File_Typ
+
+!++
+! Functional description:
+!	Returns the file type of file Integer1.  The file index is
+!	the channel number, or -1 for the currently parsed file.
+!
+! Formal parameters:
+!	Usual for system procedure
+!
+! Implicit inputs:
+!	File
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Stringvalue of datum
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    LOCAL
+	FIL;
+    IF .CNT NEQ 1 THEN ERROR('Bad argument to $File_Dev');
+    FIL = PCEGOP(.(.AP), STE_TYP_INT);
+    DINJFN(.FIL, FLD($JSAOF,JS_TYP)+64 )
+    END;
+
+ROUTINE DINJFN(FIL, COD) =	! Common JFNS routine
+
+!++
+! Functional description:
+!	Returns the requested datum regarding the given file.
+!
+! Formal parameters:
+!	File index: Channel number, or -1 for the currently parsed file
+!	Datum code
+!
+! Implicit inputs:
+!	File
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Stringvalue of datum
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    LOCAL
+	JFN,			! JFN
+	VAL: STR_VAL,		! Stringvalue being generated
+	LEN,
+	PTR;			! String pointer
+    JFN = 0;
+    IF .FIL LSS 0
+    THEN
+	BEGIN
+	LOCAL
+	    LST: REF JLS_WRD,	! Parsed JFN list
+	    HLF: HLF_WRD;
+	LST = .PCCURC[ECB_PFL];
+	IF .LST NEQ 0
+	THEN
+	    IF .LST[JLS_WLD]
+	    THEN
+		JFN = .LST[JLS_JFN]
+	    ELSE
+		BEGIN
+		HLF = .LST[JLS_JFN];
+		JFN = .HLF[HLF_RGT]
+		END
+	END
+    ELSE
+	BEGIN
+	LOCAL
+	    ENT: REF RCL_WRD;
+	ENT = .PCCURC[ECB_RCL];
+	WHILE .ENT NEQ 0 DO
+	    IF .ENT[RCL_CHN] EQL .FIL THEN EXITLOOP ELSE ENT = .ENT[RCL_NXT];
+	IF .ENT NEQ 0 THEN JFN = .ENT[RCL_JFN]
+	END;
+    IF .JFN EQL 0 THEN ERROR('Requested file channel not in use');
+    PTR = .CSBUFP;
+    CASE .COD FROM 1 TO 3 OF
+	SET
+[1 TO 2]:
+	BEGIN
+	LOCAL
+	    HLF: HLF_WRD;
+	REGISTER
+	    R1=1,R2=2;
+	HLF[HLF_LFT] = (IF .COD EQL 1 THEN $GFAUT ELSE $GFLWR);
+	HLF[HLF_RGT] = .JFN;
+	R1 = .HLF;
+	R2 = .CSBUFP;
+	IF NOT JSYS(-1,GFUST,R1,R2) THEN R2 = .CSBUFP;
+	PTR = .R2;
+	END;
+[3]:	BEGIN
+	REGISTER
+	    R1=1,R2=2;
+	R1 = .JFN;
+	R2 = .CSBUFP;
+	IF NOT JSYS(1,GACTF,R1,R2) THEN R2 = .CSBUFP;
+	PTR = .R2
+	END;
+[OUTRANGE]:
+	BEGIN
+	! General access to JFNS
+	REGISTER
+	    R1=1,R2=2,R3=3,R4=4;
+	IF .COD LSS 64 THEN ERROR('Invalid index');
+!	IF .FIL LSS 0
+!	THEN
+!	    BEGIN
+!	    LOCAL
+!		LST: REF JLS_WRD;
+!	    LST = .PCCURC[ECB_PFL];
+!	    IF .LST[JLS_WLD] THEN JFN = .LST[JLS_JFN]
+!	    END;
+	R1 = .CSBUFP;
+	R2 = .JFN;
+	R3 = .COD - 64;
+	R4 = 0;
+	IF NOT JSYS(-1,JFNS,R1,R2,R3,R4) THEN R1 = .CSBUFP;
+	PTR = .R1
+	END;
+	TES;
+    IF .PTR NEQ .CSBUFP
+    THEN
+	BEGIN
+	LEN = SUBBP(.PTR, .CSBUFP);
+	VAL = PCEAST(.LEN);
+	CH$COPY(.LEN, .CSBUFP, $CHNUL, .LEN+1, BYTPTR(.VAL[STV_ADR]));
+	.VAL
+	END
+    ELSE
+	0
+    END;
+
+GLOBAL ROUTINE DIVACC =		! Internal variable $Account
+
+!++
+! Functional description:
+!	Return stringvalue of job's account number.
+!
+! Formal parameters:
+!	None
+!
+! Implicit inputs:
+!	Account number
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Stringvalue of account number
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    LOCAL
+	STR: STR_VAL,		! Stringvalue being generated
+	LEN,			! String length
+	BUFF: VECTOR[10];	! String buffer
+    REGISTER
+	R1=1,R2=2;
+    R1 = -1;
+    R2 = BYTPTR(BUFF);
+    JSYS(0,GACCT,R1,R2);
+    R1 = .R2;
+    LEN = SUBBP(.R1, BYTPTR(BUFF));
+    STR = PCEAST(.LEN);
+    CH$COPY(.LEN, BYTPTR(BUFF), $CHNUL, .LEN+1, BYTPTR(.STR[STV_ADR]));
+    .STR
+    END;
+
+GLOBAL ROUTINE DINWAI (AP,CNT): NOVALUE =	! Procedure $Wait
+
+!++
+! Functional description:
+!	Delay the number of milliseconds given in Integer1, or forever
+!	of omitted or nonpositive.
+!
+! Formal parameters:
+!	Usual for system procedure
+!
+! Implicit inputs:
+!	None
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	None
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    LOCAL
+	TIME;
+    TIME = 0;
+    IF .CNT GEQ 1 THEN TIME = PCEGOP(..AP, STE_TYP_INT);
+    IF .TIME LEQ 0
+    THEN
+	JSYS(0,WAIT)
+    ELSE
+	BEGIN
+	REGISTER
+	    R1=1;
+	R1 = .TIME;
+	JSYS(0,DISMS,R1)
+	END
+    END;
+
+GLOBAL ROUTINE DIVTAH =		! Variable $Typeahead_Count
+
+!++
+! Functional description:
+!	Return characters in typeahead buffer for controlling terminal.
+!
+! Formal parameters:
+!	None
+!
+! Implicit inputs:
+!	None
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Number of characters
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    REGISTER
+	R1=1,R2=2;
+    R1 = $CTTRM;
+    IF JSYS(1,SIBE,R1,R2) THEN R2 = 0;
+    .R2
+    END;
+
+GLOBAL ROUTINE DIVDND =		! Variable $DECnet_Node
+
+!++
+! Functional description:
+!	Return stringvalue containing the local node name.
+!	
+! Formal parameters:
+!	None
+!
+! Implicit inputs:
+!	None
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Stringvalue containing the local Decnet node name.  This is a null
+!	string if the user's machine is not a DECnet host.
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    LOCAL
+	STR: STR_VAL,		! Stringvalue being generated
+	LEN,			! String length
+	NODBLK,			! NODE% argument block
+	BUFF: VECTOR[10];	! String buffer
+    REGISTER
+	R1=1,R2=2;
+    NODBLK = BYTPTR(BUFF);
+    R1 = $NDGLN;
+    R2 = NODBLK;
+    IF JSYS(-1,NODE,R1,R2)
+        THEN LEN = SUBBP(.NODBLK, BYTPTR(BUFF))
+	ELSE LEN = 0;
+    STR = PCEAST(.LEN);
+    CH$COPY(.LEN, BYTPTR(BUFF), $CHNUL, .LEN+1, BYTPTR(.STR[STV_ADR]));
+    .STR
+    END;
+
+GLOBAL ROUTINE DIVAND =		! Variable $ARPAnet_Node
+
+!++
+! Functional description:
+!	Return stringvalue containing the local node name.
+!	
+! Formal parameters:
+!	None
+!
+! Implicit inputs:
+!	None
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	Stringvalue containing the local Arpanet node name.  This is a null
+!	string if the user's machine is not an Arpanet host.
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    LOCAL
+	STR: STR_VAL,		! Stringvalue being generated
+	LEN,			! String length
+	BUFF: VECTOR[10];	! String buffer
+    REGISTER
+	R1=1,R2=2;
+    R1 = BYTPTR(BUFF);
+    R2 = -1;
+    IF JSYS(-1,CVHST,R1,R2)
+        THEN LEN = SUBBP(.R1, BYTPTR(BUFF))
+	ELSE LEN = 0;
+    STR = PCEAST(.LEN);
+    CH$COPY(.LEN, BYTPTR(BUFF), $CHNUL, .LEN+1, BYTPTR(.STR[STV_ADR]));
+    .STR
+    END;
+
+GLOBAL ROUTINE DINROU: NOVALUE = ! Procedure $Resume_Output
+
+!++
+! Functional description:
+!	Resumes output by turning off TT%OSP (the bit in the JFN mode
+!	word which is turned on by the ^O routine) in the JFN mode word
+!	for .PRIOU.  This routine is a noop if TT%OSP is already off.
+!	
+! Formal parameters:
+!	None
+!
+! Implicit inputs:
+!	None
+!
+! Implicit outputs:
+!	None
+!
+! Routine value:
+!	None
+!
+! Side effects:
+!	None
+!
+!--
+
+    BEGIN
+    EXTERNAL REGISTER Z=0;
+    REGISTER
+	R1=1,R2=2;
+    R1 = $PRIOU;
+    JSYS(0,RFMOD,R1,R2);
+    R2 = .R2 OR TT_OSP;
+    JSYS(0,SFMOD,R1,R2);
+    END;
+END
+
+ELUDOM

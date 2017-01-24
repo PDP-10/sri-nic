@@ -1,0 +1,722 @@
+;<5.ISI.MONITOR>MNTPAR.MAC.5350	 6-Jan-83 18:26:46	Edit by CLYNN
+;#535 Update from CLynn
+;<134>MNTPAR.MAC;7     5-DEC-82 15:37:33    EDIT BY TAFT
+;<134>MNTPAR.MAC;6    29-NOV-82 17:41:42    EDIT BY TAFT
+; Change END to .END
+;<134>MNTPAR.MAC;5    29-NOV-82 14:39:07    EDIT BY TAFT
+; Numerous IFIW!XXX changed to IFIW+XXX because MACRO gets R errors
+;<134>MNTPAR.MAC;4    29-NOV-82 10:47:41    EDIT BY TAFT
+; Flush printout of table definitions
+;<134>MNTPAR.MAC;3    29-NOV-82 09:47:23    EDIT BY TAFT
+; Change MONSYM to STENEX
+; Define NCT for Alto-Imp driver on Maxc
+; Modify MAKRES to use KA10 JEN rather than KL10 XJEN.
+;<5.ISI.MONITOR>MNTPAR.MAC.5010	22-Oct-82 08:54:41	Edit by JGOLDBERGER
+;#501 Version 5 MultiNet
+;[BBNF]<TAPPAN.NEW>MNTPAR.MAC.35, 20-Jul-82 09:09:51, Edit by: TAPPAN
+; Re-arrange NCT's alittle more, so they aren't required to have
+; I/O instructions (to simplify interface to different styles
+; of drivers)
+;[BBNF]<TAPPAN.NEW>MNTPAR.MAC.34, 18-Jun-82 09:57:25, Edit by TAPPAN
+; Add MACRO's to print out table offsets.
+; make DEFWRD symbols half-killed
+;<TAPPAN.NEW>MNTPAR.MAC.8, 15-Apr-82 09:24:37, Edit by TAPPAN
+; Rearrangement to allow "virtual" NCT's
+;<TAPPAN.NEW>MNTPAR.MAC.2, 10-Apr-82 13:42:14, Edit by TAPPAN
+; Modifications for new format (Hardware and Protocal vector rather
+; than individual routine pointers)
+	UNIVERSAL MNTPAR - Definitions for Multinet
+
+;;; COPYRIGHT (C) 1980,1981,1982,1983 BOLT BERANEK and NEWMAN INC.
+
+;;; Dan Tappan 6/80
+	SALL
+	SEARCH	INPAR,PROLOG
+IFNKA <	SEARCH	MONSYM>
+IFKA <	SEARCH	STENEX>
+	SEARCH	MACSYM
+
+
+
+	SUBTTL	MACRO Definitions used
+;;; MACROs
+
+;;; DEFWRD - Define a full word structure, and increment place in table
+;;; arguments are A - Name for offset
+;;;		  SIZ - number of words to reserve ( default to 1)
+DEFINE DEFWRD(A,SIZ)
+<	IF1 <IFDEF A,<PRINTX ? Multiply defined offset in DEFWRD>>
+	A==:..OFST			; set value as table offset
+	DEFPRT(A,\A)
+	IFB <SIZ>,<..OFST==..OFST+1> 	; Increment offset 
+	IFNB <SIZ>,<..OFST==..OFST+SIZ> ; Incrment by buffer size
+>	; End of DEFWRD
+
+;;; DEFHDR - Define the start of a table
+;;;
+DEFINE DEFHDR(TABLE,START)
+<	IF2 <PRINTX	Defining TABLE format>
+	IFB <START>,<..OFST==0>
+	IFNB <START>,<..OFST==START>
+>
+
+;;; DEFPRT - print a table entry
+;;;
+DEFINE DEFPRT(NAME,SIZ)
+<	IF2 <PRINTX	NAME	=	SIZ>>
+
+;;; Machine Type checking Macro's
+
+;;; IFKA - True if a KA10
+IFNDEF KAFLG,<KAFLG==0>
+IFNDEF KIFLG,<KIFLG==0>
+IFNDEF KLFLG,<KLFLG==0>
+IFNDEF SMFLG,<KLFLG==0>
+IFE KAFLG+KIFLG+KLFLG+SMFLG,<PRINTX ? Processor not defined>
+
+DEFINE IFNKA(STUFF)<IFE KAFLG!KIFLG,<STUFF>>
+DEFINE IFKA(STUFF)<IFN KAFLG!KIFLG,<STUFF>>	; KI and KA are the same
+DEFINE IFSM(STUFF)<IFN SMFLG,<STUFF>>
+
+;;; SETSEC - Modify the section number of an index register
+
+IFKA <	DEFINE SETSEC (AC,SECTION)<>>
+IFKL <	DEFINE SETSEC (AC,SECTION) <	HRLI AC,SECTION>>
+IFSM <	DEFINE SETSEC (AC,SECTION) <>>
+
+;;; PUTSEC - make a pointer to the base of a section
+IFKA < DEFINE PUTSEC (AC,SECTION)<	MOVEI AC,0>>
+IFKL < DEFINE PUTSEC (AC,SECTION)<	HRLZI AC,SECTION>>
+IFSM < DEFINE PUTSEC (AC,SECTION)<	MOVEI AC,0>>
+
+IFKL <DEFINE GIW (ADDR,X<0>,I<0>) < <I>B1!<X>B5!<ADDR>B35>>
+IFSM <DEFINE GIW (ADDR,X<0>,I<0>) < <I>B13!<X>B17!<ADDR>B35>>
+IFKA <DEFINE GIW (ADDR,X<0>,I<0>) < <I>B13!<X>B17!<ADDR>B35>>
+
+IFKA <	IFIW==:1B0
+	MNTSEC==:0
+	OPDEF XMOVEI [SETMI]
+>
+
+
+;;; MNTBUG - Machine dependent BUGX creator
+;;;
+
+DEFINE MNTBUG(TYPE,TAG,STRING,ACS) <
+	IFKA <	IFIDN <TYPE>,<INF>,<BUG(NTE,<STRING>)>
+		IFDIF <TYPE>,<INF>,<BUG(TYPE,<STRING>)>
+	>
+	IFNKA <	BUG(TAG,<ACS>)>
+>
+
+
+;;;
+;;; SAVP1 - macro for saving and automaticly restoring the AC
+;;; used to store the NCT
+;;; 
+DEFINE SAVP1<JSP CX,.SAVP1>
+
+;;;
+;;; The following macroes are used to access routines offset
+;;; in the NCT
+;;;
+
+;;; MNTCALL - Call a routine
+;;; This calls routines either from the Hardware or the Protocal
+;;; vector (dependent on the argument)
+DEFINE	MNTCALL(FOO)<
+	..FND==0
+	MNTCL0(FOO,<<<NTPKIL,NTPERR,NTIDUN,NTODUN,NTRBUF,NTLLDR,NTOTOK,NTPINI>,NTPVEC>,<<NTHKIL,NTHINI,NTISRT,NTOSRT,NTRSRT,NTSCHK>,NTHVEC>>)
+	IFE ..FND,<PRINTX Unknown offset -- FOO>
+	CALL @FOO(CX)
+	PURGE ..FND
+>
+
+;;; MNTCL0 -- decide which vector to use
+;;;
+DEFINE	MNTCL0(FOO,VEC)<
+	IRP VEC,<MNTCL1(FOO,VEC)>
+>
+
+DEFINE	MNTCL1(FOO,VEC)<MNTCL2(FOO,VEC)>	; Strip off brackets
+DEFINE	MNTCL2(FOO,TEST,VEC)<
+	IRP TEST,<
+		IFIDN <FOO>,<TEST>,<
+			MOVE CX,VEC(P1)
+			..FND==1
+			>
+		>
+>
+
+;;; MNTXCT - execute an instruction
+;;;
+DEFINE	MNTXCT(FOO)<XCT FOO(P1)>
+
+
+;;; The following MACROs are used to actually create the 
+;;; NCT or Network Control Table
+;;;
+;;; The macro MKNCTS should be called at the location of the
+;;; NCT storage table.
+;;;
+;;;	NCT's are allocated in the order
+;;;	Non-vectored devices( i.e. IMP10s), vectored devices (i.e. AN20s)
+;;;
+;;; The Macro MKPTRS should be called at the location of the NCT vector
+;;; table
+
+
+;;;
+
+;;; MKNCTS - The basic MACRO
+;;; **NOTE** That the following must be called in the RESCD PSECT
+DEFINE	MKNCTS
+<	XALL			; Show the lines temporarily
+NT.NUM==0			; Start with Interface 0
+
+NCTNUM==0			; Start out at zero
+NT.TYP==NT.NCP			; Define network type as NCP
+NT.DEV==NT.BBN			; Device type is IMP10
+DV.NUM==0			; Device number starts at 0
+REPEAT	BBNN,<
+MAKNCT(\DV.NUM,\NCTNUM,^D576)	; Make an IMP10 type NCT
+DV.NUM==DV.NUM+1		; Go to next of this type
+	>	;; End of Repeat BBNN
+
+NT.TYP==NT.NCP			; Network Type is NCP
+NT.DEV==NT.ANX			; Device type AN20
+DV.NUM==0			; Back to number 0
+REPEAT	ANXN,<
+MAKNCT(\DV.NUM,\NCTNUM,^D576)		; Make that type NCT
+DV.NUM==DV.NUM+1		; increment number of that type
+	>	;; End of Repeat ANXN
+
+NT.TYP==NT.NUN			; No network level protocal
+NT.DEV==NT.NFE			; Network front-end DTE's
+DV.NUM==0			; Back to number 0
+REPEAT	NFEN,<
+MAKNCT(\DV.NUM,\NCTNUM,^D576)	; Make one of 'em
+DV.NUM==DV.NUM+1		; And increment number
+	>	;; End of repeat NFEN
+
+NT.TYP==NT.NCP			; Network Type is NCP
+NT.DEV==NT.ALT			; Device type Maxc-Alto-Imp
+DV.NUM==0			; Back to number 0
+ND ALTN,0
+REPEAT	ALTN,<
+MAKNCT(\DV.NUM,\NCTNUM,^D576)		; Make that type NCT
+DV.NUM==DV.NUM+1		; increment number of that type
+	>	;; End of Repeat ALTN
+
+	SALL			; Again suppress expansions
+>		;; End of MKNCTS
+
+;;; MAKNCT - Make a specific NCT
+;;; *** WARNING *** This !MUST! agree with the table offsets defined below
+DEFINE MAKNCT(NUM,NCTN,ISIZ)<
+
+;;; The following section is the same among all NCT's
+.NCT'NCTN=:.			; Set address of this NCT
+	EXP	0		; Link word to next NCT in list
+				; (filled in by MNTINI)
+NCTNUM==NCTNUM+1		; Increment number of NCTS defined
+
+	XWD	NT.TYP,NT.DEV	; Protocal and device codes
+	EXP	NT.NUM		; Net index
+NT.NUM==NT.NUM+1		; increment net index
+	EXP	-1		; Internet network number
+	EXP	-1		; Internet Address of this interface
+	EXP	0		; default logical host mask
+IFB  <ISIZ>,<XWD 377777,-1>	; Maximum packet size
+IFNB <ISIZ>,<EXP ISIZ>		; Maximum packet size
+	EXP	0		; Local leader size
+	BLOCK	NTPVEC-NTRDY	; Storage
+
+;;; Now we have a seperate conditional for each possible 
+;;; Network type, If another type is added, another, similar
+;;; conditional must be added
+
+;;; Poll routine for IMP10 devices, note:
+;;;  This isn't really necessary, but speeds things up.
+;;;  This should be the last thing in the NCT
+;;;  By convention, a poll routine will dispatch to the proper
+;;;   interrupt handler, returning +2 if one is found for this device
+;;;   +1 if the interrupt is not for this device
+;;;( it is to advantage to have the more heavily used devices NCT's first)
+
+	 DEFINE IMPPOL(IMP,%HERE)
+<
+;;; Bit definitions
+I.IRQ==1B32			; Input word ready, CONI
+I.STO==1B21			; Stop output, CONO
+I.ERQ==1B24			; End of input, CONI
+I.ORQ==1B28			; Ready for next output word, CONI
+
+IFKA <	EXTERN IMPIND>
+;;; Now the Poll routine
+	CONSO IMP,7		; Input turned off?
+	JRST %HERE		; Yes
+	CONSZ IMP,I.IRQ
+	 JRST @NTIDSP(P1)	; Input in
+	CONSZ IMP,I.ERQ
+	 JRST [	CONSO IMP,I.IRQ	; It can happen that last input came in
+		 JRST IMPIND	; End of input
+		JRST @NTIDSP(P1)]	; If so, handle it first
+%HERE:	CONSZ IMP,7B31		; Do nothing if no channel assigned
+	 CONSO IMP,I.ORQ
+	  RET			; NOT AN INTERRUPT FOR THIS DEVICE
+	SKIPE NTOB(P1)		; If an output buffer
+	 JRST @NTODSP(P1)	; Word out
+	CONO IMP,I.STO		; Else turn output off
+	RETSKP
+> ;; End of IMPPOL Macro
+
+;;; 1 - NCP, IMP10
+IFE <<NT.TYP-NT.NCP>!<NT.DEV-NT.BBN>>,
+<
+IFKA <	EXTERN NCPVEC,IMPVEC>
+	IFIW+NCPVEC		; 1822 net vector
+	BLOCK	NTHVEC-NTIB	; Storage
+	IFIW+IMPVEC		; IMP10 hardware vector
+	CONSZ	IMP'NUM,(T1)	; CONSZ word
+	CONSO	IMP'NUM,(T1)	; CONSO  word
+	CONO	IMP'NUM,(T1)	; CONO word
+	CONI	IMP'NUM,T1	; CONI word
+	DATAO	IMP'NUM,T1	; DATAO word
+	DATAI	IMP'NUM,T1	; DATAI word
+	BLOCK	NTPOLL-HSTGDM	; More storage
+	IMPPOL(\IMP'NUM)	; Make the POLL routine
+	>	;; End of IMP10/NCP conditional
+
+;;; NCP/AN20
+
+;;; MAKSAV MACRO
+;;; Creates an interrupt AC save and dispatch routine in the current NCT
+;;; at the current location,
+;;; Uses The following locations (which therefore must be defined for that
+;;; net type)
+;;; the argument PDP is the address of a Push down pointer fot this routine
+;;; DISP is the offset of the dispatch address
+DEFINE MAKSAV(PDP,DISP)
+<	MOVEM P,.NCT'NCTN+NTSVAC+17	; Save P
+	MOVEI P,.NCT'NCTN+NTSVAC	; Where the AC's go
+	BLT P,.NCT'NCTN+NTSVAC+16	; Save all
+	MOVE P,PDP		; Set new P
+	XMOVEI P1,.NCT'NCTN	; Point to NCT
+	CALL	@DISP(P1)	; And Goto routine
+>	;; End of MAKSAV
+
+
+;;; MAKRES - Make a 3 word AC restore , dismiss interrupt routine
+;;; AC's are assumed stored at NTSVAC
+;;; Arg PCW is the address of the interrupt PC
+DEFINE	MAKRES(PCW)
+<	MOVSI P,.NCT'NCTN+NTSVAC	; From there to 0
+	BLT P,P			; Restore all AC's
+IFE KAFLG,<XJEN .NCT'NCTN+PCW>	; And dismiss the interrupt
+IFN KAFLG,<JEN @.NCT'NCTN+PCW>
+>	;; End of MAKRES MACRO
+
+IFE <<NT.TYP-NT.NCP>!<NT.DEV-NT.ANX>>,<
+  IFKA <PRINTX ?Creating NCP/ANX NCT>
+ANI'NUM==ANX'NUM		; Input device address
+ANO'NUM==ANX'NUM+4		; Output side
+
+	IFIW+NCPVEC		; 1822 type net vector
+	BLOCK	NTHVEC-NTIB	; Storage
+	IFIW+ANXVEC		; AN20 hardware vector
+	CONSZ	ANI'NUM,(T1)	; CONSZ Input
+	CONSO	ANI'NUM,(T1)	; CONSO Input
+	CONO	ANI'NUM,(T1)	; CONO Input
+	CONI	ANI'NUM,T1	; CONI Input
+	DATAO	ANI'NUM,T1	; DATAO Input
+	DATAI	ANI'NUM,T1	; DATAI Input
+	BLOCK	NTOCNO-HSTGDM	; Storage
+	CONO	ANO'NUM,(T1)	; CONO Output
+	CONI	ANO'NUM,T1	; CONI Output
+	CONSO	ANO'NUM,(T1)	; CONSO Output
+	CONSZ	ANO'NUM,(T1)	; CONSZ Output
+	DATAO	ANO'NUM,T1	; DATAO Output
+	XPCW	.+1		; Interrupt instruction
+	BLOCK	2		; Inturrupt PC storage
+	EXP	0		; New flags (Input)
+	XWD	MSEC1,.+1	; New PC (Input save)
+	MAKSAV	(IMPPDP,NTIDSP)	; 6 words of AC save routine
+	MAKRES	(NTIPCW)	; 3 words of AC restore routine
+	XPCW	.+1		; Interrupt instruction
+	BLOCK	2		; PC storage
+	EXP	0		; New flags
+	XWD	MSEC1,.+1	; New PC (Output Save)
+	MAKSAV	(IMPPDP,NTODSP)	; 6 words of AC Save
+	MAKRES	(NTOPCW)	; 3 words of AC restore
+	BLOCK	20			; AC storage
+	>	;; End of NCP/ANX conditional	
+
+
+;;; Network front-end DTE, This is a DTE, but as far as the Regular DTE drivers
+;;; on the system are concerned it doesn't exist (and thus shouldn't
+;;; be counted in DTEN)
+
+IFE	<NT.DEV-NT.NFE>,<
+  IFKA <PRINTX ?Creating DTE NCT>
+	IFIW+NFEVEC		; Network front end protocal vector
+	BLOCK	NTHVEC-NTIB	; Storage
+	IFIW+DTEVEC		; network front-end DTE vector
+	CONSZ	NFE'NUM,(T1)	; CONSZ word
+	CONSO	NFE'NUM,(T1)	; CONSO word
+	CONO	NFE'NUM,(T1)	; CONO word
+	CONI	NFE'NUM,T1	; CONI word
+	DATAO	NFE'NUM,T1	; DATAO word
+	DATAI	NFE'NUM,T1	; DATAI word
+	BLOCK	NTIINT-NT11ST	; Storage
+	XPCW	.+1		; Interrupt instruction
+	BLOCK	2		; PC Storage
+	EXP	0		; New flags
+	XWD	MSEC1,.+1	; New PC
+	MAKSAV	(NFEPDP,NTIDSP)	; 6 words AC save
+	MAKRES	(NTIPCW)	; 3 words restore
+	BLOCK	NTSVAC-NTOINT	; Null storage
+	BLOCK	20		; AC storage
+>	;;	End of Network front-end DTE Table
+
+
+;; Maxc-Alto-Imp interface
+;; A lot of this stuff isn't used, but I'm afraid to compress anything out because
+;; I have no idea who knows about what table offsets.
+
+IFE <<NT.TYP-NT.NCP>!<NT.DEV-NT.ALT>>,<
+	IFIW+NCPVEC		; 1822 type net vector
+	BLOCK	NTHVEC-NTIB	; Storage
+	IFIW+ALTVEC		; Maxc-Alto-Imp hardware vector
+	HALT			; CONSZ Input
+	HALT			; CONSO Input
+	HALT			; CONO Input
+	HALT			; CONI Input
+	HALT			; DATAO Input
+	HALT			; DATAI Input
+	BLOCK	NTOCNO-HSTGDM	; Storage
+	HALT			; CONO Output
+	HALT			; CONI Output
+	HALT			; CONSO Output
+	HALT			; CONSZ Output
+	HALT			; DATAO Output
+	JSYS	.+4		; Interrupt instruction
+	BLOCK	2		; Inturrupt PC storage *** only first word used
+	EXP	0		; New flags (Input) *** not used
+	XWD	.-3,.+1		; PC save loc ,, New PC (Input save)
+	MAKSAV	(IMPPDP,NTIDSP)	; 6 words of AC save routine
+	MAKRES	(NTIPCW)	; 3 words of AC restore routine
+	JSYS	.+4		; Interrupt instruction
+	BLOCK	2		; PC storage *** only first word used
+	EXP	0		; New flags *** not used
+	XWD	.-3,.+1		; PC save loc ,, New PC (Output Save)
+	MAKSAV	(IMPPDP,NTODSP)	; 6 words of AC Save
+	MAKRES	(NTOPCW)	; 3 words of AC restore
+	BLOCK	20			; AC storage
+	>	;; End of NCP/ALT conditional	
+
+>	;; End of MAKNCT MACRO
+
+
+;;; MKPTRS - Macro for createing the NCT vector table, called
+;;; at vector table location
+;;; The following must also be called in the RESCD PSECT
+DEFINE MKPTRS<
+..TMP==0			; Start at NCT #0
+REPEAT %NETS,<
+	MAKPTR(\..TMP)
+	..TMP==..TMP+1>
+>
+
+;;; MAKPTR- Sub-macro for finding the proper NCT address
+DEFINE MAKPTR(NUM)<	XWD MSEC1,.NCT'NUM>
+
+
+
+; To be used at BUGHLT and BUGCHK
+DEFINE	MNTSTP<
+
+DEFINE	STOP (INST,DEV,IDX,VAL)<	INST DEV'IDX,VAL>
+
+..N==0	; From IMPPHY: I.NRL==1B20	; Not Ready-line to IMP, CONO
+REPEAT BBNN,<	STOP CONO,IMP,\..N,1B20
+..N==..N+1	> ; End of REPEAT BBNN
+
+> ; End of DEFINE MNTSTP
+
+
+	SUBTTL General Definitions
+
+
+;;; Definitions of network and protocal types
+NT.NCP==:0			; Protocal type 0, NCP
+NT.NUN==:1			; PROTOCAL TYPE 1, NO LOCAL PROTOCAL
+NT.CHA==:2			; Protocal type 2, CHAOSNet
+NT.ETH==:3			; Protocal type 3 -- Ethernet (10MB)
+
+NT.BBN==:0			; Device type 0, IMP10
+NT.ANX==:1			; Device type 1, AN20
+NT.NFE==:2			; DEVICE TYPE 2, Network front-end DTE
+NT.NIN==:3			; No interface associated with address
+NT.LNK==:4			; Linked (virtual) NCT (Not stored in the NCT)
+NT.ALT==:5			; Maxc-Alto-IMP interface
+
+;;; Field definitions for InterNet address'
+DEFSTR IANET,0,11,8		; Net Number
+;;;(The next 5 overlap since different nets use the parts differently)
+DEFSTR IAHI,0,19,8		; 8 bit high part
+DEFSTR IAHST,0,19,8		; 8 bit host number
+DEFSTR IAIMP,0,35,16	; 16 bit Low part
+DEFSTR IAMID,0,27,8		; 8 bit middle
+DEFSTR IALOW,0,35,8		; 8 bit low part
+
+;;;
+;;; Structures in the Host tables
+;;; For reference the Hostables have the following formats
+;;;
+;;; Tables indexed by a hash of the host number
+;;; HOSTNN - The 32 bit host number
+;;; HSTSTS - Status bits
+;;;
+;;; Tables indexed by order in the Hostname file
+;;; HOSTN - LH 18 bit address in HSTNAM
+;;;	    RH Index into hashed tables
+DEFSTR HSTIDX,HOSTN,35,18	;INDEX TO STATUS TABLE
+DEFSTR HSTNMP,HOSTN,17,16	;POINTER TO NAME STRING
+;;;
+;;; HSTNAM - a block NHSTN long which holds the null terminated
+;;;		name strings.
+;;;
+
+
+	SUBTTL	Offset definitions for tables
+;;; Tables for driving Multinet interfaces
+;;;
+;;; The basic philosphy here, is that each interface
+;;; (and network type) has some subset of functions in common
+;;; with all others, and also will have some other (hopefully
+;;; smaller) set of functions that are unique to it.
+;;; Partly in order to assure this, we restrict the interface
+;;; types supported to packet-switched networks, and preferably
+;;; supporting Internet protocals (though its not clear that
+;;; this is actually necessary).
+;;;
+;;; There are two different "flavors" of NCT, "physical" and
+;;; "virtual". A Given piece of hardware only has one physical
+;;; NCT associated with it, but it can have several virtual 
+;;; ones - one for each network address associated with the hardware
+;;; (This is meaningful mostly for a network front end,
+;;; which might have several network interfaces on it, but
+;;; only one path to the 10). The virtual NCT contains
+;;; only those entries that are necessary for supporting
+;;; the protocals used. It is distingished from a physical
+;;; NCT by having a non-zero NTPHY entry - which points to
+;;; the associated physical NCT. 
+;;; A physical NCT with associated virtual NCT's will
+;;; have an local address of -1 (this is so each address
+;;; can be enabled or disabled without taking down the
+;;; shared hardware)
+;;;
+;;; The physical NCT contains all entries necessary for
+;;; actually driving the hardware.
+;;; The driver table is divided into 4 parts ( possibly with
+;;; some overlap)
+;;; 1 - Device independent routines/instructions
+;;;	i.e. I/O instructions and other things that
+;;;	all will have in common
+;;; 2 - Device independent storage, Input/Output buffers etc
+;;; 3 - Device dependent routines, These depend on the type
+;;;	of interface ( possibly type of network) and will
+;;;	not exist except for those types ( i.e. each interface
+;;;	type should have different definitions for the offsets 
+;;;	of these things)
+;;; 4 - Device dependent storage - see 3
+;;;
+;;; The present design has been heavily influenced by the
+;;; ARPANet 1822/AN20 code, however it should be general enough
+;;; to be expanded to any type of interface ( for example
+;;; a DTE-11 driving Network front-end
+;;;
+;;; NCT's are chained together, by the NTLNK field, in the following way:
+;;; The chain starts with the first physical NCT, this is chained
+;;; to it's first virtual NCT, which is chained to the next. The last
+;;; virtual NCT for that interface is chained to the next physical,
+;;; so the chain goes <real><virtual><virtual>...<real><virtual>....
+;;;
+
+;;; Common Constants
+DEFSTR	NTLNK,0,35,36		; Link to next Block
+DEFSTR	NTTYP,1,17,18		; Type code of this network
+DEFSTR	NTDEV,1,35,18		; Type code of device this interface is
+DEFHDR (<NCT>,3)		; start after the headers
+DEFWRD	NTNET			; Internet network number of this interface
+				; -1 until initialized
+DEFWRD	NTLADR			; Local InterNet address on this interface
+				; -1 until initialized
+DEFWRD	NTNLHM			; Logical Host Mask for this (interface's) net
+				; 0 if none
+DEFWRD	NTPSIZ			; Maximum packet size for this network (bytes)
+
+DEFWRD	NTHDRL			; Local leader size (including link,size word)
+;;;
+;;; Status flags 
+;;;
+;;; The following act as status flags (and correspond to the old
+;;; IMPRDY GETAB table) between them governing the state of the
+;;; network on that interface.
+;;; 
+
+;;; Software  (protocal driver) flags
+DEFWRD	NTRDY			; 0 = Down, >0 = Going down, -1=Up
+DEFWRD	NETON			; 0 - Network turned off (software wise)
+DEFWRD	NTSTCH			; Network has undergone a change of state
+DEFWRD	NTORDY			; Output enabled on Interface
+DEFWRD	NTXDNT			; TODCLK of last time net went off externally
+				; (for ex. readyline drop)
+DEFWRD	NTDCLK			; "Down clock" TODCLK counter for
+				; timeout's
+DEFWRD	NTXUPT			; T&D of last time net came on externally
+				; (for ex. ready-line up)
+
+DEFWRD	NTPHY			; Link to physical NCT if shared hardware
+DEFWRD	NTPVEC			; Protocal dependent vector
+VNCTSZ==..OFST			; Size of a virtual NCT
+;;; After this point entries exist only in physical NCT's
+;;;
+;;; Storage needed by all nets
+;;;
+DEFWRD	NTIB			; Current input buffer
+DEFWRD	NTOB			; Current output buffer
+	;; Input interrupts
+DEFWRD	NTIDSP			; Input interrupt dispatch address
+	;; Output interrupts
+DEFWRD	NTODSP			; Output interrupt dispatch address
+;;;
+;;; The rational behind the following allocation for buffer lists
+;;; is that these are all Internet networks, with some sort of
+;;; local protocal, consequently there is one list for messages
+;;; which must go out immediately, one for regular messages on the
+;;; local network, and one for internet messages, Since these are
+;;; FIFO queues there is both a head and a tail pointer for each.
+;;; In order to keep local or internet from chokeing the other off
+;;; the NTPRIO word defines the priority of each, being more
+;;; positive if local stuff has higher priority ( it would
+;;; be good to keep this constant among the various network drivers)
+;;;
+;;;
+DEFWRD	NTHOBO			; High priority output list, head pointer
+DEFWRD	NTHOBI			; Tail pointer
+DEFWRD	NTLOBO			; Local network output list head pointer
+DEFWRD	NTLOBI			; tail pointer
+DEFWRD	NTIOBO			; Internet output list, head pointer
+DEFWRD	NTIOBI			; Tail pointer
+DEFWRD	NTPRIO			; Priority word for deciding between lists
+
+
+;;; Hardware (interface driver) flags
+DEFWRD	NTERRF			; An external error condition has been noticed
+				; by the hardware (i.e. ready-line drop)
+DEFWRD	NTNOP			; A count of how many null messages to send
+DEFWRD	NTFLS			; A count of how many input messaages to ignore
+DEFWRD	NTTOUT			; Output hung timeout
+
+DEFWRD	NTHVEC			; Hardware dependent vector
+
+;;;
+;;; Storage needed by only some nets/interface types
+;;; Since different nets use different storage here the same offset
+;;; can be known by different names.
+;;;
+;;; [Presently storage is allocated here optimaly for the two types
+;;; of networks we have, if more were added it could of course be 
+;;; rearranged]
+;;;
+DEFWRD	NTCNSZ			; CONSZ (T1) instruction
+DEFWRD	NTCNSO			; CONSO (T1) instruction
+DEFWRD	NTCONO			; CONO (T1) instruction
+DEFWRD	NTCONI			; CONI T1 instruction
+DEFWRD	NTDATO			; DATAO T1 instruction
+DEFWRD	NTDATI			; DATAI T1 instruction
+
+DEFWRD	NT11ST,0		; 11's status word (Network front-end DTE)
+DEFWRD	HSTGDM			; Host going down message wanted (NCP type)
+DEFWRD	NT10ST,0		; 10's status word, (Network front-end DTE)
+DEFWRD	IMPCCH			; Flag to reset hosts (NCP Type nets)
+DEFWRD	NTINP			; Current input pointer (AN20,IMP10)
+				; (base input buffer byte pointer, DTE)
+DEFWRD	NTOUP			; Current Output pointer (AN20,IMP10)
+				; (base output buffer byte pointer, DTE)
+DEFWRD	NTDTEN,0		; Saved offset into EPT DTE blocks (DTE)
+DEFWRD	NTITYP			; Input transfer type (AN20,IMP10)
+DEFWRD	NTOTYP			; Output tranfer type (AN20,IMP10)
+DEFWRD	NTIWC,0			; Input word count (IMP10)
+DEFWRD	NTOCNO			; Output side CONO (T1) (AN20)
+DEFWRD	NTOWC,0			; Output word count (IMP10)
+DEFWRD	NTOCNI			; Output side CONI T1 (AN20)
+DEFWRD	NTIS32,0		; Input word repacking status (IMP10)
+DEFWRD	NTOCSO			; Output side CONSO (T1) (AN20)
+DEFWRD	NTOS32,0		; Output side repacking state (IMP10)
+DEFWRD	NTOCSZ			; Output side CONSZ (T1) (AN20)
+DEFWRD	NTODTO			; Output side DATAO T1 (AN20)
+;;; The following are the interrupt handlers
+DEFWRD	NTIINT			; Input interrupt instruction (AN20)(DTE)
+DEFWRD	NTPOLL,0		; This is the first location of the poll
+				; Routine (IMP10), note that the storage
+				; can be shared with the interrupt handlers
+				; since a device will be polled or vectored
+				; but not both, this should be the bottom
+				; of the NCT in which it is used
+DEFWRD	NTIPCW,2		; Interrupt PC etc storage(AN20)
+DEFWRD	NTINPC,2		; New PC and flags (AN20)
+DEFWRD	NTIISV,6		; Input interrupt save routine(AN20)
+DEFWRD	NTIIRS,3		; Interrupt restore routine(AN20)
+DEFWRD	NTOINT			; Output interrupt instruction
+DEFWRD	NTOPCW,2		; Interrupt Output PC,flags storage(AN20)
+DEFWRD	NTONPC,2		; New Pc on output interrupt
+DEFWRD	NTIOSV,6		; Output interrupt save routine(AN20)
+DEFWRD	NTIORS,3		; Output restore routine(AN20)
+DEFWRD	NTSVAC,20		; Interrupt AC storage
+
+
+;;;
+;;; NCTVEC -- Checks that a routine is at the right offset
+;;; in the vector
+;;;
+DEFINE	NCTVEC(TABLE,ROUTINE,OFF)<
+	IFN <.-TABLE-OFF>,<PRINTX ?ROUTINE at bad TABLE offset>
+	IFIW+ROUTINE		; Create instruction
+>
+;;; Definition of the protocal vector.
+;;; This vector contains pointers to routines that are specific
+;;; to the type of network (i.e. 1822), as opposed to the 
+;;; particular hardware
+DEFHDR	(<PROTOCAL-VECTOR>)
+DEFWRD	NTPKIL			; Protocal dependent shutdown
+DEFWRD	NTPERR			; Protocal dependent hardware error handler
+DEFWRD	NTIDUN			; End of input
+DEFWRD	NTODUN			; End of output
+DEFWRD	NTRBUF			; Flush a buffer (chain)
+DEFWRD	NTOTOK			; Check that an Internet buffer can be sent
+DEFWRD	NTLLDR			; Create a local leader
+DEFWRD	NTPINI			; Protocal specific "network up" function
+
+;;;
+;;; Definition of the Hardware vector 
+;;; This contains pointers to routines that are specific to the exact
+;;; piece of hardware
+DEFHDR	(<HARDWARE-VECTOR>)
+DEFWRD	NTHKIL			; Shut off the hardware
+DEFWRD	NTHINI			; Network Initialization instruction
+DEFWRD	NTRSRT			; Network restart instruction
+DEFWRD	NTISRT			; Start input instruction
+DEFWRD	NTOSRT			; Start output instruction
+DEFWRD	NTSCHK			; Hardware status check instruction
+				; checks on whether net is on hardware-wise
+				; skip return if so ( for an 1822 device
+				; Checks the ready-line, note that not all
+				; network types may have some thing they
+				; can check on)
+
+
+IFNKA <	END			; Of MNTPAR>
+IFKA <	.END			; Of MNTPAR>

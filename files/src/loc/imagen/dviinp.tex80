@@ -1,0 +1,678 @@
+Entry;
+begin "-- DVI file routines --"
+
+require "genhdr.sai"source!file;
+
+! **************************************************************************
+* 	Input routine for DVI files.  This file contains all the routines  *
+* specific to Device Independent Format.  This program is an adaptation    *
+* (by Jan Stoeckenius) of an earlier one written by Randy Strauss.  	   *
+* The routine reads the file from back to front by (output) pages, scan-   *
+* ning each page twice.  The first scan prepares the prepage entries	   *
+* (glyph table) and the second the page entries (positioning information). *
+*	When establishing the prepage entries, the glyph table space 	   *
+* needed by the entries on this page must be known before any glyph masks  *
+* can be sent, because it may be necessary to delete certain glyphs to	   *
+* make room for new entries.  To permit this, the program first constructs *
+* a table of pointers to glyph masks (using the routine FindChar), then    *
+* transfers the glyph masks all at one time (using the routine OGlyMsk).   *
+* 									   *
+* June 25, 1982.							   *
+*									   *
+****************************************************************************;
+
+!	External variables;
+
+
+External real 	      mag,	! User specified magnification;
+		 wdfactor;	! Factor to be used in converting returned
+					character widths;
+
+External Integer   OutPtr, 	! Pointer to output buffer area;
+		     curx, 	! current Imprint-10 x position;
+		     cury, 	! current Imprint-10 y position;
+		     curf; 	! current font number;
+
+External integer   firstp,	! First page of specified range;
+		    lastp, 	! Last page of specified range;
+	         outpages,      ! Number of pages output;
+	       copynumber;	! Number of copies to be printed;
+
+External integer InFlSize; 	! Input file size;
+
+External safa integer array glyph[0:MAXF,0:MAXCH,0:3];
+				! Glyph information table, with the
+				  following format:
+						
+				   glyph[f,c,0] = pointer to glyst array,
+				   glyph[f,c,1] = advancewidth in pixels,
+				   glyph[f,c,2] = advancewidth in input
+						  file units,
+				   glyph[f,c,3] = space taken up in glyph
+						  table by this font,
+				
+				  all for character #c in font #f;
+
+External Record!Class  FI(	! Font information record;
+	    string	fname;	! Font's file name;
+	    boolean  openable;	! Indicates font could be opened;
+	    integer firstchar,	! Code of first char in font;
+		     lastchar,	! Code of last  char in font;
+			xline,	! Suggested interline spacing;
+			spwid,	! Suggested interword spacing;
+	      	     dirpoint,	! Pointer to start of directory;
+		        check,	! Checksum, for comparison with Raster file 
+								    Checksum;
+		          jfn;	! JFN for this font file;
+	   real	          mag	! magnification;
+			      );
+
+External record!pointer (FI) safa array fntinf[0:MAXF]; 
+				! one pointer per font;
+
+!	External procedures, requires;
+
+
+External simp procedure   SetTitleFonts;       ! set up two title fonts;
+
+External simp procedure 	     ResetOut; ! unmap the pages of the 
+						 output file buffer;
+
+External simp procedure 
+		   OGlyMsk(integer curpagnum); ! Transfer glyph masks from
+						 font files to output buffer;
+
+External simp procedure       Error(string s); ! Error handling;
+External simp procedure              InitPage; ! Resets glyph table, etc.;
+External simp procedure		  
+	SetPos(boolean exmove, eymove; integer emovexamount,
+						emoveyamount,newx, newy); 
+					       ! Sets new x and y 
+						 coordinates, allows
+						 exact movements or
+						 movements to exact
+						 locations;
+
+External simp procedure 	     TableSet; ! Sets up font tables;
+External simp procedure		     Convfctr; ! Sets up wdfactor;
+
+External simp integer procedure
+		       FindChar(integer char); ! Sets a character in the 
+						 output file;
+
+require "DVIdef.sai" source!file; ! get the current DVI format definitions;
+require "ebgsrc.sai" source!file; ! debugging information;
+require "outmac.sai" source!file; ! output macros;
+require "inmac.sai"  source!file; ! input macros;
+
+!	Global variables;
+
+boolean  	   nopages;	! Indicates that no pages were output;
+
+integer	      infilversion,	! Expected version of DVI file;
+	           curpage, 	! Starting address of current page;
+	          nextpage, 	! Starting address of following page;
+	          prevpage, 	! Starting address of previous page;
+	         curpagnum;	! Current page number (\count0);
+
+real		  cvfactor;
+
+safa integer array pagecnt[0:9]; ! \count0 to \count9, the first 10
+							parameters of BOP;
+
+!	Pixel, DoBop, EndofPage;
+
+
+! *********** P I X E L **********;
+define pixel(r)	= 	{r*cvfactor+.5};
+
+
+!	D O   B O P
+!
+! *********************************************************************
+! Gets the 10 parameters of BOP and returns true if BOP found or user 
+! overides error indication.
+! *********************************************************************;
+simp boolean procedure doBOP;
+    	begin "-- do beginning of page --" 
+    	integer i;
+    	printi4(<nl,"DoBop: curpage=",curpage," prevpage=",prevpage,
+						" firstp=",firstp>)
+    	if curpage=-1 then 
+		begin "-- error --"
+		Error("attempt to read BOP on page preceeding first page."
+			&"  Last page read "&cvs(curpagnum));
+		return(FALSE)	
+		end   "-- error --"
+    	else if (i_InFileByte)  BOP then 
+		begin "-- BOP askew --"
+		Error("BOP askew on page preceeding "&cvs(curpagnum)
+			&".   Found "&cvs(i)&" when expecting BOP.");
+		print(nl,"continue with this page? ");
+		if (lop(intty) = "n") then return(FALSE);
+		end   "-- BOP askew --";
+
+    	curpagnum_pagecnt[0]_InFileFourBytes;					! get \count0;
+    	for i_1 step 1 until 9 do pagecnt[i]_InFileFourBytes;
+					! and \count1 through \count9;
+    	prevpage_InFileFourBytes; ! and the previous page pointer;
+    	printi4(<nl,"DoBop: curpage=",curpage," prevpage=",prevpage," curpagnum=",
+    					            cvs(curpagnum)>)
+    	return(TRUE)
+    	end   "-- do beginning of page --";
+
+
+!	E N D P A G E
+!
+! *********************************************************************
+! Goes to byte address of previous page.
+! *********************************************************************;
+simp boolean procedure EndofPage; if prevpage=-1 then return(FALSE) else
+    	begin "-- EndofPage --"
+    	printi4(<nl,"EndofPage: going to prevpage=",prevpage>)
+    	GotoByte(prevpage); 
+    	nextpage_curpage; curpage_prevpage;
+    	end   "-- EndofPage --";
+
+!	 readDVIinfo;
+
+
+! 	R E A D   D V I   I N F O
+!
+! **********************************************************************
+! read DVI info:  finds the postamble, reads the 3 words of
+!		  info and the font names contained therein.
+! **********************************************************************;
+boolean procedure ReadDVIinfo;
+	begin "-- read dvi info --"
+	string filnam;
+	integer P, i, fnt, numer, denom, maxpageheight, maxpagewidth;
+	real m;
+
+	! ---- File ends with: <postamble addr> 1 223 ... 223 <eof>;
+	P _ InFlSize*4;       GotoByte(P-1);
+	while (infilversion_InFileByte)=223 do 
+		begin "-- 223 --"
+		GotoByte(P_P-1); 
+		printi2(<" 223">)
+		end   "-- 223 --";
+	printi0(<nl,"Found version number, file is of version #",infilversion>)
+	if VersionCheck and infilversionInputFileVersion then 
+		begin "-- bad file --"
+		Error("File is not a version "&cvs(InputFileVersion)&
+		" DVI file.  File version is "&cvs(infilversion)&".  Aborting");
+		return(FALSE)
+		end   "-- bad file --";
+
+	! ---- Next word is pointer to start of postamble;
+	GotoByte(P_P-4);        P_InFileFourBytes;    
+	printi0(<nl,"Postamble starter pointer = ",P>)
+	GotoByte(P);
+
+	! ---- The next byte should be the start of the postamble;
+	if (i_InFileByte) neq PST then 
+		begin "-- no postamble --"
+		Error("Bad DVI file: Found "&cvos(i)&" when expecting PST.");
+		return(FALSE)
+		end   "-- no postamble --";
+
+	! ---- First word is last page address;
+	prevpage_InFileFourBytes;
+	numer_InFileFourBytes; denom_InFileFourBytes; 
+	printi0(<nl,"unit scale=",numer,"/",denom>)
+
+!	ReadDVIinfo: contd.;
+
+
+	! ---- Next word is overall magnification parameter;
+	m_InFileFourBytes/1000; mag_mag * m;						  
+	if mag1.0 then print(nl,"TEX mag=",m," total mag=",mag);
+	printi0(<nl,"TEX mag=",m,", total mag=",mag,", Pixel!RSU=",Pixel!RSU>)
+
+	cvfactor_mag*Pixel!RSU*numer/denom; ! Used in calculating Pixel per
+						rsu for the input file;
+	wdfactor_1/cvfactor; ! Used to convert pixel width to input unit
+							widths;
+	printi0(<nl,"cvfactor ",cvfactor,", wdfactor",wdfactor>)
+
+	! ---- Next 2 words are maximum page height and width;
+	maxpageheight_pixel(InFileFourBytes); maxpagewidth_pixel(InFileFourBytes);
+	printi0(<nl,"Maximum page height = ",maxpageheight,
+			", maximum page width = ",maxpagewidth>)
+
+	! ---- Then groups of {font#, checksum, fontsize, 
+	!			    numchars(of), file name} followed by -1;
+	! Note:  the font# is incremented because IMP wants to reserve 
+	! font0 for some everpresent, fixed-width entity;
+	while (fnt_(InFileFourBytes+1)) neq 0 do
+		begin "-- get a font name --"
+		integer n;
+
+		fntinf[fnt]_New!Record (FI); FI:check[fntinf[fnt]]_InFileFourBytes;
+		FI:mag[fntinf[fnt]]_InFileFourBytes; n_InFileByte;
+		for i_1 step 1 until n do 
+			FI:fname[fntinf[fnt]]_FI:fname[fntinf[fnt]]&InFileByte;
+		FI:mag[fntinf[fnt]]_FI:mag[fntinf[fnt]]*mag/1000; 
+		FI:openable[fntinf[fnt]]_FALSE; 
+		printi1(<nl,"Declared font #",fnt," to be ",
+		    FI:fname[fntinf[fnt]]," @ ", FI:mag[fntinf[fnt]]/mag,
+						"(",FI:mag[fntinf[fnt]],")">)
+		end   "-- get a font name --";
+
+	printi0(<nl,"done with Read Dvi Info">) return(TRUE)
+	end   "-- read dvi info --";
+
+!	InDVIPage: vars;
+
+
+! 	I N   D V I   P A G E
+!
+! *************************************************************************** ;
+! InDVIPage reads a page of the dvi file, thinking in 4 coordinates and a
+! stack like TEX.  Characters and rules are found and stored with SetChar and
+! SetRule.  Note the adjusting of x and y coordinates passed to SetChar to 
+! find the top left hand corner of characters.
+! *************************************************************************** ;
+procedure inDVIpage;
+	begin "-- In Page --"  
+
+	integer lastw,lastx,	! the last character sizes used- ;
+		lasty,lastz;	! keep using these until next changed;
+
+	integer 	x,y;	! current position in input file;
+
+	integer	     stkptr,	! DVI stack pointer;
+			  i;	! copynumber counter;
+
+	define     PSH = 50;	! push down stack size;
+	define    P="0:PSH";	
+	safa integer array 
+		    pshx[P], 	! stacks for x&y, last amts and Imp vars; 
+		    pshy[P], 
+		 pshwamt[P], 
+		 pshxamt[P], 
+		 pshyamt[P], 
+		 pshzamt[P]; 
+		 
+
+	boolean    pagedone, 	! indicates both scans for this page done;
+		   scandone;	! indicates first scan of this page done;
+
+	boolean  smallxmove, 	! TRUE => movement in x direction should be exact;
+		 smallymove;    ! TRUE => movement in y direction should be exact;
+
+	integer smallxspace, 	! exact movement in the x direction;
+		smallyspace;	! exact movement in the y direction;
+	
+	integer 	  v,
+		     fontno; 	! Note: Current font number is restablished
+					at the start of each page;
+
+!	InDVIpage: CheckTotMove, CheckMovex, CheckMovey;
+
+
+!	C H E C K   T O T A L   M O V E M E N T
+!
+! ********************************************************************
+! Decides whether movement or location is to be exact, then calls
+! SetPos to output appropriate positioning information.
+! ********************************************************************;
+define CheckTotMove = 
+		   {if abs(smallxspace) > minxspace then smallxmove_FALSE;
+		    if abs(smallyspace) > minyspace then smallymove_FALSE;
+		    SetPos(smallxmove,smallymove,
+		           Pixel(smallxspace),Pixel(smallyspace),
+		           Pixel(x), Pixel(y));
+		    smallxmove_smallymove_TRUE;
+		    smallxspace_smallyspace_0};
+
+
+!	C H E C K   M O V E M E N T,   X   D I R E C T I O N
+!
+! ********************************************************************
+! Decides whether a horizontal movement is small enough to need to be
+! exact.  It is necessary to check both individual and total movements
+! because a small net move made up of several large moves should not
+! be exact.
+! ********************************************************************;
+define CheckMovex(move) = {if smallxmove then 
+				if move>minxspace then
+					smallxmove_FALSE ! adjustable move;
+				else smallxspace_smallxspace+move};
+
+
+!	C H E C K   M O V E M E N T,   Y   D I R E C T I O N
+!
+! ********************************************************************
+! Decides whether a vertical movement is small enough to need to be
+! exact.  It is necessary to check both individual and total movements
+! because a small net move made up of several large moves should not
+! be exact.
+! ********************************************************************;
+define CheckMovey(move) = {if smallymove then 
+				if move>minyspace then
+					smallymove_FALSE ! adjustable move;
+				else smallyspace_smallyspace+move};
+
+! 	InDVIpage: local procedures pushenv, popenv, newspace;
+
+
+	! ********** P U S H **********; 
+	simp procedure PushEnv; 
+		begin "-- push --"
+    		if stkptr>PSH then Error("STACK OVERFLOW-YOU LOSE!");
+		printi6(<nl,"pushing, pixel y=",pixel(y),", pixel x=",pixel(x)>)
+		pshx[stkptr]_x;    pshwamt[stkptr]_lastw;  
+		pshxamt[stkptr]_lastx;
+    		pshy[stkptr]_y;    pshyamt[stkptr]_lasty;  
+		pshzamt[stkptr]_lastz;
+    		stkptr_stkptr + 1
+    		end   "-- push --";
+
+
+	! ********** P O P **********;
+	simp procedure PopEnv;  
+		begin "-- pop --"
+		stkptr_stkptr - 1;
+    		if stkptr<0 then Error("STACK UNDERFLOW BUG!");
+    		smallxspace_smallxspace + pshx[stkptr] - x; x_pshx[stkptr];
+		lastw _pshwamt[stkptr]; lastx _pshxamt[stkptr];
+    		smallyspace_smallyspace + pshy[stkptr] - y; y_pshy[stkptr]; 
+		lasty _pshyamt[stkptr]; lastz _pshzamt[stkptr];
+		printi6(<nl,"poping, pixel restored y = ",pixel(y)," x = ",
+								  pixel(x)>)
+    		end   "-- pop --";
+
+!    InDVIPage: preliminaries and first scan;
+
+	stkptr_0; scandone_FALSE; fontno_-1; x_y_0; 
+
+	printi4(<nl,"InDviPage: curpagnum=",curpagnum," curpage=",curpage," ">)
+
+	print(curpagnum);
+
+	while not scandone do
+		begin "-- first scan --"
+		v_InFileByte;
+		if v  MAXCH then 
+			begin "-- character --"
+			printi8(<nl,"Input character ",cvos(v),"(",junk_v,")">)
+			FindChar(v) 
+			end   "-- character --"
+    		else if v  fontnum then 
+			begin "-- font --"
+			printi5(<nl,"Setting current font to ",(fontno_v-fontnum+1)>)
+			if (fontno_v-fontnum+1) > MAXF then
+				Error("Font number "&cvs(fontno - 1)&
+				 "is out of range, will ignore this font")
+			else curf_fontno ! Note: incremented font number;
+			end   "-- font --"
+
+		else case v of
+    			begin "-- first scan case statement --"
+
+     [NOP] [DVIPUSH] [DVIPOP]		
+	  [W0] [X0] [Y0] [Z0]	nothing;
+
+    			[BOP]   begin "-- BOP --" 
+	    			Error("Found a BOP marker on page"
+				       &cvs(curpagnum)&".  Aborting page."); 
+				scandone_TRUE;
+				pagedone_TRUE
+	    			end   "-- BOP --";
+
+    			[EOP]   begin "-- EOP --"
+	    			scandone_TRUE;
+				print(".")
+	    			end   "-- EOP --";
+
+    			[PST]   begin "-- error --"
+	    			Error("Found a PST marker on page"
+				       &cvs(curpagnum)&".  Aborting page."); 
+				scandone_TRUE;
+				pagedone_TRUE
+	    			end   "-- error --";
+
+		   [HORZCHAR]	FindChar(v_InFileByte);
+
+		    [DVIFONT]	begin "-- font --"
+				fontno_InFileFourBytes + 1;
+					! Note: incremented font number; 
+				printi5(<nl,"Setting current font to ",fontno>)
+				if fontno > MAXF then
+					begin "-- error --"
+					Error("Font number "&cvs(fontno - 1)&
+				 	"is out of range.  Will ignore this font")
+					end   "-- error --"
+				else curf_fontno 
+				end   "-- font --";
+
+	[HORZRULE] [VERTRULE]	begin "-- rule --"
+	    			temp_InFileFourBytes; temp_InFileFourBytes
+	    			end   "-- rule --";
+
+	  [W2] [X2] [Y2] [Z2]	temp_InFileTwoBytes;
+	  [W3] [X3] [Y3] [Z3]	temp_InFIleThreeBytes;
+	  [W4] [X4] [Y4] [Z4]	temp_InFileFourBytes
+
+			end   "-- first scan case statement --";
+		end   "-- first scan --";
+
+!	InDVIpage: Output glyph masks and second scan;
+
+
+	OGlymsk(curpagnum); ! Output glyph masks;
+	for i_1 step 1 until copynumber do
+	begin "-- multiple copies --"
+	stkptr_0; fontno_-1; x_y_0; pagedone_FALSE; 
+	Initpage; StartPage;	     ! Output pagemark;
+	smallxmove_smallymove_FALSE; ! First move must always be adjustable
+				       so as to set margins;
+	smallxspace_smallyspace_0;
+	gotobyte(curpage + 45); ! go back to start of this page;
+	printi4(<nl,"InDviPage: curpagnum=",curpagnum," curpage=",curpage," ">)
+	while (not pagedone) do
+    		begin "-- process the page --"
+
+		if (v_InFileByte) leq MAXCH then
+			begin "-- vertical --"
+			CheckTotMove;
+			x_x+glyph[curf,v,2]; SetGlyph(v);
+			while (v_InFileByte) leq MAXCH do
+				begin "-- string of glyphs --"
+				x_x+glyph[curf,v,2];
+				SetGlyph(v)
+				end   "-- string of glyphs --"
+			end   "-- vertical --";
+
+    		if (v) geq fontnum then 
+			begin "-- set font --"
+			if (fontno_v-fontnum+1) > MAXF then
+				Error("Font number "&cvs(fontno - 1)&
+				 "is out of range, will ignore this font")
+			else SetFont(fontno)
+				! Note: incremented font number;
+			end   "-- set font --"
+    		else 
+			begin "-- positioning command --"
+			printi7(<nl,"command byte='",cvos(v),"(",v,")">)
+    			case v of
+    			begin "-- second scan case statement --"
+
+    	    [BOP] [PST] [NOP]	begin  end;
+
+    			[EOP]   begin "-- EOP --"
+	    			pagedone_TRUE; EndPage;
+				printi4(<".">)
+	    			end   "-- EOP --";
+
+		   [HORZCHAR]   begin "-- horizontal --"
+				CheckTotMove; v_InFileByte; 
+				SetGlyph(v); 
+				smallxspace_-glyph[curf,v,2];
+				smallxmove_FALSE 
+		    		end   "-- horizontal --";
+
+		    [DVIFONT]   begin "-- set font --"
+				if (v_InFileFourBytes + 1) > MAXF then
+				  Error("Font number "&cvs(fontno - 1)&
+				    "is out of range, will ignore this font")
+				else SetFont(v) ! Note: incremented font 
+								      number;
+				end   "-- set font --";
+
+		    [DVIPUSH]	PushEnv;
+
+		     [DVIPOP]	PopEnv;
+
+	[HORZRULE] [VERTRULE]	begin "-- rule --"
+				integer hrsu, wrsu;
+	    			hrsu_InFileFourBytes; wrsu_InFileFourBytes;
+	    			if hrsu>0 and wrsu>0 then
+					begin "-- draw rule --"
+					integer height, width, offset;
+
+					CheckTotMove;
+					height_1 max Pixel(hrsu);
+					width_1 max Pixel(wrsu);
+					offset_-(1 max Pixel(hrsu)) + 1;
+					SetRule(width,height,offset)
+						! note- don't advance curx;
+					end   "-- draw rule --";
+	    			if v=VERTRULE then x_x+wrsu;
+	    			end   "-- rule --";
+
+			 [W0]	begin "-- W0 --"
+				x_x+lastw; CheckMovex(lastw)
+				end   "-- W0 --";
+
+			 [W2]	begin "-- W2 --"
+				x_x+(lastw_InFileTwoBytes); CheckMovex(lastw)
+				end   "-- W2 --";
+
+			 [W3]	begin "-- W3 --" 
+				smallxmove_FALSE; x_x+(lastw_InFileThreeBytes)
+				end   "-- W3 --";
+
+			 [W4]	begin "-- W4 --"
+				smallxmove_FALSE; x_x+(lastw_InFileFourBytes)
+				end   "-- W4 --";
+
+
+			 [X0]	begin "-- X0 --"
+				x_x+lastx; CheckMovex(lastx) 
+				end   "-- X0 --";
+
+			 [X2]	begin "-- X2 --"
+				x_x+(lastx_InFileTwoBytes); CheckMovex(lastx)
+				end   "-- X2 --";
+
+			 [X3]	begin "-- X3 --" 
+				smallxmove_FALSE; x_x+(lastx_InFileThreeBytes)
+				end   "-- X3 --";
+
+			 [X4]	begin "-- X4 --"
+				smallxmove_FALSE; x_x+(lastx_InFileFourBytes)
+				end   "-- X4 --";
+
+
+			 [Y0]	begin "-- Y0 --"
+				y_y+lasty; CheckMovey(lasty)
+				end   "-- Y0 --";
+
+			 [Y2]	begin "-- Y2 --"
+				y_y+(lasty_InFileTwoBytes); CheckMovey(lasty)
+				end   "-- Y2 --";
+
+			 [Y3]	begin "-- Y3 --" 
+				smallymove_FALSE; y_y+(lasty_InFileThreeBytes)
+				end   "-- Y3 --";
+
+			 [Y4]	begin "-- Y4 --"
+				smallymove_FALSE; y_y+(lasty_InFileFourBytes)
+				end   "-- Y4 --";
+
+
+			 [Z0]	begin "-- Z0 --"
+				y_y+lastz; CheckMovey(lastz)
+				end   "-- Z0 --";
+
+			 [Z2]	begin "-- Z2 --"
+				y_y+(lastz_InFileTwoBytes); CheckMovey(lastz)
+				end   "-- Z2 --";
+
+			 [Z3]	begin "-- Z3 --" 
+				smallymove_FALSE; y_y+(lastz_InFileThreeBytes)
+				end   "-- Z3 --";
+
+			 [Z4]	begin "-- Z4 --"
+				smallymove_FALSE; y_y+(lastz_InFileFourBytes)
+				end   "-- Z4 --"
+
+			end   "-- second scan case statement --"
+			end   "-- positioning command --";
+		end   "-- process the page --";
+
+	if stkptr>0 then
+		begin "-- too many pushes --"
+		Error("More pushes than pops on page "&cvs(curpagnum));
+		while stkptr>0 do popenv
+		end   "-- too many pushes --";
+	print(".")
+	end   "-- multiple copies --"
+	end   "-- In Page --";
+
+! 	doDVIpage, doDVIfile;
+
+
+!	D O   D V I   P A G E
+!
+! **********************************************************************
+! Does one page of a DVI file;
+! **********************************************************************;
+simp procedure doDVIpage;
+	begin "-- do DVI page --"
+	if not doBOP then
+		begin "-- abort --"
+		curpage_prevpage_-1;
+		return
+		end   "-- abort --"
+	else if (firstp  pagecnt[0]) and (pagecnt[0]  lastp) then
+		begin "-- do a page --"
+		nopages_FALSE;
+		printi4(<nl>) print("[");
+		InitPage; InDVIpage;
+		outpages_outpages+1;
+		print ("]")
+		end   "-- do a page --";
+	end   "-- do DVI page --";
+
+
+!	D O   D V I   F I L E
+!
+! **********************************************************************
+! main driving program for DVI files.
+! **********************************************************************;
+internal simp procedure doDVIfile;
+	begin "-- do DVI file --"
+	Initin;		! Initialize input file page tables;
+	printi0(<nl,"starting doDVIfile">)
+	nopages_TRUE; arrclr(pagecnt,0);
+	if not ReadDVIinfo then return else if not EndofPage then
+		begin "-- no pages --"
+		Error ("DVI file has no pages.");
+		return
+		end   "-- no pages --";
+	SetTitleFonts;      ! Add in two title fonts here, if necessary;
+	Tableset; Convfctr; ! Set up font tables and wdfactor;
+	printi0(<nl,"doDVIfile, starting page processing">)
+	print(nl);
+	do doDVIpage until not EndofPage;
+	if nopages then
+		begin "-- null range --"
+		Error ("DVI file has no pages in the specified range.");
+		return
+		end   "-- null range --"
+	end   "-- do DVI file --";
+end   "-- DVI file routines --";
+

@@ -1,0 +1,209 @@
+! DoListing, decls;
+
+proc dolisting; begin "list"
+    int lastbyte, curby, nexby, x,y, linesk, spacsk, font, rmarg;
+    int lstfnum, hdrfnum, headmarg;
+    bool have!coms;
+    int array ppb[1:pagelimit], pp[1:pagelimit]; int lastpaper;
+    int pagenumpos, filenamepos, usernamepos; string datestr;
+    string hdrfont;
+
+define EOFbyte='200;
+
+siproc incby;  curby_nexby; nexby_getby;
+		if dvibytecntlastbyte then nexby_EOFbyte;
+		! Note if curby=EOFbyte then so does nexby;
+		return(curby) ;
+
+sproc docom;   ;
+
+sproc setupfont(int num; real mgnify; string name); begin int i;
+    FI:fname[fonts[num]]_name;
+    FI:mag[fonts[num]]_ mgnify;
+    touchfont(num);				! make sure it's set up;
+    FI:defd[fonts[num]]_true;
+    end;
+
+sproc usefont(int num);				! Switch to this font;
+begin
+  if not num=font then begin
+    spacsk_ FI:spwid[fonts[num]];		! find size of space;
+    linesk_ FI:xline[fonts[num]];		! find interline space;
+    font_num;
+    setfont(font);	
+  end;
+end;
+
+simple procedure newline;	 x_0;  y_y+linesk*spacing  ;
+
+simple procedure do!tab;    begin int tw, adv;
+    tw_ 8 * spacsk;
+    adv_ tw - (x mod tw); if adv=0 then adv_ tw;
+    if x+adv  pagewd then  newline; return 
+		      else   x_x+adv;
+    end;
+
+simple procedure do!verttab;     newline; newline ;
+
+simple procedure backspace;	 x_ (x - spacsk) max 0 ;
+
+simple procedure dochar(int c); begin int pw, rw;
+    findchar(font,c,rw,pw,false);
+    if x + pw > (pagewd-lmarg) then	! in case go off page, push com back;
+	 gotobyte(dvibytecnt-2); newline; incby; return ;
+    setpos(x,y); I!!setglyph(c);
+    x_x+pw; curx_curx+pw;
+    end;
+
+! header routines;
+
+siproc lenstr(int f; string s); begin int pw,dum,x,tw; tw_spacsk*8; x_0;
+    while s"" do  
+	if s='40 then pw_ spacsk else
+	if s='11 then  pw_ tw-(x mod tw); if pw=0 then pw_tw 
+	else findchar(f,s,dum,pw,false);
+	dum_ lop(s); x_ x + pw ;
+    return(x)
+    end;
+
+sproc setupheader; begin int i;
+    usefont(hdrfnum);
+    rmarg_ pagewd-lmarg-220;
+    datestr_odtim(-1,0); i_lenstr(font,datestr);
+    filenamepos _  i+100+headmarg-lmarg;
+    pagenumpos  _  pagewd-2*headmarg-lmarg-lenstr(font,"Page 555 - 555")
+				-lenstr(font,"      "&logdirname);
+    usernamepos _  pagewd-2*headmarg-lmarg-lenstr(font,logdirname)-8;
+    usefont(lstfnum);
+    end;
+
+sproc setstr(string s); begin int i; while s"" do
+    case (i_lop(s)) of  ['40] x_x+spacsk;  ['11] do!tab;
+		     else  dochar(i)  end;
+
+sproc setheader(int p, sp); begin
+    usefont(hdrfnum);
+    I!!rule(pagewd-2*headmarg,1,linesk*.2);   I!!rule(1,1.2*linesk,-linesk);
+    I!!rule(pagewd-2*headmarg,1,-linesk); 
+    x_4+headmarg-lmarg;
+    setpos(x,y);		setstr(datestr);
+    setpos(x_filenamepos,y);	setstr(name);
+    setpos(x_pagenumpos, y);	setstr("Page "&cvs(p));
+    if sp>1 then setstr(" - "&cvs(sp));
+    setpos(x_usernamepos, y);
+    setstr(logdirname);
+    setpos(pagewd-headmarg-lmarg,y);	I!!rule(1,linesk*1.2,-linesk);
+    usefont(lstfnum);
+    end;
+
+! SetUpPointers and SetUpHeader;
+
+sproc SetUpPointers; begin int i, curp, subp;
+
+    simple procedure dochar(int c); begin int pw, rw;  
+	findchar(font,c,rw,pw,false);
+	if x + pw > (pagewd-lmarg) then
+		     ! in case go off page, push com back;
+	     gotobyte(dvibytecnt-2); newline; incby; return ;
+	x_x+pw;
+	end;
+
+    sproc setstr(string s); begin int i; while s"" do
+	case (i_lop(s)) of  ['40] x_x+spacsk;  ['11] do!tab;
+			 else  dochar(i)  end;
+
+    sproc setheader(int p, sp); begin
+	setstr(datestr);
+	x_filenamepos;    setstr(name);
+	x_pagenumpos;    setstr(cvs(p));
+	if sp>1 then setstr(" - "&cvs(sp));
+	end;
+
+    sproc listapage;  begin x_y_curx_cury_0;  
+	while (y+tmarg)<pageht do case incby of begin
+	    [ '40]  x_x+spacsk;             ! space;
+	    [  '0]  donothing;              ! NUL;
+	    [ '12]  y_y+linesk*spacing;     ! line-feed;
+	    [ '15]  x_0;                    ! cr;
+	    [ '11]  do!tab;                 ! tab;
+	    [ '13]  y_y+2*linesk*spacing;   ! vertical tab;
+	    ['177]  x_(x-spacsk)max 0;      ! bs;
+	    [ '14] 
+	    ['200]   done ;               ! FF or EOF;
+	    else if curby="@" and have!coms 
+		    then docom else dochar(curby)
+	    end;
+	end;
+
+    arrclr(pp); arrclr(ppb); lastpaper_0;
+    ! first find selected pages;
+    i_1; firstp_ firstp max 1;
+    while i<firstp and nexbyEOFbyte do           ! set up pointers to pages;
+       do until incby='14 or nexby=EOFbyte; inc(i); ;
+
+    ! set up pointers to pages;
+    curp_i; subp_1; i_1;
+    while ipagelimit and curplastp and nexbyEOFbyte do begin
+	ppb[i]_ dvibytecnt-1;   pp[i]_ (curp lsh 16) lor subp;
+	listapage; 
+	if curby='14 then  inc(curp); subp_1  
+		     else   inc(subp);
+	inc(i)
+	end;
+    lastpaper_i-1;
+    end;
+
+! main stuff;
+
+sproc listapage(int curp, subp);  begin initinputvars;
+    setspace(spacsk); setnl(linesk*spacing,0); print("[",curp);
+    curx_cury_0; x_headmarg-lmarg; y_100-tmarg; I!!push; setpos(x,y);
+    if headerflag then setheader(curp, subp); 
+    x_y_0;  setpos(x,y);
+    while (y+tmarg)<pageht do case incby of begin
+	[ '40]  x_x+spacsk;    		! space;
+	[  '0]  donothing;		! NUL;
+	[ '12]  y_y+linesk*spacing;	! line-feed;
+	[ '15]  x_0;			! cr;
+	[ '11]  do!tab;			! tab;
+	[ '13]  y_y+2*linesk*spacing;	! vertical tab;
+	['177]  x_(x-spacsk)max 0;	! bs;
+	[ '14] 
+	['200]   done ;		! FF or EOF;
+	else if curby="@" and have!coms 
+		then docom else dochar(curby)
+	end;
+    I!!pop; print(".]"); 
+    outpages_outpages+1;
+    end;
+
+begin int i;
+
+hdrfont_"<fonts>cmr10";
+have!coms_false;
+setupfont(lstfnum_1,lstfontmag*mag,lstfont);	! set up printing font;
+setupfont(hdrfnum_2,1.0,hdrfont);		! set up header font;
+inBPB_7; inBPW_5;               ! set up for 7 bit bytes;
+inBPR_inBPW*RECLEN;
+lastbyte_dvifsize*inBPW;        ! figure out where eof is;
+
+gotobyte(0);                    ! start out at start of file;
+incby;                          ! get the first byte ready for curby;
+
+initpage;
+font_0;
+usefont(lstfnum);
+headmarg_100;
+setupheader;
+setuppointers;
+print2("tmarg= ",tmarg,nl,"pageht= ",pageht,nl);
+
+for i_lastpaper downto 1 do 
+   gotobyte(ppb[i]); incby; 
+    listapage(pp[i] lsh -16, pp[i] m16); 
+    outpage; initpage ;
+end;
+outpages_lastpaper;
+
+end "list";
+

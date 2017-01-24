@@ -1,0 +1,1424 @@
+;XS:<5-GALAXY>QSRLPT.MAC.3, 23-Jan-87 14:00:37, Edit by KNIGHT
+; Add junk for parsing and handling language types (like Postscript, Impress)
+;SRC:<5-GALAXY>QSRLPT.MAC.2, 15-Aug-86 11:00:12, Edit by KNIGHT
+;Add P%FSPL
+;SRC:<5-GALAXY>QSRLPT.MAC.1, 22-Jul-86 10:44:14, Edit by KNIGHT
+; Configure this for the NIC
+	TITLE QSRLPT
+
+	SEARCH GLXMAC		;Search GALAXY library
+	PROLOGUE(QSRLPT)	;Standard prologue
+	SEARCH QSRMAC,ORNMAC	;Search QUASAR and ORION definitions
+
+	PARSET			;Define the parser externals
+
+;Define a macro to do the parsing for a single unit number
+
+DEFINE	$UNIT(NEXT,%UNI01),<
+	.XCREF	%UNI01
+	SUPPRESS %UNI01
+%UNI01:	$NUMBER	(NEXT,^D10,,<$ACTION(CHKVAL)>)
+>
+
+DEFINE KEYDSP(NXT,KEY,CODE,FLAGS),<
+	DSPTAB(NXT,.LP'CODE,KEY,FLAGS)
+>;END KEYDSP
+
+DEFINE SWIDSP(NXT,SWITCH,CODE,FLAGS),<
+	DSPTAB(NXT,.ES'CODE,SWITCH,FLAGS)
+>;END ORNSWI
+
+SUBTTL	Parse definitions
+;Keyword definitions
+
+DEFINE KEYWORD,<
+	X	FORM,FRM
+	X	IMPRESS,IMP
+	X	NO,NOP		;;F1 Don't shift
+	X	PAPER,PAP
+	X	PDE,PDE
+	X	POSTSCRIPT,POS
+	X	PRINTER,PRT
+	X	STYLE,STY
+	X	YES,YUP		;;F1 Do shift
+>
+
+;Now define the X macro to generate the needed symbols
+
+DEFINE X(A,B),<
+	IF1,<IFDEF .LP'B,< PRINTX ?Duplicate keyword code -- .LP'B>>
+	.LP'B==..Z
+	..Z==..Z+1
+>
+
+;Initialize the counter and call KEYWORD to generate the symbols
+
+	..Z==0
+	KEYWORD
+
+;Define switch values
+
+DEFINE SWITCH,<
+	X	ALCNT,ALC
+	X	ALIGN,ALI
+	X	ALSLP,ALS
+	X	BANNER,BAN	;;F22 
+	X	CHAIN,CHA
+	X	DRUM,DRU
+	X	FILE-TYPE,TYP
+	X	FONTS,FNT
+;F22	X	FORMS,FRM  ;;F22 This is a keyword, not a switch
+	X	HEADER,HEA
+	X	LANPDE,LPG
+	X	LINDEX,LIX
+	X	LINES,LIN
+	X	LLINE,LLN
+	X	LWIDTH,LWD
+	X	NODE,NOD
+	X	NOTE,NOT
+	X	PHASE,PHA
+	X	PORPDE,PPG
+	X	PINDEX,PIX
+	X	PLINE,PLN
+	X	PRTNAM,PNM
+	X	PWIDTH,PWD
+	X	PROGRAM,PRG	 ;F1 Used for printer program name mapping
+	X	RAM,RAM
+	X	RIBBON,RIB
+	X	SHIFT,SFT	;;F1 User for default shift information
+	X	SIZE,SIZ
+	X	SYMMETRIC,SYM	;;F1 Whether paper needs to be turned in duplex
+	X	TAPE,TAP
+	X	TRAILER,TRA
+	X	UNIT-NUMBER,UNI
+	X	VFU,VFU
+	X	WIDTH,WID
+>
+
+;Define the X macro to generate the needed symbols
+
+DEFINE X(A,B),<
+	IF1,<IFDEF .ES'B,< PRINTX ?Duplicate keyword code -- .ES'B>>
+	.ES'B==..Z
+	..Z==..Z+1
+>
+
+;Generate the symbols for switches
+
+	..Z==400000
+	SWITCH
+
+SUBTTL	Parse tables
+
+;Main dispatch table
+
+LPTPAR:	$INIT (LPFORM)
+
+LPFORM:	$KEYDSP(TYPTAB)
+
+TYPTAB:	$STAB
+	KEYDSP(FRMFDB,FORM,FRM)		
+	KEYDSP(PAPFDB,PAPER,PAP)
+	KEYDSP(PDEFDB,PDE,PDE)	
+	KEYDSP(LPTFDB,PRINTER,PRT)
+	KEYDSP(STYFDB,STYLE,STY)
+	$ETAB
+
+
+;Process a STYLE entry
+
+STYFDB:	$FIELD(STYSWI)		;Get STYLE name
+
+STYSWI:	$SWITCH(,STYABL,<$ALTER(CONFRM)>)
+
+STYABL:	$STAB
+	 SWIDSP(STY001,<LANPDE:>,LPG)
+	 SWIDSP(STY002,<LINDEX:>,LIX)
+	 SWIDSP(STY002,<LLINE:>,LIN)
+	 SWIDSP(STY002,<LWIDTH:>,LWD)
+	 SWIDSP(STY002,<PINDEX:>,PIX)
+	 SWIDSP(STY002,<PLINE:>,PLN)
+	 SWIDSP(STY001,<PORPDE:>,PPG)
+	 SWIDSP(STY001,<PRTNAM:>,PNM)
+	 SWIDSP(STY002,<PWIDTH:>,PWD)
+	 $ETAB
+
+STY001:	$FIELD(STYSWI)		;Parse PDE or device name
+
+STY002:	$NUMBER(STYSWI,^D10)	;Parse switch value
+
+
+
+;Process a FORMS entry
+
+FRMFDB:	$FIELD(FRMSWI)		;Get FORM name
+
+FRMSWI:	$SWITCH(,FRMTBL,<$ALTER(CONFRM)>)
+
+FRMTBL:	$STAB
+	 SWIDSP(FRM002,<ALCNT:>,ALC)
+	 SWIDSP(FRM001,<ALIGN:>,ALI)
+	 SWIDSP(FRM002,<ALSLP:>,ALS)
+	 SWIDSP(FRM002,<BANNER:>,BAN) ;F22 Parse for number afterwards
+	 SWIDSP(FRM001,<CHAIN:>,CHA)
+	 SWIDSP(FRM001,<DRUM:>,DRU)
+	 SWIDSP(FRM002,<HEADER:>,HEA)
+	 SWIDSP(FRM002,<LINES:>,LIN)
+	 SWIDSP(FRM003,<NOTE:>,NOT)
+	 SWIDSP(FRM002,<PHASE:>,PHA)
+	 SWIDSP(FRM001,<PRTNAM:>,PNM)
+	 SWIDSP(FRM001,<RAM:>,RAM)
+	 SWIDSP(FRM001,<RIBBON:>,RIB)
+	 SWIDSP(FRM002,<SIZE:>,SIZ)	;F1 obscurity in GLXSCN...
+	 SWIDSP(FRM001,<TAPE:>,TAP)
+	 SWIDSP(FRM002,<TRAILER:>,TRA)
+	 SWIDSP(FRM001,<VFU:>,VFU)
+	 SWIDSP(FRM002,<WIDTH:>,WID)
+	$ETAB
+
+FRM001:	$FIELD(FRMSWI)		;Get a name
+
+FRM002:	$NUMBER(FRMSWI,^D10)	;Parse switch value
+
+FRM003:	$QUOTE(FRMSWI)		;Get QUOTED string
+
+
+;Process a PAPER entry
+
+PAPFDB:	$FIELD(PAPSWI)		;Get PAPER name
+
+PAPSWI:	$SWITCH(,PAPTBL,<$ALTER(CONFRM)>)
+
+PAPTBL:	$STAB
+	 SWIDSP(PAP001,<PRTNAM:>,PNM)	 ;F1 Printer that this will be used on
+	 SWIDSP(PAP002,<SHIFT:>,SFT)	 ;F1 Get default image shift info
+	 SWIDSP(PAP006,<SYMMETRIC:>,SYM) ;F1 Get symmetric characteristic
+	$ETAB
+
+PAP001:	$FIELD(PAPSWI)			 ;F1 Get printer name and more switches
+
+PAP002:	$KEYDSP(PAPKEY,<$ALTERNATE(PAP003)>) ;F1 Parse yes/no OR shift amount
+
+PAPKEY:	$STAB				;F1 So we can use XEROX default values
+	 KEYDSP(PAPSWI,<NO>,NOP)	;F1 Says don't do anything
+	 KEYDSP(PAPSWI,<YES>,YUP)	;F1 Says use the XEROX's default
+	$ETAB
+
+     Remark If we don't like default XEROX shifting, we can set the amount
+
+PAP003:	$NUMBER(PAP004,^D10)		;F1 Pick up front part
+
+PAP004:	$COMMA(PAP005)			;F1 Comma and back part
+
+PAP005:	$NUMBER(PAPSWI,^D10)		;F1 Offset for back, get more switches
+
+PAP006:	$KEYDSP(PAPKEY)			;F1 Pick up either yes or no
+
+;Process a PRINTER entry
+
+LPTFDB:	$FIELD(LPTSWI)		;Get PRINTER name
+
+LPTSWI:	$SWITCH(,LPTABL,<$ALTER(CONFRM)>)
+
+LPTABL:	$STAB
+	 SWIDSP(LPT004,<FILE-TYPE:>,TYP)
+	 SWIDSP(LPT001,<NODE:>,NOD)
+	 SWIDSP(LPT003,<PROGRAM:>,PRG)		;F1 Use specific program
+	 SWIDSP(LPT002,<UNIT-NUMBER:>,UNI)
+	$ETAB
+
+LPT001:	$FIELD(LPTSWI)		;Get device or node name
+
+LPT002:	$UNIT(LPTSWI)
+
+LPT003:	$FIELD(LPTSWI)			;F1 Pick up a sixbit program name
+
+LPT004:	$KEYDSP(LPTKEY)			;F1 Pick up either yes or no
+
+LPTKEY: $STAB
+	 KEYDSP(LPTSWI,<IMPRESS>,IMP)	;Understands ImPress
+	 KEYDSP(LPTSWI,<POSTSCRIPT>,POS) ;Understands PostScript
+	$ETAB
+
+;Process a PDE entry
+
+PDEFDB:	$FIELD(PDESWI)		;Get PDE name
+
+PDESWI:	$SWITCH(,PDETBL,<$ALTER(CONFRM)>)
+
+PDETBL:	$STAB
+	 SWIDSP(PDE001,<FONTS:>,FNT)
+	 SWIDSP(PDE002,<PRTNAM:>,PNM)
+	 SWIDSP(PDE001,<SIZE:>,SIZ)
+	$ETAB
+
+PDE001:	$NUMBER(PDESWI,^D10)
+
+PDE002:	$FIELD(PDESWI)
+
+;For confirmation of an entry
+
+CONFRM:	$CRLF
+
+SUBTTL	Impure data storage
+
+FILJFN:	BLOCK	1		;Save area for file JFN
+PKTJFN:	BLOCK	1		;Save the printer keyword table JFN
+PRTNAM:	BLOCK	1		;Printer name to which this applies
+LOCAL:	BLOCK	1		;Local NODE name
+PRTLST:	BLOCK	1		;Pointer to printer list
+PARBLK:	BLOCK	PAR.SZ		;Space for parser call arguments
+PARPAG:	BLOCK	1		;Place to parse in
+PKTPAG:	BLOCK	1		;Page for printer keyword tables
+PRTBLK:	BLOCK	PP.SIZ		;Values from a parsed PRINTER entry
+STYBLK:	BLOCK	ST.SIZ		;Values from a parsed STYLE entry
+FRMBLK:	BLOCK	FF.SIZ		;Values from a parsed FORM entry
+PAPBLK:	BLOCK	PA.SIZ		;Values from a parsed PAPER block
+PDEBLK:	BLOCK	PD.SIZ		;Values from a parsed PDE entry
+INIPRT:	$BUILD (PP.SIZ)		;Initial values for a PRINTER entry
+	  $SET (PP.UNI,,0)	;The default unit number
+	  $SET (PP.PAP,,-1)	;Pointer to PAPER list
+	  $SET (PP.STY,,-1)	;Pointer to STYLE list
+	  $SET (PP.FRM,,-1)	;Pointer to FORM list
+	  $SET (PP.PDE,,-1)	;Pointer to PDE list
+	  $SET (PP.PRG,,'LPTSPL') ;F1 Default to LPTSPL
+	$EOB 			;End of block
+
+INISTY:	$BUILD (ST.SIZ)		;Size of initial STYLE block
+	  $SET (ST.PPG,,0)	;Name of portrait PDE
+	  $SET (ST.LPG,,0)	;Name of landscape PDE
+	  $SET (ST.PGI,ST.PIX,1) ;Index for portrait printing
+	  $SET (ST.PGI,ST.LIX,1) ;Index for landscape printing
+	  $SET (ST.LEN,ST.PWD,^D85) ;Number of characters on portrait line
+	  $SET (ST.LEN,ST.LWD,^D132) ;Number of characters on landscape line
+	  $SET (ST.LEN,ST.PLN,^D60) ;Number of lines on portrait page
+	  $SET (ST.LEN,ST.LLN,^D60) ;Number of lines on landscape page
+	$EOB
+
+INIFRM:	$BUILD (FF.SIZ)		;Size of default FORM block
+	  $SET (FF.ALI,,0)	;No default name
+	  $SET (FF.AWD,FF.ALC,5) ;Print five times
+	  $SET (FF.AWD,FF.ALS,7) ;Sleep seven seconds
+	  $SET (FF.BAN,,-1)	;F22 Default for print BANNERS from GALCNF
+	  $SET (FF.HEA,,-1)	;F22 Default for print HEADERS from GALCNF
+	  $SET (FF.TRA,,-1)	;F22 Default for print TRAILERS from GALCNF
+	  $SET (FF.RAM,,-1)	;Default RAM
+	  $SET (FF.MEM,,0)	;Use none of XEROX memory
+	  $SET (FF.LEN,FF.WID,^D132) ;Characters on one line
+	  $SET (FF.LEN,FF.LIN,^D60) ;Lines on one page
+	  $SET (FF.PHA,,-1)	;Default for parity pages
+	$EOB			;End of FORM block
+	
+INIPAP:	$BUILD (PA.SIZ)		;Default size of a PAPER block
+	 $SET (PA.SFT,,0)	;F1 Default to non shifted image
+	 $SET (PA.SYM,,0)	;F1 Paper default is asymmetric
+	$EOB			;End of default block 
+
+INIPDE:	$BUILD (PD.SIZ)		;Size of PDE block
+	 $SET (PD.FNT,,0)	;Number of FONTS stored in this PDE
+REPEAT 0,<$SET (PD.MEM,,XRXMEM)	;Size of PDE in bits of FONT>;REPEAT 0
+	$EOB			;End of default PDE block
+
+;F23 File descriptor for the LPFORM.INI file
+;
+FormFD:	Xwd FormFl,0		;F23 Count of words following
+	Asciz \SYSTEM:LPFORM.INI\ ;F23 The actual file
+	FormFl==.-FormFD	;F23 Compute the FD size
+ERRORB:	0			;F23 Address of returned parser block
+LINE:	0			;F23 Line of error in QSRLPT
+SUBTTL Miscellaneous internal routines
+
+;Routine to search a dispatch table for a value
+;
+;Call with:	S1/ Value to search for
+;		S2/ Address of dispatch table
+;
+;Returns true:	S1/ Address of routine to dispatch to
+;
+;Returns false:	Value not found
+
+FNDDSP:	MOVN T1,0(S2)		;Get negative of count of table entries
+	HRL S2,T1		;Make an AOBJN word for searching table
+
+FNDD.1:	HLRZ T2,1(S2)		;Fetch a value
+	CAMN T2,S1		;Is this the one we want?
+	JRST [	HRRZ S1,1(S2)	;Yes--get the dispatch address
+		$RETT]		;Return it
+	AOBJN S2,FNDD.1		;Search the whole table
+	$RETF			;Return failure if not found
+
+;Routine to decrement byte pointer in T1
+
+DBP:	SOS	T1
+	IBP	T1
+	IBP	T1
+	IBP	T1
+	IBP	T1
+	$RETT
+
+FIXIT:	HRRZ	T4,CR.FLG(S2)	;Get adr of cmdblk
+	MOVE	T1,.CMPTR(T4)	;Get command pointer
+	MOVE	T2,.CMABP(T4)	;Get bp to atom buffer
+FIXI.1:	ILDB	T3,T2
+	JUMPE	T3,FIXI.2	;Done.. all fixed up
+	PUSHJ	P,DBP		;Decrement the bp
+	AOS	.CMCNT(T4)
+	JRST	FIXI.1		;Try next character
+FIXI.2:	MOVEM	T1,.CMPTR(T4)	;Store adjusted bp
+	POPJ	P,0
+
+;Action routine called on $UNIT macro to handle negative unit
+;number arguments.
+
+CHKVAL:	SKIPL	CR.RES(S2)	;Check that number
+	$RETT			;It's good
+	$CALL	FIXIT		;Fix it up
+	$RETF
+
+
+;Global routines
+;
+	INTERN	P%FUNI
+
+;Routine to search for a given printer entry by unit number
+;
+;Call with:	S1/ Node name
+;		S2/ Unit number to search for
+;
+;Returns true:	S2/ Pointer to printer entry
+;
+;Returns false:	Value not found
+;
+P%FUNI:	$CALL	.SAVE2		;Save P1 and P2
+	DMOVE	P1,S1		;Load parameters
+	SKIPGE	S1,PRTLST	;Does a list exist?
+	$RETF			;No,,return false
+	SKIPN	P1		;Node name provided?
+	MOVE	P1,LOCAL	;Default to local node name
+	$CALL	L%FIRST		;Position to the first entry
+	$RETIF			;Empty list??
+PFUNI1:	CAME	P1,PP.NOD(S2)	;Correct NODE?
+	JRST	PFUNI2		;No,,look at next entry
+	CAMN	P2,PP.UNI(S2)	;Is it this printer?
+	$RETT			;Yes,,return true
+	MOVE	S1,PRTLST	;Get pointer to printer list
+PFUNI2:	$CALL	L%NEXT		;Go on to the next entry
+	JUMPT	PFUNI1		;Check the next entry
+	$RETF			;Return false
+
+
+;Routine to search for a given printer entry by its name
+;
+;Call with:	S1/ Printer name to search for
+;
+;Returns true:	S2/ Pointer to printer entry
+;
+;Returns false:	Value not found
+;
+
+	INTERN	P%FNAM
+
+P%FNAM:	$CALL	.SAVE1		;Save P1 
+	MOVE	P1,S1		;Load parameters
+	SKIPGE	S1,PRTLST	;Does a list exist?
+	$RETF			;No,,return false
+	$CALL	L%FIRST		;Position to the first entry
+	$RETIF			;Empty list??
+PFNAM1:	CAMN	P1,PP.NAM(S2)	;Is it this printer?
+	$RETT			;Yes,,return true
+	MOVE	S1,PRTLST	;Get pointer to printer list
+	$CALL	L%NEXT		;Go on to the next entry
+	JUMPT	PFNAM1		;Check the next entry
+	$RETF			;Return false
+
+
+;Routine to search for a given printer entry by its spooler
+;
+;Call with:	S1/ Spooler name to search for
+;
+;Returns true:	S2/ Pointer to printer entry
+;
+;Returns false:	Value not found
+;
+
+	INTERN	P%FSPL
+
+P%FSPL:	$CALL	.SAVE1		;Save P1 
+	MOVE	P1,S1		;Load parameters
+	SKIPGE	S1,PRTLST	;Does a list exist?
+	$RETF			;No,,return false
+	$CALL	L%FIRST		;Position to the first entry
+	$RETIF			;Empty list??
+PFSPL1:	CAMN	P1,PP.PRG(S2)	;Is it this printer?
+	$RETT			;Yes,,return true
+	MOVE	S1,PRTLST	;Get pointer to printer list
+	$CALL	L%NEXT		;Go on to the next entry
+	JUMPT	PFSPL1		;Check the next entry
+	$RETF			;Return false
+
+;Routine to search for a given printer entry by file attribute
+;
+;Call with:	S1/ Attribute to search for
+;
+;Returns true:	S2/ Pointer to printer entry
+;
+;Returns false:	Value not found
+;
+
+	INTERN	P%FTYP
+
+P%FTYP:	$CALL	.SAVE1		;Save P1 
+	MOVE	P1,S1		;Load parameters
+	SKIPGE	S1,PRTLST	;Does a list exist?
+	$RETF			;No,,return false
+	$CALL	L%FIRST		;Position to the first entry
+	$RETIF			;Empty list??
+PFTYP1:	CAMN	P1,PP.ATT(S2)	;Is it this printer?
+	$RETT			;Yes,,return true
+	MOVE	S1,PRTLST	;Get pointer to printer list
+	$CALL	L%NEXT		;Go on to the next entry
+	JUMPT	PFTYP1		;Check the next entry
+	$RETF			;Return false
+
+;Routine to search for a given form entry given a specified printer block
+;
+;Call with:	S1/ Printer entry
+;		S2/ FORM name
+;
+;Returns true:	S2/ Pointer to FORM entry
+;
+;Returns false:	Value not found
+;
+	INTERN P%FFRM
+
+P%FFRM:	$SAVE	<P1,P2>		;Save P1 and P2
+	MOVE	P1,S2		;Save the FORM name
+	SKIPGE	S1,PP.FRM(S1)	;Does a list exist?
+	$RETF			;No,,return false
+	MOVE	P2,S1		;Save pointer to FORM list
+	$CALL	L%FIRST		;Position to the first entry
+	$RETIF			;Empty list??
+PFFRM1:	CAMN	P1,FF.NAM(S2)	;Is it this FORM
+	$RETT			;Yes,,return true
+	MOVE	S1,P2		;Restore pointer
+	$CALL	L%NEXT		;Go on to the next entry
+	JUMPT	PFFRM1		;Check the next entry
+	$RETF			;Return false
+
+
+;Routine to search for a given style entry given a specified printer block
+;
+;Call with:	S1/ Printer entry
+;		S2/ STYLE name
+;
+;Returns true:	S2/ Pointer to STYLE entry
+;
+;Returns false:	Value not found
+;
+	INTERN P%FSTY
+
+P%FSTY:	$SAVE	<P1,P2>		;Save P1 and P2
+	MOVE	P1,S2		;Save the FONT name
+	SKIPGE	S1,PP.STY(S1)	;Does a list exist?
+	$RETF			;No,,return false
+	MOVE	P2,S1		;Save pointer to STYLE list
+	$CALL	L%FIRST		;Position to the first entry
+	$RETIF			;Empty list??
+PFSTY1:	CAMN	P1,ST.NAM(S2)	;Is it this STYLE
+	$RETT			;Yes,,return true
+	MOVE	S1,P2		;Restore pointer
+	$CALL	L%NEXT		;Go on to the next entry
+	JUMPT	PFSTY1		;Check the next entry
+	$RETF			;Return false
+
+;Routine to search for a given PDE entry given a specified printer block
+;
+;Call with:	S1/ Printer entry
+;		S2/ PDE name
+;
+;Returns true:	S2/ Pointer to PDE entry
+;
+;Returns false:	Value not found
+;
+	INTERN P%FPDE
+
+P%FPDE:	$SAVE	<P1,P2>		;Save P1 and P2
+	MOVE	P1,S2		;Save the PDE name
+	SKIPGE	S1,PP.PDE(S1)	;Does a list exist?
+	$RETF			;No,,return false
+	MOVE	P2,S1		;Save pointer to PDE list
+	$CALL	L%FIRST		;Position to the first entry
+	$RETIF			;Empty list??
+PFPDE1:	CAMN	P1,PD.NAM(S2)	;Is it this one??
+	$RETT			;Yes,,return true
+	MOVE	S1,P2		;Restore pointer
+	$CALL	L%NEXT		;Go on to the next entry
+	JUMPT	PFPDE1		;Check the next entry
+	$RETF			;Return false
+
+
+;Routine to search for a given PAPER entry given a specified printer block
+;
+;Call with:	S1/ Printer entry
+;		S2/ PAPER name
+;
+;Returns true:	S2/ Pointer to PAPER entry
+;
+;Returns false:	Value not found
+;
+	INTERN P%FPAP
+
+P%FPAP:	$SAVE	<P1,P2>		;Save P1 and P2
+	MOVE	P1,S2		;Save the PAPER name
+	SKIPGE	S1,PP.PAP(S1)	;Does a list exist?
+	$RETF			;No,,return false
+	MOVE	P2,S1		;Save pointer to paper list
+	$CALL	L%FIRST		;Position to the first entry
+	$RETIF			;Empty list??
+PFPAP1:	CAMN	P1,PA.NAM(S2)	;Is it this one?
+	$RETT			;Yes,,return true
+	MOVE	S1,P2		;Restore pointer
+	$CALL	L%NEXT		;Go on to the next entry
+	JUMPT	PFPAP1		;Check the next entry
+	$RETF			;Return false
+
+SUBTTL	P%LPOU - Destroy the LPFORM.INI linked list
+
+	INTERN P%LPOU
+
+P%LPOU:	$SAVE	<P1>		;Save P1 around the call
+	SKIPGE	S1,PRTLST	;Has the list been built?
+	$RETT			;No, return true
+	$CALL	L%FIRST		;Position to the first entry
+	JUMPF [	SETOM PRTLST	;Indicate that no list is there
+		$RETT]		;Return true value
+PLPOU1:	MOVE	P1,S2		;Save the list entry
+	SKIPL	S1,PP.FRM(P1)	;Is there a FORM list?
+	$CALL	L%DLST		;Delete the list
+	SKIPL	S1,PP.STY(P1)	;Is there a STYLE entry?
+	$CALL	L%DLST		;Delete the list
+	SKIPL	S1,PP.PDE(P1)	;Is there a PDE entry?
+	$CALL	L%DLST		;Delete the list
+	SKIPL	S1,PP.PAP(P1)	;Is there a PAPER list?
+	$CALL	L%DLST		;Yes, delete the list
+	MOVE	S1,PRTLST	;Get the main list address
+	$CALL	L%NEXT		;Go to the next printer
+	JUMPT	PLPOU1		;Finish off all lists
+	MOVE	S1,PRTLST	;Get the main list address
+	$CALL	L%DLST		;Delete that too
+	SETOM	PRTLST		;Indicate that the list is gone
+	$RETT			;Return to caller
+
+
+SUBTTL	P%BPKT - Build a new PRINTER-KEYWORD-TABLES.BIN file
+	
+	INTERN	P%BPKT
+
+P%BPKT:	$CALL	.SAVE2		;Save P1 and P2
+	SKIPGE	PRTLST		;Has the list been built ?
+	$RETF			;No, return error
+	MOVEI	S1,2		;Need two pages
+	$CALL	M%AQNP		;A page each for the keyword tables and strings
+	PG2ADR	S1		;Make an address
+	MOVE	P1,S1		;Save the address for easy indexing
+	MOVEM	S1,PKTPAG	;Save the address of the keyword tables
+	MOVEI	P2,PAGSIZ(S1)	;And the address of the keyword strings
+;
+;Build the printer name table first
+;
+	MOVEI	S1,.MXOFF(P1)	;Get the address of the first table
+	MOVEM	S1,.UTOFF(P1)	;Save the unit name address
+	MOVE	S1,PRTLST	;Get the printer list
+	$CALL	L%FIRST		;Position to the first entry
+	JUMPF	P%BP.E		;Error, release space and return error
+P%BP.0:	MOVEI	S1,2(P2)	;Point to the sixbit version after the ascii
+	MOVE	S2,PP.NAM(S2)	;Get the name of the printer
+	MOVEM	S2,(S1)		;And save it there
+	HRLI	S1,(POINT 6,)	;Make a sixbit pointer
+	MOVE	S2,P2		;Get the current keyword string pointer
+	HRLI	S2,(POINT 7,)	;Make a byte pointer
+	$CALL	SIXASC		;Convert to ascii
+	MOVE	S1,.UTOFF(P1)	;Get the address of the unit name table
+	MOVE	S2,P2		;Get the ascii string pointer
+	$CALL	S%TBLK		;Look up the entry
+	TXNE	S2,TL%EXM	;If an exact match ?
+	JRST	P%BP.1		;Yes, don't need to add it then
+	MOVE	S1,.UTOFF(P1)	;Get the address of the unit name table
+	HRRZ	S2,(S1)		;Get the number of entries now
+	ADDI	S2,1		;Make room for one more
+	HRRM	S2,(S1)		;And put the maximum back
+	HRLZ	S2,P2		;Get the address of the ascii string
+	HRRI	S2,2(P2)	;And the address of the sixbit string
+	$CALL	S%TBAD		;Add the keyword to the table
+	ADDI	P2,3		;Move the next string pointer
+P%BP.1:	MOVE	S1,PRTLST	;Point to the printer list
+	$CALL	L%NEXT		;Get the next entry
+	JUMPT	P%BP.0		;And loop
+;
+;Build the paper type table next
+;
+	HRRZ	S1,@.UTOFF(P1)	;Get the number of entries in previous table
+	ADD	S1,.UTOFF(P1)	;Add in the address of the previous table
+	ADDI	S1,1		;Add in the header of previous table
+	MOVEM	S1,.PTOFF(P1)	;Save the paper type address
+	MOVE	S1,PRTLST	;Get the printer list
+	$CALL	L%FIRST		;Position to the first entry
+	JUMPF	P%BP.E		;Error, release space and return error
+P%BP.2:	SKIPGE	S1,PP.PAP(S2)	;Does a list exist ?
+	JRST	P%BP.5		;No, next printer
+	MOVE	P3,S1		;Save pointer to paper list
+	$CALL	L%FIRST		;Position to the first entry
+	JUMPF	P%BP.5		;Empty list
+P%BP.3:	MOVEI	S1,2(P2)	;Point to the sixbit version after the ascii
+	MOVE	S2,PA.NAM(S2)	;Get the name of the paper
+	MOVEM	S2,(S1)		;And save it there
+	HRLI	S1,(POINT 6,)	;Make a sixbit pointer
+	MOVE	S2,P2		;Get the current keyword string pointer
+	HRLI	S2,(POINT 7,)	;Make a byte pointer
+	$CALL	SIXASC		;Convert to ascii
+	MOVE	S1,.PTOFF(P1)	;Get the address of the paper name table
+	MOVE	S2,P2		;Get the ascii string pointer
+	$CALL	S%TBLK		;Look up the entry
+	TXNE	S2,TL%EXM	;If an exact match ?
+	JRST	P%BP.4		;Yes, don't need to add it then
+	MOVE	S1,.PTOFF(P1)	;Get the address of the paper name table
+	HRRZ	S2,(S1)		;Get the number of entries now
+	ADDI	S2,1		;Make room for one more
+	HRRM	S2,(S1)		;And put the maximum back
+	HRLZ	S2,P2		;Get the address of the ascii string
+	HRRI	S2,2(P2)	;And the address of the sixbit string
+	$CALL	S%TBAD		;Add the keyword to the table
+	ADDI	P2,3		;Move the next string pointer
+P%BP.4:	MOVE	S1,P3		;Point to the paper list
+	$CALL	L%NEXT		;Get the next entry
+	JUMPT	P%BP.3		;And loop
+P%BP.5:	MOVE	S1,PRTLST	;Point to the printer list
+	$CALL	L%NEXT		;Get the next entry
+	JUMPT	P%BP.2		;And loop
+;
+;Build the forms type table next
+;
+	HRRZ	S1,@.PTOFF(P1)	;Get the number of entries in previous table
+	ADD	S1,.PTOFF(P1)	;Add in the address of the previous table
+	ADDI	S1,1		;Add in the header of previous table
+	MOVEM	S1,.FTOFF(P1)	;Save the forms type address
+	MOVE	S1,PRTLST	;Get the printer list
+	$CALL	L%FIRST		;Position to the first entry
+	JUMPF	P%BP.E		;Error, release space and return error
+P%BP.6:	SKIPGE	S1,PP.FRM(S2)	;Does a list exist ?
+	JRST	P%BP.9		;No, next printer
+	MOVE	P3,S1		;Save pointer to forms list
+	$CALL	L%FIRST		;Position to the first entry
+	JUMPF	P%BP.9		;Empty list
+P%BP.7:	MOVEI	S1,2(P2)	;Point to the sixbit version after the ascii
+	MOVE	S2,FF.NAM(S2)	;Get the name of the forms
+	MOVEM	S2,(S1)		;And save it there
+	HRLI	S1,(POINT 6,)	;Make a sixbit pointer
+	MOVE	S2,P2		;Get the current keyword string pointer
+	HRLI	S2,(POINT 7,)	;Make a byte pointer
+	$CALL	SIXASC		;Convert to ascii
+	MOVE	S1,.FTOFF(P1)	;Get the address of the forms name table
+	MOVE	S2,P2		;Get the ascii string pointer
+	$CALL	S%TBLK		;Look up the entry
+	TXNE	S2,TL%EXM	;If an exact match ?
+	JRST	P%BP.8		;Yes, don't need to add it then
+	MOVE	S1,.FTOFF(P1)	;Get the address of the forms name table
+	HRRZ	S2,(S1)		;Get the number of entries now
+	ADDI	S2,1		;Make room for one more
+	HRRM	S2,(S1)		;And put the maximum back
+	HRLZ	S2,P2		;Get the address of the ascii string
+	HRRI	S2,2(P2)	;And the address of the sixbit string
+	$CALL	S%TBAD		;Add the keyword to the table
+	ADDI	P2,3		;Move the next string pointer
+P%BP.8:	MOVE	S1,P3		;Point to the forms list
+	$CALL	L%NEXT		;Get the next entry
+	JUMPT	P%BP.7		;And loop
+P%BP.9:	MOVE	S1,PRTLST	;Point to the printer list
+	$CALL	L%NEXT		;Get the next entry
+	JUMPT	P%BP.6		;And loop
+;
+;Build the style table last
+;
+	HRRZ	S1,@.FTOFF(P1)	;Get the number of entries in previous table
+	ADD	S1,.FTOFF(P1)	;Add in the address of the previous table
+	ADDI	S1,1		;Add in the header of previous table
+	MOVEM	S1,.STOFF(P1)	;Save the style types address
+	MOVE	S1,PRTLST	;Get the printer list
+	$CALL	L%FIRST		;Position to the first entry
+	JUMPF	P%BP.E		;Error, release space and return error
+P%BP10:	SKIPGE	S1,PP.STY(S2)	;Does a list exist ?
+	JRST	P%BP13		;No, next printer
+	MOVE	P3,S1		;Save pointer to styles list
+	$CALL	L%FIRST		;Position to the first entry
+	JUMPF	P%BP13		;Empty list
+P%BP11:	MOVEI	S1,2(P2)	;Point to the sixbit version after the ascii
+	MOVE	S2,ST.NAM(S2)	;Get the name of the style
+	MOVEM	S2,(S1)		;And save it there
+	HRLI	S1,(POINT 6,)	;Make a sixbit pointer
+	MOVE	S2,P2		;Get the current keyword string pointer
+	HRLI	S2,(POINT 7,)	;Make a byte pointer
+	$CALL	SIXASC		;Convert to ascii
+	MOVE	S1,.STOFF(P1)	;Get the address of the style name table
+	MOVE	S2,P2		;Get the ascii string pointer
+	$CALL	S%TBLK		;Look up the entry
+	TXNE	S2,TL%EXM	;If an exact match ?
+	JRST	P%BP12		;Yes, don't need to add it then
+	MOVE	S1,.STOFF(P1)	;Get the address of the style name table
+	HRRZ	S2,(S1)		;Get the number of entries now
+	ADDI	S2,1		;Make room for one more
+	HRRM	S2,(S1)		;And put the maximum back
+	HRLZ	S2,P2		;Get the address of the ascii string
+	HRRI	S2,2(P2)	;And the address of the sixbit string
+	$CALL	S%TBAD		;Add the keyword to the table
+	ADDI	P2,3		;Move the next string pointer
+P%BP12:	MOVE	S1,P3		;Point to the style list
+	$CALL	L%NEXT		;Get the next entry
+	JUMPT	P%BP11		;And loop
+P%BP13:	MOVE	S1,PRTLST	;Point to the printer list
+	$CALL	L%NEXT		;Get the next entry
+	JUMPT	P%BP10		;And loop
+	MOVN	S1,P1		;Get the address of the keyword table page
+	MOVSI	S2,-4		;Fix up all table entries
+	HRR	S2,P1		;From the beginning
+	ADDM	S1,(S2)		;Fix up the offsets
+	AOBJN	S2,.-1		;For all of the headers
+	MOVSI	T2,-4		;Fix up all table entries
+P%BP14:	HRRZ	S1,(S2)		;Get the size of the next table
+	MOVNS	S1		;Negate the size
+	HRL	S2,S1		;Move the count to the pointer
+	ADDI	S2,1		;Move to the first entry
+P%BP15:	HLRZ	S1,(S2)		;Get the ascii string address
+	SUB	S1,P1		;Subtract the beginning
+	HRLM	S1,(S2)		;And put it back
+	HRRZ	S1,(S2)		;Get the sixbit string address
+	SUB	S1,P1		;Subtract the beginning
+	HRRM	S1,(S2)		;And put it back
+	AOBJN	S2,P%BP15	;Do all of the table
+	AOBJN	T2,P%BP14	;Do all four tables
+	MOVX	S1,GJ%SHT!GJ%FOU
+	HRROI	S2,[ASCIZ "SYSTEM:PRINTER-KEYWORD-TABLES.BIN"]
+	GTJFN%
+	$STOP	(PKG,Cannot GTJFN% for PKT file)
+	HRRZS	S1
+	MOVEM	S1,PKTJFN
+	MOVX	S2,FLD(^D36,OF%BSZ)!OF%WR
+	OPENF%
+	$STOP	(PKO,Cannot OPENF% PKT file)
+	HRLZ	S2,S1
+	MOVE	S1,PKTPAG
+	ADR2PG	S1
+	HRLI	S1,.FHSLF
+	MOVX	T1,PM%CNT!PM%WR!FLD(2,PM%RPT)
+	PMAP%
+	MOVE	S1,PKTJFN
+	CLOSF%
+	 ERJMP .+1
+	MOVE	S1,PKTJFN
+	RLJFN%
+	 TRN
+	MOVEI	S1,2		;Release two pages
+	MOVE	S2,PKTPAG	;Get the address of the keyword tables
+	ADR2PG	S2		;Make it a page number
+	$CALL	M%RLNP		;Release them
+	$RETT			;Return to caller
+
+P%BP.E:	MOVEI	S1,2		;Release two pages
+	MOVE	S2,PKTPAG	;Get the address of the keyword tables
+	ADR2PG	S2		;Make it a page number
+	$CALL	M%RLNP		;Release them
+	$RETF			;Return false to caller
+
+SIXASC:	MOVSI	T1,-6		;Six characters
+SIXA.0:	ILDB	T2,S1		;Read a character
+	SKIPE	T2		;If not zero
+	ADDI	T2,"A"-'A'	;Convert to ascii
+	IDPB	T2,S2		;And save the char
+	AOBJN	T1,SIXA.0	;Loop for six chars
+	$RETT			;Return to caller
+
+SUBTTL	Main PARSE loop
+
+SUBTTL	Main routine
+
+	INTERN	P%LPIN
+
+P%LPIN:	$CALL	.SAVE1		;Save P1
+	SETOM	PRTLST		;No current print list
+	SETZM	LINE		;F23 Nothing read in, yet
+	$CALL	M%GPAG		;Get a page for command stuff
+	MOVEM	S1,PARPAG	;Save the address
+	$CALL	I%HOST		;Get local NODE name
+	MOVEM	S1,LOCAL	;Local NODE name
+	SETZB	S1,S2		;F23 Don't set up TIMER entry
+	$CALL	P$INIT		;F23 Initialize the PARSER
+	DMOVE	S1,[EXP FORMFD,0] ;F23 Address of LPFORM.INI file descriptor
+	$CALL	P$TAKE##	;F23 Set up for a take file
+	 JUMPF [$STOP (LPO,Cannot open LPFORM file: ^E[-1])] ;F23 DIE
+	$CALL	COMAND		;F23 Finally get to a command
+	MOVE	S1,PARPAG	;Get the page we used
+	$CALL	M%RPAG		;Return it to the memory manager
+	$RETT			;Return to caller
+;
+;F23 Parser for a command from the file
+;
+COMAND:	DMOVE S1,[LPTPAR ;PAR.TB ;F23 Address of main table
+		  0]	 ;PAR.PM ;F23 Address of prompt string (none)
+	DMOVEM	S1,PARBLK+PAR.TB ;F23 Init first two slots of parser block
+	MOVE S1,PARPAG	 ;PAR.CM ;F23 Get address of the command message block
+;	SETZ S2,	 ;PAR.SR ;F23 No source string (Allready ZERO)
+	DMOVEM 	S1,PARBLK+PAR.CM ;F23 Init second half of parser block
+;	MOVE	S1,PARPAG	 ;F23 address of comand page (allready there)
+	MOVE	S2,S1		;Save it for the blt
+	SETZM	(S2)		;Clear the first word
+	HRL	S2,S2		;Construct the BLT pointer
+	AOS	S2		;For a clear of memory
+	BLT	S2,777(S1)	;Clear to the end
+	MOVE	S2,[COM.SZ,,.OMCMD] ;F23 Size,,type of command header
+	MOVEM	S2,.MSTYP(S1)	;F23 Save it
+	AOS	LINE		;F23 Count up lines read
+	DMOVE	S1,[EXP PAR.SZ,PARBLK]	;F23 Size,,address of the block
+	$CALL	PARSER##	;Call the PARSER
+	 JUMPF [MOVX S1,P.ENDT	;F23 Maybe end of Take (LPFORM.INI) file?
+		TDNE S1,PRT.FL(S2) ;F23 Well, check for end of file
+		 $RETT		;F23  Yes, it's ok to return
+		MOVEI S1,@PRT.EM(S2) ;F23 Pick up address of error message
+		JRST SAYOPR  ]	;F23 Complain of error
+	MOVEM	S2,ERRORB	;F23 Save pointer to argument block
+	MOVE	S1,PRT.CM(S2)	;Get address of command message block
+	ADD	S1,COM.PB(S1)	;Add in the parser block offset
+	$CALL	P$SETU		;Set up the parser
+	$CALL	P$KEYW		;Try to parse a keyword
+	JUMPF	ERROR		;F22 
+	SETZM	PRTNAM		;No default printer
+	MOVEI	S2,LPFTYP	;Get top level dispatch address
+	$CALL	FNDDSP		;Dispatch to the proper keyword routine
+	JUMPF	ERROR		;F22 complain if keyword not found
+	JRST	0(S1)		;Dispatch to the command
+
+LPFTYP:	$STAB			;
+	.LPFRM,,.FORM		;FORM entry
+	.LPPAP,,.PAPER		;PAPER entry
+	.LPPDE,,.PDE		;PDE entry
+	.LPPRT,,.PRT		;PRINTER entry
+	.LPSTY,,.STYLE		;STYLE entry
+	$ETAB			;
+
+SUBTTL	Process a STYLE entry
+
+.STYLE:	HRLI	S1,INISTY	;Construct BLT pointer (source)
+	HRRI	S1,STYBLK	;Construct BLT pointer (destination)
+	BLT	S1,STYBLK+ST.SIZ-1 ;Move the initial values
+	$CALL	P$SIXF		;Get a 6 bit field type
+	JUMPF	ERROR		;F22 Go complain
+	MOVEM	S1,STYBLK+ST.NAM ;Save the STYLE name
+
+STYPAR:	$CALL	P$SWIT		;Parse a switch
+	JUMPF	STYEND		;Finish up with the STYLE block
+	MOVEI	S2,STYYPE	;Get top level dispatch address
+	$CALL	FNDDSP		;Dispatch to the proper keyword routine
+	JUMPF	ERROR		;F22 Complain that keyword was not found
+	JRST	0(S1)		;Dispatch to the command
+
+STYYPE:	$STAB			;Dispatch for printer switches
+	.ESLPG,,LANPDE
+	.ESLIX,,LINDEX
+	.ESLIN,,LLINE
+	.ESLWD,,LWIDTH
+	.ESPPG,,PORPDE
+	.ESPIX,,PINDEX
+	.ESPLN,,PLINE
+	.ESPWD,,PWIDTH
+	.ESPNM,,STYPNM		;UNIT switch
+	$ETAB			;End of table
+
+
+LANPDE:	$CALL	P$SIXF		;Get SIXBIT landscape PDE name
+	JUMPF	ERROR		;F22 Complain
+	MOVEM	S1,STYBLK+ST.LPG ;Save the PDE name
+	JRST	STYPAR		;Parse rest of the line
+	
+LINDEX:	$CALL	P$NUM		;Get the landscape PDE index
+	JUMPF	ERROR		;F22 Complain
+	STORE	S1,STYBLK+ST.PGI,ST.LIX	;Save the index
+	JRST	STYPAR		;Get the rest of the line
+
+LLINE:	$CALL	P$NUM		;Get the landscape page length
+	JUMPF	ERROR		;F22 Complain
+	STORE	S1,STYBLK+ST.LEN,ST.LLN	;Save the page length
+	JRST	STYPAR		;Get the rest of the line
+
+LWIDTH:	$CALL	P$NUM		;Get the landscape line width
+	JUMPF	ERROR		;F22 Complain
+	STORE	S1,STYBLK+ST.LEN,ST.LWD	;Save the index
+	JRST	STYPAR		;Get the rest of the line
+
+PORPDE:	$CALL	P$SIXF		;Get SIXBIT portrait PDE name
+	JUMPF	ERROR		;F22 Complain
+	MOVEM	S1,STYBLK+ST.PPG ;Save the PDE name
+	JRST	STYPAR		;Get the rest of the switches
+	
+PINDEX:	$CALL	P$NUM		;Get the portrait PDE index
+	JUMPF	ERROR		;F22 Complain
+	STORE	S1,STYBLK+ST.PGI,ST.PIX	;Save the index
+	JRST	STYPAR		;Get the rest of the line
+
+PLINE:	$CALL	P$NUM		;Get the portrait page length
+	JUMPF	ERROR		;F22 Complain
+	STORE	S1,STYBLK+ST.LEN,ST.PLN	;Save the page length
+	JRST	STYPAR		;Get the rest of the line
+
+PWIDTH:	$CALL	P$NUM		;Get the portrait line width
+	JUMPF	ERROR		;F22 Complain
+	STORE	S1,STYBLK+ST.LEN,ST.PWD	;Save the index
+	JRST	STYPAR		;Get the rest of the line
+
+STYPNM:	$CALL	P$SIXF		;Get the printer name
+	JUMPF	ERROR		;F22 Complain
+	MOVEM	S1,PRTNAM	;Save the printer name
+	JRST	STYPAR		;Go for other switches
+
+
+;Done with parse - add to STYLE list of the requested printer
+
+STYEND:	CAIE	S1,.CMCFM	;Was it a CONFIRM
+	JRST	ERROR		;F22 Complain about it
+	MOVE	S1,PRTNAM	;Get the printer name
+	$CALL	P%FNAM		;Ask for the printer entry
+	JUMPF	ERROR		;F22 Not defined printer
+	MOVE	P1,S2		;Save the printer entry
+	SKIPGE	S1,PP.STY(P1)	;Do we have a STYLE list
+	JRST [	$CALL L%CLST	;No,,create one
+		MOVEM S1,PP.STY(P1) ;Save the list name
+		JRST .+1]	;Join common code
+	MOVE	P1,S1		;Save the STYLE list address
+	$CALL	L%LAST		;Position to the last entry
+	MOVE	S1,P1		;Restore list pointer
+	MOVEI	S2,ST.SIZ	;Load the length of an entry
+	$CALL	L%CENT		;Create a new entry
+	HRRI	S1,ST.SIZ-1(S2)	;Final word to store into
+	HRLI	S2,STYBLK	;Source for a BLT pointer
+	BLT	S2,(S1)		;Copy over the parsed block
+	JRST	COMAND		;F23 Read the rest of the file
+
+SUBTTL	Process a FORM entry
+
+.FORM:	HRLI	S1,INIFRM	;Construct BLT pointer (source)
+	HRRI	S1,FRMBLK	;Construct BLT pointer (destination)
+	BLT	S1,FRMBLK+FF.SIZ-1 ;Move the initial values
+	$CALL	P$SIXF		;Get a 6 bit field type
+	JUMPF	ERROR		;F22 Complain
+	MOVEM	S1,FRMBLK+FF.NAM ;Save the FORM name
+
+FRMPAR:	$CALL	P$SWIT		;Parse a switch
+	JUMPF	FRMEND		;Finish up with the FORM block
+	MOVEI	S2,FRMTYP	;Get top level dispatch address
+	$CALL	FNDDSP		;Dispatch to the proper keyword routine
+	JUMPF	ERROR		;F22 No keyword found, complain
+	JRST	0(S1)		;Dispatch to the command
+
+FRMTYP:	$STAB
+	.ESALC,,ALCOU
+	.ESALI,,ALIGN
+	.ESALS,,ALISLP
+	.ESBAN,,BANNER		;F22 Dispatch to pick up banner sheets
+	.ESCHA,,CHAIN
+	.ESDRU,,DRUM
+	.ESHEA,,HEAD
+	.ESLIN,,LINES
+	.ESNOT,,NOTE
+	.ESPHA,,PHASE
+	.ESRAM,,RAM
+	.ESRIB,,RIBBON
+	.ESSIZ,,FRMMEM
+	.ESTAP,,TAPE
+	.ESTRA,,TRAIL
+	.ESPNM,,FFMPNM
+	.ESVFU,,VFU
+	.ESWID,,FRMWID
+	$ETAB
+
+
+ALCOU:	$CALL	P$NUM		;Get the count
+	JUMPF	ERROR		;F22 Complain
+	STORE	S1,FRMBLK+FF.AWD,FF.ALC ;Save the count
+	JRST	FRMPAR		;Go for other switches
+
+ALIGN:	$CALL	P$SIXF		;Parse SIXBIT align file name
+	JUMPF	ERROR		;F22 Complain
+	MOVEM	S1,FRMBLK+FF.ALI ;Store the name
+	JRST	FRMPAR		;Parse rest of the line
+
+ALISLP:	$CALL	P$NUM		;Get the number of seconds
+	JUMPF	ERROR		;F22 Complain
+	STORE	S1,FRMBLK+FF.AWD,FF.ALS ;Save it
+	JRST	FRMPAR		;Go for other switches
+
+BANNER:	$CALL	P$NUM		;F22 Get flag word
+	JUMPF	ERROR		;F22 Complain
+	STORE	S1,FRMBLK+FF.BAN ;F22 Save it
+	JRST	FRMPAR		;F22 Go for other switches
+
+CHAIN:	$CALL	P$SIXF		;Parse SIXBIT chain name
+	JUMPF	ERROR		;F22 Complain
+	MOVEM	S1,FRMBLK+FF.CHA ;Store the name
+	JRST	FRMPAR		;Parse rest of the line
+
+DRUM:	$CALL	P$SIXF		;Parse SIXBIT drum name
+	JUMPF	ERROR		;F22 Complain
+	MOVEM	S1,FRMBLK+FF.DRU ;Store the name
+	JRST	FRMPAR		;Parse rest of the line
+
+HEAD:	$CALL	P$NUM		;Get flag word
+	JUMPF	ERROR		;F22 Complain
+	STORE	S1,FRMBLK+FF.HEA ;Save it
+	JRST	FRMPAR		;Go for other switches
+
+LINES:	$CALL	P$NUM		;Get page length
+	JUMPF	ERROR		;F22 Complain
+	STORE	S1,FRMBLK+FF.LEN,FF.LIN ;Save it
+	JRST	FRMPAR		;Go for other switches
+
+NOTE:	$CALL	P$QSTR		;Parse a quoted string for the note
+	JUMPF	ERROR		;F22 Complain
+	HRRI	S1,ARG.DA(S1)	;Get string address
+	HRLI	S1,(POINT 7,)	;Form pointer
+	MOVE	S2,[POINT 7,FRMBLK+FF.NOT] ;Point to the destination
+NOTE1:	ILDB	T1,S1		;Get a byte
+	JUMPE	T1,FRMPAR	;All done
+	IDPB	T1,S2		;Put it where it belongs
+	JRST	NOTE1		;Loop for all the bytes
+
+
+PHASE:	$CALL	P$NUM		;Get the phase page indicator
+	JUMPF	ERROR		;F22 Complain
+	MOVEM	S1,FRMBLK+FF.PHA ;Save the value
+	JRST	FRMPAR		;Go for other switches
+
+RAM:	$CALL	P$SIXF		;Parse SIXBIT RAM name
+	JUMPF	ERROR		;F22 Complain
+	MOVEM	S1,FRMBLK+FF.RAM ;Store the name
+	JRST	FRMPAR		;Parse rest of the line
+
+RIBBON:	$CALL	P$SIXF		;Parse SIXBIT ribbon name
+	JUMPF	ERROR		;F22 Complain
+	MOVEM	S1,FRMBLK+FF.RIB ;Store the name
+	JRST	FRMPAR		;Parse rest of the line
+
+FRMMEM:	$CALL	P$NUM		;Get the size for XEROX memory
+	JUMPF	ERROR		;F22 Complain
+	MOVEM	S1,FRMBLK+FF.MEM ;Save the value
+	JRST	FRMPAR		;Go for other switches
+
+TRAIL:	$CALL	P$NUM		;Get flag word
+	JUMPF	ERROR		;F22 Complain
+	STORE	S1,FRMBLK+FF.TRA ;Save it
+	JRST	FRMPAR		;Go for other switches
+
+TAPE:	$CALL	P$SIXF		;Parse SIXBIT carriage-control tape
+	JUMPF	ERROR		;F22 Complain
+	MOVEM	S1,FRMBLK+FF.TAP ;Store the name
+	JRST	FRMPAR		;Parse rest of the line
+
+FFMPNM:	$CALL	P$SIXF		;Get the printer name
+	JUMPF	ERROR		;F22 Complain
+	MOVEM	S1,PRTNAM	;Save the printer name
+	JRST	FRMPAR		;Go for other switches
+
+VFU:	$CALL	P$SIXF		;Parse SIXBIT align file name
+	JUMPF	ERROR		;F22 Complain
+	MOVEM	S1,FRMBLK+FF.VFU ;Store the name
+	JRST	FRMPAR		;Parse rest of the line
+
+FRMWID:	$CALL	P$NUM		;Get the number of characters on a line
+	JUMPF	ERROR		;F22 Complain
+	STORE	S1,FRMBLK+FF.LEN,FF.WID ;Save the unit number
+	JRST	FRMPAR		;Go for other switches
+
+
+;Insert the FORM entry
+
+FRMEND:	CAIE	S1,.CMCFM	;Was it a CONFIRM
+	JRST	ERROR		;F22 Complain
+	MOVE	S1,PRTNAM	;Get the printer name
+	$CALL	P%FNAM		;Ask for the printer entry
+	JUMPF	ERROR		;F22 Complain, printer does not exist
+	MOVE	P1,S2		;Save the printer entry
+	SKIPGE	S1,PP.FRM(P1)	;Do we have a FORM list
+	JRST [	$CALL L%CLST	;No,,create one
+		MOVEM S1,PP.FRM(P1) ;Save the list name
+		JRST .+1]	;Join common code
+	MOVE	P1,S1		;Save the FORM list address
+	$CALL	L%LAST		;Position to the last entry
+	MOVE	S1,P1		;Restore list pointer
+	MOVEI	S2,FF.SIZ	;Load the length of an entry
+	$CALL	L%CENT		;Create a new entry
+	HRRI	S1,FF.SIZ-1(S2)	;Final word to store into
+	HRLI	S2,FRMBLK	;Source for a BLT pointer
+	BLT	S2,(S1)		;Copy over the parsed block
+	JRST	COMAND		;F23 Read the rest of the file
+
+SUBTTL	Process a PAPER entry
+
+.PAPER:	HRLI	S1,INIPAP	;Construct BLT pointer (source)
+	HRRI	S1,PAPBLK	;Construct BLT pointer (destination)
+	BLT	S1,PAPBLK+PA.SIZ-1 ;Move the initial values
+	$CALL	P$SIXF		;Get a 6 bit field type
+	JUMPF	ERROR		;F22 Complain
+	MOVEM	S1,PAPBLK+PA.NAM ;Save the paper name
+
+PAPPAR:	$CALL	P$SWIT		;Parse a switch
+	JUMPF	PAPEND		;Finish up with the paper block
+	MOVEI	S2,PAPTYP	;Get top level dispatch address
+	$CALL	FNDDSP		;Dispatch to the proper keyword routine
+	JUMPF	ERROR		;F22 Complain that keyword was not found
+	JRST	0(S1)		;Dispatch to the command
+
+PAPTYP:	$STAB			;Valid switches for PAPER type
+	.ESPNM,,PAPPNM		;Printer name
+	.ESSFT,,PAPSFT		;F1 Shift index
+	.ESSYM,,PAPSYM		;F1 Symmetric characteristic
+	$ETAB			;End of table
+
+PAPPNM:	$CALL	P$SIXF		;Get printer name
+	JUMPF	ERROR		;F22 Complain
+	MOVEM	S1,PRTNAM	;Save the printer name
+	JRST	PAPPAR		;Parse the remainder of the block
+
+;F1 Begin code addition for shift and symmetric stuff
+
+PAPSFT:	$CALL	P$KEYW		;Maybe YES or NO typed?
+	JUMPF	PAPNUM		;False means number was typed
+	MOVEI	S2,SFTTYP	;Pointer to valid keywords for SHIFT
+	$CALL	FNDDSP		;Try to find one.
+	JUMPF	ERROR		;F22 Complain about this
+	JRST	0(S1)		;Dispatch to the command
+
+SFTTYP:	$STAB			;Valid keywords for SHIFT
+	 .LPNOP,,NOPPAP		;No shift
+	 .LPYUP,,YUPPAP		;Default shift
+	$ETAB			;End of table
+
+NOPPAP:	SETZM	PAPBLK+PA.SFT	;say no shifting
+	JRST	PAPPAR		;Go parse some more things
+
+YUPPAP:	SETOM	PAPBLK+PA.SFT	;say use default XEROX shifting
+	JRST	PAPPAR		;Go parse some more things
+
+	Remark Shift the image to be where we want it to be
+
+PAPNUM:	$CALL	P$NUM		;Get a number
+	JUMPF	ERROR		;F22 Complain about it
+	STORE	S1,PAPBLK+PA.SFT,PA.FRT	;Stuff away as front shift
+	$CALL	P$COMMA		;Parse seperator
+	JUMPF	ERROR		;F22 Complain
+	$CALL	P$NUM		;Get a number
+	JUMPF	ERROR		;F22 Complain
+	STORE	S1,PAPBLK+PA.SFT,PA.BAK	;Stuff away as back shift
+	JRST	PAPPAR		;Go parse some more things
+
+PAPSYM:	$CALL	P$KEYW		;Pick up the parsed keyword
+	JUMPF	ERROR		;F22 Complain
+	MOVEI	S2,SYMTYP	;Pointer to valid keywords for SYMMETRIC
+	$CALL	FNDDSP		;Try to find one.
+	JUMPF	ERROR		;F22 Complain
+	JRST	0(S1)		;Dispatch to the command
+
+SYMTYP:	$STAB			;Valid keywords for SYMMETRIC
+	 .LPNOP,,NOPSYM		;Asymmetric
+	 .LPYUP,,YUPSYM		;Symmetric
+	$ETAB			;End of table
+
+NOPSYM:	SETZM	PAPBLK+PA.SYM	;say asymmetric
+	JRST	PAPPAR		;Go parse some more things
+
+YUPSYM:	SETOM	PAPBLK+PA.SYM	;say symmetric
+	JRST	PAPPAR		;Go parse some more things
+;F1 End code addition
+
+;Add to the list
+
+PAPEND:	CAIE	S1,.CMCFM	;Was it a CONFIRM
+	JRST	ERROR		;F22 Complain
+	MOVE	S1,PRTNAM	;Get the printer name
+	$CALL	P%FNAM		;Ask for the printer entry
+	JUMPF	ERROR		;F22 Complain
+	MOVE	P1,S2		;Save the printer entry
+	SKIPGE	S1,PP.PAP(P1)	;Do we have a PAPER list
+	JRST [	$CALL L%CLST	;No,,create one
+		MOVEM S1,PP.PAP(P1) ;Save the list name
+		JRST .+1]	;Join common code
+	MOVE	P1,S1		;Save the PAPER list address
+	$CALL	L%LAST		;Position to the last entry
+	MOVE	S1,P1		;Restore list pointer
+	MOVEI	S2,PA.SIZ	;Load the length of an entry
+	$CALL	L%CENT		;Create a new entry
+	HRRI	S1,PA.SIZ-1(S2)	;Final word to store into
+	HRLI	S2,PAPBLK	;Source for a BLT pointer
+	BLT	S2,(S1)		;Copy over the parsed block
+	JRST	COMAND		;F23 Read the rest of the file
+
+SUBTTL	Process a PDE entry
+
+.PDE:	HRLI	S1,INIPDE	;Construct BLT pointer (source)
+	HRRI	S1,PDEBLK	;Construct BLT pointer (destination)
+	BLT	S1,PDEBLK+PD.SIZ-1 ;Move the initial values
+	$CALL	P$SIXF		;Get a 6 bit field type
+	JUMPF	ERROR		;F22 Complain
+	MOVEM	S1,PDEBLK+PD.NAM ;Save the PDE name
+
+PDEPAR:	$CALL	P$SWIT		;Parse a switch
+	JUMPF	PDEEND		;Finish up with the PDE block
+	MOVEI	S2,PDETYP	;Get top level dispatch address
+	$CALL	FNDDSP		;Dispatch to the proper keyword routine
+	JUMPF	ERROR		;F22 Complain, keyword not found
+	JRST	0(S1)		;Dispatch to the command
+
+PDETYP:	$STAB			;Switches for a PDE entry
+	.ESFNT,,PDEFNT		;FONTS switch
+	.ESSIZ,,PDESIZ		;Size in FONT memory
+	.ESPNM,,PDEPNM		;The printer to which this applies
+	$ETAB			;End of the table
+
+PDEFNT:	$CALL	P$NUM		;Get the number of FONTS
+	JUMPF	ERROR		;F22 Complain
+	MOVEM	S1,PDEBLK+PD.FNT ;Save the fonts
+	JRST	PDEPAR		;Continue with parse
+
+PDESIZ:	$CALL	P$NUM		;Get the size in XEROX memory
+	JUMPF	ERROR		;F22 Complain
+	MOVEM	S1,PDEBLK+PD.MEM ;Save the value
+	JRST	PDEPAR		;Parse the rest of the line
+
+PDEPNM:	$CALL	P$SIXF		;Get unit number
+	JUMPF	ERROR		;F22 Complain
+	MOVEM	S1,PRTNAM	;Save the printer name
+	JRST	PDEPAR		;Parse the remainder of the block
+
+
+
+;Add the PDE to the list
+
+PDEEND:	CAIE	S1,.CMCFM	;Was it a CONFIRM
+	JRST	ERROR		;F22 Complain
+	MOVE	S1,PRTNAM	;Get the printer name
+	$CALL	P%FNAM		;Ask for the printer entry
+	JUMPF	ERROR		;F22 Complain, printer not defined
+	MOVE	P1,S2		;Save the printer entry
+	SKIPGE	S1,PP.PDE(P1)	;Do we have a PDE list
+	JRST [	$CALL L%CLST	;No,,create one
+		MOVEM S1,PP.PDE(P1) ;Save the list name
+		JRST .+1]	;Join common code
+	MOVE	P1,S1		;Save the PDE list address
+	$CALL	L%LAST		;Position to the last entry
+	MOVE	S1,P1		;Restore list pointer
+	MOVEI	S2,PD.SIZ	;Load the length of an entry
+	$CALL	L%CENT		;Create a new entry
+	HRRI	S1,PD.SIZ-1(S2)	;Final word to store into
+	HRLI	S2,PDEBLK	;Source for a BLT pointer
+	BLT	S2,(S1)		;Copy over the parsed block
+	JRST	COMAND		;F23 Read the rest of the file
+
+SUBTTL	Parse the entry for a printer
+
+.PRT:	HRLI	S1,INIPRT	;Construct BLT pointer (source)
+	HRRI	S1,PRTBLK	;Construct BLT pointer (destination)
+	BLT	S1,PRTBLK+PP.SIZ-1 ;Move the initial values
+	$CALL	P$SIXF		;Get a 6 bit field type
+	JUMPF	ERROR		;F22 Complain
+	MOVEM	S1,PRTBLK+PP.NAM ;Save printer name
+	MOVE	S1,LOCAL	;Get LOCAL node name
+	MOVEM	S1,PRTBLK+PP.NOD ;Save as default NODE
+
+PRTPAR:	$CALL	P$SWIT		;Parse a switch
+	JUMPF	PRTEND		;Finish up with the print block
+	MOVEI	S2,PRTYPE	;Get top level dispatch address
+	$CALL	FNDDSP		;Dispatch to the proper keyword routine
+	JUMPF	ERROR		;F22 Complain, keyword not found
+	JRST	0(S1)		;Dispatch to the command
+
+PRTYPE:	$STAB			;Dispatch for printer switches
+	.ESTYP,,PRTTYP		;Language type
+	.ESNOD,,PRTNOD		;NODE name
+	.ESPRG,,PRTPRG		;F1 Printer Program Name
+	.ESUNI,,PRTUNI		;UNIT-NUMBER switch
+	$ETAB			;End of table
+
+LTYPES:	$STAB			;Valid printer language keywords
+	 .LPIMP,,.FPIMP		;Impress
+	 .LPPOS,,.FPFPS		;Postscript
+	$ETAB			;End of table
+
+PRTTYP:	$CALL	P$KEYW		;Get a keyword
+	JUMPF 	ERROR		;Lose, lose
+	MOVEI 	S2,LTYPES	;Pointer to valid keywords
+	$CALL 	FNDDSP
+	JUMPF	ERROR
+	MOVEM 	S1,PRTBLK+PP.ATT	;Save the language type
+	JRST	PRTPAR
+
+PRTUNI:	$CALL	P$NUM		;Get a unit number
+	JUMPF	ERROR		;F22 Complain
+	MOVEM	S1,PRTBLK+PP.UNI ;Save the unit number
+	JRST	PRTPAR		;Go for other switches
+
+PRTNOD:	$CALL	P$SIXF		;Get SIXBIT node name
+	JUMPF	ERROR		;F22 Complain
+	MOVEM	S1,PRTBLK+PP.NOD ;Save the node name
+	JRST	PRTPAR		;Go for other switches
+
+PRTPRG:	$CALL	P$SIXF		;Get sixbit program name
+	JUMPF	ERROR		;F22 Complain
+	MOVEM	S1,PRTBLK+PP.PRG ;Save the program name
+	JRST	PRTPAR		;Go for other switches
+
+PRTEND:	CAIE	S1,.CMCFM	;Was it a CONFIRM
+	JRST	ERROR		;F22 Complain
+	SKIPGE	S1,PRTLST	;Do we have a printer list
+	JRST [	$CALL L%CLST	;Create a list for it
+		MOVEM S1,PRTLST ;Save the list name
+		JRST .+1]	;Join common code
+	$CALL	L%LAST		;Position to the last entry
+	MOVE	S1,PRTLST	;Restore list pointer
+	MOVEI	S2,PP.SIZ	;Load the length of an entry
+	$CALL	L%CENT		;Create a new entry
+	HRRI	S1,PP.SIZ-1(S2)	;Final word to store into
+	HRLI	S2,PRTBLK	;Source for a BLT pointer
+	BLT	S2,(S1)		;Copy over the parsed block
+	JRST	COMAND		;F23 Read the rest of the file
+
+
+
+	Subttl ERROR - Global error handler for QSRLPT, all [F22]
+
+; We just do an $WTO of the input buffer.  This will type the line
+; with the error in it to the operator so that a person will know 
+; where to look when correcting the LPFORM.INI file.
+
+ERROR:	MOVE	S1,ERRORB	;F23 get address of some kind of block
+	MOVE	S2,PRT.CM(S1)	;F23 Address of message
+	MOVE	S1,COM.CM(S2)	;F23 Get text offset
+	ADDI	S1,1(S2)	;F23 Point to start of string
+
+;F23 Finally ship the cruft off to Orion
+;
+;  The WTO flags mean: suppress job info, no dashes on output
+;    suppress typeout of the object block and don't format
+;
+SAYOPR:	PUSH P,S1		;F23 Save our hard work!
+	HRRZI S1,.FHSLF		;F23 This process
+	GETER%			;F23 Get the last error
+	 ERJMP [ SETZ S2,	;F23 Catch any further lossage
+		 JRST .+1 ]	;F23 Join main line code
+	POP P,S1		;F23 Restore our hard work!
+	TLZ S2,-1		;F23 Keeps GLXTXT from getting confused
+REPEAT 0,<
+	$WTO (<**** LPFORM.INI parse error at line ^D/LINE/ ****>,
+<^M^JLast GLXLIB error: ^E/[-1]/^M^JLast Tops-20 error: ^E/S2/^M^J^T/(S1)/>,
+,$WTFLG(<WT.SJI!WT.NDA!WT.SOB!WT.NFO>))
+>;REPEAT 0
+	$WTO (<**** LPFORM.INI parse error at line ^D/LINE/ ****>,
+<^M^JLast GLXLIB error: ^E/[-1]/^M^JLast Tops-20 error: ^E/S2/^M^J^T/(S1)/>,
+,$WTFLG(<WT.SJI!WT.NDA!WT.NFO>))
+	JRST	COMAND		;F23 Keep processing the file
+
+	END

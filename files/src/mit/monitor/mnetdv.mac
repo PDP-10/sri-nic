@@ -1,0 +1,1752 @@
+;[MIT-XX]PS:<MONITOR.ISIMAC>MNETDV.MAC.5501, 28-Feb-83 17:08:55, Edit by BERLIN
+;3032 Ignore value of DBUGSW; always bring up net
+;<5.ISI.MONITOR>MNETDV.MAC.5500	18-Jan-83 09:48:50	Edit by JGOLDBERGER
+;#550 Ignore domains in GTHST%
+;<5.ISI.MONITOR>MNETDV.MAC.5350	 6-Jan-83 18:22:43	Edit by CLYNN
+;#535 Update from CLynn
+;<134>MNETDV.MAC;7    13-DEC-82 14:13:38    EDIT BY TAFT
+; MNETGO set SF%NVT flag in FACTSW to permit TVT listener to be started.
+;<134>MNETDV.MAC;6    13-DEC-82 10:02:42    EDIT BY TAFT
+; Put definition and all uses of FIXLDR inside IFN MAXLDR-.NBHHL conditional.
+;<134>MNETDV.MAC;5    11-DEC-82 14:27:42    EDIT BY TAFT
+; Fix use of incorrect AC at SETDF5.
+; Eliminate use of STS (=AC0 !) in HSTLUK -- does this work in Tops20??
+;<134>MNETDV.MAC;4    10-DEC-82 15:11:02    EDIT BY TAFT
+; Insert GHOSTN routine to simulate the HOSTN GETAB table (taken from old NETWRK.MAC).
+; Also add GTBIRD to simulate a subset of the NETRDY table.
+;<134>MNETDV.MAC;3     9-DEC-82 14:50:41    EDIT BY TAFT
+; Insert missing setup instructions in monitor fork initialization.
+;<134>MNETDV.MAC;2     7-DEC-82 17:51:44    EDIT BY TAFT
+; For Tenex, SITE-ADDRESS.TXT file has to be on <SYSTEM>, not SYSTEM:.
+; Add interface type ALTO.
+;[BBNF]<TAPPAN.NEW>MNETDV.MAC.61, 29-Jul-82 17:20:36, Edit by: TAPPAN
+; Fix GTHHNI (using name table index rather than status table)
+;[BBNF]<TAPPAN.NEW>MNETDV.MAC.60, 27-Jul-82 16:42:30, Edit by: TAPPAN
+; Get rid of old version of HSTINI
+;[BBNF]<TAPPAN.NEW>MNETDV.MAC.49,  3-Jun-82 11:51:39, Edit by TAPPAN
+; modify LCLHST to allow an address of 0 as a synonym
+; for the local host (returns primary address in T1)
+;<TAPPAN.NEW>MNETDV.MAC.4, 27-Mar-82 16:04:34, Edit by TAPPAN
+; Remove NTSNDX BUGCHK since it can happen legitimately
+; if an interface is down
+;<TAPPAN.NEW>MNETDV.MAC.2, 27-Mar-82 15:40:27, Edit by TAPPAN
+; Create seperate Multinet fork for maintaining hardware.
+; initialize all protocals from MNTINI
+;<TAPPAN.4>MNETDV.MAC.17,  3-Mar-82 18:07:17, Edit by TAPPAN
+; FIx NETNCT (and therefore the routines that call it)
+; to work even if the referenced interface is down.
+;<TAPPAN.4>MNETDV.MAC.14,  1-Mar-82 13:42:12, Edit by TAPPAN
+; Add PACKET-SIZE:<bytes> keyword to address file
+; Have NTSNDI call "output allowed" routine before
+; sending a packet, so interfaces can refuse packets if they wish
+;<TAPPAN.4>MNETDV.MAC.3, 18-Feb-82 18:51:47, Edit by TAPPAN
+; Changes for class C addresses:
+; remove some unused routines for handling internet packets
+; make FNDNCT,NETCHK take a host number instead of a net number
+; remove HNFNCT,HNETCK
+; JSYS's now accept either a network number (8-24 bits) or a 32 bit
+; host number
+;<TAPPAN.4>MNETDV.MAC.2, 29-Oct-81 09:15:08, Edit by TAPPAN
+; Allow address file to leave off an interface number
+; for <device>#0
+;<TAPPAN.4>MNETDV.MAC.2, 27-Aug-81 17:20:48, Edit by TAPPAN
+; 102: Change ADRINI for new format address files
+;<MULTINET-MONITOR>MNETDV.MAC.121, 26-Jun-81 18:54:37, Edit by TAPPAN
+; Have FNDNCT check network number against MAXNET
+
+	SEARCH PROLOG,MONSYM,MACSYM,IMPPAR,INPAR,MNTPAR
+	TTITLE MNETDV
+;;; Routines for driving Multinet
+;;;
+	ASCIZ	/
+	MNETDV
+	COPYRIGHT (C) 1980,1981,1982,1983 BOLT BERANEK and NEWMAN INC.
+	/
+
+;;; Routines in this module
+;;;
+;;; MNTINI - System startup routine for multinet *
+;;; MNTCHK - Hardware maintainance routine
+;;; NTHSND - Send a high priority packet on a network *
+;;; NTLSND - Send a low priority packet on a network *
+;;; NULHDR - Null header producing routine*
+;;; NTSNDI - Send an internet packet*
+;;; .SAVP1 - Routine to automaticly save P1*
+;;; FNDNCT - Find an NCT for a given net number *
+;;; HSTHSH - Find index of a host number in host tables *
+;;; NETCHK - check if interface on a net is up *
+;;; NETCMP - Check if a host is on a given interface *
+;;; LCLNET - Check if a host is on the same net as us.*
+;;; LCLHST - CHeck if an address is one of ours *
+;;; MNTHLT - Shut down all networks prior to going down *
+;;; MNTSET - Set status of a network*
+;;; ADRINI - Initialize the interface address'*
+;;; HSTINI - Initialize the host tables *
+
+ND CHAOS,0
+
+	SWAPCD
+
+;;; MNTINI - Called at system startup, initializes tables and
+;;; storage needed by Multinet
+MNTINI::SE1CAL			; Call section 1
+	ACVAR <IDX>		; temp register
+
+	SETZM DEFADR		; Clear default address field
+	SETZM NETSUP		; Networks not yet up
+
+	MOVX T1,CR%CAP		; Create a Job 0 fork, with capabilities
+	CFORK
+	 MNTBUG(HLT,MNTCCF,<CAN'T CREATE MULTINET FORK>)
+	MOVEI T2,MNETGO
+	MSFRK			; Start fork in monitor
+	MOVE IDX,INIPTL		; Protocal handler table
+	JUMPE IDX,R		; None
+	MOVNS IDX		; Make into
+	MOVSS IDX		; An
+	HRRI IDX,1		; AOBJN pointer
+	CALL @INIPTL(IDX)	; Initialize one
+	AOBJN IDX,.-1		; loop
+	RET			; Done
+	ENDAV.
+
+;;; Here in fork context to initialize the rest of multinet
+MNETGO:	SE1ENT			; Run in section one
+IFKA <	MOVSI T1,UMODF		; (So MENTR will set up the PC)
+	MOVEM T1,FPC>
+	MCENTR			; And in monitor space
+	MOVEI T1,.FHSLF		; Give us some priority
+	MOVEI T2,1		;  by running in queue 0
+	SPRIW
+IFKA <	 ERJMP .+1>
+
+	MOVEI T1,101		;KLUDGE TO GET HIGH PRIORITY
+	MOVEM T1,JOBBIT
+	CALL SETSPQ
+
+	MOVE T1,FORKX		; Remember FORKX
+	MOVEM T1,MNTFRK		; ...
+
+	MOVE T1,[XWD ITFPC,MNTUXI]
+	MOVEM T1,MONBK		; Trap any interrupts
+	MOVE T1,CHNSON		; Trap all these channels
+	MOVEM T1,MONCHN
+
+IFNKA	<
+	MOVEI T1,BMNTLK		; Beginning of pages needed to lock down
+	SETSEC T1,MNTSEC	; In proper section
+	MOVEI T2,EMNTLK		; End of area to lock
+	SETSEC T2,MNTSEC	; Same section
+	CALL LKSTOR		; Lock storage
+>				; End IFNKA
+	MOVSI T1,-%NETS		; Get number of networks we handle
+	SKIPA P1,NCTVT		; Link together all the physical NCT's
+MNTIN0:	LOAD P1,NTLNK,(P1)	; get next on list
+	MOVE T2,NCTVT+1(T1)	; Get next pointer
+	STOR T2,NTLNK,(P1)	; Link it to this one
+	SETZM NTPHY(P1)		; Not virtual
+	AOBJN T1,MNTIN0		; Loop through all
+	SETZRO NTLNK,(P1)	; Clear last pointer (End of list)
+
+	CALL HSTINI		;GET THE SYSTEM TO KNOW NAMES OF SITES
+	 MNTBUG(INF,NOHSTN,<HSTINI FAILED TO FIND HOST NAME FILE>)
+	CALL ADRINI		; Init addresses
+	 MNTBUG(INF,NOADDR,<ADRINI failed to find address file>)
+
+	CALL NETHSI		; Initialize the network hash table
+
+;3032	MOVE T1,DBUGSW		; Get system switch
+;3032	CAIG T1,1		; System normal?
+	 SKIPN DEFADR		; Did addresses initialize properly?
+	  CAIA
+	   CALL	MNETON		; Yes, Yes, start things up
+IFKA <	MOVX T1,SF%NVT		; Enable TVT listener to be started
+	IORM T1,FACTSW>
+
+	JRST MNETLP		; Go to main fork loop
+
+;;;
+;;; MNETON - Turn networks on if NETSUP has been off
+;;;; Called by CALL MNETON$X
+;;; returns +1 always
+MNETON::
+MNTINA:	SKIPA P1,NCTVT		; Point to vector table
+MNTIN2:	  LOAD P1,NTLNK,(P1)	; get next in list
+	JUMPE P1,MNTINY		; Return when done
+	SETOM NETON(P1)		; Turn it on
+	MNTCALL NTPINI		; Do protocal specific initialization
+	SKIPN NTPHY(P1)		; If not physical
+	IFSKP.
+	 SETOM NTRDY(P1)	; don't init hardware, but do bring it up
+	ELSE.
+	 MNTCALL NTHINI		; Initialize network device
+	 SETZM NTDCLK(P1)	; Init "down timeout" clock
+	 SETZM NTPRIO(P1)	; Clear priority cell
+	 MNTCALL NTRSRT		; get it going
+	ENDIF.
+	JRST MNTIN2		; and loop
+
+MNTINY:	SETOM	NETSUP		; Flag networks on
+	RET
+
+;;; Unexpected interrupt trap
+MNTUXI:	MNTBUG(CHK,MNTUX0,<NET HARDWARE FORK - UNEXPECTED INTERRUPT>)
+	SE1ENT			; Make sure in section one
+	MCENTR
+	JRST MNETLP		; Recover processing
+
+	RESCD
+;;; Keep this resident for better response
+;;; Main Multinet fork loop
+MNETLP:	SETZM MNTFLG		; Clear flag
+	MOVEI T1,^D60000	; Default time to run next
+	MOVEM T1,MNTTIM		; save
+	CALL MNTCHK		; Check on the interfaces
+
+	MOVE T1,MNTTIM		; set as next time to run
+	CALL SETBKT		; Convert to BLOCKT arg
+	HRRI T1,MNTBPT		; Schedular test routine
+	MDISMS			; Sleep awhile
+	JRST MNETLP		; loop
+
+;;; Scheduler test
+MNTBPT:	SKIPE MNTFLG		; Any reason to run?
+	 JRST 1(T4)		; yes
+	JRST BLOCKT		; Check for time expired
+
+;;;
+;;; MNTWAK -- Wake up multinet fork
+;;; If caller is not the multinet fork does an
+;;; immediate wakeup. Otherwise sets a wakeup
+;;; "fairly soon" (under the assumption that
+;;; nothing is critical enough to take over the whole machine)
+;;;
+MNTWAK::
+	MOVE T1,FORKX		; Get running fork
+	CAME T1,MNTFRK		; already running?
+	 JRST MNTWK1		; No
+	MOVEI T1,^D1000		; wake in one second
+	CAMG T1,MNTTIM		; Anyone asking for sooner?
+	 MOVEM T1,MNTTIM	; no, use this
+	CAIA
+MNTWK1:	AOS MNTFLG		; Signal an immediate wakeup
+	RET			; done
+
+
+;;;
+;;; MNTCHK - routine for keeping things going on all nets
+;;;
+MNTCHK:	SKIPA P1,NCTVT		; Point to the vector table
+MNTCH0:	LOAD P1,NTLNK,(P1)	; Get next in list
+	JUMPE P1,R		; Return if done
+
+	CALL CHKHDW		; Check out the interface
+
+	SKIPE NTSTCH(P1)	; Change of state?
+	 CALL LOGSTC		; Yes, print it out
+	SKIPN NTPHY(P1)		; If virtual
+	 SKIPN NETON(P1)	; or network off
+	  JRST MNTCH0		; Loop
+
+	MOVE T1,SCTLW		; System shutdown?
+	TXNN T1,<1B3>
+	 JRST MNTCH0		; No, continue
+	MNTCALL NTHKIL		; Drop ready line
+	JRST MNTCH0		; and loop through the rest
+
+	SWAPCD
+;;; Log network change of state to CTY
+;;; P1 -- NCT for the network
+;;;
+LOGSTC:	SETZM NTSTCH(P1)	; Clear flag
+	SKIPG NTLADR(P1)	; Any address?
+	 RET			; No, ignore it
+
+;;; Now isolate the bytes of the net number
+	MOVE T1,NTNET(P1)	; Get number
+	SETZ T4,		; init count (N-1)
+LOGST1:	LSHC T1,-^D8		; shift off a byte
+	PUSH P,T2		; save
+	SKIPE T1		; Done?
+	 AOJA T4,LOGST1		; No, count up another
+
+	HRROI T1,[ASCIZ /
+[Network /]
+	PSOUT
+
+;;; Write all the bytes of the net number
+	MOVX T1,.PRIOU		; Primary output
+LOGST2:	SETZ T2,
+	POP P,T3		; get a byte
+	LSHC T2,^D8		; Justify it correctly
+	MOVX T3,^D10		; output in decimal
+	NOUT			; ...
+	 NOP			; Shouldn't fail
+	MOVEI T2,"."		; seperator
+	SKIPE T4		; If any left
+	 BOUT			; write it
+	SOJGE T4,LOGST2		; Loop through them all
+	HRROI T1,[ASCIZ / on/]
+	SKIPN NETON(P1)
+	 HRROI T1,[ASCIZ / off/]
+	PSOUT
+	HRROI T1,[ASCIZ /, Output /]
+	PSOUT
+	HRROI T1,[ASCIZ /on/]
+	SKIPN NTORDY(P1)
+	 HRROI T1,[ASCIZ /off/]
+	PSOUT
+	MOVEI T1," "
+	PBOUT
+	CALL LGTAD		; REPORT TIME OF THIS CHANGE
+	SKIPGE T2,T1		; IF TIME KNOWN
+	 JRST LOGSTX		; NOT KNOWN.
+	MOVEI T1,.PRIOU		; STILL ON CTY
+	SETZ T3,
+	ODTIM
+LOGSTX:	TMSG <]
+>
+	SKIPN NTORDY(P1)	; Did the hardware come up?
+	 CALLRET INTDWN		; No, signal it's down
+	CALLRET	INTUP		; Signal that it's available for use
+
+
+	RESCD
+;;;
+;;; CHKHDW -- Check, and maintain, the status of an interface
+;;;
+;;; This routine assumes the following usage for some flags in the NCT
+;;;
+;;; NTERRF --	-1 if an error occured "recently"
+;;; NETON --	<0 if the interface should be up, 0 if it should be down
+;;; NTRDY --	<0 if interface is up, 0 if interface is down, 
+;;;		>0 if interface is on the way down
+;;;		Protocal, or hardware specific "take down" routines
+;;;		can use bits in the right half as flags. Basicly
+;;;		The right half is set to 777777 when the down cycle
+;;;		starts, and is changed (set to 0) only when the
+;;;		interface is completely down.
+;;; NTDCLK --	Timeout clock, used to timeout various events
+;;;		(error condition, going down, etc.)
+;;;
+CHKHDW:	SKIPE NTPHY(P1)		; Is this a physical NCT?
+	 JRST CHKINU		; No, don't check any hardware
+	SKIPL NTRDY(P1)		; Should it be ok?
+	 JRST CHKIND		; Down cycle
+	AOSN NTERRF(P1)		; Did an error occur recently?
+	 JRST CHKINE		; Yes
+	MNTCALL NTSCHK		; Check the current status
+	 JRST CHKINE		; Not good
+	SKIPN NTDCLK(P1)	; Was it down previously?
+	 JRST CHKINU		; No
+	SETZM NTDCLK(P1)	; It's up now
+	CALL LGTAD		; get time of day
+	MOVEM T1,NTXUPT(P1)	; Save as when it came up
+
+;;; Signal the virtual NCT's that it's come up
+	XMOVEI T1,[SKIPG NTLADR(P1)	; If no address associated
+		    RET			; do nothing
+		   MNTCALL NTPINI	; Do protocal specific initialization
+		   CALLRET INTUP]	; and mark it up
+
+	CALL VNCTFN		; Do the function
+
+;;; At this point the interface is apparently functional
+CHKINU:	SKIPN NETON(P1)		; Should it be functional?
+	 JRST CHKINN		; No, take it down
+;;; Interface is, and should be, up
+	SKIPE NTPHY(P1)
+	 RET			; Nothing more if only a virtual interface
+	SKIPE T1,NTTOUT(P1)	; Get current output timeout
+	 CAMLE T1,TODCLK	; Timed out?
+	  JRST CHKINA		; No
+	MNTBUG(INF,NTOHNG,<Network output hung>,<P1,D>)
+	MNTCALL NTRSRT	; If timeout, reset net
+CHKINA:	MNTCALL NTISRT		; Make sure input
+CHKINB:	MNTCALL NTOSRT		; And output are going
+	RET			; and return
+
+;;; Here if interface is dead, or has a transient error
+CHKINE:	SKIPE T1,NTDCLK(P1)	; Was it down last time?
+	 JRST CHKIE1		; Yes, check how long
+	MNTCALL NTPERR		; Do protocal dependent error recovery
+	MOVE T1,TODCLK		; Get time now
+	MOVEM T1,NTDCLK(P1)	; Save as when went off
+CHKIE1:	SUB T1,TODCLK		; Subtract current time
+	MOVNS T1		; (Current time is larger)
+	CAIG T1,^D10000		; Down for 10 seconds (arbitrary)?
+	 JRST CHKINU		; No, may still be ok
+;;; Interface has been down for too long, kill it.
+CHKINN:
+;;; Must take this one down and all its
+;;; "virtual" interfaces
+	XMOVEI T1,[ HRRZI T1,-1		; Function to perform
+		   MOVEM T1,NTRDY(P1)   ; signal going down
+		   CALL LGTAD		; Get current time
+		   MOVEM T1,NTXDNT(P1)	; save as when it when off
+		   SETZM NTDCLK(P1)	; clear clock
+		   SKIPL NTLADR(P1)	;if an address associated with it
+		    CALL INTDWN		; Take that one down
+		   RET]
+	CALL VNCTFN		; Do it
+
+;;; Here if an interface is down or on it's way down
+CHKIND:	SKIPE NTRDY(P1)		; Already down?
+	IFSKP.	
+	 SKIPN NETON(P1)	; Should it be up?
+	 IFSKP.			; Yes
+	  SKIPN T1,NTPHY(P1)	; Virtual?
+	  IFSKP.
+	   SKIPGE NTRDY(T1)	; Is real one usable?
+	    SKIPL NTORDY(T1)	; ?
+	    IFSKP.
+	     SETOM NTRDY(P1)	; Mark this one ready
+	     SETOM NTORDY(P1)	;...
+	    ENDIF.
+	  ELSE.			; Physical
+	   MNTCALL NTRSRT	; Try to restart it
+	  ENDIF.		; end of SKIPN NTPHY
+	 ENDIF.			; end of SKIPN NETON
+	 RET			; Return now
+	ENDIF.			; End of SKIPE NTRDY
+
+	CALL MNTWAK		; We need to come back fairly soon.
+	SKIPN NTORDY(P1)	; Still doing protocal specific stuff?
+	 JRST CHKID1		; No
+
+	MNTCALL NTPKIL		; Do protocal specific kill action
+	 JRST CHKINA		; Not done yet, keep I/O going for now.
+
+	AOS NTSTCH(P1)		; Note the change of state
+ 	SETZM NTORDY(P1)	; Output not allowed any more
+
+	SKIPE NTPHY(P1)		; If only a virtual interface
+	IFSKP.
+	 SETZM NTRDY(P1)	; Done now
+	 RET
+	ENDIF.
+
+	MOVE T1,TODCLK		; Get now
+	MOVEM T1,NTDCLK(P1)	; set it
+CHKID1:	MOVE T1,NTDCLK(P1)	; Get timeout value
+	SUB T1,TODCLK		; Subtract from current time
+	MOVNS T1		; ...
+	CAIL T1,^D30000		; Been waiting too long?
+	 JRST CHKID3		; Yes, give up
+
+	SKIPN NTOB(P1)		; Stuff going out?
+	 SKIPE NTIOBO(P1)
+	  JRST CHKINB		; Output must go on
+
+	SKIPN NTHOBO(P1)	; Other queues
+	 SKIPE NTLOBO(P1)	; ...
+	  JRST CHKINB		; keep it moving
+
+;;; Here when ready to kill the thing
+CHKID3:	MNTCALL NTHKIL		; Kill the hardware
+	SETZM NTRDY(P1)		; All down
+        AOS NTSTCH(P1)		; Log the change of state
+	CALLRET MNTCLQ		; Clear anything still on the queues
+
+;;;
+;;; VNCTFN -- perform a function on an NCT and all the associated
+;;; virtual NCT's.
+;;;	T1 -- pointer to function to call
+;;;	P1 -- Physical NCT
+;;;
+;;;	Returns +2 if any of the function calls did
+;;;
+VNCTFN::
+	STKVAR	<OLDP1,SKPFLG,FUNC>
+	SETZM SKPFLG		; Nothing skipped
+	MOVEM P1,OLDP1		; save NCT
+	MOVEM T1,FUNC		; Save function
+	JRST VNCTF1		; skip checks first time thorough
+
+VNCTF0:	LOAD P1,NTLNK,(P1)	; get linked (first vitual)
+	JUMPE P1,VNCTFX		; no more
+	SKIPN NTPHY(P1)		; virtual?
+	 JRST VNCTFX		; No, done with these
+VNCTF1:	CALL @FUNC		; perform the function
+	 CAIA			; returned +1
+	  SETOM SKPFLG		; something skipped
+	JRST VNCTF0		; loop
+
+VNCTFX:	MOVE P1,OLDP1		; retore NCT
+	SKIPN SKPFLG		; something skipped?
+	 RET			; no
+	RETSKP			; yes, follow suite
+
+	SWAPCD
+;;;
+;;; MNTCLQ -- Clear an interfaces buffer queues.
+;;; Called with P1 -- NCT (must be a "real" NCT)
+;;;
+;;; The interface should be turned off at this point or
+;;; I/O page failures may result
+;;;
+;;; Buffer address considerations -- Internet packets
+;;; on the input or output q's do NOT point to
+;;; MAXLDR before the buffer, instead they point
+;;; MAXLDR-<local header size>.
+;;; this means that the address, and count, must be
+;;; corrected before the packet can be released.
+;;;
+MNTCLQ:	SKIPN NTRDY(P1)		; Must be turned off
+	SKIPE NTORDY(P1)	; Output disallowed.
+	 RET			; Bad, don't try it
+
+	MNTCALL	NTIDUN		; Simulate end of input
+
+	SETZ T2,
+	EXCH T2,NTOB(P1)	; get output
+	CALL MNTCLB		; return it
+
+	PIOFF
+	SETZM NTIOBI(P1)	; Clear internet Q
+	SETZ T2,
+	EXCH T2,NTIOBO(P1)	; get tail
+	PION
+	CALL INTFBF		; Flush an internet buffer chain
+
+	PIOFF
+	SETZM NTHOBI(P1)	; High priority Q
+	SETZ T2,
+	EXCH T2,NTHOBO(P1)	; get tail
+	PION
+	MNTCALL NTRBUF		; FLush local chain
+
+	PIOFF
+	SETZM NTLOBI(P1)	; Low priority Q
+	SETZ T2,
+	EXCH T2,NTLOBO(P1)	; get tail
+	PION
+	MNTCALL NTRBUF		; FLush it
+	RET			; and return
+
+;;;
+;;; MNTCLB -- Release a buffer that may be internet or local
+;;; T2 -- buffer
+MNTCLB:	JUMPLE T2,R		; No buffer
+	HLRZ CX,T2		; Get section number
+	CAIE CX,INTSEC		; Internet?
+	 JRST MNTCLL		; Non-Internet
+	CALLRET	INTFB1		; Internet, correct header and return
+
+MNTCLL:	MNTCALL NTRBUF		; release it
+	RET			; and return
+
+	RESCD
+;;; Functions shared by several interface/protocal drivers.
+;;; These will change considerably (as will much else)
+;;; when a general "network buffer" pool
+;;; is developed.
+
+;;; 
+;;; INTBCK -- Check if an internet buffer
+;;; Called T1 -- buffer address
+;;; Returns +2 if in internet space
+INTBCK::
+	CAML T1,[XWD INTSEC,INTFRE]
+	 CAMLE T1,[XWD INTSEC,INTFRE+INTFSZ-1]
+	  RET
+	   RETSKP
+
+;;;
+;;; INTEIN -- End of input with an Internet buffer
+;;;
+INTEIN::
+	SETZ T1,
+	EXCH T1,NTIB(P1)	; get the buffer (and clear)
+	SETZRO NBQUE,(T1)	; make sure it's not linked
+	PIOFF			; Keep machine
+	MOVE T2,INTIBI		; Get input list
+	JUMPN T2,INTEI0		; Something there
+	MOVEM T1,INTIBO		; else set head of list
+	CAIA			; skip
+INTEI0:	 STOR T1,NBQUE,(T2)	; Put on Q
+	MOVEM T1,INTIBI		; and set new tail
+	PION
+	AOS INTFLG		; signal gateway
+	MNTCALL NTISRT		; Keep input moving if needed
+	RET
+
+;;;
+;;; INTFBF -- Flush a buffer (chain)
+;;;	Called with	T2/	First buffer
+;;;			P1/	NCT pointer
+INTFBF::
+	JUMPE	T2,R		; Nothing there
+
+INTFB0:
+	CAML T2,[XWD INTSEC,INTFRE] ; Valid buffer?
+	 CAMLE T2,[XWD INTSEC,INTFRE+INTFSZ-1]
+	  MNTBUG(HLT,INTRBB,<Releasing bad Internet buffer>)
+	LOAD T1,NBQUE,(T2)	; get next buffer in list
+	PUSH P,T1		; Save
+	SETZRO NBQUE,(T2)	; zero queue pointer
+	CALL INTFB1		; release it
+	POP P,T1		; restore next
+	JUMPE T1,R		; end of list
+	MOVE T2,T1		; Get this
+	SETSEC T2,INTSEC
+	JRST INTFB0		; Loop
+
+;;; Here to do the actual release
+;;; T2/ Buffer pointer
+;;; Clobbers T3 and T1 (indirectly)
+INTFB1:
+IFNKA <	MOVN T3,NTHDRL(P1)	; Size of local leader
+	CALL FIXLDR>		; Correct Local leader to MAXLDR
+IFKA <IFN MAXLDR-.NBHHL,<
+	MOVN T3,NTHDRL(P1)	; Size of local leader
+	CALL FIXLDR		; Correct Local leader to MAXLDR
+>>
+	MOVE T1,T2		; Copy for indexing
+	PIOFF
+	EXCH T2,INTNFB		; Put on free list
+	STOR T2,NBQUE,(T1)	; Hang old list off of this new head
+	PION
+	AOS INTFLG		; Get Internet gateway to notice it
+	RET
+;;;
+;;; INTODN -- Output done
+;;;
+INTODN::
+	SETZM NTTOUT(P1)	; Clear the timeout
+	SETZ T2,
+	EXCH T2,NTOB(P1)	; Get output buffer (and clear)
+	SETZRO NBQUE,(T2)	; clear any garbage link
+	CALLRET INTFB1		; Join above
+
+
+;;;
+;;; FIXLDR -- Correct the leader size for the real network
+;;; Called	T2 -- Buffer pointer, MAXLDR above packet
+;;; 		|T3| -- Size of local leader (including link word)
+;;;	T3 is positive to correct, negative to uncorrect
+;;;
+FIXLDR::
+	PUSH P,T1		; Save a scratch
+	SKIPL T3		; Decrementing size?
+	 SKIPA T1,[-MAXLDR]	; Yes, get appropriate modifier
+	  MOVEI T1,MAXLDR	; No, incrementing
+	ADD T3,T1		; Amount and direction to correct
+	LOAD T1,NBBSZ,(T2)	; Get current packet size
+	ADD T1,T3		; Correct size
+	SUB T2,T3		; and pointer
+	STOR T1,NBBSZ,(T2)	; Update size
+	POP P,T1		; Restore
+	RET			; And return
+
+
+;;; Routines for outputing packets to a network
+
+;;; NTHSND - Put packet on High priority Q
+;;; Called
+;;;	T2/	packet pointer
+;;;	returns +2 if packet succesfully queued
+NTHSND::
+	SAVP1
+	CALL FNDNCT
+	 RET			; Not available (currently?)
+	MOVEI T1,NTHOBO		; High priority Q
+	JRST NTQPKT		; And queue it
+
+;;; NTLSND - Put packet on low priority Q
+;;;
+NTLSND::
+	SAVP1
+	CALL FNDNCT
+	 RET			; Not available
+	MOVEI T1,NTLOBO		; low priority Q
+
+;;; NTQPKT - PUT PACKET ON FIFO Q
+;;; Reached with T1 Queue head offset
+;;; T2 - Pointer to packet
+;;; P1 - Pointer to NCT for the interface
+;;;
+NTQPKT:	SKIPE NTPHY(P1)		; Virtual?
+	 MOVE P1,NTPHY(P1)	; yes, get the physical one
+	SKIPN NTORDY(P1)	; Output allowed?
+	 RET			; No, fail
+	TRNN T2,-1		; Is the address good?
+	 MNTBUG(HLT,BADBUF,<Null buffer address>)
+	HRRZS 0(T2)		; Make sure succesor chain is NIL
+	ADD T1,P1		; Offset to the proper Q
+	PIOFF			; INSURE INTERGRETY OF QUEUES
+	SKIPE T3,1(T1)		; Q empty?
+	 JRST NTQPK2		; No, put on tail
+	MOVEM T2,0(T1)		; Yes, set head pointer
+	SKIPA			; Don't chain, no predecessor
+NTQPK2:	STOR T2,NBQUE,(T3)	; Chain from predecessor to new guy
+	MOVEM T2,1(T1)		; This is new tail of Q
+	PION			; ALLOW  INTERRUPTS AGAIN
+	MNTCALL NTOSRT		; Start output if needed
+	RETSKP			; And return succesfully
+
+;;; NTSNDI -- Default routine for EnQuing an internet packet
+;;; Called with
+;;;	T1/	Local host
+;;;	T2/	Packet pointer
+;;;	P1/	NCT
+;;; Returns +2 if packet queued succesfully, else 
+;;; +1 with T1 holding an ICMP error code
+NTSNDI::
+	MNTCALL NTOTOK		; Can this packet be sent?
+	 RET			; No, T1 has reason
+	MNTCALL NTLLDR		; Make a local header
+	MOVEI T1,NTIOBO		; Point to right Q
+	CALL NTQPKT		; And Q the packet
+	 CAIA			; Failed
+	  RETSKP		; Success
+	MOVX T1,<ICM%SQ>	; Back off a minute, interface unusable
+	RET			; return
+
+	
+;;; .SAVP1 - The function for automaticly saving and restoreing the P1 AC
+;;;	Called via JSP CX,.SAVP1 (the SAVP1 MACRO)
+.SAVP1::PUSH P,P1		; Save it on stack
+	CALL 0(CX)		; Call the routine
+	 SKIPA			; +1 return
+	AOS -1(P)		; Add to return PC
+	POP P,P1		; Restore old one
+	RET			; And return
+
+;;; FNDNCT - Given a host number in T1 returns 
+;;; +2 with a pointer to the NCT for an interface on that net
+;;; in P1 if we have one, else +1
+;;;
+FNDNCT::
+	SAVET			; Save temps
+	NETNUM T2,T1		; Get the network number
+FNDNC0:	CALL NETHSH		; Look it up in the tables
+	  RET			; No, knowledge of that net
+	SKIPL P1,NETGWY(T2)	; Get the interface
+	 RET			; Not directly connected
+	RETSKP			; And skip return
+
+;;;
+;;; NETNCT -- Given either a net number, or a host number
+;;; in T1, finds the NCT, returns as FNDNCT
+;;; Note that it doesn't have the restriction (that FNDNCT has)
+;;; that the network be up, but is slower
+;;;
+NETNCT::	
+	SAVET			; Save temps
+	TXNN T1,-1B11		; Host address?
+	 JRST NETNC0		; No
+	NETNUM T1,T1		; Get the network number
+NETNC0:	XMOVEI P1,NCTVT		; point to the table
+NETNCL:	LOAD P1,NTLNK,(P1)	; get net in the chain
+	JUMPE P1,R		; no more
+	CAMN T1,NTNET(P1)	; Same network?
+	 RETSKP			; yes, success
+	JRST NETNCL		; else loop
+
+
+;;; HSTHSH - Given a host number in T1 finds entry for that
+;;; number in host tables
+;;; Does skip return if found
+;;; is table index, or -1 if no more room in tables
+;;;
+HSTHSH::
+	MOVE T2,T1		;DO A HASH
+	IDIVI T2,NHOSTS		;GET INITIAL GUESS, DIV BY PRIME
+	EXCH T2,T3		;2/ FIRST GUESS
+	IDIVI T3,NHOSTS		;DIV BY PRIME AGAIN
+	CAIN T4,0		;GET INCREMENT
+	 MOVEI T4,1
+	MOVEI T3,NHOSTS		;COUNTER FOR GUESSES
+	SETSEC T2,MNTSEC	; Look in the right section
+HSTHLP:	SKIPG HOSTNN(T2)	;NO HOST THERE?
+	 RET			;NO, 2/ WHERE TO PUT IT
+	CAMN T1,HOSTNN(T2)	;MATCH?
+	 RETSKP
+	ADDI T2,(T4)		;STEP BY INCREMENT
+	CAML T2,[XWD MNTSEC,NHOSTS]	; Check for overflow
+	 SUBI T2,NHOSTS		; Wrap around if needed
+	SOJG T3,HSTHLP		;COUNT DOWN GUESSES
+	SETO T2,		;-1 TABLE FULL
+	RET			; Return error
+
+
+	SWAPCD
+;;; NETCHK - Check if our interface on a given net is up
+;;; Called with	T1 - Host number
+;;;	Returns+1 if interface is down
+;;;	+2	if it is up
+NETCHK::
+	SAVP1			; Save P1 AC
+	CALL	FNDNCT		; Find the NCT (Or not up)
+	 TRNA			; No such Net
+	SKIPL	NTRDY(P1)	; Network up?
+	 RET			; No
+	RETSKP			; Yes, return good
+
+
+;;; NETCMP - Check if a host is on a given interface
+;;; Called with:
+;;;	T1 - Host number
+;;;	P1 - Pointer to NCT
+;;;	Returns +1 if host is not on that interface, +2 if it is
+NETCMP::
+	SAVET			; Save temps
+	NETNUM T1,T1		; Get the net number
+	MOVE T2,NTNET(P1)	; And that of this NCT
+	CAME T2,T1		; Same?
+	 RET			; No
+	RETSKP			; Yes
+ 
+;;; LCLNET -- Check if a host address is on a net we're connected 
+;;; to
+;;; Called T1/	Host address
+;;; returns +1 if we have an intersecting network
+;;; (Note that this doesn't mean that the interface is currently usable)
+LCLNET::
+	SAVET			; Save temps
+	NETNUM T1,T1		; Get the net number
+	XMOVEI T3,NCTVT		; Point to the interface table
+LCLNT0:	LOAD T3,NTLNK,(T3)	; get the next in the list
+	JUMPE T3,R		; end of the list
+	CAMN T1,NTNET(T3)	; On this network?
+	 RETSKP			; yes, return success
+	JRST LCLNT0		; loop through all
+
+;;; LCLHST - Check if a given address is one of ours
+;;; Called with T1 - 32 bit address
+;;; Returns +1 if it is not ours, +2 if it is
+LCLHST::
+	JUMPN T1,LCLHS1		; Address of 0 always succeeds
+	MOVE T1,DEFADR		; Return our default address
+	RETSKP			; and success
+
+LCLHS1:	SAVP1			; Save P1
+	PUSH P,T1		; Save address
+	SKIPA P1,NCTVT		; check out the NCTs
+LCLHS0:	 LOAD P1,NTLNK,(P1)	; get the next
+	JUMPE P1,LCLHS9		;no match if none
+	MOVE T1,0(P)		; get address back
+	ANDCM T1,NTNLHM(P1)	; mask off any logical host bits
+	CAME T1,NTLADR(P1)	; same address?
+	 JRST LCLHS0		; no, try the next
+
+	AOS -1(P)		; success! skip
+LCLHS9:	POP P,T1		; restore
+	RET			; and back
+
+;;;
+;;; MNTHLT - Tell all networks we are going away
+;;; Called at system shutdown time
+MNTHLT::SAVP1			; Save register
+	MOVX T1,<377777777777>	; +infinity
+	MOVEM T1,PINGTM		; turn off pinging
+	CALL MNTWAK		; wake up the hardware fork
+	SKIPA P1,NCTVT		; Get pointer to tables
+MNTHL0:	  LOAD P1,NTLNK,(P1)	; Get link
+	JUMPE P1,R		; If done
+	SETZM NETON(P1)		; Turn it off
+	JRST MNTHL0		; Loop through all
+
+;;; MNTSET - Set a network status
+;;; Accepts T1 - Network number, or host address
+;;;	    T2 - value
+;;; Possible values are: <0 = on
+;;;			  0 = off
+;;;			>0 = request cycle
+MNTSET::SAVP1
+	CALL NETNCT		; Find the NCT
+	 RET			; If none
+	MOVEM T2,NETON(P1)	; Set function
+	CALL MNTWAK		; Wake up the hardware fork
+	RETSKP			; Success return
+
+
+;;; PERROR - Print out the erring line in the file
+;;;
+;;; Called P1 - JFN
+;;; P2 - Byte index of BOL
+
+PERROR:	MOVE T1,P1
+	RFPTR			; Read where we are
+	 TRN
+	MOVE T3,T2		; Save it in T3
+	MOVE T2,P2		; Get BOL pointer
+	SFPTR			; set back to beginning of line
+	 TRN
+PERLP:	MOVE T1,P1
+	RFPTR			; Read where we are
+	 TRN
+	CAMN T2,T3		; Are we where error occured?
+	 CALL PMARK		; Yes, Mark it
+	CALL GCH1		; Get a character
+	 MOVEI T2,.CHLFD	; Fake EOL if done
+	CAIN T2,.CHLFD		; End of line?
+	 JRST PERLPX		; Yes, exit
+	MOVE T1,T2		; Get caharacter
+	PBOUT			; Type it out
+	JRST PERLP		; And loop
+
+;;; PMARK, Mark where error occured
+;;;
+PMARK:	PUSH P,T1		; Save AC1
+	MOVEI	T1,"^"		; A convenient character
+	PBOUT			; Write it out
+	POP P,T1		; And restore it
+	RET			; And back to caller
+
+;;; PERLPX - Done with error line
+PERLPX:	HRROI T1,[ASCIZ /
+/]
+	PSOUT			; Write a carridge return
+	RET			; Return when done
+
+
+;;; GBOL - Get Set pointer to the beginning of a line
+;;; Returns +1 if EOF hit
+;;; else +2 with T1 - JFN
+;;;		 P2 - Byte number of beginning of line
+;;;	
+GBOL:	MOVE T1,P1		; Get JFN
+	CALL GCH		; Get a character
+	 RET
+	CAIN T2,.CHLFD		; Line feed?
+	 JRST GBOL		; Yes, blank line
+	BKJFN			; Backup over that character
+	 MOVE T1,P1		; Restore JFN
+	RFPTR			; get pointer
+	 NOP
+	MOVE P2,T2		; Save it
+	RETSKP			; And return with it
+
+
+;;; GCH - read the next non-comment, non-blank character
+;;; returns +2 if character (character in T2)
+;;; +1 if EOF
+GCH:	MOVE T1,P1		; Get JFN
+GCH2:	CALL GCH1		; Get a byte
+	 RET			; EOF
+	CAIN T2,";"		; Comment, 
+	 JRST GCHSMC		; ignore it
+	CAIE T2,.CHTAB		; TAB?
+	CAIN T2," "		; or SPACE?
+	 JRST GCH2		; Skip it
+	RETSKP			; Else return with character
+
+GCH1:	CALL GBIN		; BIN a byte
+	 RET			; EOF
+	CAIE T2,.CHCRT		; Ignore 
+	CAIN T2,.CHFFD		; and form-feed
+	 JRST GCH1		; ..
+	RETSKP			; return with character
+
+GCHSMC:	CALL GBIN		; Get a byte
+	 RET			; EOF
+	CAIN T2,.CHLFD		; Until end of line
+	 RETSKP			; when we return
+	JRST GCHSMC		; Else lop
+
+GBIN:	BIN			; get a char
+IFNKA <	ERJMP R>		; If end of file return +1
+	JUMPN T2,RSKP		; If good
+IFKA <				; Tenex end-of-file check
+	GTSTS			; get file's status
+	TXNE T2,1B8		; at end of file?
+	  RET			; yes, return +1
+>
+	JRST GBIN		; flush NULLS
+
+
+;;; GTFIL - Get a JFN for a file, and setup 
+;;; ACs, used in HSTINI and ADRINI, 
+;;; called with T2 pointing to file name
+;;; returns +2 if successful with AC's setup
+;;; P1 - Contains JFN
+GTFIL:	MOVX T1,<GJ%OLD+GJ%SHT>	; Olf file, short
+	GTJFN			; GEt JFN
+	 RET			;; Can't file not found
+	MOVE P1,T1		;Save JFN in P1
+	MOVX T2,7B5+OF%RD	; Open for reading
+	OPENF			; ..
+	 JRST [	MOVE T1,P1	; If fails, get JFN back
+		RLJFN		; Release it
+		 NOP
+		RET]
+	RETSKP			; Succesful return
+
+;;; ADRINI - Reads in the file SYSTEM:SITE-ADDRESS.TXT and 
+;;; initializes the interface tables from it
+;;; Called from HSTINI at system startup, does skip return if
+;;; successful
+;;; AC usage
+;;;	P1 - JFN of input file
+;;;	P2 - Local address once read
+;;;	P3 - NCT associated with that address, if any
+;;;
+ADRINI::
+	SE1CAL			; ENTER SECTION 1
+	SAVEPQ			; Save registers clobbered
+	STKVAR <NONUM,<BUFFER,10>,LSTPHY,LSTNCT>
+IFNKA <	HRROI T2,[ASCIZ /SYSTEM:SITE-ADDRESS.TXT/]>
+IFKA <	HRROI T2,[ASCIZ /<SYSTEM>SITE-ADDRESS.TXT/]>
+	CALL GTFIL		; Get the file
+	 RET
+	SETZM LSTPHY		; We haven't seen any NCT's yet
+;;; 102: Clear NLHOST slots
+	SETZ T1,		; clear an index
+ADRIN1:	SKIPN NLHOST(T1)	; slot used?
+	 JRST ADRIN2		; no, done with table
+	SETOM NLHOST(T1)	; empty that slot
+	AOJA T1,ADRIN1		; and loop
+
+;;; Release all virtual NCT's
+ADRIN2:
+IFNKA <	MOVE P3,NCTVT		; Get the start of the list
+ADRIN3:	SETOM NTLADR(P3)	; No local address set
+	SKIPN NTPHY(P3)		; physical?
+	 JRST ADRIN4		; yes, try next
+	HRRZ T1,P3		; Get the addess
+	LOAD P3,NTLNK,(P3)	; walk down chain one
+	CALL RELRES		; release the storage	
+	CAIA
+ADRIN4:	LOAD P3,NTLNK,(P3)	; Get the next
+ADRIN5:	JUMPN P3,ADRIN3		; join above
+> ;end ifnka
+	
+ADRLP0:	CALL GBOL		; Start off a line
+	 JRST ADRDUN		; Done with file
+	MOVE T1,P1		; Get JFN
+;;; 102: beginning of change
+;;; Now read in the interface type
+	MOVE T3,[POINT 7,BUFFER] ; point to temp buffer
+ADGINM: CALL GCH
+	 JRST ADREOF		; enf of file
+	CAIN T2,"#"		; end of name?
+	 JRST [	SETZM NONUM	; flag that there is a number
+		JRST ADGINX]	; and leave loop
+	CAIN T2,.CHLFD		; end of line?
+	 JRST ADIERR		; error
+	CAIN T2,","		; or field delimiter?
+	 JRST [	SETOM NONUM	; flag that number is 0
+		JRST ADGINX]	; and join below
+	IDPB T2,T3		; save character in string
+	JRST ADGINM		; and loop
+
+;;; Here if error in interface descriptor
+ADIERR:	HRROI T1,[ASCIZ /Error in interface descriptor/]
+	JRST ADRERR		; goto error printer
+	
+ADGINX:	SETZ T2,		; put a null
+	IDPB T2,T3		; at end
+	MOVEI T1,INTNAM		; point to type table
+	MOVE T2,[POINT 7,0]	; make a pointer
+	ADDI T2,BUFFER		;  to the string buffer
+	TBLUK			; and look it up
+	TXNE T2,TL%NOM!TL%AMB	; match?
+	 JRST ADIERR		; error
+	HRRZ T4,(T1)		; get entry
+	SETZ P3,		; assume no NCT
+	MOVE T1,P1		; GET JFN
+	SKIPE NONUM		; is there a number?
+	 JRST [	SETZ T2,	; no, use 0
+		JRST ADGIN2]	; and skip reading it
+	MOVEI T3,^D10		; read in decimal
+	NIN
+	 JRST ADIERR		; error
+ADGIN2:	BKJFN			; Backup over terminator
+	 NOP			; Shouldn't fail
+	CAIN T4,NT.NIN		; No particular interface?
+	 JRST ADGNUM		; right, No NCT associated with it
+IFKA <	JRST ADFNCT>		; Skip virtual NCT stuff if Tenex
+IFNKA <	CAIE T4,NT.LNK		; Linked? (virtual?)
+	 JRST ADFNCT		; No, find the right physical one	 
+	SKIPN P3,LSTPHY		; Any physical NCT already?
+	 JRST [ HRROI T1,[ASCIZ /Virtual NCT before physical/]
+		JRST ADRERR]
+	SKIPE LSTNCT		; Any other virtual ones?
+	 JRST ADMAKV		; yes
+	SETOM NTLADR(P3)	; Clear local address field of old
+	MOVEM P3,LSTNCT		; This was also the last
+	CALL MKVNCT		; Make aand link a virtual NCT
+ADMAKV:	CALL MKVNCT		; Create a virtual copy
+	MOVE P3,T1		; Get the NCT
+	JRST ADGNUM		; join below
+> ; end ifnka
+
+ADFNCT:
+;;; Find the NCT for the interface
+	XMOVEI P3,NCTVT		; point to vector table
+ADFINT:	MOVE P3,(P3)		; get next in list
+	JUMPE P3,ADIERR		; error if no more
+	LOAD T1,NTDEV,(P3)	; get interface type
+	CAIE T1,(T4)		; Same as we're looking for?
+	 JRST ADFINT		; No, try next
+	SOJGE T2,ADFINT		; Try another if not right number
+	SETZM NTPHY(P3)		; Not a shared interface.
+	MOVEM P3,LSTPHY		; Save as the last physical NCT we inited
+	SETZM LSTNCT		; No virtual ones yet
+;;; Read in the address on that interface
+ADGNUM:	CALL NXTFLD		; read to the next field
+	CALL ADG4DB		; Get 4 decimal bytes
+	MOVEM T1,P2		; save address
+	CALL HSTHSH		; Hash it into table
+	 JUMPL T2,NETFUL	; No room for number
+	MOVEM P2,HOSTNN(T2)	; Put number in table
+	MOVX CX,HS%UP!HS%SLF!HS%VAL	; It is me , and valid status
+	IORM CX,HSTSTS(T2)	; Mark it so
+	SETZ T2,		; clear an index
+ADGNM1:	SKIPLE NLHOST(T2)	; anything in this slot?
+	 AOJA T2,ADGNM1		; No, try next
+	SKIPL NLHOST(T2)	; empty?
+	 JRST NETFUL		; No, table overflow.
+	MOVEM P2,NLHOST(T2)	; save number
+	JUMPE P3,ADGNM2		; Skip next if no NCT associated with number
+	MOVEM P2,NTLADR(P3)	; Set local address
+	NETNUM T1,P2		; Get the network number
+	MOVEM T1,NTNET(P3)	; Set it in NCT
+ADGNM2:	MOVE T1,P1		; get JFN back
+	BKJFN			; Back over last terminator
+	 NOP
+ADRLP3:	CALL GCH		; Read it in
+	 JRST ADREOF		; Eof error
+	CAIN T2,.CHLFD		; Was it a linefeed?
+	 JRST ADRLP0		; Yes, loop
+
+;;; Must be a comma, means a type name
+	MOVE T3,[POINT 7,BUFFER] ; point to buffer
+;;; Here to read in a modifier
+ADGTYP:	CALL GCH		; Get first char of keyword
+	 JRST ADREOF		; Error
+	CAIE T2,","		; end of field?
+	 CAIN T2,.CHLFD		; line feed?
+	  JRST ADGTYX		; got full field
+	CAIN T2,":"		; Value?
+	 JRST ADGTYX		; yes
+	IDPB T2,T3		; else save in string
+	JRST ADGTYP		; and loop
+
+ADGTYX:	SETZ T2,		; put a null
+	IDPB T2,T3		; at end of string
+	MOVEI T1,TYPNAM		; point to type table
+	MOVE T2,[POINT 7,0]	; and to string
+	ADDI T2,BUFFER		;  in the buffer
+	TBLUK			; and look it up in table
+	TXNE T2,TL%NOM!TL%AMB	; good name?
+	 JRST [ HRROI T1,[asciz /Bad network type descriptor/]
+		JRST ADRERR]	; no
+	MOVE T1,(T1)		; get routine address
+	CALL (T1)		; go to it
+	MOVE T1,P1		; Get JFN
+	BKJFN			; Back up
+	 NOP			; shouldn't fail
+	JRST ADRLP3		; and loop	
+
+;;; Here on DEFAULT keyword
+ADDFLT:	MOVE T1,P2		; get the address
+	MOVEM T1,DEFAD0		; remember as backup default
+	CALL SETDFA		; set new default address
+	RET
+
+;
+; SETDFA - set default network address
+; Called T1 - address (or 0 to choose new default)
+;
+SETDFA::
+	SAVEAC <T1,T2,T3>
+	JUMPN T1,SETDF5		; address specified
+;
+; First try to use backup default
+;
+	MOVE T1,DEFAD0		; get the address
+	CALL NETCHK		; that interface working?
+	 CAIA			; no
+	  JRST SETDF5		; yes
+
+	SAVP1			; save NCT AC
+	SKIPA P1,NCTVT		; get first entry
+SETDF0:	  LOAD P1,NTLNK,(P1)	; get next in the chain
+	JUMPE P1,R		; no interfaces up, give up ??
+
+	MOVE T1,NTLADR(P1)	; get this interface address
+IFNKA <	CALL NETCHK>		; up?
+IFKA <	SKIPN NTORDY(P1)>	; usable?
+	 JRST SETDF0		; no, try the next
+
+SETDF5:	MOVEM T1,DEFADR		; remember the address
+	
+	NETNUM T2,T1		; Get the network number
+	MOVEM T2,DEFNET		; Save as default network number
+
+	MOVE T3,T1		; Get number
+	ANDX T3,-1B27		; mask off network number (Class C)
+	CAIG T2,177777		; Class B or A?
+	 ANDX T3,-1B19		; Mask for class B
+	CAIG T2,377		; Class A?
+	 ANDX T3,-1B11		; yes, mask appropriately
+	MOVEM T3,NETFLD		; Set as default network field
+
+;;; Kludge up the 8 bit host address
+; this should be removed soon
+	MOVE T2,T1		; get number again
+	ROTC T2,-6		; Save IMP number
+	LSH T2,-^D10		; Flush middle bits
+	ROTC T2,6		; Combine Host and IMP
+	ANDI T2,377		; Round to 8 bits
+	MOVEM T2,NOHOST		; Save in proper cell
+
+	RET			; and return
+
+;;; Here on NCP keyword
+ADNCP:	MOVEI T1,NT.NCP		; get NCP network type
+	STOR T1,NTTYP,(P3)	; save in NCT
+	MOVE T1,NTNET(P3)	; Get the network number
+	CAILE T1,^D255		; Valid type A address?
+	 JFCL			; error ***
+;;; once host tables are right, find hosts for this net and set in NCP tables
+	RET			; and done
+
+;;; Here on CHAOS keyword
+ADCHAO:
+IFE CHAOS,<
+	HRROI T1,[ASCIZ /% CHAOS ignored since Chaos is not in the system./]
+	JRST ADRERR
+> ; End of IFE CHAOS
+IFG CHAOS,<
+	MOVE T1,P2		; get address
+	ANDI T1,177777		; make 16 bits
+	MOVEM T1,MYCHAD		; set as local chaosnet address
+	JUMPE P3,R		; if No NCT associated with it, return
+	MOVEI T1,NT.CHA		; else set it
+	STOR T1,NTTYP,(P3)	; to chaos protocal
+	RET			; and return
+> ; End of IFG CHAOS
+
+;;; Here on ETHERNET keyword
+ADETHR:	MOVEI T1,NT.ETH		; Ethernet
+	STOR T1,NTTYP,(P3)	; set it
+	RET			; and return
+
+;;; Here on MLC keyword
+ADMLC:	RET			; Temporarily NULL
+
+;;; Here on PACKET-SIZE keyword, next parameter is the maximum packet
+;;; size for this interface in decimal bytes
+
+ADPSIZ:	MOVE T1,P1		; Get JFN
+	MOVEI T3,^D10		; decimal
+	NIN
+	 JRST [	HRROI T1,[ASCIZ /Invalid PACKET-SIZE /]
+		JRST ADRERR]	; error
+	MOVEM T2,NTPSIZ(P3)	; save the size
+	RET			; and return
+
+
+;;; Here on LOGICAL-HOST-MASK keyword, next parameter is the 32-bit mask
+;;; for this interface in decimal bytes
+
+ADLHM:	HRROI T4,[ASCIZ / Invalid LOGICAL-HOST-MASK value field/]
+	CALL ADG4DB		; Read 4 decimal bytes
+				; Goes ADRERR on error
+	MOVEM T1,NTNLHM(P3)	; Save the mask
+	RET			; and return
+
+; ADG4DB - Read in 4 decimal bytes
+;	T4/	String pointer to error message
+;	P1/	JFN
+; Returns+1	Success, T1 has address
+; ADRERR	Error detected
+
+ADG4DB:	PUSH P,BHC		; Save a blank
+	MOVEI Q1,4		; There are 4 fields to an address
+ADG4D2:	MOVE T1,P1		; Get JFN back
+	MOVX T3,^D10		; Again decimal
+	NIN
+	  JRST [SUB P,BHC+2	; Pop address & return
+		MOVE T1,T4	; Error message
+		JRST ADRERR]	; Error exit
+	IORM T2,0(P)		; Merge in latest part
+	SOJLE Q1,ADG4D8		; All parts read?
+	MOVE T2,0(P)		; No, get so far
+	LSH T2,^D8		; Shift over one byte
+	MOVEM T2,0(P)		; Store back
+	JRST ADG4D2		; Loop through all 4 fields
+
+ADG4D8:	POP P,T1		; Get full address
+	RET
+
+
+;;; The following set the appropriate protocal vectors
+
+;;; Here on 1822 keyword
+AD1822:	XMOVEI T1,NCPVEC	; Protocal vector
+	TRNE T1,-1		; Have 1822 in configuration?
+	  JRST ADPVEC		; Yes, join below
+	HRROI T1,[ASCIZ /1822 is not in the system configuration, ignored/]
+	JRST ADRERR
+
+;;; Here on NETWORK-FE keyword
+ADNFE:	XMOVEI T1,NFEVEC	; NFE protocal vector
+	TRNE T1,-1		; Have NFE in configuration?
+	  JRST ADPVEC		; Yes, join above
+	HRROI T1,[ASCIZ /NFE is not in the system configuration, ignored/]
+	JRST ADRERR
+
+ADPVEC:	MOVEM T1,NTPVEC(P3)	; set it
+	RET
+
+;;; Error handler routine
+NETFUL:	POP P,T4		; Clean stack
+	MNTBUG(HLT,NORMIA,<No room in host tables for local address>)
+	HRROI T1,[ASCIZ /No room in host tables for local address/]
+
+ADRERR:	PSOUT			; Write error string
+	HRROI T1,[ASCIZ / In ADDRESS file
+/]
+	PSOUT
+	CALL PERROR		; Print offending line
+	JRST ADRLP0		; And loop
+
+ADREOF: HRROI T1,[ASCIZ /Premature EOF in ADDRESS file/]
+	PSOUT
+	CALL PERROR		; Print bad line
+
+ADRDUN:	CLOSF			; Close the JFN
+	 NOP			; Don't worry if fails
+	MOVE P2,NLHOST+0	; Get default default network
+	SKIPN DEFADR		; was default address set?
+	 CALL ADDFLT		; No, use this one	 
+	CALL NETHSI		; Initialize the hash table
+	RETSKP			; And return succesfully
+
+;;; Here to skip to the next field of keyword
+NXTFLD:	CALL GCH		; Get character
+	 RET			; Return now if EOF
+	CAIE B,","		; comma?
+	 CAIN B,.CHLFD		; EOL?
+	  RET			; yes, return now
+	JRST NXTFLD		; else read more
+
+ IFNKA	<
+;;;
+;;; MKVNCT -- Create a virtual NCT
+;;; Called P1 -- Physical NCT
+;;; LSTNCT -- The last NCT on this subchain
+;;;
+MKVNCT:	MOVE T1,[XWD .RESP3,VNCTSZ]	; Priority,, Size of buffer
+	MOVX T2,.RESGP		; From general pool
+	CALL ASGRES		; Assign it
+	 JRST [ POP P,0(P)	; Flush return address
+		HRROI T1,[ASCIZ /No storage for virtual NCT/]
+		JRST ADRERR]
+	MOVEM P3,NTPHY(T1)	; This is the physical one
+	LOAD T2,NTTYP,(P3)	; same network type
+	STOR T2,NTTYP,(T1)	; ..
+	LOAD T2,NTDEV,(P3)	; Same device (sort of)
+	STOR T2,NTDEV,(T1)	; ..
+	MOVE T2,NTPVEC(P3)	; Same protocal vector
+	MOVEM T2,NTPVEC(T1)	; ...
+	MOVE T3,LSTNCT		; Get the last
+	LOAD T2,NTLNK,(T3)	; Get it's link
+	STOR T1,NTLNK,(T3)	; Link this one
+	STOR T2,NTLNK,(T1)	; into chain
+	RET
+> ;end ifnka
+
+;;; Tables for address file keywords
+
+;;; Start a table definition
+DEFINE TABLE(NAME)<
+NAME:  XWD ..'NAME,..'NAME
+..TABLE==0		; Init count
+>
+DEFINE TABEND(NAME)
+< ..'NAME==..TABLE>
+
+DEFINE KEY(NAME,DATA)
+< XWD [ASCIZ /NAME/],DATA
+  ..TABLE==..TABLE+1		; Increment the count of entries
+>
+
+;;; Table of interface type names
+TABLE(INTNAM)
+KEY ALTO,NT.ALT
+KEY AN20,NT.ANX
+KEY IMP10,NT.BBN
+KEY LINK,NT.LNK
+KEY NETWORK-DTE,NT.NFE
+KEY NONE,NT.NIN
+TABEND(INTNAM)
+
+;;; Take of modifiers
+TABLE(TYPNAM)
+KEY 1822,AD1822			; 1822 type network
+KEY CHAOS,ADCHAO		; Network uses CHAOSNet protocal
+KEY DEFAULT,ADDFLT		; This is the 'primary' address for host
+KEY ETHERNET,ADETHR		; 10 MB Ethernet
+KEY LOGICAL-HOST-MASK,ADLHM	; set logical host mask
+KEY MLC,ADMLC			; network is a PTIP (speaks MLC protocal)
+KEY NCP,ADNCP			; network uses Arpanet NCP protocal
+KEY NETWORK-FE,ADNFE		; Network front end
+KEY PACKET-SIZE,ADPSIZ		; Maximum packet size allowed
+TABEND(TYPNAM)
+
+;;; 102: end of change
+
+	ENDSV.
+
+
+;;; .CVHST - The CVHST JSYS, moved here from MNETWK since not ARPANET Dependent
+;;; Convert host number to string
+
+.CVHST::MCENT
+	SETOB P1,P2		;NO NAME YET
+	MOVE T1,T2		;GET HOST NUMBER IN RIGHT PLACE
+	CALL GTHNTS		;CONVERT NUMBER TO STRING
+	JUMPL P1,[EMRETN(CVHST1)] ;STRING NOT FOUND
+	LOAD P4,HSTNMP,(P1)	;GET THE NAME POINTER
+	SETSEC P4,MNTSEC	; Into proper section
+	ADDI P4,HSTNAM		;POINT TO NAME
+	MOVE P3,[<POINT 7,0>!1B12]	; Extended pointer word
+	UMOVE T1,1		; Get desination
+	CALL GTHSOU		; Write string to user space
+	UMOVEM T1,1		; Write updated pointer to user space
+	JRST SKMRTN
+
+
+;;; .GTHST - The GTHST% JSYS, Get information on a Host or
+;;; Network, Moved here from MNETWK because expansion
+;;; allows it to be general over all Interfaces rather than
+;;; just the ARPANET
+;;; Called as in JSYS documentation
+;;;
+;;; The following register conventions are used in it
+;;;
+;;; P1 - Index into Name tables
+;;; P2 - Index into Hash tables
+;;; P3,P4 - Byte pointers (extended or otherwise)
+;;; P5,P6 - Scratch
+
+.GTHST::MCENT			; Establsh MONITOR context
+	SKIPL T1		;CHECK RANGE OF FUNCTION CODE
+	 CAIL T1,GTHMAX
+	  RETERR (ARGX02)	;BAD FUNCTION CODE
+	SETOB P1,P2		;NO NUMBER NOR NAME
+	XCT GTHDSP(T1)		;DO THE FUNCTION
+
+GTHSXX:	MOVX T4,HS%NCK		;SET THE NICKNAME FLAG
+	SKIPL P1		;NO NAME
+	SKIPL HOSTN(P1)		;DID WE HAVE ONE?
+	 SKIPA T4,HSTSTS(P2)	;NO
+	IOR T4,HSTSTS(P2)	;RETURN STATUS
+	UMOVEM T4,4
+	MOVE T3,HOSTNN(P2)	;RETURN HOST NUMBER
+	UMOVEM T3,3
+	JRST SKMRTN		;SKIP RETURN
+
+GTHDSP:	JRST GTHSIZ		;(00)GET NAME TABLE SIZE
+	JRST GTHIDX		;(01)INDEX INTO NAME SPACE
+	JRST GTHNUM		;(02)CONVERT NUMBER TO STRING
+	JRST GTHSTR		;(03)CONVERT STRING TO NUMBER
+	JRST GTHHNN		;(04)STATUS BY NUMBER
+	JRST GTHHNI		;(05)STATUS BY INDEX
+	JRST GTHNHN		;(06)Get local number on a network
+	JRST GTHNST		;(07)Get status table of a network
+GTHMAX==.-GTHDSP		;NUMBER OF FUNCTIONS
+
+GTHSIZ:	HRLZ T2,MHOSTS		;-LENGTH,,1ST INDEX
+	UMOVEM T2,2		;RETURN TO USER
+	MOVSI T3,-NHOSTS	;NUMBER OF HOST SLOTS
+	UMOVEM T3,3		;RETURN TO USER
+	MOVE T4,DEFADR		; Get default address
+	UMOVEM T4,4		;RETURN TO USER
+	JRST SKMRTN		;DONE
+
+GTHIDX:	MOVN T1,MHOSTS		;GET NUMBER OF HOST NAMES IN USE
+	HRRZ P1,T3		;CHECK RANGE OF HOST NAME INDEX
+	CAML P1,T1
+	 RETERR (GTJIX1)	;BAD INDEX TO HOSTN
+	SETSEC P1,MNTSEC	; In the right section
+	LOAD P2,HSTIDX,(P1)	;GET INDEX INTO HOSTNN
+	SETSEC P2,MNTSEC	; And in the proper section
+	JRST GTHTUS		;WRITE THE STRING
+
+GTHNUM:	MOVE T1,T3		;GET HOST NUMBER
+	CALL GTHNTS		;CONVERT NUMBER TO STRING
+	JUMPL P1,[RETERR(GTHSX3)]	 ;NO STRING FOR THAT NUMBER
+
+;;; Write host string to user space
+GTHTUS:	LOAD P4,HSTNMP,(P1)	;GET THE NAME POINTER
+IFNKA	<
+	SETSEC P4,MNTSEC	; Into proper section
+	ADDI P4,HSTNAM		;POINT TO NAME
+	MOVE P3,[<POINT 7,0>!1B12]>	; Extended pointer word
+IFKA	<
+	MOVEI P3,HSTNAM(P4)	; 10x, Use normal pointer
+	HRLI P3,(<POINT 7,0>)>
+	UMOVE T1,2		; Get dest
+	CALL GTHSOU		;WRITE STRING
+	UMOVEM T1,2		; Update user's pointer
+	JRST GTHSXX		;EXIT
+
+GTHNTS:	CALL CVNHST		;MAKE IT NEW FORMAT
+	CALL HSTHSH		;GET ITS INDEX
+	 RET			;NOT THERE
+	MOVE P2,T2		; Save index
+	SKIPG P1,HOSTPN(T2)	; has it a name?
+	 SETO P1,		; no
+	RET
+
+IFKA <
+;;; Convert host number in AC1 to new format
+
+CVNHST::CAMN T1,[-1]		;IF -1 USE LOCAL HOST NUMBER
+	 MOVE T1,DEFADR		; Default local host
+	AND T1,[HSTMSK]		;CUT DOWN TO SIZE
+	TLNE T1,37700
+	 RET
+	ANDI T1,377
+	TRZE T1,100		;SET THE HOST BITS
+	 TRO T1,200000
+	TRZE T1,200
+	 TRO T1,400000
+	IOR T1,NETFLD		;Add default network number
+	RET
+> ; End of IFKA
+
+GTHSTR:	CALL GTHSTN		;CONVERT STRING TO NUMBER	
+	SKIPL T2		;VAILD STRING FOUND?
+	 RETERR(GTHSX5)		; no, return error
+	MOVE P1,T2		; Save
+	SETSEC P1,MNTSEC	; in the right section
+	MOVE T1,T4		;GET INDEX TO HOSTNN
+	CALL CVNHST		; Convert number to 32 bits if necessary
+	CALL HSTHSH		; Look it up in tables
+	 RETERR(GTHSX2)		; Not there
+	MOVE P2,T2		; Save that index
+	JRST GTHSXX		;EXIT
+
+;;; Convert host string to a number
+;;; returns T4/ Number
+;;;	    T2/ >0 not found
+;;;		<0 RH index to HOSTN
+GTHSTN:	STKVAR <<GTHSBF,10>>
+	MOVEI P3,GTHSBF		; Point to buffer
+	HRLI P3,(<POINT 7,0>)	; ....
+	CALL GTHSIN		;GET STRING FROM USER
+	MOVEI T1,GTHSBF		;MAKE BYTE POINTER
+	HRLI T1,(<POINT 7,0>)
+	CALLRET HSTLUK		;LOOKUP NAME
+
+GTHHNI:	HRRZ T1,T3		;GET INDEX
+	CAIL T1,NHOSTS		; Compare to table size
+	 RETERR (GTJIX1)	; Bad index
+	SETSEC T1,MNTSEC	; Put in proper section
+
+	SKIPA T1,HOSTNN(T1)	; Get number
+GTHHNN:	  MOVE T1,T3		;GET HOST NUMBER
+	CALL GTHNTS		;CONVERT NUMBER TO INDEX
+	JUMPL P2,[RETERR (GTHSX1)] ;UNKNOWN HOST
+	JRST GTHSXX		;EXIT
+
+;;; Move string from user space 
+GTHSIN:	UMOVE T1,2		; GET POINTER
+	MOVE T4,[XCTBU [ILDB T2,T1]]
+	TLNN T1,777777		; IF JFN DO THE JSYS
+	 MOVE T4,[BIN]
+	TLC T1,777777		; CHECK FOR LH -1
+	TLCN T1,777777
+	 HRLI T1,(<POINT 7,0>)	; USE STANDARD POINTER
+	MOVEI P5,MAXLC		; UP TO 39 CHARS
+GTHSIL:	XCT T4			; DO RIGHT OPERATION
+	SOSG P5			; Decrement counter
+	 MOVEI T2,0		; AFTER MAXLC CHARS FORCE NULL
+	CAIL T2,140		; LOWER CASE?
+	 TRZ T2,40		; YES, RAISE
+	CAIE T2,"."		;#550 For now ignore domains
+	 CAIG T2,40		; END ON SPACE OR LESS
+	  MOVEI T2,0		; terminating with null
+	IDPB T2,P3		; Stick it in destination string
+	JUMPG T2,GTHSIL		; loop if more to it
+	CAME T4,[BIN]		; DON'T BACKUP A TTY
+	BKJFN			; backup to before termination
+	 NOP			; (shouldn't fail)
+	UMOVEM T1,2		; restore updated pointer
+	RET			; and return
+
+;;; Write string to user space
+;;; Called with T1 - Dest in user space
+;;; Returns +1 T1 updated pointer
+GTHSOU:	MOVE T4,[XCTBU [IDPB T2,T1]]
+	TLNN T1,777777		; IF JFN DO THE JSYS
+	 MOVE T4,[BOUT]
+	TLC T1,777777		; CHECK FOR LH -1
+	TLCN T1,777777
+	 HRLI T1,(<POINT 7,0>)	; USE STANDARD POINTER
+GTHSOL:	ILDB T2,P3		; Get next byte
+	JUMPE T2,GTHSOX		; If a null
+	XCT T4			; DO RIGHT OPERATION
+	JRST GTHSOL		; Loop
+GTHSOX:	CAMN T4,[BOUT]		; Don't backup a JFN
+	 RET			; Return now if a JFN
+	XCT T4			; Stick on NULL
+	BKJFN			; Backup destination
+	 NOP			; ...
+	RET			; and return
+
+
+;;; New functions
+
+;;; Get hostnumber on a network
+;;; Accepts T2 - Network number, or host number on the net
+;;; Returns +1 if no interface on that network
+;;; +2 if we have one, T2 - Hostnumber
+GTHNHN:	MOVE T1,T2		; Get number
+	CALL NETNCT		; Look for an NCT for that net
+	 RETERR (GTHSX5)	; Return error if none
+	MOVE T1,NTLADR(P1)	; Get our number there
+	UMOVEM T1,T2		; Restore it to user
+	JRST SKMRTN		; And do a skip return
+
+;;; Get status of a network
+;;; Accepts T2 - Network number or host number on the net
+;;;	    T3 - Pointer to where to store data
+;;;	    T4 - -Number of words,,offset of first
+;;; Returns +1 if no such network or invalid offset
+;;;	    +2 if good arguments with data in table
+;;;
+GTHNST:	MOVE T1,T2		; Get number
+	CALL NETNCT		; Look it up
+	 RETERR(GTHSX5)		; Bad number
+	HLRE T1,T4		; Get number wanted
+	MOVMS T1		; Magnitude
+	ADDI T1,(T4)		; Add in first
+	CAILE T1,NTXUPT-NTRDY+1	; Size of area
+	 RETERR(GTJIX1)		; Bad
+	XMOVEI P1,NTRDY(P1)	; Point to start of area
+	ADDI P1,(T4)		; Add in offset of fist word
+	XCTU [HRR T4,T3]	; Setup an AOBJN destination pointer
+GTHNS0:	MOVE T1,0(P1)		; get a word
+	UMOVEM T1,0(T4)		; Store it
+	AOS P1			; Increment source pointer
+	AOBJN T4,GTHNS0		; And loop through all desired
+	JRST SKMRTN		; And do a skip return
+
+IFKA <			; In MNETWK on TOPS-20
+HSTLUK::SAVEPQ				;GET SOME ROOM
+	MOVE UNIT,T1			;SAVE POINTER
+	MOVEI T3,10
+	NIN				;TRY TO GET A NUMBER
+	 JRST HSTLKI			;TRY A NAME
+	MOVE UNIT,T1			;SAVE UPDATED POINTER
+	MOVE T1,T2
+	CALL CVNHST
+	MOVE T4,T1			;RETURN HOST NUMBER
+	MOVE T1,UNIT			;AND UPDATED POINTER
+	SETZ T2,			;HOST NUMBER FOUND
+	RET
+
+HSTLKI:	HRLZ T2,MHOSTS			;SCAN THE TABLE
+IFNKA <	PUTSEC STS,MNTSEC>		; In this section
+IFKA <	SETZ T4,>
+HSTLK0:	MOVE T1,UNIT			;DO NAME POINTER
+IFNKA	<
+	LOAD T4,HSTNMP,(STS)
+	ADD T4,[XWD MNTSEC,HSTNAM]	; Point to the table
+	MOVE T3,[<POINT 7,0>!1B12]	; Make extended pointer
+>
+IFKA	<
+	LOAD T3,HSTNMP,(T4)
+	ADD T3,[POINT 7,HSTNAM]
+>
+HSTCMP:	ILDB IOS,T1			;COMPARE A STRING
+	ILDB HN,T3
+	SKIPN IOS
+	 JUMPE HN,[
+		IFNKA <
+		   LOAD T4,HSTIDX,(STS)
+		   SETSEC T4,MNTSEC>
+		IFKA <LOAD T4,HSTIDX,(T4)>
+		   MOVE T4,HOSTNN(T4)
+		IFNKA <HRR T2,STS>		; Save index
+		IFKA <HRR T2,T4>		; Save index
+		   RET]
+	CAIN IOS,(HN)
+	 JRST HSTCMP
+IFNKA <	AOS STS>				; Point to next slot in table
+IFKA <	AOS T4>
+	AOBJN T2,HSTLK0			;STEP TO NEXT HOST
+	SETZ T4,			;NO HOST FOUND
+	RET
+
+;ROUTINE TO PRODUCE THE OLD HOSTN TABLE
+
+GHOSTN::HRRZ T4,HOSTN(T2)		;GET INDEX
+	MOVE T1,HOSTNN(T4)		;GET THE HOST NUMBER
+	CALL CVOHST			;CONVERT TO OLD FORMAT
+	MOVE T3,HSTSTS(T4)		;GET HOST STATUS
+	ANDI T3,777000			;GET THE RIGHT BITS
+	IORI T1,(T3)			;BUILD LH
+	MOVSI T1,(T1)
+	SKIPGE HOSTN(T2)		;NICKNAME?
+	 TXO T1,HS%NCK
+	HLR T1,HOSTN(T2)		;GET THE NAME POINTER
+	TRZ T1,400000			; Clear nickname flag
+	RET
+
+;CONVERT HOST NUMBER IN AC1 TO OLD FORMAT
+
+CVOHST::CAMN T1,[-1]		;NO HOST?
+	 JRST CVOHS1		;RETURN 777
+	TDZE T1,[740077,,177700];CHECK TO SEE IF FITS IN OLD FORMAT
+	 MOVEI T1,400		;RETURN 400
+	TRZE T1,200000		;SET THE HOST BITS
+	 TRO T1,100
+	TRZE T1,400000
+	 TRO T1,200
+CVOHS1:	ANDI T1,777
+	POPJ P,
+
+; Routine to produce (a subset of) the old NETRDY table.
+; Gets status from the NCT for the "default" network.
+
+GTBIRD::PUSH P,T2
+	MOVE T1,DEFADR
+	CALL FNDNCT
+	 MOVE P1,NCTVT
+	POP P,T2
+	XCT GTBITX(T2)
+	RET
+
+GTBITX:	MOVE T1,NTRDY(P1)	; IMPRDY 0=down, .gtr. 0 =going down, -1=up
+	MOVE T1,NETON(P1)	; NETON  0=network off
+	SETZ T1,		; NETENT Flags to drive netser. e.g., don't allow login
+	SETZ T1,		; NCPUPT Gtad of last time ncp cycled up
+	SETZ T1,		; IGDMSG Most recent imp-going-down msg
+	MOVE T1,NTXDNT(P1)	; IMPDNT Time of last imp ready line drop
+	MOVE T1,NTXUPT(P1)	; IMPUPT Time of last imp ready line up
+	SETZ T1,		; IGDTIM Time of above imp-going-down msg
+IMPGTN==:.-GTBITX
+> ; End of IFKA
+
+	RESCD
+;;; LCKSTR - Lock down a region of core
+;;; 1 - Xtended address of start
+;;  2 - Xtened address of end
+;;;
+;;; (probably should be in PAGEM, but this keeps the sources cleaner)
+LKSTOR::
+	TRZ T1,777		; Round down to nearest page
+LKST1:
+	PUSH P,T1		; Save start
+	PUSH P,T2		; and end
+	CALL MLKMA		; Lock down that page
+	POP P,T2			; Rstore
+	POP P,T1			; ...
+	ADDI T1,PGSIZ		; Increment to next page
+	CAMG T1,T2		; Past last address?
+	 JRST LKST1		; Loop
+	RET
+
+	TNXEND
+	END			; Of MNETDV
+

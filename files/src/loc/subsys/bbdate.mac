@@ -1,0 +1,1452 @@
+;SSX:<SOURCES.UNSUPPORTED>BBDATE.MAC.17,  4-Aug-86 01:34:30, Edit by C.CHENRY
+; Save as BBDATE.EXE
+; Update version numbers
+; Add CSLISW to prepare for future edits.
+;SSX:<SOURCES.UNSUPPORTED>BBDATE.MAC.16, 28-Jul-86 23:12:20, Edit by C.CHENRY
+; Clean up code (somewhat)
+; Add more internal documentation
+; Fix SHOW command so that it doesn't try to access any nonexistent pages in
+;   the IDX file
+;SSX:<SOURCES.UNSUPPORTED>BBDATE.MAC.15, 28-Jul-86 21:06:57, Edit by C.CHENRY
+; Force WHOPRs and STAFF to enable privileges to use special commands
+; Clean up privilege-checking code
+;SSX:<SOURCES.UNSUPPORTED>BBDATE.MAC.14, 28-Jul-86 20:43:03, Edit by C.CHENRY
+; If user requests summary since a particular date and/or time, also
+;   print summary from beginning to allow for easy comparison
+;SSX:<SOURCES.UNSUPPORTED>BBDATE.MAC.13, 25-Jul-86 18:04:48, Edit by C.CHENRY
+; Add support for STATISTICS and SUMMARY commands
+; Add more documentation for HELP command
+; Make this program portable to other sites by adding LOTSW (other sites
+;   don't have staff or consultant bits)
+;SSX:<SOURCES.UNSUPPORTED>BBDATE.MAC.12,  7-Jun-86 23:58:46, Edit by C.CHENRY
+; Fix RESET command so that it can do IDX files even if they have no directory
+; listing access 
+;SSX:<SOURCES.UNSUPPORTED>BBDATE.MAC.11, 30-May-86 00:22:51, Edit by C.CHENRY
+; Fix bug in RESET command
+; Remove confirmation for RESET command
+;SSX:<SOURCES.UNSUPPORTED>BBDATE.MAC.10, 30-Apr-86 17:26:50, Edit by C.CHENRY
+; Make sure user wants to RESET before we actually do it
+;SSX:<SOURCES.UNSUPPORTED>BBDATE.MAC.9, 29-Apr-86 02:28:53, Edit by C.CHENRY
+; Add support for the RESET command
+; Add some more documentation
+;SSX:<SOURCES.UNSUPPORTED>BBDATE.MAC.8,  1-Apr-86 17:15:19, Edit by C.CHENRY
+; Add support for the READ command
+
+TITLE  BBDATE - Allow users to find read info about a bboard
+SUBTTL Jim Lippert / Stanford University / August 1985
+
+SEARCH MONSYM,MACSYM	;get jsys stuff
+.REQUIRE SYS:MACREL	;load some useful stuff
+ASUPPRESS
+SALL
+.TEXT "BBDATE/SAVE"
+
+VWHO==4			;customer written program
+VMINOR==0
+VMAJOR==2		;statistics/summary stuff makes it a new version
+VEDIT==17
+
+;This program enables users to find out information about who reads
+;the bboreds and when.  It is a new version of Bob Kanefsky's old
+;BBDATE.PAS program, which became obsolete when BBOARD switched to 
+;the .IDX file format.  Credits:  Frank Fujimoto (FMF) for the file
+;I/O (from his BMERGE program) and Bob Kanefsky for the concept of
+;this program.  Most of the parsing routine comes from Ralph Gorin's
+;book, pp. 372-379.  The process for getting all of the .IDX files in
+;BBD: comes from the MM program.  Please refrain from laughing at the
+;code -- it's my first MACRO program and I sort of patched together
+;code from several sources to create this...
+
+
+COMMENT /
+
+Site dependent features are selected with assembly switches.  Typically,
+the assembly switch is specified in a separate header file.  For example,
+the command line for compiling the LOTS version of BBDATE would be:
+
+	@COMPILE BBDLOT.MAC+BBDATE.MAC
+
+where the file BBDLOT.MAC would contain the line
+	
+	LOTSW==1
+
+to turn on LOTS specific features.
+
+/
+
+; Assembly switches
+IFNDEF LOTSW,<LOTSW==0>			;1 = running on LOTS
+IFNDEF CSLISW,<CSLISW==0>		;1 = running on CSLI
+
+;constant definitions:
+A=1			;JSYS arguments and temporary AC's
+B=2
+C=3
+D=4
+E=5
+T=6
+P=17			;stack pointer
+
+OPDEF	CALL	[PUSHJ P,]
+OPDEF	RET	[POPJ P,]
+OPDEF SKPA [TRNA]		;A faster skip always
+OPDEF UERR [4B8]
+
+MMRPAG==20		;page for .IDX read date
+MMWPAG==40		;page for .IDX write date
+
+IDXRPG==20		;page to use for .IDX read
+IDXWPG==40		;page to use for .IDX write
+
+STAPAG==100		;page to map in .IDX file for statistics 
+
+PDLEN==100		;length of the pushdown stack
+
+IFN CSLISW,<
+CONGRP=^D100		;consultants user group
+UTABLN==10		;How many user groups we can handle
+>;IFN CSLISW
+
+IFNDEF CMDBSZ,CMDBSZ==^D50	;length of the command text buffer (250 chars)
+IFNDEF ATMBSZ,ATMBSZ==^D20	;length of the atom buffer (100 chars)
+
+SUBTTL Macro definitions:
+
+;noise word parsing:
+DEFINE NOISE (STR) <
+	MOVEI B,[FLDDB. .CMNOI,,<-1,,[ASCIZ/STR/]>]
+	COMND%
+	ERCAL FATAL
+	TXNE A,CM%NOP
+	JRST ERROR	>	;Definition of NOISE
+
+;Obtain eoln confirmation
+DEFINE CONFIRM <
+	MOVEI B,[FLDDB. .CMCFM]
+	COMND%
+	ERCAL FATAL
+	TXNE A,CM%NOP
+	JRST ERROR	>	;Definition of CONFIRM
+
+;command table construction:
+DEFINE TBL (NAME,FLAGS,DISP) <
+IFNB <DISP>,<..DISP==DISP>	;;If a dispatch is given, use it
+IFB  <DISP>,<..DISP==.'NAME>	;;if none is given, default to .NAME
+IFB  <FLAGS>,<[ASCIZ/NAME/],,..DISP>	;if no flags, assemble just the name
+IFNB <FLAGS>,<[FLAGS!CM%FW	;;if flags, use them and set CM%FW
+		ASCIZ/NAME/],,..DISP>	;;
+	PURGE	..DISP >	;TBL macro
+
+
+DEFINE DEFERR (X,Y) <
+ DEFINE X (Z) <
+  IFB <Z>,<UERR Y,0>
+  IFNB <Z>,<UERR Y,[ASCIZ/Z/]>
+ >;DEFINE X
+>;DEFINE DEFERR
+
+DEFERR WARN,3
+
+;;;Special version of FLDDB. which has default pointer instead of string
+DEFINE FLDDF. (TYP,FLGS,DATA,HLPM,DEFM,LST) <
+ ..XX==<FLD(TYP,CM%FNC)>+FLGS+<0,,LST>
+ IFNB <HLPM>,<..XX==CM%HPP!..XX>
+ IFNB <DEFM>,<..XX==CM%DPP!..XX>
+ ..XX
+ DATA+0
+ IFNB <HLPM>,<-1,,[ASCIZ HLPM]>
+ IFB <HLPM>,<0>
+ IFNB <DEFM>,<-1,,DEFM>
+>;DEFINE FLDDF.
+
+
+SUBTTL Data storage areas
+
+PDLIST: BLOCK PDLEN		;pushdown list
+SAVPDL: 0			;in case of reparse, save stack pointer
+ENDADD: 0			;address of end of one page
+
+IDXJFN: BLOCK 1			;JFN for current .IDX file
+IDXNAM: BLOCK 20		;name of current .IDX file
+
+DIRJFN:	0			;JFN for all the .IDX files
+INJFN:	BLOCK 1			;JFN for input file name
+OUTJFN: BLOCK 1			;JFN for output file name
+
+USRNUM: BLOCK 1			;login directory number for default user
+USRNAM: BLOCK 10		;name of default user
+DIRNUM: BLOCK 1			;directory number of current username
+BBDNAM: BLOCK 20		;put the bboard name here
+
+DIRBLK: BLOCK 1			;storage for GTDIR% info
+RTIME: 	BLOCK 1			;storage for last read date
+
+IDXSIZ:	BLOCK 1			;size (in pages) of the IDX file
+IDXPAG:	BLOCK 1			;page that we want to map
+
+STABBD:	BLOCK 20		;storage for default bboard for statistics
+STATIM:	BLOCK 1			;storage for time for statistic
+STAJFN:	BLOCK 1			;storage for jfn for statistics
+
+SUMJFN:	BLOCK 1			;storage for jfn for summary
+
+NUMBBD:	BLOCK 1			;storage for the number of bboards
+
+
+;;Storage for BBoard code
+MAXBBD==^D100			;Maximum number of BBoards supported
+
+BBDTAB:	0,,MAXBBD		;Allow up to 25 local BBoards
+	BLOCK MAXBBD
+	BLOCK MAXBBD*4		;String space for BBoards
+BBDEND: BLOCK 10		;Allow for overflow
+BBDSTR: BLOCK 1			;Pointer to first free BBoard string
+
+OURNUM: BLOCK 1			;login directory number for default user
+OURNAM: BLOCK 10		;name of default user
+CURNUM: BLOCK 1			;directory number of current username
+CURTIM: BLOCK 1			;storage for time
+
+DEFIDX:	ASCIZ/BBD:MAIL.IDX.1/	;default .IDX file if none is specified
+
+CORBEG==.			;zeroed at start
+
+CMDBUF: BLOCK CMDBSZ		;command buffer
+ATMBUF: BLOCK ATMBSZ		;atom buffer
+
+IFN CSLISW,<
+GTDBLK:	.CDUGP+1		;.CDLEN - Length of argument block
+	0			;.CDPSW - Byte pointer to password
+	0			;.CDLIQ - Maximum number of working pages
+	0			;.CDPRV - Capabilities mask
+	0			;.CDMOD - Mode word
+	0			;.CDLOQ - Maximum number of permanent pages
+	0			;.CDNUM - Number of directory
+	0			;.CDFPT - Default file protection
+	0			;.CDDPT - Directory protection
+	0			;.CDRET - Default generations to keep
+	0			;.CDLLD - Last login
+	USGTAB			;.CDUGP - Address of user group list
+
+USGTAB:	BLOCK UTABLN+1
+
+>;IFN CSLISW
+
+INPJFN: 0			; input JFN for other bboreds
+
+GTJBLK: BLOCK .GJATR+1		;GTJFN BLOCK
+
+PRIVS:	0			;storage for privileged word
+CONSLT: 0			;flag if user is a consultant
+
+NUMRDR:	0			;storage for the total number of readers
+
+COREND==.-1			;end of area zeroed at START
+
+
+
+
+
+;command state BLOCK
+
+CMDBLK: 0,,CMRPRS		;flags,,address of reparse routine
+	.PRIIN,,.PRIOU		;JFNs for command i/o
+	-1,,[ASCIZ/BBDATE>/]	;CTRL-R buffer 
+	-1,,CMDBUF 		;pointer to start of text buffer
+	-1,,CMDBUF 		;pointer to start of next buffer
+	CMDBSZ*5-1		;size of command buffer (in bytes)
+	0			;number of unparsed characters
+	-1,,ATMBUF		;pointer to start of atom buffer
+	ATMBSZ*5-1		;size of atom buffer (in bytes)
+	GTJBLK 			;pointer to GTJFN block
+
+SUBTTL initialization sequence
+
+;1-- initialize the world, jsys, files, etc
+;2-- get the current user's login directory name and number
+;3-- open thawed access to default file (BBD:MAIL.IDX)
+;4-- jump to top level routine
+
+START:	RESET%				;initialize the world
+	MOVE P,[IOWD PDLEN,PDLIST]	;initialize the stack pointer
+	SETZM CORBEG			;initialize the data area
+	MOVE A,[CORBEG,,CORBEG+1]	
+	BLT A,COREND
+
+;get the default user name and directory number and store them to memory.
+DEFUSR: GJINF%				;get user number into A
+	MOVEM A,OURNUM			;save the usernumber
+	MOVE B,A
+	HRROI A,OURNAM			;pointer to username storage
+	DIRST%				;covert number to ascii string
+	ERCAL FATAL			;die gracefully
+	MOVE B,OURNUM			;RCDIR% wants number in B
+	MOVX A,RC%EMO			;want exact string match
+	RCDIR%				;get login directory
+	MOVEM C,OURNUM			;save the login directory number
+
+IFN CSLISW,<
+	MOVE A,C		;Get dir number in a for GTDIR
+	MOVEI B,GTDBLK		;Put data in our GTDIR% block
+	SETZ C,			;No password needed
+	GTDIR%			;Get our information
+	MOVE A,USGTAB		;Number of entries in user group table
+	MOVEI B,CONGRP		;Group number for consultants
+	DO.
+	  JUMPE A,ENDLP.
+	  CAMN B,USGTAB(A)	;Is the user group this entry?
+	    MOVEM B,CONSLT	;yes, flag that he is a consultant
+	  SOJA A,TOP.		;Loop through all the entries
+	ENDDO.
+>;IFN CSLISW
+
+	MOVEI A,.FHSLF			;want this process
+	RPCAP%				;get privileges
+	MOVEM C,PRIVS			;store away privileges
+
+GETBBD:	MOVEI A,MAXBBD		;Reset the BBoard table to empty
+	MOVEM A,BBDTAB
+	MOVEI A,BBDTAB+MAXBBD+1	;Clear string space
+	MOVEM A,BBDSTR
+	MOVX A,GJ%SHT!GJ%OLD!GJ%DEl!GJ%IFG
+	HRROI B,[ASCIZ/BBD:*.TXT/] ;Find all .IDX files in BBD:
+	GTJFN%
+	IFNJE.
+	  MOVE D,A		;Save JFN over this clobberage
+	  DO.
+	    HRRZ A,BBDSTR	;Current BBoard pointer
+	    CAILE A,BBDEND	;Any space left?
+	    IFSKP.
+	      HRROS A		;Yes, make string pointer
+	      HRRZ B,D		;JFN to output
+	      MOVX C,1B8	;Name only
+	      JFNS%		;Insert BBoard name in string space
+	      SETZ C,		;Tie off name
+	      IDPB C,A
+	      ADDI A,1		;Next string begins on this word
+	      HRLZ B,BBDSTR	;Pointer to this string for TBADD
+	      MOVEM A,BBDSTR	;Update string pointer
+	      MOVEI A,BBDTAB	;Add to the table
+	      TBADD%
+	      MOVE A,D		;Retrieve JFN
+	      GNJFN%		;Get next BBoard
+	       ERJMP ENDLP.	;No more BBoards to do
+	      LOOP.
+	    ENDIF.
+	    WARN <Insufficient string space for all bulletin boards>
+	  ENDDO.
+	ENDIF.
+	HRRZ A,D		;Got all BBoards, release the JFN now
+	RLJFN%
+	 ERJMP .+1
+
+
+;get the JFN of the default file
+NAMFIL:	MOVX A,GJ%OLD!GJ%SHT		;now put the default .idx file
+	HRROI B,DEFIDX			;name into the current name location
+	GTJFN%				;get the jfn
+	 ERCAL ERROR
+	MOVEM A,IDXJFN			;save it away...
+
+
+SUBTTL Top Level Command Parser
+;Top level of the program -- calling the command parser, etc.
+TOPLEV:	CALL GETCMD			;get a command and run it
+	JRST TOPLEV			;loop back to the top level
+
+GETCMD:	MOVEI A,CMDBLK 			;ACC1 points to the command BLOCK
+	MOVEI B,[FLDDB. .CMINI]		;initialize the command block, process
+	CALL .COMND
+	 JRST FATAL			;die informatively
+	MOVEM P,SAVPDL			;save stack pointer for reparse
+CMRPRS:	MOVE P,SAVPDL			;restore the stack pointer for reparse
+	MOVEI B,[FLDDB. .CMKEY,,CMDTAB,<A command,>]
+	CALL .COMND
+	 JRST ERROR			;inform the user of problem
+	HRRZ B,(B)			;get the address of the command server
+	JRST (B)			;dispatch to it.
+
+CMDTAB:	CMDTBL,,CMDTBL			;actual,,maximum number of entries
+$EXIT:	TBL (EXIT)			;exit from this program
+$HELP:	TBL (HELP)			;to get help in using this program
+	TBL (NAME)		;for displaying the current bboard name
+$QUIT:	TBL (QUIT,CM%INV,.EXIT)		;so is "quit"
+	TBL (READ)			;read list of users from a file
+	TBL (RESET)			;set last read date for all bboards
+$SELEC:	TBL (SELECT,,.SELEC)		;to select a new bboard 
+	TBL (SET)			;set a new read date 
+$SHOW:	TBL (SHOW)			;show read date information
+	TBL (STATISTICS,,.STAT)		;show bboard statistics
+	TBL (SUMMARY,,.SUMM)		;summary of bboard statistics
+CMDTBL==<.-CMDTAB>-1			;number of entries in the table
+
+
+SUBTTL NAME server
+; server for EXIT/QUIT commands
+
+.NAME:	NOISE (of current bboard database is)
+	CONFIRM
+	MOVEI A,.PRIOU			;print the current IDX filename
+	HRRZ B,IDXJFN			;JFN
+	SETZ C,
+	JFNS%
+	RET
+
+
+SUBTTL EXIT/QUIT server
+.EXIT:	NOISE (from BBDATE)
+	CONFIRM
+	HALTF%				;quit the program
+	RET				;continue at the top-level parser
+
+
+SUBTTL HELP server
+.HELP:	NOISE (with command)
+	MOVEI B,[FLDDB. .CMKEY,,HLPTAB,<A BBDATE command,>,,[FLDDB. .CMCFM]]
+					;set up COMND% call
+	CALL .COMND			;parse a keyword
+	 JRST ERROR
+	HRRZ C,C			;get address of FLDDB used
+	CAIN C,.CMCFM			;did the user type RETURN?
+	 JRST .HOVRV			;yes, give a default message
+	HRRZ B,(B)			;get the address of the server
+	JRST (B)			;and jump to it
+
+HLPTAB:	HLPTBL,,HLPTBL			;help table
+	TBL (EXIT,,.HXIT)		;exit/quit
+	TBL (NAME,,.HNAM)		;current name dispatch
+	TBL (READ,,.HREAD)		;read
+	TBL (RESET,,.HRSET)		;reset
+	TBL (SELECT,,.HSEL)		;select
+	TBL (SET,,.HSET)		;set
+	TBL (SHOW,,.HSHOW)		;show
+	TBL (STATISTICS,,.HSTAT)	;statistics
+	TBL (SUMMARY,,.HSUMM)		;summary
+HLPTBL==<.-HLPTAB>-1
+
+
+
+.HOVRV:	HRROI A,OVRMSG			;can't use a literal here cuz our
+	JRST HPRNT			;message is too long
+
+OVRMSG:	ASCIZ/
+BBDATE is a program which supplements the BBOARD program.  With BBDATE, you
+can do things like find out when a user has read a specific bboard, set the
+read date for a bboard, or gather statistics for one or all of the bboards.
+The list is longer than this, of course.  To find out all of the commands in
+BBDATE, type a ? to the BBDATE> prompt.
+
+Every command in BBDATE has its own help message.  Type HELP <command>
+-- without the brackets -- to find out more.  You may also type ? at
+any time in the program for more help in what the program is expecting
+you to type.  Using the ESCAPE key to complete your commands will also
+give you help.  Examples for each command may be found in the HELP message
+for that command.  For additional examples, EXIT this program and type HELP 
+BBDATE at the EXEC.
+
+/
+
+
+
+.HNAM:	CONFIRM
+	HRROI A,[ASCIZ/ 
+The NAME command tells you the complete name of the BBoard database
+that you are currently examining.
+
+/]
+	JRST HPRNT
+
+
+
+.HXIT:	CONFIRM
+	HRROI A,[ASCIZ/
+The EXIT command takes you back to the EXEC.  QUIT also works.
+
+/]
+	JRST HPRNT
+
+
+
+.HREAD:	CONFIRM
+	HRROI A,RDMSG			;again no literal here cuz the 
+	JRST HPRNT			;message is too long
+
+RDMSG:	ASCIZ/
+The READ command enables you to read a list of users from a file and 
+output the last read date for each user to another file.  If no output 
+file is specified, the information is displayed to the terminal.  The 
+bboard database used is the one designated by the SELECT command.
+
+The input file should have a list of user names, each one on a separate
+line.
+
+	Examples:
+
+	BBDATE>READ (users from) CLASS.LIST (directing output to) BBOARD.LIST
+	BBDATE>READ (users from) CLASS.LIST (directing output to) TTY:
+
+/
+
+
+
+.HRSET: CONFIRM
+	HRROI A,[ASCIZ/
+The RESET command enables you to set the last read date for all the bboards
+to a specified date and time.  Privileged users can reset the last read
+date of another user.
+
+	Examples:
+
+	BBDATE>RESET (all bboards to last read date) NOW
+	BBDATE>RESET (all bboards to last read date) NEVER
+	BBDATE>RESET (all bboards to last read date) 23-Jan-89
+	BBDATE>RESET (all bboards to last read date) 20-Sep-88 3:40PM
+
+/]
+	JRST HPRNT
+
+
+
+.HSEL:	CONFIRM
+	HRROI A,[ASCIZ/
+The SELECT command enables you to choose any bboard database for
+further examination.  Once you select a new database, you cannot look
+at another BBoard until you SELECT it.  BBDATE selects the regular
+BBoard when it starts.
+
+	Examples:
+
+	BBDATE>SELECT (BBoard database) ARMS-D
+	BBDATE>SELECT (BBoard database) BBD:MAIL.IDX
+
+/]				
+	JRST HPRNT
+
+
+
+.HSET:	CONFIRM
+	HRROI A,[ASCIZ/
+The SET command enables you to set a new read date for yourself in the
+current BBoard database.  Privileged users can alter the BBDATE
+entries of other users.
+
+	Examples:
+
+	BBDATE>SET (last read date) NOW
+	BBDATE>SET (last read date) NEVER
+	BBDATE>SET (last read date) 23-Jan-89
+	BBDATE>SET (last read date) 20-Sep-88 3:40PM
+/]
+	JRST HPRNT
+
+
+
+.HSHOW:	CONFIRM
+	HRROI A,[ASCIZ/
+The SHOW command enables you to see when others have read the current
+BBoard.  If no username is given, it defaults to you.
+
+	Example:
+
+	BBDATE>SHOW (last read date for user) C.CHENRY
+
+/]
+
+
+
+.HSTAT:	CONFIRM
+	HRROI A,STMSG			;can't use a literal here
+	JRST HPRNT
+
+STMSG:	ASCIZ/
+The STATISTICS command allows you to determine how many users have read a 
+specific bboard.  The command is followed by two other arguments:  (1) the 
+name of the bboard that you want statistics for and  (2) the date and time 
+you want to to check from.
+
+The default bboard is the one chosen with the SELECT command.  The default
+date and time is the start of the bboard (its creation date).
+
+	Examples:
+
+	BBDATE>STATISTICS (for bboard) BBD:MAIL.IDX (since) CREATION
+	BBDATE>STATISTICS (for bboard) BBD:MAIL.IDX (since) 4-Jul-87
+	BBDATE>STATISTICS (for bboard) BBD:MAIL.IDX (since) 12-Oct-99 2:30AM
+
+/
+
+
+
+.HSUMM:	CONFIRM
+	HRROI A,SUMMSG			;can't use a literal here
+	JRST HPRNT
+
+SUMMSG:	ASCIZ/
+The SUMMARY command prints out a list of the bboards in the bboard directory 
+and prints out the number of readers which have read each bboard.  You can
+specify a cutoff date and time if you only want a summary of the number of
+readers who have read the bboard since a specific date and time.  If you
+don't specify a date and time, then the summary defaults to the beginning
+date of each bboard.  
+
+The summary is written to a file name that you supply, or to the terminal
+if no file name is supplied.
+
+This command requires WHEEL or OPERATOR privileges, or CIA or CONSULTANT
+privileges enabled.
+
+	Examples:
+
+	BBDATE>SUMMARY (of bboards since) CREATION (directing output to) TTY:
+	BBDATE>SUMMARY (of bboards since) 5-Mar-94 (directing output to) SM.OUT
+
+/
+
+
+
+HPRNT:	PSOUT%
+	RET
+
+
+	SUBTTL READ Server
+
+.READ:	NOISE (users from)
+	MOVEI A,CMDBLK
+	MOVEI B,[FLDDB. .CMIFI]		;b/ input file
+	CALL .COMND			;get an input file
+ 	  JRST ERROR
+	HRRZ B,B
+	MOVEM B,INJFN			;store input JFN
+	NOISE (directing output to)
+	MOVEI B,[FLDDB. .CMOFI,,,,<TTY:>] ;want an output file, default is TTY:
+	CALL .COMND			;get the output file
+ 	  JRST ERROR
+	HRRZ B,B
+        MOVEM B,OUTJFN			;store output JFN
+	CONFIRM
+	
+	MOVE A,INJFN			;get jfn for input file
+	MOVE B,[070000,,OF%RD]		;seven bit bytes, read access
+	OPENF%				;open the file
+	  ERJMP ERROR			;can't open the file
+
+	MOVE A,OUTJFN			;get jfn for output file
+	MOVE B,[070000,,OF%WR]		;seven bit bytes, write access
+	OPENF%				;open the file
+	  ERJMP ERROR			;can't open the file
+
+
+DOUSR:	CALL GETUSR        		;get user name from the input file
+	  JRST DONE			;no more users, done processing file
+	MOVX A,RC%EMO			;want an exact match
+	HRROI B,USRNAM			;b/ user name string
+	HRLI C,0			
+	RCUSR%				;get the user number
+	MOVEM C,USRNUM			;save user number
+	HLRZM C,C			
+	CAIN C,500000			;was it a valid number?
+	IFSKP.				;not a valid number
+	  HRROI A,USRNAM		;print error message
+	  ESOUT%
+	  HRROI A,[ASCIZ/ - no such user
+/
+]
+	  PSOUT%
+	  JRST DOUSR
+	ENDIF.
+
+	MOVE B,USRNUM			;b/ user number
+	RCDIR%				;get a directory number for this user
+	MOVEM C,DIRNUM			;and save it away
+
+	MOVE A,OUTJFN			;get the outfile file jfn
+	MOVE C,B			;b/ directory number
+	DIRST%				;output the user name for this number
+	 ERCAL FATAL
+	CALL PRTDAT			;get last read date for this user
+	JRST DOUSR			;and go do another user
+
+
+; here when no more users to process in input file
+DONE:	MOVE A,INJFN			;get the input file jfn
+	CLOSF%				;close input file
+	  ERJMP ERROR
+	MOVE A,OUTJFN			;get output file jfn
+	CLOSF%				;close output file
+	  ERJMP ERROR	
+	RET
+
+
+	SUBTTL PRTDAT - prints out the last read date for the specified user
+;
+;Call with DIRNUM/ directory number of user to process
+;	   IDXJFN/ jfn of the IDX file we want to use
+;	   OUTJFN/ jfn of the destination to print the last read date
+;	   RTIME/  last read date and time
+;
+
+PRTDAT:	CALL GETFIL			;get the jfn and open the file
+	HRRZ A,DIRNUM			;get the number again
+	LSH A,-^D9			;make it a page number
+	ADDI A,MMRPAG			;get location of read page
+	MOVEM A,IDXPAG			;save this page away
+	HRL A,IDXJFN			;get this page of the .IDX file
+	FFUFP%				;find out if this page is used
+	  JRST .NVRRD			;no free pages, never read
+	HRRZ A,A			;a/ 0,,first free page
+	CAME A,IDXPAG			;is first free page current page?
+	  JRST .NVRRD			;no, no read date for this user
+	HRL A,IDXJFN			;get this page of the .IDX file
+	MOVE B,[.FHSLF,,IDXRPG]		;want to map it in to our idx read area
+	HRLI C,(PM%RD)			;read access
+	PMAP%				;get it
+	HRRZ A,DIRNUM			;get the number again
+	LSH A,^D9
+	HRRZ A,A
+	LSH A,-^D9
+	MOVE B,IDXRPG*1000(A)		;get the last read date/time
+	MOVEM B,RTIME
+	SKIPN B				;user read it ever?
+	 JRST .NVRRD			;nope, say it
+	MOVE A,OUTJFN
+	HRROI B,[ASCIZ/ has read up to the message of /]
+	SETZ C,
+	SOUT%
+	MOVE A,OUTJFN
+	MOVE B,RTIME		;get the last read date/time again	
+	MOVX C,OT%DAY!OT%FDY!OT%4YR!OT%SPA!OT%NSC!OT%DAM!OT%FMN!OT%12H  ;ODTIM% format
+	ODTIM%
+	HRROI B,CRLF
+	SETZ C,
+	SOUT%
+
+	JRST SHODN			;clean up
+
+.NVRRD:	MOVE A,OUTJFN
+	HRROI B,[ASCIZ/ has never read it.
+/]
+	SETZ C,
+	SOUT%
+SHODN:	SETO A,				;time to unmap
+	MOVE B,[.FHSLF,,IDXRPG]
+	SETZ C,
+	PMAP%
+	MOVX A,CO%NRJ			;but don't release it
+	HRR A,IDXJFN
+	CLOSF%				;close the file
+   	  ERCAL ERROR			;say what made us error
+	RET		
+
+
+	SUBTTL	GETUSR - read a user name from the input file
+;Call with INJFN/  jfn for the file we want to read from
+;
+;Returns +1 if no more users found (eof is reached in the input file)
+;	 +2 with the user name in USRNAM
+;
+GETUSR:	MOVE A,INJFN			;want to read from input file
+	HRROI B,USRNAM			;store the name in USRNAM
+	MOVEI C,10*5-1			
+	MOVEI D,15			;stop at a carriage return
+	SIN%				;get the name
+	  ERJMP NOUSR			;couldn't get it, check for eof
+        MOVEI A,0			;get a null
+	DPB A,B				;and tack it to the name
+	MOVE A,INJFN			;go back to the input file
+	BIN				;get the LF (and discard it)
+	AOS (P)				;do a skip return
+	RET
+
+;;  Here when a possible end of file has been reached
+NOUSR:	MOVE A,INJFN			;get the input file jfn again
+	GTSTS%				;get file status, check for EOF
+	TLNN B,(GS%EOF)			;end of file reached?
+	JRST ERROR			;no some other error
+	RET				;yes, return
+
+
+SUBTTL RESET server
+.RESET:	MOVE T,PRIVS			;get user's privileges
+IFN LOTSW,<
+	TXNN T,SC%WHL!SC%OPR!SC%STF	;WHOPR or STAFF privileges?
+>;IFN LOTSW
+IFE LOTSW,<
+	TXNN T,SC%WHL!SC%OPR		;WHOPR privileges?
+>;IFE LOTSW
+	JRST RNOPRI
+RPRIV:	NOISE (user)
+	MOVEI B,[FLDDB. .CMUSR,CM%DPP,,,<0>]	;want a username
+	HRROI C,OURNAM			;pointer to default username
+	MOVEM C,.CMDEF(B)		;Put it in the FDB
+	CALL .COMND			;get it
+	 JRST ERROR			;and we die...
+	MOVEM B,CURNUM			;save away the new number
+	JRST RNOPR1
+RNOPRI:	MOVE B,OURNUM			;set the current usernum to default
+	MOVEM B,CURNUM	
+RNOPR1:	NOISE (all bboards to last read date)
+	MOVEI B,[FLDDB. .CMKEY,,RESTAB,,NOW,[FLDDB. .CMTAD,,CM%IDA!CM%ITM,,,[FLDDB. .CMTAD,,CM%IDA]]]
+	CALL .COMND
+	 JRST ERROR
+	HRRZ C,C			;get address of FLDDB used
+	CAIN C,.CMTAD			;did we parse a time?
+	 JRST GOTTIM			;yes, process it
+	HRRZ B,(B)			;no, may have parsed a keyword
+	JRST (B)			;dispatch it
+
+;here if we parsed a date and time
+GOTTIM: MOVEM B,CURTIM
+	CONFIRM
+	JRST RESALL
+
+;here if we parsed the keyword NOW
+.RNOW:  CONFIRM
+	GTAD%
+	MOVEM A,CURTIM
+	JRST RESALL
+	
+;here if we parsed the keyword NEVER
+.RNEV:	CONFIRM
+	SETZM CURTIM
+	
+RESALL:	MOVSI A,(GJ%OLD!GJ%IFG!GJ%SHT)	;return flags, permit wildcards
+	HRROI B,[ASCIZ/BBD:*.TXT/]	;want all of the bboard files in BBD:
+	GTJFN%				
+	  ERJMP ERROR
+	MOVEM A,DIRJFN			;save entire JFN and flags
+	PUSH P,IDXJFN			;save the old jfn
+
+RESNXT: HRRZ A,IDXJFN			;get the old jfn
+	CLOSF%				;and close it
+RESNX1:	HRROI A,BBDNAM			;put the name of the bboard here
+	HRROI B,[ASCIZ/BBD:/]
+	SETZ C,
+	SOUT%
+	HRRZ B,DIRJFN			;get the jfn for this bboard file
+	MOVX C,1B8			;want the name only
+	JFNS%
+	HRROI B,[ASCIZ/.IDX/]		;add IDX file extension
+	SETZ C,
+	SOUT%
+	MOVX A,GJ%OLD!GJ%SHT
+	HRROI B,BBDNAM			;want this IDX file
+	GTJFN%				;get the jfn for this IDX file
+	IFNJE.
+	  HRRZM A,IDXJFN		;and move it into IDXJFN
+	  CALL SETTIM			;set the last read date for this bboard
+	  MOVE A,DIRJFN			;get the next IDX file
+ 	  GNJFN%
+	    JRST RSDONE			;no more files, done with reset
+ 	  JRST RESNXT			;do the next file
+	ELSE.
+	  HRROI A,BBDNAM		;get the file name
+	  ESOUT%
+	  HRROI A,[ASCIZ/ does not exist - skipping this bboard
+/]
+	  PSOUT%
+	  MOVE A,DIRJFN			;get the indexable jfn
+	  GNJFN%			;go to next file
+	    JRST RSDONE			;no more files
+	  JRST RESNX1			;do next file (don't release IDXJFN)
+	ENDIF.
+
+
+;here when done resetting all bboards
+RSDONE:	POP P,IDXJFN			;get the old JFN
+	RET
+
+
+;Keyword table for RESET command
+RESTAB: RESTBL,,RESTBL			;table for NOW/NEVER entries
+	TBL (NEVER,,.RNEV)			
+	TBL (NOW,,.RNOW)			
+RESTBL==<.-RESTAB>-1			;number of entries
+
+
+
+SUBTTL SHOW server
+.SHOW:	NOISE (last read date for user)
+	MOVEI B,[FLDDB. .CMUSR,CM%DPP,,,,<[FLDDB. .CMTOK,,<-1,,[ASCIZ /*/]>,,,]>]
+;	MOVEI B,[FLDDB. .CMUSR,CM%DPP,,,<0>]	;want a user name, need 0 to
+						;make field long enough for 
+						;default field (kludge--Pierre)
+	HRROI C,OURNAM			;Get pointer to user name
+	MOVEM C,.CMDEF(B)		;Put it in the FDB
+	CALL .COMND			;get it
+	 JRST ERROR			;why me???
+	HRRZ C,C			;get address of FLDDB used
+	CAIN C,.CMTOK			;did we parse a star?
+	 SETO B,			;yes, flag all users
+	MOVEM B,CURNUM			;store usernumber
+	CONFIRM				;tie off the command line
+	SKIPGE B,CURNUM			;get the directory num again
+	 JRST SHOALL			;if -1, do all users
+	MOVX A,RC%EMO			;exact match
+	SETZ C,
+	RCDIR%				;make it a login directory
+	MOVEM C,CURNUM			;and save it away
+	MOVE C,B			;now output the username
+	MOVEI A,.PRIOU			;want it on the tty
+	DIRST%	
+	 ERCAL FATAL
+	
+	MOVEI A,.PRIOU			;set up arguments to PRTDAT
+	MOVEM A,OUTJFN
+	MOVE A,CURNUM
+	MOVEM A,DIRNUM
+	CALL PRTDAT
+	RET
+
+;"show *"
+SHOALL:	MOVEI A,.PRIOU
+	MOVEM A,OUTJFN
+	SETZM CURNUM
+	MOVX A,RC%AWL
+	 SKIPA
+SHOALP:	MOVX A,RC%AWL+RC%STP
+	HRROI B,[ASCIZ /*/]
+	MOVE C,CURNUM
+	RCUSR%
+	TXNE A,RC%NMD			;no more?
+	 RET				;yes, done
+	MOVEM C,CURNUM
+
+	MOVEI A,.PRIOU			;want it on the tty
+	MOVE B,CURNUM
+	DIRST%				;output user name
+	 ERCAL FATAL
+
+	MOVE C,CURNUM
+	MOVEM C,DIRNUM
+	CALL PRTDAT
+
+	JRST SHOALP
+
+	RET
+
+
+SUBTTL SET server
+.SET:	MOVE T,PRIVS			;get user's privileges
+IFN LOTSW,<
+	TXNN T,SC%WHL!SC%OPR!SC%STF	;WHOPR or STAFF privileges?
+>;IFN LOTSW
+IFE LOTSW,<
+	TXNN T,SC%WHL!SC%OPR		;WHOPR privileges?
+>;IFE LOTSW
+	JRST NOPRIV			;no privileges
+PRIV:	NOISE (user)
+	MOVEI B,[FLDDB. .CMUSR,CM%DPP,,,<0>]	;want a username
+	HRROI C,OURNAM			;pointer to default username
+	MOVEM C,.CMDEF(B)		;Put it in the FDB
+	CALL .COMND			;get it
+ 	 JRST ERROR			;and we die...
+	MOVEM B,CURNUM			;save away the new number
+	JRST NOPRV1
+NOPRIV:	MOVE B,OURNUM			;set the current usernum to default
+	MOVEM B,CURNUM	
+NOPRV1:	NOISE (last read date)
+	MOVEI B,[FLDDB. .CMKEY,,DAYTAB,,NOW,[FLDDB. .CMTAD,,CM%IDA!CM%ITM,,,[FLDDB. .CMTAD,,CM%IDA]]]
+	CALL .COMND
+	 JRST ERROR
+	HRRZ C,C			;get address of FLDDB used
+	CAIN C,.CMTAD			;did we parse a time?
+	 JRST DOTIM			;yes, process it
+	HRRZ B,(B)			;no, may have parsed a keyword
+	JRST (B)			;dispatch it
+
+DOTIM:	MOVEM B,CURTIM			;save the time to memory
+	CONFIRM				;tie off the parsing
+	CALL SETTIM
+	RET
+
+
+SUBTTL 	SETTIM subroutine
+;Call with CURNUM/ user number of the person we want to set
+;	   IDXJFN/ jfn of the IDX file we want to set
+;	   CURTIM/ date and time we want to set this user to
+
+SETTIM:	MOVE B,CURNUM			;get the usernumber again
+	MOVX A,RC%EMO			;want exact match
+	SETZ C,
+	RCDIR%				;get the login directory
+	MOVEM C,CURNUM			;save it
+	SETZ A,				;zero out A for future PMAP%
+	CALL GETFIL			;get a jfn on the current file
+	HRRZ A,CURNUM			;get the user number
+	LSH A,-^D9			;make it a page number
+	ADDI A,MMRPAG			;add in the IDX read page
+	HRL A,IDXJFN			;get the jfn 
+	MOVE B,[.FHSLF,,IDXRPG]		;want to map it to this place in memory
+	MOVX C,PM%RD!PM%WR!PM%PLD	;read/write/preloaded
+	PMAP%				;map it
+	MOVS D,IDXRPG*1000		;touch the page
+	HRRZ A,CURNUM			;same, but for the write page
+	LSH A,-^D9
+	ADDI A,MMWPAG
+	HRL A,IDXJFN
+	MOVE B,[.FHSLF,,IDXWPG]	
+	MOVX C,PM%RD!PM%WR!PM%PLD
+	PMAP%
+	MOVS D,IDXWPG*1000
+	HRRZ A,CURNUM			;reload the usernumber
+	LSH A,^D9
+	HRRZ A,A
+	LSH A,-^D9
+	MOVE B,CURTIM			;get the new time
+	MOVEM B,IDXRPG*1000(A)		;write the new time to the write area
+	 ERCAL ERROR			;did we die?
+	MOVEM B,IDXWPG*1000(A)		;write the new time to the read area
+	 ERCAL FATAL			;more death
+	SETO A,				;time to unmap
+	MOVE B,[.FHSLF,,IDXWPG]		;do the write page first
+	SETZ C,
+	PMAP%
+	MOVE B,[.FHSLF,,IDXRPG]		;now the read page
+	PMAP%
+	MOVX A,CO%NRJ			;but don't release it
+	HRR A,IDXJFN
+	CLOSF%				;close the file
+	 ERCAL ERROR			;say why we erred
+	RET
+
+
+.NOW:	CONFIRM
+	GTAD%				;get current time/day
+	MOVEM A,CURTIM			;save it
+	CALL SETTIM			;continue
+	RET
+
+.NEVER:	CONFIRM
+	SETZM CURTIM			;zero out the read time
+	CALL SETTIM			;and continue onward...
+	RET
+
+DAYTAB: DAYTBL,,DAYTBL			;table for NOW/NEVER entries
+	TBL (NEVER)			
+	TBL (NOW)			
+DAYTBL==<.-DAYTAB>-1			;number of entries
+
+
+
+SUBTTL SELECT server
+.SELEC: NOISE (BBoard database)
+	MOVEI A,CMDBLK
+	MOVEI B,[FLDDF. .CMKEY,,BBDTAB,<BBoard database,>,DEFIDX,[FLDDB. .CMIFI]]
+	CALL .COMND
+	 JRST ERROR
+	PUSH P,B			;save the BBoard name or JFN parsed
+	HRRZ C,C			;get the address of FLDDB used
+	CAIN C,.CMIFI			;was a keyword parsed?
+	 JRST NEWFIL			;yes, process it
+	CONFIRM
+	HRRZ A,IDXJFN			;get the old jfn
+	CLOSF%				;close the old file
+	  ERJMP .+1			;don't care if we can't close the file
+	HRROI A,IDXNAM			;now build the name
+	HRROI B,[ASCIZ/BBD:/]		;BBored directory
+	SETZ C,
+	SOUT%
+	POP P,D				;pop index to bboard table
+	HLRO B,0(D)
+	SOUT%
+	HRROI B,[ASCIZ/.IDX/]		;IDX file extension
+	SOUT%				;tie off with a null
+	HRROI B,IDXNAM			;now get the filename
+	MOVX A,GJ%OLD!GJ%SHT		;an old, short file
+	GTJFN%				;get the new jfn
+	  ERCAL ERROR
+	HRRZM A,IDXJFN			;save the new jfn
+	RET
+
+NEWFIL:	CONFIRM
+	POP P,D				;pop the pointer into D
+	MOVEM D,IDXJFN			;save the new jfn
+	RET
+
+
+	SUBTTL	STATISTICS server
+.STAT:	NOISE (for BBoard)
+	HRROI A,STABBD			;want to get the current idx file
+	HRROI B,[ASCIZ/BBD:/]
+	SETZ C,
+	SOUT%
+	HRRZ B,IDXJFN			;get the jfn for this bboard file
+	MOVX C,1B8			;want the name only
+	JFNS%
+	HRROI B,[ASCIZ/.IDX.1/]
+	SETZ C,
+	SOUT%
+	MOVEI A,CMDBLK
+	MOVEI B,[FLDDF. .CMKEY,,BBDTAB,<BBoard database,>,STABBD,[FLDDB. .CMIFI]]
+	CALL .COMND
+	 JRST ERROR
+	PUSH P,A			;save address of command state block
+	PUSH P,B			;save the BBoard name or JFN parsed
+	HRRZ C,C			;get the address of FLDDB used
+	CAIN C,.CMIFI			;was a keyword parsed?
+	 JRST .STAT2			;yes, process it
+	HRROI A,STABBD			;now build the name
+	HRROI B,[ASCIZ/BBD:/]		;BBored directory
+	SETZ C,
+	SOUT%
+	POP P,D				;pop index to bboard table
+	HLRO B,0(D)
+	SOUT%
+	HRROI B,[ASCIZ/.IDX/]		;IDX file extension
+	SOUT%				;tie off with a null
+	HRROI B,STABBD			;now get the filename
+	MOVX A,GJ%OLD!GJ%SHT		;an old, short file
+	GTJFN%				;get the new jfn
+	  ERCAL ERROR
+	HRRZM A,STAJFN			;save the new jfn
+	JRST .STAT3
+
+.STAT2:	POP P,D				;pop the pointer into D
+	MOVEM D,STAJFN			;save the new jfn
+
+
+.STAT3:	POP P,A				;restore address of command state block
+	NOISE (since)
+	MOVEI B,[FLDDB. .CMKEY,,CRETAB,,CREATION,[FLDDB. .CMTAD,,CM%IDA!CM%ITM,,,[FLDDB. .CMTAD,,CM%IDA]]]
+	CALL .COMND
+	 JRST ERROR
+	HRRZ C,C			;get address of FLDDB used
+	CAIN C,.CMTAD			;did we parse a time?
+	 JRST .GTTIM			;yes, process it
+	HRRZ B,(B)			;no, may have parsed a keyword
+	JRST (B)			;dispatch it
+
+.GTTIM:	MOVEM B,STATIM			;save the time
+	SKPA
+.CREAT: SETZM STATIM			;want time since beginning
+	CONFIRM
+	HRRZ A,STAJFN
+	MOVX B,OF%RD!OF%THW		;want thawed read/write access
+	OPENF%				;open the file...
+	 ERCAL FATAL			;die gracefully
+	CALL GTSTAT			;get the statistics
+	HRRZ A,STAJFN			;get the jfn
+	CLOSF%				;close the file and release jfn
+	  ERJMP ERROR
+	MOVEI A,.PRIOU			;output to terminal
+	MOVE B,D			;get the number of readers
+	MOVEI C,^D10			;decimal radix
+	NOUT%
+	  ERJMP .+1
+	HRROI A,[ASCIZ/ users have read the bboard.
+/]
+	PSOUT%
+	RET
+
+
+
+	SUBTTL	GTSTAT - count the number of user for an IDX file
+; call with STAJFN/ jfn of the IDX file we want stats for
+;	    STATIM/ date and time (in internal format) we want stats since
+;
+; returns +1 always with D/ number of readers who have read this bboard
+GTSTAT: SETZ D,				;no readers to start
+	MOVEI B,MMWPAG			;don't want to go past read area
+	MOVEM B,IDXSIZ			;store the end of the read area
+	MOVEI A,MMRPAG-1		;start at beginning of read data
+	MOVEM A,IDXPAG			;store the starting page
+	
+GTSTA1:	MOVE A,IDXPAG			;get the page number
+	HRL A,STAJFN			;a/ jfn,,page number
+	FFUFP%				;find the next used page
+	  RET				;no more, return
+	HRRZ A,A			;want just the page
+	CAML A,IDXSIZ			;have we reached end of read area?
+	  RET				;yes, return
+	MOVEM A,IDXPAG			;store the page away
+	MOVE A,IDXPAG			
+	HRL A,STAJFN			;a/ jfn,,file page
+	HRLI B,.FHSLF		
+	HRRI B,STAPAG			;b/ process,,process page
+	HRLI C,(PM%RD)			;c/ access,,0
+	PMAP%				;map in this from the file
+	MOVEI A,STAPAG			;get the page in memory
+	LSH A,11			;make it an address
+	MOVEI B,STAPAG+1		;get the number of the next page
+	LSH B,11			;make it an address, too
+	MOVEM B,ENDADD			;save the end address
+	MOVE C,STATIM			;get the time
+GTSTA2: CAML C,(A)			;has this person read this bboard?
+	IFSKP.
+	 AOS D				;yes, increment the count
+	ENDIF.
+	AOS A				;go to the next user
+	CAMGE A,ENDADD			;are we all through?
+	 JRST GTSTA2			;no, go do the next user
+	SETO A,
+	MOVE B,[.FHSLF,,STAPAG]		;b/ process,,process page no.
+	SETZ C,
+	PMAP%				;unmap the page
+	AOS IDXPAG			;advance to next page
+	JRST GTSTA1			;get next used page
+
+
+CRETAB: CRETBL,,CRETBL			;table for keyword CREATION
+	TBL (CREATION,,.CREAT)
+CRETBL==<.-CRETAB>-1			;number of entries
+
+
+	SUBTTL SUMMARY server
+.SUMM:	NOISE (of bboards since)
+	MOVEI B,[FLDDB. .CMKEY,,CR2TAB,,CREATION,[FLDDB. .CMTAD,,CM%IDA!CM%ITM,,,[FLDDB. .CMTAD,,CM%IDA]]]
+	CALL .COMND
+	 JRST ERROR
+	HRRZ C,C			;get address of FLDDB used
+	CAIN C,.CMTAD			;did we parse a time?
+	 JRST .SVTIM			;yes, process it
+	HRRZ B,(B)			;no, may have parsed a keyword
+	JRST (B)			;dispatch it
+
+.SVTIM:	MOVEM B,STATIM			;save the time
+	SKPA
+.SCREAT:SETZM STATIM			;want time since beginning
+	NOISE (directing output to)
+	MOVEI B,[FLDDB. .CMOFI,,,,<TTY:>] ;want an output file, default is TTY:
+	CALL .COMND			;get the output file
+ 	  JRST ERROR
+	HRRZ B,B
+        MOVEM B,OUTJFN			;store output JFN
+	CONFIRM
+
+	MOVE A,OUTJFN			;get jfn for output file
+	MOVE B,[070000,,OF%WR]		;seven bit bytes, write access
+	OPENF%				;open the file
+	  ERJMP ERROR			;can't open the file
+
+	CALL SUMHDR			;print out a header
+	CALL PRTSUM			;print out the summary
+	MOVE A,OUTJFN			;get the output file jfn
+	HRROI B,[ASCIZ/
+	Total number of BBoards: /]
+	SOUT%
+	MOVE B,NUMBBD			;get the total number of bboards
+	MOVEI C,^D10			;decimal radix
+	NOUT%
+	MOVE A,OUTJFN
+	HRROI B,[ASCIZ/
+
+/]					;tie off with some CRLF's
+	SETZ C,
+	SOUT%
+
+	MOVE A,OUTJFN			;get the output jfn
+	CLOSF%				;and close the output file
+	  ERJMP ERROR			;couldn't close the file
+	RET
+
+
+	SUBTTL SUMHDR - writes out a header to the summary output file
+; call with OUTJFN/ jfn of the output file
+;	    STATIM/ date and time that we want summary since
+; returns +1 always
+SUMHDR:	MOVE A,OUTJFN			;get the output file jfn
+	HRROI B,[ASCIZ/===========================================================================
+Summary of BBoards/]
+	SETZ C,
+	SOUT%				;write a header
+	MOVE B,STATIM			;get the date
+	SKIPN B				;want summary since certain date?
+	IFSKP.				;yes, print out the date and time
+	  HRROI B,[ASCIZ/ since /]
+	  SOUT%				
+	  MOVE B,STATIM		    	;get the date and time
+	  MOVX C,OT%DAY!OT%FDY!OT%4YR!OT%SPA!OT%NSC!OT%DAM!OT%FMN!OT%12H  ;ODTIM% format
+	  ODTIM%			;output the date and time
+	ENDIF.
+	HRROI B,[ASCIZ/
+Report generated /]
+	SETZ C,
+	SOUT%
+	GTAD%				;get the current time and day
+	MOVE B,A			;odtim% needs the date in B
+	MOVE A,OUTJFN			;get the output file jfn
+	MOVX C,OT%DAY!OT%FDY!OT%4YR!OT%SPA!OT%NSC!OT%DAM!OT%FMN!OT%12H  ;ODTIM% format
+	ODTIM%				;output the date and time
+	HRROI B,[ASCIZ/
+===========================================================================
+
+No. of Readers	BBoard Name
+--------------  -----------
+      		
+/]
+	SKIPE STATIM			;request summary since beginning
+	HRROI B,[ASCIZ/
+===========================================================================
+
+   
+   Number of readers
+Since Date    Since Beginning	BBoard Name
+----------    ---------------	-----------
+
+/]
+	SETZ C,
+	SOUT%
+	RET
+
+
+
+	SUBTTL	PRTSUM - get and print summary for one bboard file
+; call with STATIM/ date and time we want summary since
+;	    OUTJFN/ jfn of the summary output file
+;
+; returns +1 always with NUMBBD/ total number of bboards in bboard directory
+PRTSUM: MOVSI A,(GJ%OLD!GJ%IFG!GJ%SHT)	;return flags, permit wildcards
+	HRROI B,[ASCIZ/BBD:*.TXT/]	;want all of the bboard files in BBD:
+	GTJFN%				
+	  ERJMP ERROR
+	MOVEM A,SUMJFN			;save entire JFN and flags
+	SETZM NUMBBD			;no bboards to start
+
+PRTSM1:	HRROI A,BBDNAM			;put the name of the bboard here
+	HRROI B,[ASCIZ/BBD:/]
+	SETZ C,
+	SOUT%
+	HRRZ B,SUMJFN			;get the jfn for this bboard file
+	MOVX C,1B8			;want the name only
+	JFNS%
+	HRROI B,[ASCIZ/.IDX/]		;add IDX file extension
+	SETZ C,
+	SOUT%
+	MOVX A,GJ%OLD!GJ%SHT
+	HRROI B,BBDNAM			;want this IDX file
+	GTJFN%				;get the jfn for this IDX file
+	IFNJE.
+	  HRRZ A,A			;don't want the flags
+	  MOVEM A,STAJFN		;save the jfn
+	  MOVX B,OF%RD!OF%THW		;want thawed read/write access
+	  OPENF%			;open the file...
+	    ERCAL FATAL			;die gracefully
+	  CALL GTSTAT			;get the statistics
+	  AOS NUMBBD			;increment the number of bboards
+	  
+	  MOVE A,OUTJFN			;get the output jfn
+	  MOVE B,D			;get the number of readers
+	  MOVX C,<FLD(6,NO%COL)!NO%LFL> ;6 columns
+	  HRRI C,^D10			;decimal radix
+	  NOUT%
+	   ERJMP .+1
+	  HRROI B,TABS			;print out some tabs
+	  SETZ C,
+	  SOUT%
+	  SKIPN STATIM			;requested stats from beginning?
+	  IFSKP.
+	    PUSH P,STATIM		;save the time
+	    SETZM STATIM		;want stats from beginning
+	    CALL GTSTAT			;get the stats
+	    MOVE A,OUTJFN			;get the output jfn
+	    MOVE B,D			;get the number of readers
+	    MOVX C,<FLD(6,NO%COL)!NO%LFL> ;6 columns
+	    HRRI C,^D10			;decimal radix
+	    NOUT%
+	      ERJMP .+1
+	    HRROI B,TABS		;print out some tabs
+	    SETZ C,
+	    SOUT%
+	    POP P,STATIM		;get the time back
+	  ENDIF.
+	  HRRZ B,SUMJFN			;get the jfn for this bboard file
+	  MOVX C,1B8			;want the name only
+	  JFNS%	  
+	  HRROI B,CRLF			;tie off the line with a CRLF
+	  SETZ C,
+	  SOUT%
+
+	  HRRZ A,STAJFN			;get the jfn
+	  CLOSF%			;close the file and release jfn
+	    ERJMP ERROR
+
+	  MOVE A,SUMJFN			;get the next IDX file
+ 	  GNJFN%
+	    RET				;no more files, done with summary
+ 	  JRST PRTSM1			;do the next file
+	ELSE.
+	  HRROI A,BBDNAM		;get the file name
+	  ESOUT%
+	  HRROI A,[ASCIZ/ does not exist - skipping this bboard
+/]
+	  PSOUT%
+	  MOVE A,SUMJFN			;get the indexable jfn
+	  GNJFN%			;go to next file
+	    RET				;no more files
+	  JRST PRTSM1			;do next file (don't release IDXJFN)
+	ENDIF.
+
+
+
+CR2TAB: CR2TBL,,CR2TBL			;table for keyword CREATION
+	TBL (CREATION,,.SCREAT)
+CR2TBL==<.-CR2TAB>-1			;number of entries
+
+
+SUBTTL Subroutines
+FATAL:  CALL ERROR			;output why jsys died
+	HRROI A,[ASCIZ/, JSYS AT PC = /]
+	PSOUT%
+	MOVEI A,.PRIOU			;output the PC
+	POP P,B				;get the PC from the stack
+	SUBI B,2			;backup before the ercal
+	MOVX C,NO%MAG!10		;output free format unsigned octal
+	NOUT%	
+	ERJMP .+1			;shouldn't happen, but avoids recursion
+	HRROI A,CRLF
+	PSOUT%
+	MOVEI A,.PRIIN			;flush the tty input buffer
+	CFIBF%
+FATAL0: HALTF%				;return to the exec
+	HRROI A,[ASCIZ/?Can't continue due to error
+/]
+	PSOUT%
+	JRST FATAL0			;prevent continuation
+
+ERROR:  HRROI A,[ASCIZ/Error: /]
+	ESOUT%
+	MOVEI A,.PRIOU			;error message to primary output
+	HRLOI B,.FHSLF			;this fork,,last error
+	SETZ C,				;no limit
+	ERSTR%
+	ERJMP .+1
+	ERJMP .+1
+	HRROI A,CRLF
+	PSOUT%
+	RET
+
+CRLF:   BYTE(7)15,12
+TABS:	BYTE(7)11,11
+
+;subroutine to get a jfn and open the file
+GETFIL:	HRRZ A,IDXJFN
+	MOVX B,OF%RD!OF%WR!OF%THW	;want thawed read/write access
+	OPENF%				;open the file...
+	ERCAL FATAL			;die gracefully
+	RET
+
+
+
+;.COMND - Parse one field
+;Takes B/ FLDDB. chain
+;Returns +1 - falure
+;	 +2 - success, A/ Flags
+;		       B/ data
+;		       C/ type of function parsed
+.COMND:	MOVEI A,CMDBLK		;Address of CSB
+	COMND%			;Do the parse
+	IFNJE.
+	  TXNE A,CM%NOP		;Did we parse it?
+	ANSKP.
+	  LOAD C,CM%FNC,(C)	;Get the function
+	  RETSKP		;And go back +2
+	ENDIF.
+	RET			;Go back +1
+
+;entry vector
+EVEC:	JRST START			;START entry point
+	JRST START			;REENTER entry point
+VERSIO: BYTE (3)VWHO(9)VMAJOR(6)VMINOR(18)VEDIT  ;version info
+EVECL==.-EVEC
+	
+	END <EVECL,,EVEC>

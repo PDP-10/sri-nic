@@ -1,0 +1,93 @@
+SUBTTL Deliver local mail using MMailr
+
+SYSCOD==-2			;Special user number for SYSTEM
+
+	.ENDPS
+	.PSECT DATA		;Put this in data psect
+
+PIDGET:	IP%CPD			;Create a PID
+	0			;Where the PID goes
+	0			;For <SYSTEM>INFO
+	ENDPID-.,,.+1		;Pointer to actual message
+	1,,.IPCIW		;Get PID for name
+	0			;No PID for copy
+	ASCIZ/[SYSTEM]MMAILR/	;The name
+ENDPID==.
+
+	.ENDPS
+	.PSECT CODE		;Back to code
+
+;;;Queue local mail to MMailr
+
+SNDLCL:	SKIPN W,LCLIST		;Get start of local recipients
+	 RET
+	DO.
+	  MOVE A,ADRUSR(W)	;Is this special local recipient?
+	  CAME A,[-1]
+	  IFSKP.
+	    TXON F,F%F2		;Yes, setup as saved.messages file
+	     SKIPE SAVFIL	;Unless have one from moving
+	    IFSKP.
+	      HRROI A,SAVFIL
+	      MOVE B,MSGJFN
+	      MOVE C,[111110,,JS%PAF]
+	      JFNS%
+	    ENDIF.
+	    HRRZ W,ADRLNK(W)	;Get next in line
+	    JUMPN W,TOP.
+	    RET
+	  ENDIF.
+	  CAME A,[SYSCOD]	;Mailing to SYSTEM?
+	  IFSKP.
+	    MOVX A,GJ%OLD!GJ%DEL!GJ%PHY!GJ%SHT ;Verify it exists
+	    HRROI B,[ASCIZ/PS:<SYSTEM>MAIL.TXT.1/]
+	    GTJFN%
+	  ..TAGF (ERJMP,)	;I sure wish ANNJE. existed!
+	    RLJFN%		;Now get rid of this JFN
+	     NOP
+	    MOVX A,GJ%FOU!GJ%DEL!GJ%PHY!GJ%SHT ;Get the JFN we really want
+	    HRROI B,[ASCIZ/PS:<SYSTEM>MAIL.TXT.1/]
+	    GTJFN%		;Try to get mail file
+	  ..TAGF (ERJMP,)	;I sure wish ANNJE. existed!
+	    MOVEM A,OUTJFN	;Save it
+	    MOVE B,[7B5+OF%APP]	;Open for append
+	    OPENF%
+	    IFJER.
+	      MOVE A,OUTJFN
+	      RLJFN%
+	       NOP
+	    ELSE.
+	      SETZ T,		;Mark as unseen
+	      CALL FILMS2	;Go actually append it
+	      MOVEI A,ADRSTR(W)	;Get the guy's name again
+	      SKIPL SNDVBS	;Super-terse sending?
+	       CIETYP < SYSTEM -- ok> ;No, tell of local sending
+	      SETO A,		;Shout there's a new system message
+	      HRROI B,[ASCIZ/
+[From SYSTEM: New Message-of-the-Day available]
+/]
+	      TTMSG%		;Tell everybody
+	       ERJMP .+1	;Ignore ITRAP
+	      HRRZ W,ADRLNK(W)	;Get next in list
+	      JUMPN W,TOP.
+	      RET
+	    ENDIF.
+	  ENDIF.
+	  CALL REMLST		;Prevent circular list
+	  SETZM ADRUSR(W)	;Clear host/user number for this guy
+	  MOVEI B,NETLST	;Thread entry into network recipients
+	  MOVEI U,(W)
+	  HRRZ W,ADRLNK(W)	;Get next link for next time
+	  SETZM ADRLNK(U)	;Clear any previous links
+	  CALL ADDLST		;Add onto this list
+	   NOP			;Don't worry about duplicate
+	  JUMPN W,TOP.
+	ENDDO.
+	RET
+SUBTTL End of program
+
+XLIST				;For clean listings
+	LIT
+LIST				;Literals are XLISTed out
+
+	END <EVECL,,EVEC>

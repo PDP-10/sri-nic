@@ -1,0 +1,2182 @@
+REDIT 1(103) COMPARE by user MKL, 31-Mar-89 14:42:10
+File 1: SRC:<7.MONITOR>PHYP2.MAC.1
+File 2: SRC:<7.MONITOR.AP20>PHYP2.MAC.1
+***** CHANGE #1; PAGE 1, LINE 1; PAGE 1, LINE 1
+ ---------------------------------
+; Edit= 8908 to PHYP2.MAC on 16-Aug-88 by GSCOTT
+;Update BUG. documentation. 
+
+***** CHANGE #2; PAGE 2, LINE 13; PAGE 2, LINE 13
+;    1. Parameters . . . . . . . . . . . . . . . . . . . . . .   3
+;    2. UDB And KDB Extensions . . . . . . . . . . . . . . . .   5
+;    3. Massbus-DX20 Register Definitions  . . . . . . . . . .   7
+;    4. Dispatch For DX20B . . . . . . . . . . . . . . . . . .  13
+;    5. DX20 Initialization  . . . . . . . . . . . . . . . . .  14
+;    6. Routine To Start I/O . . . . . . . . . . . . . . . . .  18
+;    7. Routine To Stack Second Transfer Command . . . . . . .  19
+;    8. Routine To Start A Position Operation  . . . . . . . .  20
+;    9. Subroutine To Connect To A Drive . . . . . . . . . . .  21
+;   10. Routine To Compute Latency Optimization  . . . . . . .  23
+;   11. Routine To Handle Normal Interrupts  . . . . . . . . .  25
+;   12. Routine To Handle Attention Interrupts . . . . . . . .  28
+;   13. Routine To Handle Asychronous Status . . . . . . . . .  31
+;   14. Routine To Check For Data Errors . . . . . . . . . . .  35
+;   15. Error Recovery . . . . . . . . . . . . . . . . . . . .  41
+;   16. Subroutines To Load Up The SYSERR Blocks . . . . . . .  48
+;   17. Routine To Check For Dual Porting  . . . . . . . . . .  50
+;   18. Misc Routines  . . . . . . . . . . . . . . . . . . . .  52
+;   19. Subroutines For Manipulating The DX20  . . . . . . . .  56
+;   20. Data . . . . . . . . . . . . . . . . . . . . . . . . .  65
+;   21. End of PHYP2 . . . . . . . . . . . . . . . . . . . . .  66
+ ---------------------------------
+;    1. Parameters . . . . . . . . . . . . . . . . . . . . . .   3
+;    2. UDB And KDB Extensions . . . . . . . . . . . . . . . .   5
+;    3. Massbus-DX20 Register Definitions  . . . . . . . . . .   7
+;    4. Dispatch For DX20B . . . . . . . . . . . . . . . . . .  13
+;    5. DX20 Initialization  . . . . . . . . . . . . . . . . .  14
+;    6. Routine To Start I/O . . . . . . . . . . . . . . . . .  20
+;    7. Routine To Stack Second Transfer Command . . . . . . .  21
+;    8. Routine To Start A Position Operation  . . . . . . . .  22
+;    9. Subroutine To Connect To A Drive . . . . . . . . . . .  23
+;   10. Routine To Compute Latency Optimization  . . . . . . .  25
+;   11. Routine To Handle Normal Interrupts  . . . . . . . . .  27
+;   12. Routine To Handle Attention Interrupts . . . . . . . .  31
+;   13. Routine To Handle Asychronous Status . . . . . . . . .  34
+;   14. Routine To Check For Data Errors . . . . . . . . . . .  38
+;   15. Error Recovery . . . . . . . . . . . . . . . . . . . .  44
+;   16. Subroutines To Load Up The SYSERR Blocks . . . . . . .  51
+;   17. Routine To Check For Dual Porting  . . . . . . . . . .  53
+;   18. Misc Routines  . . . . . . . . . . . . . . . . . . . .  55
+;   19. Subroutines For Manipulating The DX20  . . . . . . . .  59
+;   20. Data . . . . . . . . . . . . . . . . . . . . . . . . .  68
+;   21. End of PHYP2 . . . . . . . . . . . . . . . . . . . . .  69
+
+***** CHANGE #3; PAGE 4, LINE 16; PAGE 4, LINE 16
+	BYTSEC==^D2304		;NUMBER OF 8-BIT BYTES PER SECTOR
+	SNSNUM==^D80		;NUMBER OF EXTENDED STATUS BYTES
+	RTYCNT==^D10		;NUMBER OF RETRIES BEFORE RECALIBRATION
+	RCLCNT==^D2		;NUMBER OF RECALIBRATES BEFORE GIVING UP
+
+
+;DEFINITIONS FOR THE RP2FNC TABLE TO TRANSFER PHYSIO FUNCTIONS TO
+ ---------------------------------
+	BYTSEC==^D2304		;NUMBER OF 8-BIT BYTES PER SECTOR
+	SNSNUM==^D80		;NUMBER OF EXTENDED STATUS BYTES
+	RTYCNT==^D10		;NUMBER OF RETRIES BEFORE RECALIBRATION
+	RCLCNT==^D2		;NUMBER OF RECALIBRATES BEFORE GIVING UP
+
+;DEFINITIONS FOR THE RP2FNC TABLE TO TRANSFER PHYSIO FUNCTIONS TO
+
+***** CHANGE #4; PAGE 5, LINE 4; PAGE 5, LINE 4
+	DEFSTR (TBDSP,RP2FNC,^D35,^D18)	;DISPATCH ADDRESS
+
+;USEFUL MACROS:
+
+
+
+
+	DEFINE RDRG(REGN),<	;;MACRO TO READ REGISTER OF UNIT IN Q2
+ ---------------------------------
+	DEFSTR (TBDSP,RP2FNC,^D35,^D18)	;DISPATCH ADDRESS
+
+;USEFUL MACROS:
+
+	DEFINE RDRG(REGN),<	;;MACRO TO READ REGISTER OF UNIT IN Q2
+
+***** CHANGE #5; PAGE 5, LINE 13; PAGE 5, LINE 10
+	MOVX T2,<REGN>		;;SET UP REGISTER NUMBER
+	CALL RDREG3		;;READ IT INTO T1
+>
+
+
+
+	DEFINE REG(NAME,LENGTH<1>),<	;;MACRO TO ALLOCATE REGISTER OFFSETS
+ ---------------------------------
+	MOVX T2,<REGN>		;;SET UP REGISTER NUMBER
+	CALL RDREG3		;;READ IT INTO T1
+>
+
+	DEFINE REG(NAME,LENGTH<1>),<	;;MACRO TO ALLOCATE REGISTER OFFSETS
+
+***** CHANGE #6; PAGE 5, LINE 21; PAGE 5, LINE 16
+	NAME==.REG.		;;DEFINE THIS OFFSET
+	.REG.==.REG.+LENGTH	;;THEN ADVANCE OFFSET BY GIVEN AMOUNT
+>
+
+
+
+
+	DEFINE SAVREG(REGS),<	;;MACRO TO SPECIFY REGISTERS FOR SYSERR
+ ---------------------------------
+	NAME==.REG.		;;DEFINE THIS OFFSET
+	.REG.==.REG.+LENGTH	;;THEN ADVANCE OFFSET BY GIVEN AMOUNT
+>
+
+	DEFINE SAVREG(REGS),<	;;MACRO TO SPECIFY REGISTERS FOR SYSERR
+
+***** CHANGE #7; PAGE 5, LINE 33; PAGE 5, LINE 25
+		  REG.'REGS==REGNUM	;;DEFINE OFFSET FOR USE LATER
+		  REGNUM==REGNUM+1	;;INCREMENT COUNTER
+		  >		;;LOOP OVER ALL REGISTERS
+>				;;RETURN BITS AND COUNT
+
+
+	SAVREG <0,1,2,3,4,5,6,20,21,22,23,24,26,27,30,31,32,33,34,35,36,37>
+ ---------------------------------
+		  REG.'REGS==REGNUM	;;DEFINE OFFSET FOR USE LATER
+		  REGNUM==REGNUM+1	;;INCREMENT COUNTER
+		  >		;;LOOP OVER ALL REGISTERS
+>				;;RETURN BITS AND COUNT
+
+	SAVREG <0,1,2,3,4,5,6,20,21,22,23,24,26,27,30,31,32,33,34,35,36,37>
+
+***** CHANGE #8; PAGE 6, LINE 11; PAGE 6, LINE 11
+
+;	REG U.XXXX		;ANY UDB LOCATIONS GET DEFINED HERE
+
+	LU.DX2==.REG.		;LENGTH OF RP20 UDB
+
+
+
+
+;STATUS BITS IN LEFT HALF OF UDBERR:
+
+
+ ---------------------------------
+
+;	REG U.XXXX		;ANY UDB LOCATIONS GET DEFINED HERE
+
+	LU.DX2==.REG.		;LENGTH OF RP20 UDB
+
+;STATUS BITS IN LEFT HALF OF UDBERR:
+
+
+***** CHANGE #9; PAGE 7, LINE 4; PAGE 7, LINE 4
+	UE.POS==1B5		;POSITIONING ERROR
+
+;KDB DEVICE DEPENDENT PORTION:
+
+
+	.REG.==KDBDDP		;START OFFSETS AT DEVICE DEPENDENT PART
+ ---------------------------------
+	UE.POS==1B5		;POSITIONING ERROR
+
+;KDB DEVICE DEPENDENT PORTION:
+
+	.REG.==KDBDDP		;START OFFSETS AT DEVICE DEPENDENT PART
+
+***** CHANGE #10; PAGE 8, LINE 6; PAGE 8, LINE 6
+	SUBTTL Massbus-DX20 Register Definitions
+
+;MASSBUS DEVICE REGISTER ASSIGNMENTS.  MISSING REGISTER DEFINITIONS
+;ARE EITHER UNUSED OR ARE FOR DIAGNOSTICS
+
+
+
+	.DXCTL==0B5		;CONTROL REGISTER
+ ---------------------------------
+	SUBTTL Massbus-DX20 Register Definitions
+
+;MASSBUS DEVICE REGISTER ASSIGNMENTS.  MISSING REGISTER DEFINITIONS
+;ARE EITHER UNUSED OR ARE FOR DIAGNOSTICS
+
+	.DXCTL==0B5		;CONTROL REGISTER
+
+***** CHANGE #11; PAGE 9, LINE 4; PAGE 9, LINE 4
+	.DXDG7==37B5		;DIAGNOSTIC REGISTER 7 (PARITY ERROR FLAG)
+
+;REGISTER 0 (.DXCTL) BIT DEFINITIONS:
+
+
+	DX.GO==1B35		;GO BIT
+	DEFSTR (DXFNC,,^D35,6)	;FUNCTION CODE (INCLUDING GO BIT)
+
+
+
+ ---------------------------------
+	.DXDG7==37B5		;DIAGNOSTIC REGISTER 7 (PARITY ERROR FLAG)
+
+;REGISTER 0 (.DXCTL) BIT DEFINITIONS:
+
+	DX.GO==1B35		;GO BIT
+	DEFSTR (DXFNC,,^D35,6)	;FUNCTION CODE (INCLUDING GO BIT)
+
+
+***** CHANGE #12; PAGE 9, LINE 16; PAGE 9, LINE 13
+;FUNCTION CODES (INCLUDING THE GO BIT).  SOME OF THE FUNCTIONS HAVE
+;SUB-CODES WHICH MUST BE LOADED INTO THE FLAG REGISTER (.DXFLG) PRIOR
+;TO LOADING THE FUNCTION CODE ITSELF.  POSSIBLE SUB-CODES ARE INDENTED
+;FOLLOWING THEIR MAJOR CODE.
+
+
+	XF.NOP==1		;FUNCTION FOR NO OPERATION SUB-CODES
+ ---------------------------------
+;FUNCTION CODES (INCLUDING THE GO BIT).  SOME OF THE FUNCTIONS HAVE
+;SUB-CODES WHICH MUST BE LOADED INTO THE FLAG REGISTER (.DXFLG) PRIOR
+;TO LOADING THE FUNCTION CODE ITSELF.  POSSIBLE SUB-CODES ARE INDENTED
+;FOLLOWING THEIR MAJOR CODE.
+
+	XF.NOP==1		;FUNCTION FOR NO OPERATION SUB-CODES
+
+***** CHANGE #13; PAGE 9, LINE 37; PAGE 9, LINE 33
+	XF.WRS==65		;WRITE SPECIAL
+	XF.RED==71		;READ DATA
+	XF.RDF==73		;READ FORMAT
+	XF.RDS==75		;READ SPECIAL
+
+
+
+
+;REGISTER 1 (.DXSTS) BIT DEFINITIONS:
+
+
+ ---------------------------------
+	XF.WRS==65		;WRITE SPECIAL
+	XF.RED==71		;READ DATA
+	XF.RDF==73		;READ FORMAT
+	XF.RDS==75		;READ SPECIAL
+
+;REGISTER 1 (.DXSTS) BIT DEFINITIONS:
+
+
+***** CHANGE #14; PAGE 10, LINE 4; PAGE 10, LINE 4
+	ST.RUN==1B23		;MICROPROCESSOR IS RUNNING
+
+;REGISTER 2 (.DXERR) BIT DEFINITIONS:
+
+
+	DEFSTR (ERCOD,,^D27,4)	;ERROR CLASS CODE FIELD
+ ---------------------------------
+	ST.RUN==1B23		;MICROPROCESSOR IS RUNNING
+
+;REGISTER 2 (.DXERR) BIT DEFINITIONS:
+
+	DEFSTR (ERCOD,,^D27,4)	;ERROR CLASS CODE FIELD
+
+***** CHANGE #15; PAGE 10, LINE 20; PAGE 10, LINE 19
+	ER.ILR==1B34		;REFERENCE TO ILLEGAL REGISTER
+	ER.ILF==1B35		;ILLEGAL FUNCTION ATTEMPTED
+
+	ER.ALL==ER.NEW!ER.STP!ER.MPE!ER.DPE!ER.CPE!ER.RMR!ER.ILR!ER.ILF	;ALL
+
+
+;ERROR CLASS AND SUB-CLASS CODES (FROM ERCOD AND ERSUB).  VALUES
+ ---------------------------------
+	ER.ILR==1B34		;REFERENCE TO ILLEGAL REGISTER
+	ER.ILF==1B35		;ILLEGAL FUNCTION ATTEMPTED
+
+	ER.ALL==ER.NEW!ER.STP!ER.MPE!ER.DPE!ER.CPE!ER.RMR!ER.ILR!ER.ILF	;ALL
+
+;ERROR CLASS AND SUB-CLASS CODES (FROM ERCOD AND ERSUB).  VALUES
+
+***** CHANGE #16; PAGE 11, LINE 4; PAGE 11, LINE 4
+	  ES.II0==3		;MICROPROCESSOR INTERRUPTED FROM INTERFACE 0
+
+;REGISTER 3 (.DXMAI) BIT DEFINITIONS:
+
+
+	MR.SS==1B31		;SINGLE STEP MICRO PROCESSOR
+ ---------------------------------
+	  ES.II0==3		;MICROPROCESSOR INTERRUPTED FROM INTERFACE 0
+
+;REGISTER 3 (.DXMAI) BIT DEFINITIONS:
+
+	MR.SS==1B31		;SINGLE STEP MICRO PROCESSOR
+
+***** CHANGE #17; PAGE 11, LINE 11; PAGE 11, LINE 10
+	MR.WEP==1B32		;WRITE EVEN PARITY ON ALU OPERATION
+	MR.ST==1B33		;START/STOP MICRO PROCESSOR
+	MR.RES==1B34		;HALT MICRO PROCESSOR AND CLEAR REGISTERS
+
+
+
+
+
+;REGISTER 4 (.DXATN) BIT DEFINITIONS:
+
+
+	AT.0==1B35		;DRIVE 0 NEEDS ATTENTION.  FOR OTHER DRIVES,
+				;SHIFT LEFT BY DRIVE NUMBER.
+
+
+
+
+;REGISTER 5 (.DXREC) BIT DEFINITIONS:
+
+
+	DEFSTR (RCHED,,^D27,^D8)	;HEAD NUMBER
+	DEFSTR (RCREC,,^D35,^D8)	;RECORD NUMBER
+
+
+
+
+;REGISTER 20 (.DXEND) BIT DEFINITIONS (THESE STATUS FLAGS ARE ALSO
+;RETURNED IN REGISTER .DXASY ON ANCHRONOUS STATUS):
+
+
+ ---------------------------------
+	MR.WEP==1B32		;WRITE EVEN PARITY ON ALU OPERATION
+	MR.ST==1B33		;START/STOP MICRO PROCESSOR
+	MR.RES==1B34		;HALT MICRO PROCESSOR AND CLEAR REGISTERS
+
+;REGISTER 4 (.DXATN) BIT DEFINITIONS:
+
+	AT.0==1B35		;DRIVE 0 NEEDS ATTENTION.  FOR OTHER DRIVES,
+				;SHIFT LEFT BY DRIVE NUMBER.
+
+;REGISTER 5 (.DXREC) BIT DEFINITIONS:
+
+	DEFSTR (RCHED,,^D27,^D8)	;HEAD NUMBER
+	DEFSTR (RCREC,,^D35,^D8)	;RECORD NUMBER
+
+;REGISTER 20 (.DXEND) BIT DEFINITIONS (THESE STATUS FLAGS ARE ALSO
+;RETURNED IN REGISTER .DXASY ON ANCHRONOUS STATUS):
+
+
+***** CHANGE #18; PAGE 12, LINE 5; PAGE 12, LINE 5
+
+;REGISTER 21 (.DXASY) BIT DEFINITIONS (BITS 20-28 ARE STATUS BITS
+;DEFINED THE SAME AS IN REGISTER .DXEND):
+
+
+	DEFSTR (ASDRV,,^D35,^D8)	;DRIVE NUMBER PRESENTING STATUS
+
+
+
+
+
+;REGISTER 22 (.DXFLG) BIT DEFINITIONS:
+
+
+ ---------------------------------
+
+;REGISTER 21 (.DXASY) BIT DEFINITIONS (BITS 20-28 ARE STATUS BITS
+;DEFINED THE SAME AS IN REGISTER .DXEND):
+
+	DEFSTR (ASDRV,,^D35,^D8)	;DRIVE NUMBER PRESENTING STATUS
+
+;REGISTER 22 (.DXFLG) BIT DEFINITIONS:
+
+
+***** CHANGE #19; PAGE 12, LINE 25; PAGE 12, LINE 19
+	DF.RTY==1B23		;COMMAND RETRY REQUESTED
+	DF.DSN==1B25		;DISABLE SENSE ON UNIT CHECKS
+	DF.FSN==1B26		;FORCE SENSE OPERATION ON COMMAND COMPLETION
+	DF.WHT==1B27		;READ OR WRITE THE WHOLE TRACK
+
+
+
+
+
+;REGISTER 23 (.DXDRV) BIT DEFINITIONS:
+
+
+	DEFSTR (DRVNM,,^D35,^D8)	;DRIVE NUMBER
+
+
+
+
+
+;REGISTER 31 (.DXDG0) BIT DEFINITIONS:
+
+
+ ---------------------------------
+	DF.RTY==1B23		;COMMAND RETRY REQUESTED
+	DF.DSN==1B25		;DISABLE SENSE ON UNIT CHECKS
+	DF.FSN==1B26		;FORCE SENSE OPERATION ON COMMAND COMPLETION
+	DF.WHT==1B27		;READ OR WRITE THE WHOLE TRACK
+
+;REGISTER 23 (.DXDRV) BIT DEFINITIONS:
+
+	DEFSTR (DRVNM,,^D35,^D8)	;DRIVE NUMBER
+
+;REGISTER 31 (.DXDG0) BIT DEFINITIONS:
+
+
+***** CHANGE #20; PAGE 12, LINE 48; PAGE 12, LINE 32
+	DG.MSE==1B21		;ENABLE MICROSTORE FOR WRITING
+	DG.PCS==1B22		;SET DX20 PC
+	DG.PCI==1B23		;INCREMENT PC AFTER USING INSTRUCTION REGISTER
+	DG.PC==7777B35		;PC VALUE
+
+
+
+
+
+;REGISTER 37 (.DXDG7) BIT DEFINITIONS:
+
+
+ ---------------------------------
+	DG.MSE==1B21		;ENABLE MICROSTORE FOR WRITING
+	DG.PCS==1B22		;SET DX20 PC
+	DG.PCI==1B23		;INCREMENT PC AFTER USING INSTRUCTION REGISTER
+	DG.PC==7777B35		;PC VALUE
+
+;REGISTER 37 (.DXDG7) BIT DEFINITIONS:
+
+
+***** CHANGE #21; PAGE 13, LINE 6; PAGE 13, LINE 6
+
+;DEFINITIONS FOR SENSE BYTES 0-3.  WHEN READ INTO AN AC, BITS 2-9
+;CONTAIN BYTE 0, BITS 10-17 CONTAIN BYTE 1, BITS 20-27 CONTAIN
+;BYTE 2, AND BITS 28-35 CONTAIN BYTE 3.
+
+
+
+	S0.REJ==1B2		;COMMAND REJECT
+ ---------------------------------
+
+;DEFINITIONS FOR SENSE BYTES 0-3.  WHEN READ INTO AN AC, BITS 2-9
+;CONTAIN BYTE 0, BITS 10-17 CONTAIN BYTE 1, BITS 20-27 CONTAIN
+;BYTE 2, AND BITS 28-35 CONTAIN BYTE 3.
+
+	S0.REJ==1B2		;COMMAND REJECT
+
+***** CHANGE #22; PAGE 13, LINE 30; PAGE 13, LINE 28
+	S2.EDP==1B23		;ENVIRONMENTAL DATA PRESENT (BYTES 8 - 23)
+	S2.CMP==1B24		;DRIVE IS IN 3330 COMPATIBLE MODE
+
+	DEFSTR (S3RSC,,^D35,^D8)	;RESTART COMMAND
+
+
+
+
+;OTHER SENSE BYTE INFORMATION OF INTEREST.  ALL OF THESE DEFINITIONS
+;ASSUME THAT ALL OF THE SENSE BYTES WERE READ INTO THE K.DEXS TABLE
+;IN THE KDB.  THIS TABLE CONTAINS FOUR SENSE BYTES PER WORD.
+
+
+ ---------------------------------
+	S2.EDP==1B23		;ENVIRONMENTAL DATA PRESENT (BYTES 8 - 23)
+	S2.CMP==1B24		;DRIVE IS IN 3330 COMPATIBLE MODE
+
+	DEFSTR (S3RSC,,^D35,^D8)	;RESTART COMMAND
+
+;OTHER SENSE BYTE INFORMATION OF INTEREST.  ALL OF THESE DEFINITIONS
+;ASSUME THAT ALL OF THE SENSE BYTES WERE READ INTO THE K.DEXS TABLE
+;IN THE KDB.  THIS TABLE CONTAINS FOUR SENSE BYTES PER WORD.
+
+
+***** CHANGE #23; PAGE 14, LINE 15; PAGE 14, LINE 15
+;	(SKIP RETURN)		;ROUTINE SKIPPED
+;
+;YOU CAN REPLACE THE "HRRZ AC,UDBDSP(P3)" INSTRUCTION WITH "HRRZ AC,KDBDSP(P2)"
+;WHEN NECESSARY, SINCE THE KDB AND THE UDB USE THE SAME DISPATCH TABLE.
+
+
+
+
+DXBDSP::JRST DX2INI		;0 - INITIALIZATION
+ ---------------------------------
+;	(SKIP RETURN)		;ROUTINE SKIPPED
+;
+;YOU CAN REPLACE THE "HRRZ AC,UDBDSP(P3)" INSTRUCTION WITH "HRRZ AC,KDBDSP(P2)"
+;WHEN NECESSARY, SINCE THE KDB AND THE UDB USE THE SAME DISPATCH TABLE.
+
+DXBDSP::JRST DX2INI		;0 - INITIALIZATION
+
+***** CHANGE #24; PAGE 15, LINE 13; PAGE 15, LINE 13
+;  P5/	UNIT NUMBER TO INITIALIZE, OR -1 FOR ALL UNITS
+;RETURNS:
+;  +1:	ALWAYS
+;	  T1/	KDB
+
+
+
+DX2INI:	SAVEQ			;SAVE REGISTERS
+ ---------------------------------
+;  P5/	UNIT NUMBER TO INITIALIZE, OR -1 FOR ALL UNITS
+;RETURNS:
+;  +1:	ALWAYS
+;	  T1/	KDB
+
+DX2INI:	SAVEQ			;SAVE REGISTERS
+
+***** CHANGE #25; PAGE 15, LINE 25; PAGE 15, LINE 23
+	MOVE P2,0(P2)		;GET ENTRY
+	SKIPE P3,P2		;FOUND ONE?
+	JRST INILA		;ALREADY GOT ONE
+
+INILB:	CALL CHKMIC		;CHECK THE DX20 MICROCODE (STOPS IT TOO)
+	 JRST [	HRRZ T1,CDBADR(P1)	;BAD MICROCODE, GET CHANNEL READY
+		BUG.(CHK,DXBDMI,PHYP2,SOFT,<PHYP2 - DX20B microcode is invalid>,<<T1,CHAN>,<Q2,DX20>>,<
+
+Cause:	TOPS-20 could not verify the microcode in a DX20B (RP20 controller).
+
+ ---------------------------------
+	MOVE P2,0(P2)		;GET ENTRY
+	SKIPE P3,P2		;FOUND ONE?
+	JRST INILA		;ALREADY GOT ONE
+
+INILB:	CALL CHKMIC		;CHECK THE DX20 MICROCODE (STOPS IT TOO)
+	 JRST [	HRRZ T1,CDBADR(P1) ;BAD MICROCODE, GET CHANNEL READY
+		BUG.(CHK,DXBDMI,PHYP2,SOFT,<PHYP2 - DX20B microcode is invalid>,<<T1,CHAN>,<Q2,DX20>>,<
+
+Cause:	TOPS-20 could not verify the microcode in a DX20B (RP20 controller).
+
+Action:	Reload the microcode in the DX20B.  If the problem still occurs, Field
+	Service should check out the DX20 and the RH20 it connects to.
+
+
+***** CHANGE #26; PAGE 16, LINE 4; PAGE 16, LINE 4
+				;FALL INTO LOOP
+
+;LOOP TO EXAMINE ALL UNITS:
+
+
+INILP:	SETZ P5,		;NO UDBSTS BITS YET
+ ---------------------------------
+				;FALL INTO LOOP
+
+;LOOP TO EXAMINE ALL UNITS:
+
+INILP:	SETZ P5,		;NO UDBSTS BITS YET
+
+***** CHANGE #27; PAGE 16, LINE 34; PAGE 16, LINE 33
+	CALL RDSNS		;YES, READ IN SENSE BYTES
+	 JRST NXTDRV		;FAILED, SKIP THIS DRIVE
+	TXNE T1,S0.OVR!S0.DCK!S0.ECK!S0.BPE!S0.REJ!S1.OPI!S1.FPE!S1.NRF!S1.EOC!S1.ITF!S1.PRM			;ANY AWFUL STATUS?
+	JRST SIKDRV		;YES, CALL IT SICK
+	MOVX P5,US.OFS		;DRIVE IS OFF-LINE, GET STATUS TO SET
+
+ ---------------------------------
+	CALL RDSNS		;YES, READ IN SENSE BYTES
+	 JRST NXTDRV		;FAILED, SKIP THIS DRIVE
+	TXNE T1,S0.OVR!S0.DCK!S0.ECK!S0.BPE!S0.REJ!S1.OPI!S1.FPE!S1.NRF!S1.EOC!S1.ITF!S1.PRM			;ANY AWFUL STATUS?
+	JRST SIKDRV		;YES, CALL IT SICK
+	MOVX P5,US.OFS		;DRIVE IS OFF-LINE, GET STATUS TO SET
+
+
+***** CHANGE #28; PAGE 16, LINE 41; PAGE 17, LINE 7
+;HERE FOR EACH EXISTENT DRIVE.  DECIDE IF THIS DRIVE IS DUAL PORTED, AND
+;IF SO EITHER IGNORE THIS ACCESS PATH TO IT, OR ELSE MOVE THE UDB FROM
+;THE ALTERNATE ACCESS PATH TO THIS ONE (WHICH WILL IMPROVE PERFORMANCE).
+;CALLED WITH INITIAL UDBSTS FLAGS IN P5.
+
+
+ISDRV:	HRRZ T1,Q1		;GET DRIVE NUMBER
+ ---------------------------------
+;HERE FOR EACH EXISTENT DRIVE.  DECIDE IF THIS DRIVE IS DUAL PORTED, AND
+;IF SO EITHER IGNORE THIS ACCESS PATH TO IT, OR ELSE MOVE THE UDB FROM
+;THE ALTERNATE ACCESS PATH TO THIS ONE (WHICH WILL IMPROVE PERFORMANCE).
+;CALLED WITH INITIAL UDBSTS FLAGS IN P5.
+
+ISDRV:	HRRZ T1,Q1		;GET DRIVE NUMBER
+
+***** CHANGE #29; PAGE 17, LINE 10; PAGE 18, LINE 10
+NEWDRV:	MOVE T3,K.DNUM(P2)	;GET NUMBER OF DRIVES FOUND SO FAR
+	CAIL T3,NUMDRV		;ROOM IN K.DUDB TABLE?
+	JRST [	BUG.(CHK,DXBTTS,PHYP2,HARD,<PHYP2 - Tables too small for this many drives>,<<T3,NUMDRV>>,<
+
+Cause:	The number of RP20 drives on a DX20 controller exceeds the number
+	supported by TOPS-20.
+
+ ---------------------------------
+NEWDRV:	MOVE T3,K.DNUM(P2)	;GET NUMBER OF DRIVES FOUND SO FAR
+	CAIL T3,NUMDRV		;ROOM IN K.DUDB TABLE?
+	JRST [	BUG.(CHK,DXBTTS,PHYP2,HARD,<PHYP2 - Tables too small for this many drives>,<<T3,NUMDRV>>,<
+
+Cause:	The number of RP20 drives on a DX20 controller exceeds the number
+	supported by TOPS-20.  Since NUMDRV is 16 decimal, this is not expected
+	to happen.
+
+Action:	Rebuild the monitor with a larger NUMDRV in PHYP2 or reduce the number
+	of RP20 drives accessible through this controller.
+
+
+***** CHANGE #30; PAGE 17, LINE 17; PAGE 18, LINE 21
+Data:	NUMDRV - Number of drives allowed per controller
+>,,<DB%NND>)			;[7.1210] 
+		MOVE T1,P2	;TELL RETURN TO PUT KDB INTO CDB
+		RET]		;GIVE UP NOW
+	MOVE T3,[DXBDSP,,LU.DX2] ;SET UP ADDRESS,,LENGTH
+ ---------------------------------
+Data:	NUMDRV - Number of drives allowed per controller
+>,,<DB%NND>)			;[7.1210] 
+		MOVE T1,P2	;TELL RETURN TO PUT KDB INTO CDB
+		RET]		;GIVE UP NOW
+
+	MOVE T3,[DXBDSP,,LU.DX2] ;SET UP ADDRESS,,LENGTH
+
+***** CHANGE #31; PAGE 17, LINE 29; PAGE 19, LINE 13
+	CAME T1,DSKUTP(T2)	;LOOK FOR DISK TYPE IN TABLE
+	AOBJN T2,.-1		;KEEP SEARCHING
+	SKIPL T2		;FIND IT?
+	BUG.(HLT,DXBTNF,PHYP2,SOFT,<PHYP2 - Unit type not found in table>,,<
+
+Cause:	The routine DX2INI was called to initialize a UDB for an RP20 disk.
+	It converted the hardware drive type into the internal drive
+	type and then looked in the physical parameter table (DSKUTP)
+	for that type so that the disk parameters could be obtained.
+	The drive type could not be found.
+
+>)		;NO, COMPLAIN
+	MOVE T2,DSKSIZ(T2)	;GET POINTER TO PHYSICAL PARAMETER TABLE
+ ---------------------------------
+	CAME T1,DSKUTP(T2)	;LOOK FOR DISK TYPE IN TABLE
+	AOBJN T2,.-1		;KEEP SEARCHING
+	SKIPL T2		;FIND IT?
+	BUG.(HLT,DXBTNF,PHYP2,SOFT,<PHYP2 - Unit type not found in table>,,<
+
+Cause:	The routine DX2INI was called to initialize a UDB for an RP20 disk.  It
+	converted the hardware drive type into the internal drive type and then
+	looked in the physical parameter table (DSKUTP) for that type so that
+	the disk parameters could be obtained.  The drive type could not be
+	found.  There is a hardware problem or an illegal drive type connected
+	to the RP20 controller.
+
+Action:	Field Service should check out the RH20, DX20B, and RP20 hardware.
+>)				;NO, COMPLAIN
+	MOVE T2,DSKSIZ(T2)	;GET POINTER TO PHYSICAL PARAMETER TABLE
+
+***** CHANGE #32; PAGE 18, LINE 5; PAGE 20, LINE 5
+
+;HERE TO COMPLAIN IF NECESSARY ABOUT A SICK DRIVE, CLEAR ANY POSSIBLE
+;ERROR STATUS, AND LOOP FOR THE NEXT UNIT.
+
+
+
+SIKDRV:	SOJL Q3,NXTDRV		;ONLY COMPLAIN ABOUT FIRST FEW DRIVES
+ ---------------------------------
+
+;HERE TO COMPLAIN IF NECESSARY ABOUT A SICK DRIVE, CLEAR ANY POSSIBLE
+;ERROR STATUS, AND LOOP FOR THE NEXT UNIT.
+
+SIKDRV:	SOJL Q3,NXTDRV		;ONLY COMPLAIN ABOUT FIRST FEW DRIVES
+
+***** CHANGE #33; PAGE 18, LINE 16; PAGE 20, LINE 14
+	BUG.(CHK,DXBEUI,PHYP2,HARD,<PHYP2 - Error trying to initialize a unit>,<<T1,CHAN>,<Q2,DX20>,<T2,UNIT>>,<
+
+Cause:	TOPS-20 detected a drive error while trying to initialize an RP20
+	disk.
+
+Data:	CHAN - Channel number
+ ---------------------------------
+	BUG.(CHK,DXBEUI,PHYP2,HARD,<PHYP2 - Error trying to initialize a unit>,<<T1,CHAN>,<Q2,DX20>,<T2,UNIT>>,<
+
+Cause:	TOPS-20 detected a drive error while trying to initialize an RP20
+	disk.
+
+Action:	Field Service should check out the drive specified in the additional
+	data, as it appears to have a hardware problem.
+
+Data:	CHAN - Channel number
+
+***** CHANGE #34; PAGE 19, LINE 12; PAGE 21, LINE 12
+;  P4/	IORB
+;RETURNS:
+;  +1:	FAILED, IORB MARKED AS FAILED
+;  +2:	I/O SUCCESSFULLY STARTED
+
+
+
+
+DX2SIO:	SAVEQ			;SAVE SOME REGISTERS
+ ---------------------------------
+;  P4/	IORB
+;RETURNS:
+;  +1:	FAILED, IORB MARKED AS FAILED
+;  +2:	I/O SUCCESSFULLY STARTED
+
+DX2SIO:	SAVEQ			;SAVE SOME REGISTERS
+
+***** CHANGE #35; PAGE 19, LINE 26; PAGE 21, LINE 23
+	CAIGE T1,MNRP2V
+	CAIG T1,MXEXTF		;MAKE SURE IT IS WITHIN RANGE
+	SKIPN RP2FNC(T1)	;AND LEGAL
+	BUG.(HLT,DXBFEX,PHYP2,SOFT,<PHYP2 - Illegal function starting IO>,,<
+
+Cause:	The routine DX2SIO in PHYP2 was called to start a transfer
+	operation for an IORB but the function code from the IORB
+	was illegal.
+
+>)		;NO, DIE
+DS2SI1:	LOAD Q1,TBFNC,(T1)	;TRANSLATE TO HARDWARE FUNCTION
+ ---------------------------------
+	CAIGE T1,MNRP2V
+	CAIG T1,MXEXTF		;MAKE SURE IT IS WITHIN RANGE
+	SKIPN RP2FNC(T1)	;AND LEGAL
+	BUG.(HLT,DXBFEX,PHYP2,SOFT,<PHYP2 - Illegal function starting IO>,,<
+
+Cause:	The routine DX2SIO in PHYP2 was called to start a transfer operation
+	for an IORB but the function code from the IORB was illegal.
+>)				;NO, DIE
+DS2SI1:	LOAD Q1,TBFNC,(T1)	;TRANSLATE TO HARDWARE FUNCTION
+
+***** CHANGE #36; PAGE 20, LINE 14; PAGE 22, LINE 14
+	CAIGE T1,MNRP2V		;VARIFY?
+	CAIG T1,MXEXTF		;VERIFY THAT IS IS NOT TOO LARGE
+	SKIPN RP2FNC(T1)	;AND THAT IS IS VALID
+	BUG.(HLT,DXBIF2,PHYP2,SOFT,<PHYP2 - Illegal function stacking IO>,,<
+
+Cause:	The routine DX2STK in PHYP2 was called to stack a second
+	transfer command but the function in the IORB was illegal.
+
+>)		;IT'S BAD
+	LOAD Q1,TBFNC,(T1)	;TRANSLATE TO HARDWARE FUNCTION
+ ---------------------------------
+	CAIGE T1,MNRP2V		;VARIFY?
+	CAIG T1,MXEXTF		;VERIFY THAT IS IS NOT TOO LARGE
+	SKIPN RP2FNC(T1)	;AND THAT IS IS VALID
+	BUG.(HLT,DXBIF2,PHYP2,SOFT,<PHYP2 - Illegal function stacking IO>,,<
+
+Cause:	The routine DX2STK in PHYP2 was called to stack a second transfer
+	command but the function in the IORB was illegal.
+>)				;IT'S BAD
+	LOAD Q1,TBFNC,(T1)	;TRANSLATE TO HARDWARE FUNCTION
+
+***** CHANGE #37; PAGE 22, LINE 30; PAGE 24, LINE 30
+	RDRG .DXEND		;GET ENDING STATUS ALSO
+	HRL T4,T1		;PUT WITH OTHER DATA
+	CALL FNDCKU		;COLLECT NUMBERS
+	BUG.(CHK,DXBEWC,PHYP2,HARD,<PHYP2 - Error present when connecting to a unit>,<<T1,CHAN>,<T2,CTRL>,<T3,UNIT>,<T4,20AND2>>,<
+
+Cause:	One or more flags is turned on in a DX20 drive error register.
+	TOPS-20 is ignoring the errors and proceeding.
+
+ ---------------------------------
+	RDRG .DXEND		;GET ENDING STATUS ALSO
+	HRL T4,T1		;PUT WITH OTHER DATA
+	CALL FNDCKU		;COLLECT NUMBERS
+	BUG.(CHK,DXBEWC,PHYP2,HARD,<PHYP2 - Error present when connecting to a unit>,<<T1,CHAN>,<T2,CTRL>,<T3,UNIT>,<T4,20AND2>>,<
+
+Cause:	One or more flags is turned on in a DX20 drive error register.  TOPS-20
+	is ignoring the errors and proceeding.
+
+Action:	There is probably a hardware problem with the RP20 disk named in the
+	additional data, and it should be checked out by Field Service.  The
+	fourth additional data item contains error information.
+
+
+***** CHANGE #38; PAGE 23, LINE 21; PAGE 25, LINE 21
+	IDIV T2,SECCYL(T4)	;DIVIDE BY SECTORS PER CYLINDER
+	MOVEM T2,UDBPS1(P3)	;SAVE CYLINDER
+	MOVEM T3,UDBPS2(P3)	;AND SECTOR WITHIN CYLINDER
+	RETSKP			;SUCCESS RETURN
+
+
+ ---------------------------------
+	IDIV T2,SECCYL(T4)	;DIVIDE BY SECTORS PER CYLINDER
+	MOVEM T2,UDBPS1(P3)	;SAVE CYLINDER
+	MOVEM T3,UDBPS2(P3)	;AND SECTOR WITHIN CYLINDER
+	RETSKP			;SUCCESS RETURN
+
+
+***** CHANGE #39; PAGE 26, LINE 4; PAGE 28, LINE 4
+				;THEN FALL INTO LOOP
+
+;NOW LOOP OVER ALL IORBS LOOKING FOR THE BEST ONE.
+
+
+LATLOP:	HRRZ P4,P4		;FIXUP ADDRESS
+ ---------------------------------
+				;THEN FALL INTO LOOP
+
+;NOW LOOP OVER ALL IORBS LOOKING FOR THE BEST ONE.
+
+LATLOP:	HRRZ P4,P4		;FIXUP ADDRESS
+
+***** CHANGE #40; PAGE 26, LINE 45; PAGE 28, LINE 44
+	HRL T3,T2		;REMEMBER NEW BEST DISTANCE ALSO
+	JUMPN T2,LATLOP		;LOOK FOR BETTER ONE UNLESS FOUND A BEST CASE
+
+LATFIN:	JUMPE P5,[BUG.(HLT,DXBLTF,PHYP2,SOFT,<PHYP2 - Latency optimization failure>,,<
+
+Cause:	The routine DX2LAT in PHYP2 was called by PHYSIO to find the best
+	IORB for a unit.  However, after scanning all IORBs in the transfer
+	wait queue for the unit, no IORB was found that could be returned.
+
+>)	;IF FOUND NO IORB, COMPLAIN
+		  RET]		;AND ERROR RETURN
+ ---------------------------------
+	HRL T3,T2		;REMEMBER NEW BEST DISTANCE ALSO
+	JUMPN T2,LATLOP		;LOOK FOR BETTER ONE UNLESS FOUND A BEST CASE
+
+LATFIN:	JUMPE P5,[BUG.(HLT,DXBLTF,PHYP2,SOFT,<PHYP2 - Latency optimization failure>,,<
+
+Cause:	The routine DX2LAT in PHYP2 was called by PHYSIO to find the best IORB
+	for a unit.  However, after scanning all IORBs in the transfer wait
+	queue for the unit, no IORB was found that could be returned.
+>)				;IF FOUND NO IORB, COMPLAIN
+		  RET]		;AND ERROR RETURN
+
+***** CHANGE #41; PAGE 28, LINE 4; PAGE 30, LINE 4
+	RET			;DONE
+
+;HERE TO HANDLE THE DONE INTERRUPT.  DX20 UNIT NUMBER IS IN Q2.
+
+
+DOINT:	SKIPN P3,KDBACT(P2)	;GET THE UDB I/O WAS BEING DONE FOR
+	JRST [	HRRZ T1,CDBADR(P1)	;NONE, GET CHANNEL READY
+		BUG.(CHK,DXBNUD,PHYP2,HARD,<PHYP2 - No unit active for Done interrupt>,<<T1,CHAN>,<Q2,DX20>>,<
+
+Cause:	A done interrupt occurred on a DX20 but there is no active UDB for
+	this controller.
+
+ ---------------------------------
+	RET			;DONE
+
+;HERE TO HANDLE THE DONE INTERRUPT.  DX20 UNIT NUMBER IS IN Q2.
+
+DOINT:	SKIPN P3,KDBACT(P2)	;GET THE UDB I/O WAS BEING DONE FOR
+	JRST [	HRRZ T1,CDBADR(P1)	;NONE, GET CHANNEL READY
+		BUG.(CHK,DXBNUD,PHYP2,HARD,<PHYP2 - No unit active for done interrupt>,<<T1,CHAN>,<Q2,DX20>>,<
+
+Cause:	A done interrupt occurred on a DX20 but there is no active UDB for this
+	controller.
+
+Action:	There probably is a hardware problem with the RH20, DX20B, or RP20
+	hardware and Field Service should be notified.  If an OVRDTA BUGCHK
+	preceeded this BUGCHK with the same channel and contoller number, then
+	the drive number called out in the OVRDTA is the one to suspect first.
+
+
+***** CHANGE #42; PAGE 28, LINE 23; PAGE 30, LINE 27
+	TXNE T1,US.ACT		;MAKE SURE UDB WAS ACTIVE
+	TXNE T1,US.POS		;AND THAT IT WAS NOT POSITIONING
+	JRST [	CALL FNDCKU	;NOPE, COLLECT CKU NUMBERS
+		BUG.(CHK,DXBUA1,PHYP2,HARD,<PHYP2 - Done interrupt and unit was not active>,<<T1,CHAN>,<T2,CTRL>,<T3,UNIT>>,<
+
+Cause:	A done interrupt occurred on a DX20 but the UDB for the drive
+	marked in the KDB as active is not.
+
+ ---------------------------------
+	TXNE T1,US.ACT		;MAKE SURE UDB WAS ACTIVE
+	TXNE T1,US.POS		;AND THAT IT WAS NOT POSITIONING
+	JRST [	CALL FNDCKU	;NOPE, COLLECT CKU NUMBERS
+		BUG.(CHK,DXBUA1,PHYP2,HARD,<PHYP2 - Done interrupt and unit was not active>,<<T1,CHAN>,<T2,CTRL>,<T3,UNIT>>,<
+
+Cause:	A done interrupt occurred on a DX20 but the UDB for the drive marked in
+	the KDB as active is not.
+
+Action:	There probably is a hardware problem with the RH20, DX20B, or RP20
+	hardware and Field Service should be notified.  If an OVRDTA BUGCHK
+	preceeded this BUGCHK with the same channel and contoller number, then
+	the drive number called out in the OVRDTA is the one to suspect first.
+
+
+***** CHANGE #43; PAGE 28, LINE 32; PAGE 30, LINE 41
+Data:	CHAN - Channel number
+	CTRL - Controller number
+	UNIT - Unit number
+>,,<DB%NND>)			;[7.1210] 
+		RET]		;AND ERROR RETURN
+	CALL SETIRB		;SET UP THE CURRENT IORB
+ ---------------------------------
+Data:	CHAN - Channel number
+	CTRL - Controller number
+	UNIT - Unit number
+>,,<DB%NND>)			;[7.1210] 
+		RET]		;AND ERROR RETURN
+
+	CALL SETIRB		;SET UP THE CURRENT IORB
+
+***** CHANGE #44; PAGE 28, LINE 50; PAGE 31, LINE 19
+	LDB T1,IRYFCN		;NO, NORMAL FUNCTION FROM IORB THEN
+	SKIPGE T1,RP2FNC(T1)	;GET DISPATCH ADDRESS
+	TRNN T1,-1		;ALSO MAKE SURE HAVE AN ADDRESS
+INTBDF:	BUG.(HLT,DXBILF,PHYP2,SOFT,<PHYP2 - Illegal function at Done interrupt>,,<
+
+Cause:	The routine DX2INT in PHYP2 was called to handle a done interrupt
+	for a drive.  The IORB which finished I/O contained a function
+	code which was illegal.
+
+>)		;NO, LOSE
+	CALL (T1)		;CALL PROPER ROUTINE
+ ---------------------------------
+	LDB T1,IRYFCN		;NO, NORMAL FUNCTION FROM IORB THEN
+	SKIPGE T1,RP2FNC(T1)	;GET DISPATCH ADDRESS
+	TRNN T1,-1		;ALSO MAKE SURE HAVE AN ADDRESS
+INTBDF:	BUG.(HLT,DXBILF,PHYP2,SOFT,<PHYP2 - Illegal function at Done interrupt>,,<
+
+Cause:	The routine DX2INT in PHYP2 was called to handle a done interrupt for a
+	drive.  The IORB which finished I/O contained a function code which was
+	illegal.
+>)				;NO, LOSE
+	CALL (T1)		;CALL PROPER ROUTINE
+
+***** CHANGE #45; PAGE 30, LINE 25; PAGE 33, LINE 25
+;	P3/  0
+;	P4/  0  (THIS INDICATES NO IORB WAS IN ERROR)
+;	Q1/  LEFT HALF SET TO -1 IF SCHEDULING DESIRED BECAUSE OF A
+;	     COMPLETED SEEK OPERATION
+
+
+
+
+DX2ATN:	MOVEM Q1,K.SAVQ(P2)	;SAVE Q1 IN AN ACCESSIBLE LOCATION
+ ---------------------------------
+;	P3/  0
+;	P4/  0  (THIS INDICATES NO IORB WAS IN ERROR)
+;	Q1/  LEFT HALF SET TO -1 IF SCHEDULING DESIRED BECAUSE OF A
+;	     COMPLETED SEEK OPERATION
+
+DX2ATN:	MOVEM Q1,K.SAVQ(P2)	;SAVE Q1 IN AN ACCESSIBLE LOCATION
+
+***** CHANGE #46; PAGE 31, LINE 12; PAGE 34, LINE 12
+	MOVX T1,US.ACT		;VERIFY UDB IS REALLY ACTIVE
+	TDNN T1,UDBSTS(P3)	;WELL?
+	JRST [	CALL FNDCKU	;NO, COLLECT CKU NUMBERS
+		BUG.(CHK,DXBUNA,PHYP2,HARD,<PHYP2 - Attention interrupt and unit was not active>,<<T1,CHAN>,<T2,CTRL>,<T3,UNIT>>,<
+
+Cause:	An attention interrupt occurred for a DX20 drive but the unit
+	listed in the KDB as active is not.
+
+ ---------------------------------
+	MOVX T1,US.ACT		;VERIFY UDB IS REALLY ACTIVE
+	TDNN T1,UDBSTS(P3)	;WELL?
+	JRST [	CALL FNDCKU	;NO, COLLECT CKU NUMBERS
+		BUG.(CHK,DXBUNA,PHYP2,HARD,<PHYP2 - Attention interrupt and unit was not active>,<<T1,CHAN>,<T2,CTRL>,<T3,UNIT>>,<
+
+Cause:	An attention interrupt occurred for a DX20 drive but the unit listed in
+	the KDB as active is not.
+
+Action:	There probably is a hardware problem with the RH20, DX20B, or RP20
+	hardware and Field Service should be notified.  If an OVRDTA BUGCHK
+	preceeded this BUGCHK with the same channel and contoller number, then
+	the drive number called out in the OVRDTA is the one to suspect first.
+
+
+***** CHANGE #47; PAGE 32, LINE 4; PAGE 35, LINE 4
+				;SINCE DX2INT CODE WILL NOTICE ERROR
+
+;HERE ON AN ATTENTION INTERRUPT DURING ERROR RECOVERY:
+
+
+ATNERC:	SKIPL T1,RP2FNC(T1)	;GET DISPATCH ADDRESS READY
+ ---------------------------------
+				;SINCE DX2INT CODE WILL NOTICE ERROR
+
+;HERE ON AN ATTENTION INTERRUPT DURING ERROR RECOVERY:
+
+ATNERC:	SKIPL T1,RP2FNC(T1)	;GET DISPATCH ADDRESS READY
+
+***** CHANGE #48; PAGE 32, LINE 12; PAGE 35, LINE 11
+	TRNN T1,-1		;DATA OPERATION OR NO DISPATCH ADDRESS?
+	RET			;YES, IGNORE INTERRUPT
+	CALL SETIRB		;GET THE CURRENT IORB
+	JRST (T1)		;THEN GO TO ROUTINE
+
+
+
+;HERE ON AN ATTENTION CAUSED BY A POSITION DONE INTERRUPT:
+
+
+ ---------------------------------
+	TRNN T1,-1		;DATA OPERATION OR NO DISPATCH ADDRESS?
+	RET			;YES, IGNORE INTERRUPT
+	CALL SETIRB		;GET THE CURRENT IORB
+	JRST (T1)		;THEN GO TO ROUTINE
+
+;HERE ON AN ATTENTION CAUSED BY A POSITION DONE INTERRUPT:
+
+
+***** CHANGE #49; PAGE 32, LINE 26; PAGE 35, LINE 22
+	TXNE Q3,ES.DVE!ES.UNC!ES.UNE	;DEVICE END UP OR ERRORS?
+	JRST ATNSRC		;YES, SEARCH IS FINISHED
+	HRROS K.SAVQ(P2)	;SEARCH STILL GOING, REMEMBER TO SCHEDULE
+	RET			;DONE
+
+
+
+;HERE WHEN A POSITION REQUEST IS COMPLETED (SEARCH FOUND THE SPECIFIED
+;SECTOR AND WE HAVE TO START I/O QUICKLY).
+
+
+ ---------------------------------
+	TXNE Q3,ES.DVE!ES.UNC!ES.UNE	;DEVICE END UP OR ERRORS?
+	JRST ATNSRC		;YES, SEARCH IS FINISHED
+	HRROS K.SAVQ(P2)	;SEARCH STILL GOING, REMEMBER TO SCHEDULE
+	RET			;DONE
+
+;HERE WHEN A POSITION REQUEST IS COMPLETED (SEARCH FOUND THE SPECIFIED
+;SECTOR AND WE HAVE TO START I/O QUICKLY).
+
+
+***** CHANGE #50; PAGE 34, LINE 11; PAGE 37, LINE 11
+;  Q2/	DX20 NUMBER
+;  Q3/	ASYCHRONOUS STATUS FOR THIS DRIVE (FROM .DXASY REGISTER)
+;RETURNS:
+;  +1:	ALWAYS
+
+
+
+
+ASYNDO:	MOVE T2,UDBSTS(P3)	;GET STATUS
+ ---------------------------------
+;  Q2/	DX20 NUMBER
+;  Q3/	ASYCHRONOUS STATUS FOR THIS DRIVE (FROM .DXASY REGISTER)
+;RETURNS:
+;  +1:	ALWAYS
+
+ASYNDO:	MOVE T2,UDBSTS(P3)	;GET STATUS
+
+***** CHANGE #51; PAGE 34, LINE 26; PAGE 37, LINE 23
+	RET			;YES, IGNORE SINCE IT IS EXTRANEOUS
+	TXNN T2,US.POS		;DOING A SEEK FOR THIS DRIVE?
+	JRST [	CALL FNDCKU	;NO, COLLECT CKU NUMBERS
+		BUG.(CHK,DXBASD,PHYP2,HARD,<PHYP2 - Asynchronous status from non-positioning drive>,<<T1,CHAN>,<T2,CTRL>,<T3,UNIT>>,<
+
+Cause:	An asynchronous interrupt occurred from a DX20 drive that was not
+	in the process of doing a seek operation.
+
+ ---------------------------------
+	RET			;YES, IGNORE SINCE IT IS EXTRANEOUS
+	TXNN T2,US.POS		;DOING A SEEK FOR THIS DRIVE?
+	JRST [	CALL FNDCKU	;NO, COLLECT CKU NUMBERS
+		BUG.(CHK,DXBASD,PHYP2,HARD,<PHYP2 - Asynchronous status from non-positioning drive>,<<T1,CHAN>,<T2,CTRL>,<T3,UNIT>>,<
+
+Cause:	An asynchronous interrupt occurred from a DX20 drive that was not in
+	the process of doing a seek operation.
+
+Action:	There probably is a hardware problem with the RH20, DX20B, or RP20
+	hardware and Field Service should be notified.
+
+
+***** CHANGE #52; PAGE 34, LINE 34; PAGE 37, LINE 34
+Data:	CHAN - Channel number
+	CTRL - Controller number
+	UNIT - Unit number
+
+>)	;COMPLAIN
+		RET]		;AND RETURN
+ ---------------------------------
+Data:	CHAN - Channel number
+	CTRL - Controller number
+	UNIT - Unit number
+
+>)				;COMPLAIN
+		RET]		;AND RETURN
+
+***** CHANGE #53; PAGE 34, LINE 43; PAGE 37, LINE 43
+	TXNE Q3,ES.DVE		;DEVICE END NOT SET?
+	TXNE Q3,ES.UNC!ES.UNE	;OR ANY UNIT ERRORS?
+	JRST SRCBAD		;YES, THEN HAVE A FAILED SEEK
+				;NOPE, THEN IS A FINISHED SEEK
+
+
+;HERE WHEN A SEARCH HAS FINISHED SUCCESSFULLY:
+
+
+ ---------------------------------
+	TXNE Q3,ES.DVE		;DEVICE END NOT SET?
+	TXNE Q3,ES.UNC!ES.UNE	;OR ANY UNIT ERRORS?
+	JRST SRCBAD		;YES, THEN HAVE A FAILED SEEK
+				;NOPE, THEN IS A FINISHED SEEK
+
+;HERE WHEN A SEARCH HAS FINISHED SUCCESSFULLY:
+
+
+***** CHANGE #54; PAGE 35, LINE 8; PAGE 38, LINE 8
+;DO NOT ALLOW SEEK ERRORS TO BE RETURNED FOR INDIVIDUAL UNITS OF A CONTROLLER.
+;THEREFORE MAKE A SYSERR ENTRY, COUNT SEEK ERRORS, BUT MARK THE IORB AS
+;SUCCESSFUL.  THE FOLLOWING TRANSFER WILL THEN DO AN IMPLIED SEEK, WHICH
+;WILL CATCH THE ERROR IF IT WAS HARD.
+
+
+
+SRCBAD:	AOS UDBSPE(P3)		;CALL THIS A SOFT POSITIONING ERROR
+ ---------------------------------
+;DO NOT ALLOW SEEK ERRORS TO BE RETURNED FOR INDIVIDUAL UNITS OF A CONTROLLER.
+;THEREFORE MAKE A SYSERR ENTRY, COUNT SEEK ERRORS, BUT MARK THE IORB AS
+;SUCCESSFUL.  THE FOLLOWING TRANSFER WILL THEN DO AN IMPLIED SEEK, WHICH
+;WILL CATCH THE ERROR IF IT WAS HARD.
+
+SRCBAD:	AOS UDBSPE(P3)		;CALL THIS A SOFT POSITIONING ERROR
+
+***** CHANGE #55; PAGE 36, LINE 6; PAGE 39, LINE 6
+
+;ROUTINES TO HANDLE ON-LINE TRANSITIONS, EITHER FROM AN OLD EXISTENT DRIVE
+;OR FROM A TOTALLY UNKNOWN DRIVE.  IF CALLED FOR AN UNKNOWN DRIVE, WE
+;HAVE TO BUILD A UDB FOR THE UNIT.
+
+
+
+NEWONL:	TXNE Q3,ES.DVE		;DEVICE END UP?
+ ---------------------------------
+
+;ROUTINES TO HANDLE ON-LINE TRANSITIONS, EITHER FROM AN OLD EXISTENT DRIVE
+;OR FROM A TOTALLY UNKNOWN DRIVE.  IF CALLED FOR AN UNKNOWN DRIVE, WE
+;HAVE TO BUILD A UDB FOR THE UNIT.
+
+NEWONL:	TXNE Q3,ES.DVE		;DEVICE END UP?
+
+***** CHANGE #56; PAGE 37, LINE 13; PAGE 40, LINE 13
+;  P4/	IORB
+;RETURNS:
+;  +1:	ERRORS FOUND AND FLAGGED
+;  +2:	NO ERRORS FOUND OR OF NO IMPORTANCE
+
+
+
+HARCHK:	MOVX T1,IS.DVE!IS.DTE	;GET IORB ERROR BITS
+ ---------------------------------
+;  P4/	IORB
+;RETURNS:
+;  +1:	ERRORS FOUND AND FLAGGED
+;  +2:	NO ERRORS FOUND OR OF NO IMPORTANCE
+
+HARCHK:	MOVX T1,IS.DVE!IS.DTE	;GET IORB ERROR BITS
+
+***** CHANGE #57; PAGE 38, LINE 6; PAGE 41, LINE 6
+
+;DISPATCH TABLE FOR ERROR CLASS CODES.  CODE IS OBTAINED FROM THE
+;ERCOD FIELD OF THE ERROR REGISTER (.DXERR).  THIS FIELD IS VALID ONLY
+;IF THE ER.NEW FLAG IS SET IN THE ERROR REGISTER.
+
+
+
+ERCTAB:	IFIW ISUNKN		;(0) ILLEGAL OR UNKNOWN ERROR
+ ---------------------------------
+
+;DISPATCH TABLE FOR ERROR CLASS CODES.  CODE IS OBTAINED FROM THE
+;ERCOD FIELD OF THE ERROR REGISTER (.DXERR).  THIS FIELD IS VALID ONLY
+;IF THE ER.NEW FLAG IS SET IN THE ERROR REGISTER.
+
+ERCTAB:	IFIW ISUNKN		;(0) ILLEGAL OR UNKNOWN ERROR
+
+***** CHANGE #58; PAGE 38, LINE 21; PAGE 41, LINE 19
+	IFIW ISIGNR		;(7) RETRY LOG INFORMATION AVAILABLE
+	IFIW ISDEAD		;(10) FATAL ERRORS
+
+	ERCMAX==.-ERCTAB-1	;HIGHEST KNOWN ERROR CODE
+
+
+
+
+;HERE WHEN THE ERROR IS UNKNOWN:
+
+
+ISUNKN:	HRRZ T2,CDBADR(P1)	;GET CHANNEL
+	BUG.(CHK,DXBIEC,PHYP2,SOFT,<PHYP2 - Unknown error code from DX20>,<<T2,CHAN>,<Q2,DX20>,<T1,STATUS>>,<
+
+Cause:	A transfer operation on a RP20 drive had drive failed. This
+	indicates a drive or controller error but the error code provided
+	by the DX20 is not valid.
+
+ ---------------------------------
+	IFIW ISIGNR		;(7) RETRY LOG INFORMATION AVAILABLE
+	IFIW ISDEAD		;(10) FATAL ERRORS
+
+	ERCMAX==.-ERCTAB-1	;HIGHEST KNOWN ERROR CODE
+
+;HERE WHEN THE ERROR IS UNKNOWN:
+
+ISUNKN:	HRRZ T2,CDBADR(P1)	;GET CHANNEL
+	BUG.(CHK,DXBIEC,PHYP2,SOFT,<PHYP2 - Unknown error code from DX20>,<<T2,CHAN>,<Q2,DX20>,<T1,STATUS>>,<
+
+Cause:	A transfer operation on a RP20 drive had drive failed.  This indicates
+	a drive or controller error but the error code provided by the DX20 is
+	not valid.
+
+Action:	Field Service should check out the DX20 and RP20 hardware.
+
+
+***** CHANGE #59; PAGE 39, LINE 7; PAGE 42, LINE 7
+;HERE TO HANDLE UNUSUAL DEVICE STATUS (ERROR CLASS 1).  THIS IS THE
+;NORMAL ERROR CODE FOR TYPICAL DEVICE AND DATA ERRORS.  INFORMATION ON
+;THE PARTICULAR ERROR IS OBTAINED FROM THE ENDING STATUS REGISTER AND
+;THE SENSE BYTES.
+
+
+ISUNUS:	MOVX T2,.DXEND		;WANT TO READ ENDING STATUS
+ ---------------------------------
+;HERE TO HANDLE UNUSUAL DEVICE STATUS (ERROR CLASS 1).  THIS IS THE
+;NORMAL ERROR CODE FOR TYPICAL DEVICE AND DATA ERRORS.  INFORMATION ON
+;THE PARTICULAR ERROR IS OBTAINED FROM THE ENDING STATUS REGISTER AND
+;THE SENSE BYTES.
+
+ISUNUS:	MOVX T2,.DXEND		;WANT TO READ ENDING STATUS
+
+***** CHANGE #60; PAGE 40, LINE 4; PAGE 43, LINE 4
+	CALLRET ISDATC		;FLAG ALL OTHERS AS DATA CHECKS.
+
+;HERE IF THE DRIVE HAS GONE OFF-LINE:
+
+
+ISOFFL:	CALL REDALL		;READ ALL REGISTERS AND CLEAR THE ERROR
+ ---------------------------------
+	CALLRET ISDATC		;FLAG ALL OTHERS AS DATA CHECKS.
+
+;HERE IF THE DRIVE HAS GONE OFF-LINE:
+
+ISOFFL:	CALL REDALL		;READ ALL REGISTERS AND CLEAR THE ERROR
+
+***** CHANGE #61; PAGE 40, LINE 12; PAGE 43, LINE 11
+ISOFF2:	CALL PHYOFL		;MARK THE DRIVE OFF-LINE
+	JRST ISFAI2		;CALL IT A RECOVERABLE ERROR, SO ON THE
+				;NEXT RETRY THE UNIT WILL BE MARKED AS
+				;WAITING FOR OPERATOR INTERVENTION
+
+
+
+
+;HERE IF THE COMMAND WAS REJECTED, PROBABLY DUE TO A WRITE-LOCKED DRIVE.
+ ---------------------------------
+ISOFF2:	CALL PHYOFL		;MARK THE DRIVE OFF-LINE
+	JRST ISFAI2		;CALL IT A RECOVERABLE ERROR, SO ON THE
+				;NEXT RETRY THE UNIT WILL BE MARKED AS
+				;WAITING FOR OPERATOR INTERVENTION
+
+;HERE IF THE COMMAND WAS REJECTED, PROBABLY DUE TO A WRITE-LOCKED DRIVE.
+
+***** CHANGE #62; PAGE 40, LINE 24; PAGE 43, LINE 20
+;THE DRIVE WILL STAY THAT WAY UNTIL RANDOM ASYCHRONOUS STATUS APPEARS DUE
+;TO THE OPERATOR HITTING THE ATTN BUTTON OR POWERING UP THE DRIVE.  THIS
+;ROUNDABOUT PROCEDURE IS NECESSARY BECAUSE YOU CAN'T TELL IF AN RP20 IS
+;WRITE-LOCKED WITHOUT ACTUALLY TRYING TO WRITE ON IT!!!
+
+
+
+ISRJEC:	TXNN T2,S1.WLK		;IS DRIVE REALLY WRITE-LOCKED?
+ ---------------------------------
+;THE DRIVE WILL STAY THAT WAY UNTIL RANDOM ASYCHRONOUS STATUS APPEARS DUE
+;TO THE OPERATOR HITTING THE ATTN BUTTON OR POWERING UP THE DRIVE.  THIS
+;ROUNDABOUT PROCEDURE IS NECESSARY BECAUSE YOU CAN'T TELL IF AN RP20 IS
+;WRITE-LOCKED WITHOUT ACTUALLY TRYING TO WRITE ON IT!!!
+
+ISRJEC:	TXNN T2,S1.WLK		;IS DRIVE REALLY WRITE-LOCKED?
+
+***** CHANGE #63; PAGE 40, LINE 40; PAGE 43, LINE 34
+	CALL CLRACT		;MARK THE DRIVE IDLE
+	SETZM P3		;FORGET ABOUT THIS UNIT
+	SETOM P4		;REQUEST A SCHEDULER CYCLE
+	RET			;AND STOP STACKED COMMAND BY DOING ERROR RETURN
+
+
+
+
+;HERE ON A NORMAL DATA CHECK ERROR:
+
+
+ ---------------------------------
+	CALL CLRACT		;MARK THE DRIVE IDLE
+	SETZM P3		;FORGET ABOUT THIS UNIT
+	SETOM P4		;REQUEST A SCHEDULER CYCLE
+	RET			;AND STOP STACKED COMMAND BY DOING ERROR RETURN
+
+;HERE ON A NORMAL DATA CHECK ERROR:
+
+
+***** CHANGE #64; PAGE 41, LINE 5; PAGE 44, LINE 5
+
+;HERE IN CASES WHERE THE OPERATION FAILED DUE TO SOME DEVICE ERROR,
+;BUT THERE IS REASON TO THINK THAT RETRYING THE OPERATION MIGHT WIN.
+
+
+
+ISFAIL:	CALL REDALL		;READ IN REGISTERS AND CLEAR THE ERROR
+ ---------------------------------
+
+;HERE IN CASES WHERE THE OPERATION FAILED DUE TO SOME DEVICE ERROR,
+;BUT THERE IS REASON TO THINK THAT RETRYING THE OPERATION MIGHT WIN.
+
+ISFAIL:	CALL REDALL		;READ IN REGISTERS AND CLEAR THE ERROR
+
+***** CHANGE #65; PAGE 41, LINE 15; PAGE 44, LINE 13
+	IORM T1,UDBERR(P3)	;REMEMBER THAT THIS IS A DEVICE ERROR
+	MOVX T1,IS.ERR!IS.DVE	;GET IORB FLAGS
+	IORM T1,IRBSTS(P4)	;MARK THE ERROR IN THE IORB
+	RET			;DONE
+
+
+
+
+;HERE FOR RETRY REQUEST ERROR (ERROR CLASS 5).
+ ---------------------------------
+	IORM T1,UDBERR(P3)	;REMEMBER THAT THIS IS A DEVICE ERROR
+	MOVX T1,IS.ERR!IS.DVE	;GET IORB FLAGS
+	IORM T1,IRBSTS(P4)	;MARK THE ERROR IN THE IORB
+	RET			;DONE
+
+;HERE FOR RETRY REQUEST ERROR (ERROR CLASS 5).
+
+***** CHANGE #66; PAGE 41, LINE 38; PAGE 44, LINE 33
+	MOVE T1,K.DCNI(P2)	;GET CONI STATUS WORD
+	TXNE T1,CI.OVR		;IF DUE TO OVERRUN
+	 CALLRET ISFAI2		;THEN RETRY AS DEVICE ERROR
+	CALLRET ISDATC		;FLAG AS DATA ERROR
+
+
+
+
+
+;HERE ON ERROR CONDITIONS WHICH ARE NOT REALLY ERRORS, OR WHICH ARE
+;DETECTED ELSEWHERE (SUCH AS OVERRUNS).  JUST CLEAR THE ERROR REGISTER
+;AND SAY THE OPERATION SUCCEEDED.
+
+
+ ---------------------------------
+	MOVE T1,K.DCNI(P2)	;GET CONI STATUS WORD
+	TXNE T1,CI.OVR		;IF DUE TO OVERRUN
+	 CALLRET ISFAI2		;THEN RETRY AS DEVICE ERROR
+	CALLRET ISDATC		;FLAG AS DATA ERROR
+
+;HERE ON ERROR CONDITIONS WHICH ARE NOT REALLY ERRORS, OR WHICH ARE
+;DETECTED ELSEWHERE (SUCH AS OVERRUNS).  JUST CLEAR THE ERROR REGISTER
+;AND SAY THE OPERATION SUCCEEDED.
+
+
+***** CHANGE #67; PAGE 42, LINE 5; PAGE 45, LINE 5
+
+;HERE ON FATAL ERRORS WHICH INDICATE THAT THE MICROPROCESSOR IS
+;MALFUNCTIONING.  COMPLAIN AND MARK THE CONTROLLER AS HALTED.
+
+
+ISDEAD:	CALL REGALL		;READ THE MASSBUSS REGISTERS ONLY
+ ---------------------------------
+
+;HERE ON FATAL ERRORS WHICH INDICATE THAT THE MICROPROCESSOR IS
+;MALFUNCTIONING.  COMPLAIN AND MARK THE CONTROLLER AS HALTED.
+
+ISDEAD:	CALL REGALL		;READ THE MASSBUSS REGISTERS ONLY
+
+***** CHANGE #68; PAGE 42, LINE 15; PAGE 45, LINE 14
+	MOVX T1,KS.HLT		;GET HALT FLAG
+	IORM T1,KDBSTS(P2)	;REMEMBER THAT THE CONTROLLER IS DEAD
+	HRRZ T1,CDBADR(P1)	;GET CHANNEL NUMBER
+	BUG.(CHK,DXBDIE,PHYP2,HARD,<PHYP2 - DX20B microcode halted>,<<T1,CHAN>,<Q2,DX20>>,<
+
+Cause:	The microcode in a DX20B has halted. This indicates a hardware
+	problem with the DX20 microprocessor.
+
+Action:	Contact Field Service.
+
+Data:	CHAN - Channel number
+	DX20 - DX20 number
+>,,<DB%NND>)			;[7.1210] 
+	JRST ISHAR2		;KILL REQUEST
+
+
+
+
+
+;HERE ON DEVICE ERRORS WHICH WE CANNOT EXPECT TO RECOVER FROM.  FLAG
+;THE ERROR AS FATAL.
+
+
+ ---------------------------------
+	MOVX T1,KS.HLT		;GET HALT FLAG
+	IORM T1,KDBSTS(P2)	;REMEMBER THAT THE CONTROLLER IS DEAD
+	HRRZ T1,CDBADR(P1)	;GET CHANNEL NUMBER
+	BUG.(CHK,DXBDIE,PHYP2,HARD,<PHYP2 - DX20B microcode halted>,<<T1,CHAN>,<Q2,DX20>>,<
+
+Cause:	The microcode in a DX20B has halted.  This could be due to one or more
+	of the following:
+
+	o The DX20 has been powered down.  Reload the microcode with DX20LD.
+	o The DX20 microcode has detected a fatal error.
+	o The microcode could have been halted by a program such as DX20LD.
+	o The DX20 is seeing microbus parity errors while fetching an
+	  instruction from its memory.
+
+Action:	The DX20 may be having problems, look for other DXBxxx BUGCHKs.  If the
+	DX20 won't run or starts halting frequently, call Field Service.
+
+Data:	CHAN  - Channel number
+	DX20  - DX20 number	
+>,,<DB%NND>)			;[7.1210] 
+	JRST ISHAR2		;KILL REQUEST
+
+;HERE ON DEVICE ERRORS WHICH WE CANNOT EXPECT TO RECOVER FROM.  FLAG
+;THE ERROR AS FATAL.
+
+
+***** CHANGE #69; PAGE 43, LINE 14; PAGE 46, LINE 14
+;	IS NOT SET, THEN WE HAVE RECOVERED AND THE ERROR WAS SOFT.
+;RETURNS:
+;  +1:	ERROR RECOVERY STILL IN PROGRESS
+;  +2:	ERROR RECOVERY IS FINISHED (IS.ERR SET IF UNSUCCESSFUL)
+
+
+
+
+DX2ERR:	SAVEQ			;SAVE REGISTERS
+ ---------------------------------
+;	IS NOT SET, THEN WE HAVE RECOVERED AND THE ERROR WAS SOFT.
+;RETURNS:
+;  +1:	ERROR RECOVERY STILL IN PROGRESS
+;  +2:	ERROR RECOVERY IS FINISHED (IS.ERR SET IF UNSUCCESSFUL)
+
+DX2ERR:	SAVEQ			;SAVE REGISTERS
+
+***** CHANGE #70; PAGE 44, LINE 6; PAGE 47, LINE 6
+
+;HERE ON A DEVICE ERROR DURING A SEARCH OR SEEK OPERATION.  WE DO NOT
+;GENERATE SEEK ERRORS, SO THAT SUPPOSEDLY IT IS IMPOSSIBLE TO GET HERE.
+;THEREFORE, JUST GIVE A HARD ERROR WITHOUT RETRYING.
+
+
+POSERR:	MOVX T1,UE.POS!UE.DEV	;MARK A POSITIONING ERROR
+ ---------------------------------
+
+;HERE ON A DEVICE ERROR DURING A SEARCH OR SEEK OPERATION.  WE DO NOT
+;GENERATE SEEK ERRORS, SO THAT SUPPOSEDLY IT IS IMPOSSIBLE TO GET HERE.
+;THEREFORE, JUST GIVE A HARD ERROR WITHOUT RETRYING.
+
+POSERR:	MOVX T1,UE.POS!UE.DEV	;MARK A POSITIONING ERROR
+
+***** CHANGE #71; PAGE 44, LINE 14; PAGE 47, LINE 13
+	IORM T1,UDBERR(P3)	;IN THE UDB ERROR LOCATION
+	MOVX T1,IS.DVE		;MARK A DEVICE ERROR
+	IORM T1,IRBSTS(P4)	;IN THE IORB STATUS
+	JRST HRDERR		;AND CAUSE A HARD ERROR
+
+
+
+
+;HERE TO HANDLE DEVICE OR SIMPLE DATA ERRORS FROM A DATA TRANSFER OPERATION.
+ ---------------------------------
+	IORM T1,UDBERR(P3)	;IN THE UDB ERROR LOCATION
+	MOVX T1,IS.DVE		;MARK A DEVICE ERROR
+	IORM T1,IRBSTS(P4)	;IN THE IORB STATUS
+	JRST HRDERR		;AND CAUSE A HARD ERROR
+
+;HERE TO HANDLE DEVICE OR SIMPLE DATA ERRORS FROM A DATA TRANSFER OPERATION.
+
+***** CHANGE #72; PAGE 44, LINE 23; PAGE 47, LINE 19
+;FLAG THE ERROR AND INITIATE THE NEXT STEP IN ERROR RECOVERY.  THE ALGORITHM
+;IS SIMPLE, SINCE THERE ARE NO FANCY OFFSETS OR SUCH TO TRY.  JUST TRY THE
+;OPERATION OVER AGAIN MANY TIMES, WITH OCCASIONAL RECALIBRATIONS.
+
+
+DATERR:	MOVX T1,UE.DAT		;GET DATA ERROR FLAG
+ ---------------------------------
+;FLAG THE ERROR AND INITIATE THE NEXT STEP IN ERROR RECOVERY.  THE ALGORITHM
+;IS SIMPLE, SINCE THERE ARE NO FANCY OFFSETS OR SUCH TO TRY.  JUST TRY THE
+;OPERATION OVER AGAIN MANY TIMES, WITH OCCASIONAL RECALIBRATIONS.
+
+DATERR:	MOVX T1,UE.DAT		;GET DATA ERROR FLAG
+
+***** CHANGE #73; PAGE 45, LINE 11; PAGE 48, LINE 11
+;	  ITSELF, AND THEREFORE THE DATA IS ACTUALLY OK.
+;  20-21  MASK WHICH WHEN XORED WITH THE DATA ACTUALLY READ WILL
+;	  CORRECT THE DATA.
+;SENSE BYTES 18-19 ARE ALREADY IN AC Q3.
+
+
+
+ECCERR:	JUMPE Q3,ECCER2		;SKIP ON IF ERROR WAS IN ECC BYTE
+ ---------------------------------
+;	  ITSELF, AND THEREFORE THE DATA IS ACTUALLY OK.
+;  20-21  MASK WHICH WHEN XORED WITH THE DATA ACTUALLY READ WILL
+;	  CORRECT THE DATA.
+;SENSE BYTES 18-19 ARE ALREADY IN AC Q3.
+
+ECCERR:	JUMPE Q3,ECCER2		;SKIP ON IF ERROR WAS IN ECC BYTE
+
+***** CHANGE #74; PAGE 45, LINE 25; PAGE 48, LINE 23
+	MOVNI T2,-^D<36-16>(T2)	;COMPUTE SHIFT VALUE FOR MASK
+	LOAD P5,SBEMSK		;GET THE ECC MASK FROM BYTES 20 AND 21
+	SKIPN P5		;MASK SHOULD BE NONZERO
+	BUG.(CHK,DXBZEC,PHYP2,HARD,<PHYP2 - Zero ECC byte returned>,,<
+
+Cause:	An ECC correctable error occurred on a DX20 drive. The byte number
+	in error in the sector was zero. This indicates the error was in
+	the ECC byte itself and the data is actually correct.
+>,,<DB%NND>)			;[7.1210] 
+ ---------------------------------
+	MOVNI T2,-^D<36-16>(T2)	;COMPUTE SHIFT VALUE FOR MASK
+	LOAD P5,SBEMSK		;GET THE ECC MASK FROM BYTES 20 AND 21
+	SKIPN P5		;MASK SHOULD BE NONZERO
+	BUG.(CHK,DXBZEC,PHYP2,HARD,<PHYP2 - Zero ECC byte returned>,,<
+
+Cause:	An ECC correctable error occurred on a RP20 drive.  The byte number in
+	error in the sector was zero.  This indicates the error was in the ECC
+	byte itself and the data is actually correct.
+
+Action:	If this BUGCHK is seen often, Field Service should check the RP20
+	hardware for error recovery problems.
+>,,<DB%NND>)			;[7.1210] 
+
+***** CHANGE #75; PAGE 46, LINE 11; PAGE 49, LINE 11
+	PMOVEM T2,T1		;[7.1002] AND STORE BACK THE CORRECTED DATA
+ECCER2:	CALL ECCUCL		;UPDATE CCW LIST, RETURN WORDS TRANSFERED OK
+	 JRST ECCDON		;WAS IN LAST SECTOR, FINISH UP
+	BUG.(HLT,DXBMSR,PHYP2,SOFT,<PHYP2 - Multiple sectors indicated in ECC recovery>,,<
+
+Cause:	The routine ECCERR in PHYP2 was called to recover from an ECC error
+	on a unit.  After correcting the error, the routine ECCUCL in PHYSIO
+	was called to update the CCW list.  That routine skipped, indicating
+	that more sectors must be read to complete the transfer.  However,
+	the RP20 is formatted in pages and no transfer is ever longer than
+	a page, so the skip return should never occur.
+
+>)		;NEVER GET HERE SINCE ALWAYS READING ONE SECTOR
+
+
+ ---------------------------------
+	PMOVEM T2,T1		;[7.1002] AND STORE BACK THE CORRECTED DATA
+ECCER2:	CALL ECCUCL		;UPDATE CCW LIST, RETURN WORDS TRANSFERED OK
+	 JRST ECCDON		;WAS IN LAST SECTOR, FINISH UP
+	BUG.(HLT,DXBMSR,PHYP2,SOFT,<PHYP2 - Multiple sectors indicated in ECC recovery>,,<
+
+Cause:	The routine ECCERR in PHYP2 was called to recover from an ECC error on
+	a unit.  After correcting the error, the routine ECCUCL in PHYSIO was
+	called to update the CCW list.  That routine skipped, indicating that
+	more sectors must be read to complete the transfer.  However, the RP20
+	is formatted in pages and no transfer is ever longer than a page, so
+	the skip return should never occur.
+>)				;NEVER GET HERE SINCE ALWAYS READING ONE SECTOR
+
+
+***** CHANGE #76; PAGE 47, LINE 19; PAGE 50, LINE 19
+	MOVEI T1,UDBSPE(P3)	;YES, POINT TO SOFT POSITION COUNTER
+	AOS (T1)		;INCREMENT PROPER COUNTER
+	CALL RDRFIN		;READ FINAL REGISTERS NOW
+	RETSKP			;SKIP RETURN TO INDICATE RECOVERY FINISHED
+
+
+
+
+;HERE ON A HARD ERROR WHEN NO AMOUNT OF RETRIES SUCCEEDED, OR IF
+;ERROR RECOVERY WAS INHIBITED:
+
+
+ ---------------------------------
+	MOVEI T1,UDBSPE(P3)	;YES, POINT TO SOFT POSITION COUNTER
+	AOS (T1)		;INCREMENT PROPER COUNTER
+	CALL RDRFIN		;READ FINAL REGISTERS NOW
+	RETSKP			;SKIP RETURN TO INDICATE RECOVERY FINISHED
+
+;HERE ON A HARD ERROR WHEN NO AMOUNT OF RETRIES SUCCEEDED, OR IF
+;ERROR RECOVERY WAS INHIBITED:
+
+
+***** CHANGE #77; PAGE 48, LINE 4; PAGE 51, LINE 4
+	RETSKP			;SKIP RETURN TO INDICATE ALL DONE
+
+;HERE TO RECALIBRATE A DRIVE AFTER MANY UNSUCCESSFUL OPERATIONS:
+
+
+
+RECAL:	MOVEI T1,RCLNDX		;GET INDEX FOR RECALIBRATION
+ ---------------------------------
+	RETSKP			;SKIP RETURN TO INDICATE ALL DONE
+
+;HERE TO RECALIBRATE A DRIVE AFTER MANY UNSUCCESSFUL OPERATIONS:
+
+RECAL:	MOVEI T1,RCLNDX		;GET INDEX FOR RECALIBRATION
+
+***** CHANGE #78; PAGE 48, LINE 19; PAGE 51, LINE 17
+	 JRST HRDERR		;FAILED, CALL THE ERROR HARD
+	CALL DOPOS		;START THE OPERATION
+	 JFCL			;CHSTRT ALWAYS SKIPS
+	RET			;DONE
+
+
+
+;HERE ON THE ATTENTION INTERRUPT AFTER THE RECAL IS INITIATED.  SEE
+;IF THE OPERATION IS TOTALLY FINISHED.  IF NOT, WE HAVE TO WAIT FOR
+;THE ASYCHRONOUS STATUS TO APPEAR.
+
+
+
+ ---------------------------------
+	 JRST HRDERR		;FAILED, CALL THE ERROR HARD
+	CALL DOPOS		;START THE OPERATION
+	 JFCL			;CHSTRT ALWAYS SKIPS
+	RET			;DONE
+
+;HERE ON THE ATTENTION INTERRUPT AFTER THE RECAL IS INITIATED.  SEE
+;IF THE OPERATION IS TOTALLY FINISHED.  IF NOT, WE HAVE TO WAIT FOR
+;THE ASYCHRONOUS STATUS TO APPEAR.
+
+
+***** CHANGE #79; PAGE 49, LINE 6; PAGE 52, LINE 6
+
+;HERE WHEN DEVICE END IS UP, EITHER FROM THE INITIAL ATTENTION
+;INTERRUPT, OR ON THE ASYCHRONOUS STATUS INTERRUPT.  GO BACK
+;AND RETRY THE OPERATION WHICH FAILED.
+
+
+
+
+RCLFIN:	MOVX T1,US.POS		;SEE IF ORIGINAL OPERATION WAS A SEARCH
+ ---------------------------------
+
+;HERE WHEN DEVICE END IS UP, EITHER FROM THE INITIAL ATTENTION
+;INTERRUPT, OR ON THE ASYCHRONOUS STATUS INTERRUPT.  GO BACK
+;AND RETRY THE OPERATION WHICH FAILED.
+
+RCLFIN:	MOVX T1,US.POS		;SEE IF ORIGINAL OPERATION WAS A SEARCH
+
+***** CHANGE #80; PAGE 49, LINE 15; PAGE 52, LINE 12
+	TDNN T1,UDBSTS(P3)	;WAS IT?
+	JRST RETRY		;NO, THEN GO RESTART A TRANSFER OPERATION
+	JRST HRDERR		;YES, CALL IT A HARD ERROR THEN
+
+
+
+
+
+;HERE TO RETRY A TRANSFER OPERATION:
+
+
+ ---------------------------------
+	TDNN T1,UDBSTS(P3)	;WAS IT?
+	JRST RETRY		;NO, THEN GO RESTART A TRANSFER OPERATION
+	JRST HRDERR		;YES, CALL IT A HARD ERROR THEN
+
+;HERE TO RETRY A TRANSFER OPERATION:
+
+
+***** CHANGE #81; PAGE 50, LINE 3; PAGE 53, LINE 3
+	SETZM P4		;WANT TO DISMISS THIS INTERRUPT
+	RET			;DONE
+	SUBTTL Subroutines To Load Up The SYSERR Blocks
+
+
+
+;RDRINI - ROUTINE CALLED ON FIRST ERROR TO LOAD UP THE SYSERR BLOCK.
+ ---------------------------------
+	SETZM P4		;WANT TO DISMISS THIS INTERRUPT
+	RET			;DONE
+	SUBTTL Subroutines To Load Up The SYSERR Blocks
+
+;RDRINI - ROUTINE CALLED ON FIRST ERROR TO LOAD UP THE SYSERR BLOCK.
+
+***** CHANGE #82; PAGE 50, LINE 11; PAGE 53, LINE 9
+;THE MASSBUSS REGISTERS AND DX20 SENSE BYTES HAVE ALREADY BEEN SAVED
+;IN THE KDB.  THIS ROUTINE COPIES THEM INTO THE SYSERR BLOCK AS THE
+;INITIAL STATUS FOR THE ERROR.
+
+
+
+RDRINI:	JUMPE Q1,R		;CAN'T DO THIS IF NO ERROR BLOCK
+ ---------------------------------
+;THE MASSBUSS REGISTERS AND DX20 SENSE BYTES HAVE ALREADY BEEN SAVED
+;IN THE KDB.  THIS ROUTINE COPIES THEM INTO THE SYSERR BLOCK AS THE
+;INITIAL STATUS FOR THE ERROR.
+
+RDRINI:	JUMPE Q1,R		;CAN'T DO THIS IF NO ERROR BLOCK
+
+***** CHANGE #83; PAGE 50, LINE 32; PAGE 53, LINE 28
+	MOVE T2,T1		;COPY ADDRESS
+	HRLI T1,K.DREG(P2)	;INSERT SOURCE ADDRESS FOR BLT
+	BLT T1,REGNUM+<<SNSNUM+3>/4>-1(T2)	;MOVE TO SYSERR BLOCK
+	RET			;DONE
+
+
+
+
+;TABLE OF DATA TO COPY AT INITIAL ERROR RECOVERY TIME:
+
+
+ ---------------------------------
+	MOVE T2,T1		;COPY ADDRESS
+	HRLI T1,K.DREG(P2)	;INSERT SOURCE ADDRESS FOR BLT
+	BLT T1,REGNUM+<<SNSNUM+3>/4>-1(T2)	;MOVE TO SYSERR BLOCK
+	RET			;DONE
+
+;TABLE OF DATA TO COPY AT INITIAL ERROR RECOVERY TIME:
+
+
+***** CHANGE #84; PAGE 51, LINE 7; PAGE 54, LINE 7
+;RDRFIN - ROUTINE TO STORE REGISTERS AT END OF RETRY.  CALLED AT THE END
+;OF ERROR RECOVERY TO COPY THE FINAL MASSBUSS REGISTER VALUES INTO THE
+;SYSERR BLOCK ALONGSIDE THE INITIAL REGISTERS.  THE FINAL REGISTERS HAVE
+;ALREADY BEEN READ INTO THE KDB.
+
+
+
+
+RDRFIN:	HRRZ Q1,UDBERP(P3)	;GET ERROR BLOCK AGAIN IF ANY
+ ---------------------------------
+;RDRFIN - ROUTINE TO STORE REGISTERS AT END OF RETRY.  CALLED AT THE END
+;OF ERROR RECOVERY TO COPY THE FINAL MASSBUSS REGISTER VALUES INTO THE
+;SYSERR BLOCK ALONGSIDE THE INITIAL REGISTERS.  THE FINAL REGISTERS HAVE
+;ALREADY BEEN READ INTO THE KDB.
+
+RDRFIN:	HRRZ Q1,UDBERP(P3)	;GET ERROR BLOCK AGAIN IF ANY
+
+***** CHANGE #85; PAGE 52, LINE 23; PAGE 55, LINE 23
+;  DRIVE NUMBER LESS THAN 20:  DRIVE IS SINGLE PORTED.
+;  OTHERWISE:  IF TWO DIFFERENT COMBINATIONS OF RH20 AND DX20 EXIST
+;   SUCH THAT THE SAME DRIVE NUMBER EXISTS ON EACH COMBINATION, THEN
+;   THOSE TWO COMBINATIONS ARE THE TWO PORTS FOR THAT DRIVE.
+
+
+
+CKDUAL:	CAIGE T1,DUADRV		;IS DRIVE NUMBER IN RANGE OF DUAL PORT DRIVES?
+ ---------------------------------
+;  DRIVE NUMBER LESS THAN 20:  DRIVE IS SINGLE PORTED.
+;  OTHERWISE:  IF TWO DIFFERENT COMBINATIONS OF RH20 AND DX20 EXIST
+;   SUCH THAT THE SAME DRIVE NUMBER EXISTS ON EACH COMBINATION, THEN
+;   THOSE TWO COMBINATIONS ARE THE TWO PORTS FOR THAT DRIVE.
+
+CKDUAL:	CAIGE T1,DUADRV		;IS DRIVE NUMBER IN RANGE OF DUAL PORT DRIVES?
+
+***** CHANGE #86; PAGE 54, LINE 13; PAGE 57, LINE 13
+;RETURNS:
+;  +1:	NO UDB FOUND WITH THIS DRIVE NUMBER
+;  +2:	P3/  ADDRESS OF THE FOUND UDB
+;DESTROYS T1.
+
+
+
+
+DRVSRC:	MOVSI T1,-NUMDRV	;BUILD AOBJN POINTER
+ ---------------------------------
+;RETURNS:
+;  +1:	NO UDB FOUND WITH THIS DRIVE NUMBER
+;  +2:	P3/  ADDRESS OF THE FOUND UDB
+;DESTROYS T1.
+
+DRVSRC:	MOVSI T1,-NUMDRV	;BUILD AOBJN POINTER
+
+***** CHANGE #87; PAGE 54, LINE 25; PAGE 57, LINE 22
+	CAME T4,UDBSLV(P3)	;YES, IS IT THIS UNIT?
+	AOBJN T1,.-2		;NO, LOOK MORE
+	JUMPL T1,RSKP		;GOOD RETURN IF FOUND IT
+	RET			;ERROR RETURN
+
+
+
+
+;HERE TO SEE IF A PARTICULAR UNIT EXISTS ON THIS DX20.
+ ---------------------------------
+	CAME T4,UDBSLV(P3)	;YES, IS IT THIS UNIT?
+	AOBJN T1,.-2		;NO, LOOK MORE
+	JUMPL T1,RSKP		;GOOD RETURN IF FOUND IT
+	RET			;ERROR RETURN
+
+;HERE TO SEE IF A PARTICULAR UNIT EXISTS ON THIS DX20.
+
+***** CHANGE #88; PAGE 54, LINE 36; PAGE 57, LINE 30
+;RETURNS:
+;  +1:	T1/ 0	UNIT IS ILLEGAL
+;	T1/ -1	NONEXISTENT UNIT
+;  +2:	UNIT EXISTS
+
+
+DX2EXT:	SKIPL T4,Q2		;MOVE TO RIGHT AC AND CHECK LEGALITY
+ ---------------------------------
+;RETURNS:
+;  +1:	T1/ 0	UNIT IS ILLEGAL
+;	T1/ -1	NONEXISTENT UNIT
+;  +2:	UNIT EXISTS
+
+DX2EXT:	SKIPL T4,Q2		;MOVE TO RIGHT AC AND CHECK LEGALITY
+
+***** CHANGE #89; PAGE 55, LINE 11; PAGE 58, LINE 11
+;RETURNS:
+;  +1:	ALWAYS, WITH:
+;	  T2/	CYLINDER NUMBER (UDBPS1)
+;	  T3/	SECTOR WITHIN CYLINDER (UDBPS2)
+
+
+
+DX2CNV:	CALL PHYBLK		;GET THE DISK ADDRESS INTO T2
+ ---------------------------------
+;RETURNS:
+;  +1:	ALWAYS, WITH:
+;	  T2/	CYLINDER NUMBER (UDBPS1)
+;	  T3/	SECTOR WITHIN CYLINDER (UDBPS2)
+
+DX2CNV:	CALL PHYBLK		;GET THE DISK ADDRESS INTO T2
+
+***** CHANGE #90; PAGE 55, LINE 20; PAGE 58, LINE 18
+	TXZ T2,IRBPAD		;REMOVE PHYSICAL ADDRESSING BIT
+	MOVE T3,UDBSIZ(P3)	;THEN GET POINTER TO DISK SIZE TABLE
+	IDIV T2,SECCYL(T3)	;DIVIDE BY SECTORS/CYLINDER TO GET RESULTS
+	RET			;DONE
+
+
+
+
+
+;GTHWSC - ROUTINE TO CONVERT A SECTOR WITHIN A CYLINDER INTO THE FORMAT
+ ---------------------------------
+	TXZ T2,IRBPAD		;REMOVE PHYSICAL ADDRESSING BIT
+	MOVE T3,UDBSIZ(P3)	;THEN GET POINTER TO DISK SIZE TABLE
+	IDIV T2,SECCYL(T3)	;DIVIDE BY SECTORS/CYLINDER TO GET RESULTS
+	RET			;DONE
+
+;GTHWSC - ROUTINE TO CONVERT A SECTOR WITHIN A CYLINDER INTO THE FORMAT
+
+***** CHANGE #91; PAGE 55, LINE 33; PAGE 58, LINE 27
+;  T3/	SECTOR IN CYLINDER
+;RETURNS:
+;  +1:	ALWAYS,	T1/  .DXREC DATA READY FOR USE
+;PRESERVES T2.
+
+
+
+GTHWSC:	MOVE T4,UDBSIZ(P3)	;GET ADDRESS OF SIZE TABLE
+ ---------------------------------
+;  T3/	SECTOR IN CYLINDER
+;RETURNS:
+;  +1:	ALWAYS,	T1/  .DXREC DATA READY FOR USE
+;PRESERVES T2.
+
+GTHWSC:	MOVE T4,UDBSIZ(P3)	;GET ADDRESS OF SIZE TABLE
+
+***** CHANGE #92; PAGE 56, LINE 12; PAGE 59, LINE 12
+;  P3/	UDB (ANY ONE WILL DO)
+;RETURNS:
+;  +1:	ALWAYS
+;TRASHES Q2
+
+
+
+DX2CCK:	MOVE Q2,K.DXAD(P2)	;GET CONTROLLER NUMBER
+ ---------------------------------
+;  P3/	UDB (ANY ONE WILL DO)
+;RETURNS:
+;  +1:	ALWAYS
+;TRASHES Q2
+
+DX2CCK:	MOVE Q2,K.DXAD(P2)	;GET CONTROLLER NUMBER
+
+***** CHANGE #93; PAGE 56, LINE 26; PAGE 59, LINE 24
+	CALL DXSTRT		;RESTART THE MICROCODE
+	MOVX T1,KS.HLT		;GET HALT FLAG
+	ANDCAM T1,KDBSTS(P2)	;SAY MICROCODE IS RUNNING AGAIN
+	RET			;AND RETURN
+
+
+
+
+;DX2HNG - ROUTINE CALLED ON A HUNG IORB.  FORCE THE DX20 TO RESTART.
+ ---------------------------------
+	CALL DXSTRT		;RESTART THE MICROCODE
+	MOVX T1,KS.HLT		;GET HALT FLAG
+	ANDCAM T1,KDBSTS(P2)	;SAY MICROCODE IS RUNNING AGAIN
+	RET			;AND RETURN
+
+;DX2HNG - ROUTINE CALLED ON A HUNG IORB.  FORCE THE DX20 TO RESTART.
+
+***** CHANGE #94; PAGE 56, LINE 37; PAGE 59, LINE 32
+;  P1/  CDB
+;  P2/  KDB
+;RETURNS:
+;  +1:	ALWAYS
+
+
+
+DX2HNG:	MOVE T1,KDBSTS(P2)	;GET STATUS
+ ---------------------------------
+;  P1/  CDB
+;  P2/  KDB
+;RETURNS:
+;  +1:	ALWAYS
+
+DX2HNG:	MOVE T1,KDBSTS(P2)	;GET STATUS
+
+***** CHANGE #95; PAGE 56, LINE 47; PAGE 59, LINE 40
+	RET			;YES, LEAVE IT ALONE THEN
+	MOVE Q2,K.DXAD(P2)	;SET UP DX20 NUMBER
+	MOVEI T1,STADDR		;GET START ADDRESS
+	CALL DXSTRT		;CLEAR THE DX20 AND RESTART IT
+	RET			;DONE
+
+ ---------------------------------
+	RET			;YES, LEAVE IT ALONE THEN
+	MOVE Q2,K.DXAD(P2)	;SET UP DX20 NUMBER
+	MOVEI T1,STADDR		;GET START ADDRESS
+	CALL DXSTRT		;CLEAR THE DX20 AND RESTART IT
+	RET			;DONE
+
+***** CHANGE #96; PAGE 58, LINE 10; PAGE 61, LINE 10
+;  P4/	IORB
+;RETURNS:
+;  +1:	POSITIONING NOT NEEDED, SO APPEND REQUEST TO TWQ
+;  +2:	POSITIONING NECESSARY, APPEND TO PWQ
+
+
+
+
+DX2PCK:	MOVX T1,US.POS		;GET POSITIONING FLAG READY
+ ---------------------------------
+;  P4/	IORB
+;RETURNS:
+;  +1:	POSITIONING NOT NEEDED, SO APPEND REQUEST TO TWQ
+;  +2:	POSITIONING NECESSARY, APPEND TO PWQ
+
+DX2PCK:	MOVX T1,US.POS		;GET POSITIONING FLAG READY
+
+***** CHANGE #97; PAGE 59, LINE 15; PAGE 62, LINE 15
+;  Q2/	DX20 UNIT NUMBER
+;RETURNS:
+;  +1:	MICROCODE IS BAD
+;  +2:	MICROCODE IS VALID
+
+
+
+CHKMIC:	MOVX T2,.DXMAI!MR.RES	;SET UP BIT AND REGISTER NUMBER
+ ---------------------------------
+;  Q2/	DX20 UNIT NUMBER
+;RETURNS:
+;  +1:	MICROCODE IS BAD
+;  +2:	MICROCODE IS VALID
+
+CHKMIC:	MOVX T2,.DXMAI!MR.RES	;SET UP BIT AND REGISTER NUMBER
+
+***** CHANGE #98; PAGE 60, LINE 13; PAGE 63, LINE 13
+;  +1:	MICROCODE HALTED, BUGINF PRINTED IF FIRST TIME NOTICED
+;  +2:	MICROCODE IS RUNNING FINE
+;
+;PRESERVES T4.
+
+
+
+HLTCHK:	RDRG .DXSTS		;READ THE STATUS REGISTER
+ ---------------------------------
+;  +1:	MICROCODE HALTED, BUGINF PRINTED IF FIRST TIME NOTICED
+;  +2:	MICROCODE IS RUNNING FINE
+;
+;PRESERVES T4.
+
+HLTCHK:	RDRG .DXSTS		;READ THE STATUS REGISTER
+
+***** CHANGE #99; PAGE 60, LINE 23; PAGE 63, LINE 21
+	TXNN T1,ST.RUN		;IS IT RUNNING?
+	JRST DX2STP		;NO IT QUIT ON US
+	ANDCAM T2,KDBSTS(P2)	;NOT HALTED, REMEMBER THAT
+	RETSKP			;GOOD RETURN
+
+
+DX2STP:	TDNE T2,KDBSTS(P2)	;ALREADY KNEW THAT IT WAS STOPPED?
+ ---------------------------------
+	TXNN T1,ST.RUN		;IS IT RUNNING?
+	JRST DX2STP		;NO IT QUIT ON US
+	ANDCAM T2,KDBSTS(P2)	;NOT HALTED, REMEMBER THAT
+	RETSKP			;GOOD RETURN
+
+DX2STP:	TDNE T2,KDBSTS(P2)	;ALREADY KNEW THAT IT WAS STOPPED?
+
+***** CHANGE #100; PAGE 60, LINE 38; PAGE 63, LINE 35
+	HRR T4,T1		;SAVE IT
+	CALL FNDCKU		;SET UP CHANNEL AND CONTROLLER NUMBERS
+	POP P,T3		;RESTORE STATUS REGISTER
+	BUG.(INF,DXBHLT,PHYP2,HARD,<PHYP2 - DX20B controller halted>,<<T1,CHAN>,<T2,DX20>,<T3,REG1>,<T4,2AND26>>,<
+
+Cause:	A DX20B controller has halted.
+
+Data:	CHAN - Channel number
+	REG1 - Status register
+	2AND26 - Right half of error register,,RH of error reason register
+ ---------------------------------
+	HRR T4,T1		;SAVE IT
+	CALL FNDCKU		;SET UP CHANNEL AND CONTROLLER NUMBERS
+	POP P,T3		;RESTORE STATUS REGISTER
+	BUG.(INF,DXBHLT,PHYP2,HARD,<PHYP2 - DX20B controller halted>,<<T1,CHAN>,<T2,DX20>,<T3,REG1>,<T4,2AND26>>,<
+
+Cause:	The DX20B controller's microcode is no longer running.  This could be
+	due to one or more of the following:
+
+	o The DX20B has been powered down.  Reload the microcode with DX20LD.
+	o The DX20B microcode has detected a fatal error.
+	o The microcode could have been halted by a program such as DX20LD.
+	o The DX20B is seeing microbus parity errors while fetching an
+	  instruction from its memory.
+
+Action:	The DX20B may be having problems, look for other DXBxxx BUGCHKs.  If
+	the DX20B won't run or starts halting frequently, Field Service should
+	check out the DX20B.
+
+Data:	CHAN - Channel number
+	REG1 - DX20B status register
+	2AND26 - Right half of error register,,RH of error reason register
+
+***** CHANGE #101; PAGE 61, LINE 10; PAGE 64, LINE 10
+;  P2/	KDB
+;  Q2/  UNIT NUMBER OF DX20
+;RETURNS:
+;  +1:	ALWAYS
+
+
+
+DXSTRT:	PUSH P,T1		;SAVE THE PC
+ ---------------------------------
+;  P2/	KDB
+;  Q2/  UNIT NUMBER OF DX20
+;RETURNS:
+;  +1:	ALWAYS
+
+DXSTRT:	PUSH P,T1		;SAVE THE PC
+
+***** CHANGE #102; PAGE 61, LINE 23; PAGE 64, LINE 21
+	TXO T2,.DXDG1!DG.PCS!DG.PCI!DG.UIR	;SET REGISTER AND FLAGS
+	CALL WTREG3		;LOAD STARTING ADDRESS INTO DX20
+	MOVX T2,.DXMAI!MR.ST	;GET START FLAG
+	CALLRET WTREG3		;START IT UP
+
+
+
+
+
+;ROUTINE TO READ THE VERSION OF THE DX20 MICROCODE.  THIS IS STORED IN
+ ---------------------------------
+	TXO T2,.DXDG1!DG.PCS!DG.PCI!DG.UIR	;SET REGISTER AND FLAGS
+	CALL WTREG3		;LOAD STARTING ADDRESS INTO DX20
+	MOVX T2,.DXMAI!MR.ST	;GET START FLAG
+	CALLRET WTREG3		;START IT UP
+
+;ROUTINE TO READ THE VERSION OF THE DX20 MICROCODE.  THIS IS STORED IN
+
+***** CHANGE #103; PAGE 61, LINE 37; PAGE 64, LINE 31
+;  Q2/	DX20 UNIT NUMBER
+;RETURNS:
+;  +1:	ALWAYS
+;	  T1/	CONTENTS OF LOCATION 0 OF THE CRAM
+
+
+
+GETVER:	MOVX T2,.DXMAI!MR.RES	;GET MAINTAINANCE REGISTER AND FLAG
+ ---------------------------------
+;  Q2/	DX20 UNIT NUMBER
+;RETURNS:
+;  +1:	ALWAYS
+;	  T1/	CONTENTS OF LOCATION 0 OF THE CRAM
+
+GETVER:	MOVX T2,.DXMAI!MR.RES	;GET MAINTAINANCE REGISTER AND FLAG
+
+***** CHANGE #104; PAGE 62, LINE 11; PAGE 65, LINE 11
+;  Q2/	DX20 NUMBER
+;RETURNS:
+;  +1:	FAILED TO READ THEM, BUGCHK GIVEN
+;  +2:	SUCCESSFUL RETURN, BYTES IN T1
+
+
+
+
+GTSNS:	CALL HLTCHK		;SEE IF MICROCODE IS STILL ALIVE
+ ---------------------------------
+;  Q2/	DX20 NUMBER
+;RETURNS:
+;  +1:	FAILED TO READ THEM, BUGCHK GIVEN
+;  +2:	SUCCESSFUL RETURN, BYTES IN T1
+
+GTSNS:	CALL HLTCHK		;SEE IF MICROCODE IS STILL ALIVE
+
+***** CHANGE #105; PAGE 62, LINE 27; PAGE 65, LINE 24
+	MOVX T2,.DXCTL+<FLD(XF.SEN,DXFNC)>	;GET FUNCTION FOR SENSE
+	CALL WTREG3		;TELL DX20 TO GET THE BYTES NOW
+	CALL ATTNWT		;WAIT FOR COMPLETION
+	 JRST [	BUG.(CHK,DXBFGS,PHYP2,HARD,<PHYP2 - Failed to get sense bytes>,,<
+
+Cause:	A timeout occurred while waiting for an attention interrupt from
+	a DX20B after requesting the sense bytes.
+>,,<DB%NND>)			;[7.1210] 
+ ---------------------------------
+	MOVX T2,.DXCTL+<FLD(XF.SEN,DXFNC)>	;GET FUNCTION FOR SENSE
+	CALL WTREG3		;TELL DX20 TO GET THE BYTES NOW
+	CALL ATTNWT		;WAIT FOR COMPLETION
+	 JRST [	BUG.(CHK,DXBFGS,PHYP2,HARD,<PHYP2 - Failed to get sense bytes>,,<
+
+Cause:	A timeout occurred while waiting for an attention interrupt from a
+	DX20B after requesting the sense bytes.
+
+Action:	Field Service should be called to check out the DX20 and RP20 hardware.
+>,,<DB%NND>)			;[7.1210] 
+
+***** CHANGE #106; PAGE 63, LINE 13; PAGE 66, LINE 13
+;  Q2/  DX20 UNIT NUMBER
+;RETURNS:
+;  +1:	FAILED, BUGCHK DONE
+;  +2:	SUCCESSFUL, 4 SENSE BYTES IN T1
+
+
+
+GETEXS:	MOVX T2,.DXEND!ES.SUI	;GET BIT TO REQUEST NEW SENSE BYTES
+ ---------------------------------
+;  Q2/  DX20 UNIT NUMBER
+;RETURNS:
+;  +1:	FAILED, BUGCHK DONE
+;  +2:	SUCCESSFUL, 4 SENSE BYTES IN T1
+
+GETEXS:	MOVX T2,.DXEND!ES.SUI	;GET BIT TO REQUEST NEW SENSE BYTES
+
+***** CHANGE #107; PAGE 63, LINE 27; PAGE 66, LINE 25
+	TXNN T1,ES.SUI		;DX20 DONE READING SENSE BYTES YET?
+	JRST RDSNS2		;YES, GO GET THEM
+	SOJG T4,RDSNS1		;NO, KEEP LOOPING
+	BUG.(CHK,DXBFUS,PHYP2,HARD,<PHYP2 - Failed to update sense bytes>,,<
+
+Cause:	A timeout occurred while waiting for a DX20 to update the sense
+	bytes provided to it by TOPS-20.
+>,,<DB%NND>)			;[7.1210] 
+ ---------------------------------
+	TXNN T1,ES.SUI		;DX20 DONE READING SENSE BYTES YET?
+	JRST RDSNS2		;YES, GO GET THEM
+	SOJG T4,RDSNS1		;NO, KEEP LOOPING
+	BUG.(CHK,DXBFUS,PHYP2,HARD,<PHYP2 - Failed to update sense bytes>,,<
+
+Cause:	A timeout occurred while waiting for a DX20 to update the sense bytes
+	provided to it by TOPS-20.
+
+Action:	Field Service should be called to check out the DX20 and RP20 hardware.
+>,,<DB%NND>)			;[7.1210] 
+
+***** CHANGE #108; PAGE 64, LINE 9; PAGE 67, LINE 9
+;  P1/	CDB
+;  P2/	KDB
+;  P3/	UDB
+;RETURNS:  +1:	ALWAYS, WITH REGISTERS READ AND ERROR CLEARED
+
+
+
+
+REDALL:	CALL REGALL		;FIRST READ THE DRIVE REGISTERS
+ ---------------------------------
+;  P1/	CDB
+;  P2/	KDB
+;  P3/	UDB
+;RETURNS:  +1:	ALWAYS, WITH REGISTERS READ AND ERROR CLEARED
+
+REDALL:	CALL REGALL		;FIRST READ THE DRIVE REGISTERS
+
+***** CHANGE #109; PAGE 65, LINE 10; PAGE 68, LINE 10
+;  P1/	CDB
+;  P2/	KDB
+;  P3/	UDB
+;RETURNS:  +1:	ALWAYS
+
+
+
+REGALL:	SAVEQ			;SAVE REGISTERS
+ ---------------------------------
+;  P1/	CDB
+;  P2/	KDB
+;  P3/	UDB
+;RETURNS:  +1:	ALWAYS
+
+REGALL:	SAVEQ			;SAVE REGISTERS
+
+***** CHANGE #110; PAGE 66, LINE 9; PAGE 69, LINE 9
+;  P1/	CDB
+;  P2/	KDB
+;  P3/	UDB
+;RETURNS:  +1:	ALWAYS
+
+
+
+
+EXSALL:	SAVEQ			;SAVE REGISTERS
+ ---------------------------------
+;  P1/	CDB
+;  P2/	KDB
+;  P3/	UDB
+;RETURNS:  +1:	ALWAYS
+
+EXSALL:	SAVEQ			;SAVE REGISTERS
+
+***** CHANGE #111; PAGE 67, LINE 12; PAGE 70, LINE 12
+;  Q2/	DX20 NUMBER
+;RETURNS:
+;  +1:	TIMED OUT WAITING FOR ATTENTION
+;  +2:	ATTENTION SEEN AND CLEARED
+
+
+
+ATTNWT:	PUSH P,P4		;SAVE A REGISTER
+ ---------------------------------
+;  Q2/	DX20 NUMBER
+;RETURNS:
+;  +1:	TIMED OUT WAITING FOR ATTENTION
+;  +2:	ATTENTION SEEN AND CLEARED
+
+ATTNWT:	PUSH P,P4		;SAVE A REGISTER
+

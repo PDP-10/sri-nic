@@ -1,0 +1,464 @@
+Entry;
+begin  "-- INTERLISP file handler --"
+
+require "genhdr.sai" source!file;
+require "lstdef.sai" source!file;
+require "ebgsrc.sai" source!file;
+require "inmac.sai"  source!file;
+require "outmac.sai" source!file;
+
+
+! **********************************************************************
+! INTERLISP listing handler.
+! **********************************************************************;
+
+
+
+
+
+!	External variables;
+
+
+External real 	      mag,	! User specified magnification;
+		 wdfactor;	! Factor to be used in converting returned
+					character widths;
+
+External Integer   OutPtr, 	! Pointer to output buffer area;
+		     curx, 	! current Imprint-10 x position;
+		     cury, 	! current Imprint-10 y position;
+		     curf; 	! current font number;
+
+External integer   firstp,	! First page of specified range;
+		    lastp, 	! Last page of specified range;
+		 outpages,      ! Number of pages printed;
+		  spacing;	! interline spacing;
+
+External integer   InChan;	! Input channel number;
+
+External boolean headerflag;	! True if headers desired;
+
+External string     name,	! file name;
+		username,	! user name;
+	        Lstfont;	! Font for listing;
+
+External real Listfontmag;	! Font magnification for listing;
+
+External integer   pageht,	! Page height (pixels);
+		   pagewd,	! Page width (pixels);
+		    tmarg,	! Top margin (pixels);
+		    lmarg,	! Left margin (pixels);
+		      lpi;      ! Lines per inch;
+
+External integer InFlSize; 	! Input file size;
+
+External safa integer array glyph[0:MAXF,0:MAXCH,0:3];
+				! Glyph information table, with the
+				  following format:
+						
+				   glyph[f,c,0] = pointer to glyst array,
+				   glyph[f,c,1] = advancewidth in pixels,
+				   glyph[f,c,2] = advancewidth in input
+						  file units,
+				   glyph[f,c,3] = space taken up in glyph
+						  table by this font,
+				
+				  all for character #c in font #f;
+
+External Record!Class  FI(	! Font information record;
+	    string	fname;	! Font's file name;
+	    boolean  openable;	! Indicates font could be opened;
+	    integer firstchar,	! Code of first char in font;
+		     lastchar,	! Code of last  char in font;
+			xline,	! Suggested interline spacing;
+			spwid,	! Suggested interword spacing;
+	      	     dirpoint,	! Pointer to start of directory;
+		        check,	! Checksum, for comparison with Raster file 
+								    Checksum;
+		          jfn;	! JFN for this font file;
+	   real	          mag	! magnification;
+			      );
+
+External record!pointer (FI) safa array fntinf[0:MAXF]; 
+				! one pointer per font;
+
+!	External procedures;
+
+
+External simp procedure 	     ResetOut; ! unmap the pages of the 
+						 output file buffer;
+
+External simp procedure   ClrGly;     ! Clear glyst, glyph, and pointers;
+
+External simp procedure 
+		   OGlyMsk(integer curpagnum); ! Transfer glyph masks from
+						 font files to output buffer;
+
+External simp procedure       Error(string s); ! Error handling;
+External simp procedure              InitPage; ! Resets glyph table, etc.;
+External simp procedure		  
+	SetPos(boolean exmove, eymove; integer emovexamount,
+						emoveyamount,newx, newy); 
+					       ! Sets new x and y 
+						 coordinates, allows
+						 exact movements or
+						 movements to exact
+						 locations;
+
+External simp procedure 	     TableSet; ! Sets up font tables;
+External simp procedure		     Convfctr; ! Sets up wdfactor;
+
+External simp integer procedure 
+	    BytesIn(integer InChan, bytesize); ! Returns # of bytes in file;
+
+External simp integer procedure
+		       FindChar(integer char); ! Sets a character in the 
+						 output file;
+
+
+! 	DoLISPfile;
+
+
+!	D O   I N T E R L I S P   L I S T I N G
+!
+! **********************************************************************
+! Does INTERLISP files.
+! **********************************************************************;
+internal procedure DoLISPfile;
+	begin "-- do LISP listing --"
+
+	boolean  eof,		! indicates end of file has been reached;
+	         EscapeFlag;	! indicates lisp escape char seen;
+
+	string datestr;	        ! time and date stamp for header;
+
+	integer  page,v,x,y,i,j,k,l,lasty,
+                 headwd,	! width of header line;
+		 Incnt,		! Input Byte counter;
+		 spcount,	! number of spaces on this line;
+		 pgpntr,	! pointer to start of this page;
+		 pglength,	! pageheight - topmargin;
+		 lnlength,	! pagewidth - (rightmargin + leftmargin);
+		 space,		! size of space;
+		 tabsp,		! size of inter-tab-stop space;
+	         baselineskip;	! interline spacing;
+
+	integer array brkbyte[0:1023],	! points to location on which to 
+					  break pages (note 1024 page maximum);
+		      brkfont[0:1023],  ! font for start of page;
+		      brkxpos[0:1023],	! x position after page break;
+		      brkypos[0:1023];	! y position after page break;
+
+
+!	integer array linebuff; ! Buffers one line for justification;
+
+
+define spos(newx,newy) = {setpos(false,false,0,0,newx,newy)};	
+		    ! Note that setpos adds lmarg and tmarg onto newx and newy;
+
+    simple procedure Setf(integer fnt);	! sets current font number to fnt;
+    begin
+        curf_fnt;
+	space_FI:mag[fntinf[fnt]]*FI:spwid[fntinf[fnt]]; 
+	baselineskip_FI:mag[fntinf[fnt]]*FI:xline[fntinf[fnt]];
+	if fnt=1 and lpi  0 and (240/lpi > .66*baselineskip) then 
+						baselineskip_240/lpi;
+    end;
+
+
+    simple procedure setstr(string s);
+	    begin  integer q;
+	    while (s neq "") do 
+		case (q_lop(s)) of begin 
+		        ['40] begin x_x+space; end;
+			else begin spos(x,y); setglyph(q); 
+			           x_x+glyph[curf,q,2] end end;
+	    end;
+
+
+    simple procedure SetHeader(integer p);	! Adds headers to each page;
+    begin
+        integer b;
+	Setf(9);	! current font is header font;
+	Setfont(curf);	! tell it to the Imagen;
+	b_1.2*baselineskip;
+        x_abslftmarg+10-lmarg;
+	y_50-tmarg;
+	spos(x,y);
+	setrule(headwd,2,0);
+	setrule(2,b,0);
+	spos(x,y+b);
+	setrule(headwd,2,0);
+	spos(x+headwd,y);
+	setrule(2,b,0);
+	
+	y_y+baselineskip;
+	x_x+7;
+	spos(x,y);
+	setstr(name);
+	x_x+30;
+	spos(x,y);
+	setstr(datestr);
+	x_x+30;
+	spos(x,y);
+	setstr(username);
+	x_abslftmarg+headwd-lmarg-200;
+	setstr("Page ");
+	setstr(cvs(p));
+
+    end;
+
+     simple procedure notestr(string s);
+     begin integer q;
+	    while (s neq "") do 
+		case (q_lop(s)) of begin 
+		        ['40] begin end;
+			else begin  FindChar(q); end end;
+    end;
+
+    simple procedure SetHdrGlyphs(integer p);	! sets up chars for header;
+    begin
+
+	Setf(9);	! header font here;
+	notestr("Page ");
+	notestr(username);
+	notestr(cvs(p));
+	notestr(datestr);
+	notestr(name);
+    end;
+
+
+	! Start the main program here;
+
+	Initin;		! Initializes input file page tables;
+
+	datestr_odtim(-1,0);	! time stamp for header;
+	headwd_absrightmarg-(abslftmarg+20);	! Width of header line;
+
+	Listfontmag_mag;  ! We want user-specified magnification;
+	wdfactor_1.0; Convfctr;
+	fntinf[1]_New!Record(FI); ! We will be using font #1 as default font;
+	FI:fname[fntinf[1]]_Lstfont; FI:mag[fntinf[1]]_Listfontmag;
+	fntinf[2]_New!Record(FI); ! We will be using font #2 as UserFont;
+	FI:fname[fntinf[2]]_UserFont; FI:mag[fntinf[2]]_UserMag;
+	fntinf[3]_New!Record(FI); ! We will be using font #3 as CommentFont;
+	FI:fname[fntinf[3]]_CommentFont; FI:mag[fntinf[3]]_Commentmag;
+	fntinf[4]_New!Record(FI); ! We will be using font #4 as LambdaFont;
+	FI:fname[fntinf[4]]_LambdaFont; FI:mag[fntinf[4]]_LambdaMag;
+	fntinf[5]_New!Record(FI); ! We will be using font #5 as System font;
+	FI:fname[fntinf[5]]_SystemFont; FI:mag[fntinf[5]]_SystemMag;
+	fntinf[6]_New!Record(FI); ! We will be using font #6 as Clisp font;
+	FI:fname[fntinf[6]]_ClispFont; FI:mag[fntinf[6]]_ClispMag;
+	fntinf[7]_New!Record(FI); ! We will be using font #7 as Change font;
+	FI:fname[fntinf[7]]_ChangeFont; FI:mag[fntinf[7]]_ChangeMag;
+	fntinf[8]_New!Record(FI); ! We will be using font #8 as PrettyCom font;
+	FI:fname[fntinf[8]]_PrettyComFont; FI:mag[fntinf[8]]_PrettyComMag;
+	fntinf[9]_New!Record(FI); ! We will be using font #9 as header font;
+	FI:fname[fntinf[9]]_hdrfont; FI:mag[fntinf[9]]_1.0;
+
+	TableSet; x_y_0; InitPage; 
+
+	curf_9;
+	FindChar("e");
+
+	curf_8;
+	FindChar("e");
+
+	curf_7;
+	FindChar("e");
+
+	curf_6;
+	FindChar("e");
+
+	curf_5;
+	FindChar("e");
+
+	curf_4;
+	FindChar("e");
+
+	curf_3;
+	FindChar("e");
+
+	curf_2;
+	FindChar("e");
+
+	curf_1;
+	FindChar("e"); ! Must do this to load the font;
+	Setf(1);	! set current font to default font;
+
+	x_y_spcount_0; pglength_(pageht-tmarg); lnlength_(pagewd-lmarg);
+	tabsp_TABSTP*space; ! set up tab stops;
+	arrclr(brkxpos,0); arrclr(brkypos,0); arrclr(brkfont,0);
+	brkfont[1]_1;   ! font for first page is default font;
+
+	! Start first scan here;
+
+	GoToByte(0); brkbyte[1]_-1; i_2;
+
+	InFlsize_BytesIn(InChan,InBpB);	! must do this as wordsin is
+					  incorrect for TOPS20 text files;
+	
+	printi1(nl,"In DoLISPfile, font ",FI:fname[fntinf[1]],", magnification ",
+		FI:mag[fntinf[1]],", input file size ",InFlsize*InBpW," bytes");
+	EscapeFlag_FALSE;
+	for Incnt_0 step 1 until (InFlsize - 1) do
+		begin "-- first scan --"
+		case v_InFileByte of begin "-- case statement --"
+
+		[BS] x_x-space;
+
+		[CR] begin "-- carriage return --"
+	     	     x_0; 
+		     if LookNextByte  LF then y_lasty
+	     	     end   "-- carriage return --";
+
+		[FF] begin "-- new page --";
+		     brkxpos[i]_x_0; brkypos[i]_y_lasty_0; 
+		     brkbyte[i]_Incnt; brkfont[i]_curf;
+		     i_i + 1; print("[",i - 2,"]") 
+		     end   "-- new page --";
+
+		[LF] begin "-- line feed --"
+		     while x > lnlength do
+			    begin "-- new line --"
+			    x_x - lnlength; printi7(nl,"New line");
+			    y_y + (baselineskip*spacing)
+			    end   "-- new line --";
+		     lasty_y_y+(baselineskip*spacing)
+		     end   "-- line feed --";
+
+		[SP] x_x + space;
+
+       	       [TAB] x_x + tabsp - (x mod tabsp);
+
+   	        else if v = 6 and not EscapeFlag then
+		        begin "-- Set Font --"
+			v_InFileByte;
+			If v>0 and v<9 then Setf(v)
+			    else Error("Change to illegal font");
+			Incnt_Incnt+1
+			end "-- Set Font --"
+		     else begin "-- character --"
+		     if glyph[curf,v,0] < 0 then FindChar(v);
+		     while x > 0 and x + glyph[curf,v,2] > lnlength do
+			    begin "-- new line --"
+			    x_0 max(x - lnlength); printi7(nl,"New line");
+			    y_y + (baselineskip*spacing)
+			    end   "-- new line --";
+
+		     while y > pglength do
+			    begin "-- new page --"
+			    brkbyte[i]_Incnt-1; 
+			    brkfont[i]_curf;
+			    print("[",i - 2,"']"); 
+			    y_y - pglength; lasty_y;
+		     	    brkxpos[i]_x; brkypos[i]_y;
+			    i_i + 1 	
+			    end   "-- new page --";
+		     
+		      x_x+glyph[curf,v,2]
+		      end   "-- character --"
+		end                "-- case statement --";
+		if v = '45 then EscapeFlag_TRUE else EscapeFlag_FALSE;
+			comment Lisp escape character;
+		end   "-- first scan --";
+
+	ClrGly;    ! reset everything for real pass;
+	brkbyte[i]_Incnt - 1; print("[",i - 1,"]");
+
+	! Now onto the main business;
+	
+	for j_((i-1) min lastp) step -1 until (1 max firstp) do
+		begin "-- second and third scan --"
+		boolean word;	! Indicates a continuous stream of
+						characters is being output;
+
+		Setf(brkfont[j]);
+		print("[",j); InitPage; GotoByte(brkbyte[j] + 1);
+		EscapeFlag_FALSE;
+	        for k_(brkbyte[j] + 1) step 1 until brkbyte[j+1] do
+			begin "-- second scan --"
+			case v_InFileByte of begin "-- case statement --"
+			[BS] [CR]  [FF] 
+			[LF] [SP] [TAB] nothing;
+
+   	        	      else if v=6 and not EscapeFlag then
+			              begin
+				      Setf(InFileByte); k_k+1
+				      end
+				    else FindChar(v)
+			end "-- case statement --";
+
+			if v= '45 then EscapeFlag_TRUE else EscapeFlag_FALSE
+			end   "-- second scan --";
+
+		if headerflag then SetHdrGlyphs(j);
+
+		OGlyMsk(i);	! Output glyph masks;
+		print(".");  StartPage;		! Output page mark;
+		if headerflag then SetHeader(j);
+		Setf(brkfont[j]);
+		Setfont(curf);	! Set current font;
+		outpages_outpages+1;
+		GotoByte(brkbyte[j] + 1); x_brkxpos[j]; y_lasty_brkypos[j];
+		spos(x,y);
+		EscapeFlag_FALSE;
+		for k_(brkbyte[j] + 1) step 1 until brkbyte[j+1] do
+			begin "-- third pass --"
+			case v_InFileByte of begin "-- case statement --"
+			[BS] begin "-- backspace --"
+			     x_x-space; word_FALSE
+			     end   "-- backspace --";
+
+			[CR] begin "-- carriage return --"
+		     	     x_0; 
+			     if LookNextByte  LF then y_lasty;
+			     word_FALSE
+		     	     end   "-- carriage return --";
+
+			[FF] nothing;
+
+			[LF] begin "-- line feed --"
+		     	     while x > lnlength do
+			    	begin "-- new line --"
+			    	x_x - lnlength; printi7(nl,"New line");
+			    	y_y + (baselineskip*spacing)
+			    	end   "-- new line --";
+		     	     lasty_y_y+(baselineskip*spacing);
+			     word_FALSE
+		     	     end   "-- line feed --";
+
+			[SP] begin "-- space --"
+			     x_x + space; word_FALSE
+			     end   "-- space --";
+
+       	       	       [TAB] begin "-- character --"
+		             x_x + tabsp - (x mod tabsp);
+			     word_FALSE
+			     end   "-- character --";
+
+   	        	else if v=6 and not EscapeFlag then
+			       begin
+			       Setf(InFileByte); k_k+1;
+			       Setfont(curf)
+			       end
+			     else begin "-- character --"
+		     	     while x > 0 and x + glyph[curf,v,2] > lnlength do
+			    	begin "-- new line --"
+			    	x_x - lnlength; printi7(nl,"New line");
+			    	y_y + (baselineskip*spacing)
+			    	end   "-- new line --";
+
+			     SetPos(FALSE,FALSE,0,0,x,y);
+			     SetGlyph(v); x_x+glyph[curf,v,2];
+			     word_TRUE
+		      	     end   "-- character --"
+			end                        "-- case statement --";
+			if v='45 then EscapeFlag_TRUE else EscapeFlag_FALSE;
+			end   "-- third pass --";
+			EndPage; 
+			print(".]")
+		end   "-- second and third scan --"
+
+	end   "-- do LISP listing --";
+end   "-- INTERLISP file handler --";
+

@@ -1,0 +1,1796 @@
+	TITLE DMASER DECnet SMTP server
+
+;  This version of DMASER comes from Ken Rossman's version of 2:00am
+; Sunday, 24 July 1983.  The only major changes made were to simplify
+; it for a more general distribution outside of the CMU/CU/TARTAN
+; community.
+;
+;  It must be noted that DECnet mailing support should not be considered
+; finished or even fully operative.  There are a number of unresolved
+; issues which can only be resolved by enhanced cooperation from the
+; TOPS-20 monitor.  In particular, work needs to be done in the area of
+; DECnet node name validation.
+;
+; Mark Crispin, August 3, 1983
+
+; DMASER is a DECnet SMTP mail server which is adapted from Mark Crispin's
+; MAISER code.  MAISER, while designed to be as network independent as
+; possible, can't quite get the job done on it's own when it comes to DECnet.
+; The main reason is that MAISER tries to do buffered I/O throughout, which can
+; cause I/O synchronization problems between itself and MMAILR when going
+; through DECnet.  For this reason (and others), I have chosen to convert
+; the MAISER code into a DECnet only SMTP server.
+;
+; Aside from the code which originally came from MAISER, much of this code
+; comes from an earlier DECnet adaptation of MAISER (DCNSMT) by Dave King,
+; with additional modifications by Hedrick, JSOL, Zubkoff, and Nedved.
+; Many thanks to the abovenamed for the original guidance.
+;
+; Ken Rossman, CUCCA, 10:00pm  Saturday, 14 May 1983
+
+	SEARCH MACSYM,MONSYM,JOBDAT ; system definitions
+	.TEXT "/NOINITIAL"	; suppress loading of JOBDAT
+	.TEXT "DMASER/SAVE"	; save as DMASER.EXE
+	.REQUIRE HSTNAM		; host name routines
+	.REQUIRE SYS:MACREL	; MACSYM support routines
+	EXTERN $GTPRO,$GTNAM,$GTLCL,$GTHNS,$GTHSN
+
+;  MAISER is the server to receive electronic mail from other systems via
+; a network.  It implements the server half of SMTP (Simple Mail Transfer
+; Protocol), the DoD standard electronic mail interchange protocol defined
+; by Jon Postel in RFC 821, available online in the Internet as:
+;	[SRI-NIC.ARPA]<NETINFO>RFC821.TXT
+;
+;  While nominally MAISER will be used layered on top of the DoD transport
+; protocols (TCP/IP) in the Internet environment, it has been designed so
+; that this is not necessary.  In this case, it runs on top of the DECnet
+; transport system.
+;
+;  MAISER runs on TOPS-20 release 5 and later monitors.  MAISER will not run
+; on Tenex; the "Twenex" operating system is a figment of the imagination of
+; certain individuals.  There ain't no such thing as a free lunch.
+
+	SUBTTL Symbol Definitions
+
+; Version components
+
+IFNDEF MLSWHO,<MLSWHO==0>	; who last edited DMASER (0=developers)
+IFNDEF MLSVER,<MLSVER==5>	; DMASER's release version (matches monitor's)
+IFNDEF MLSMIN,<MLSMIN==3>	; DMASER's minor version
+IFNDEF MLSEDT,<MLSEDT==4>	; DMASER's edit version
+
+; Assembly options
+
+; This fields have required minimum sizes established by RFC 822.  Someday
+; these ought to be made to be dynamically assigned out of free storage.
+
+IFNDEF ADLLEN,<ADLLEN==^D256>	; length of an a-d-l (256 required minimum)
+IFNDEF USRNML,<USRNML==^D64>	; length of a user name (64 required minimum)
+IFNDEF HSTNML,<HSTNML==^D64>	; length of a host name (64 required minimum)
+IFNDEF BUFLEN,<BUFLEN==^D512>	; length of command line (512 required minimum)
+IFNDEF EBUFLN,<EBUFLN==^D200>	; length of error buffer
+IFNDEF TIMOUT,<TIMOUT==^D300>	; inactivity timeout, in seconds
+IFNDEF TIMCLK,<TIMCLK==^D10>	; inactivity clock freq, in seconds
+
+IFNDEF DATORG,<DATORG==10000>	; data on page 10
+IFNDEF PAGORG,<PAGORG==100000>	; paged data on page 100
+IFNDEF CODORG,<CODORG==400000>	; code on page 400
+IFNDEF ALCORG,<ALCORG==500000>	; relay table on page 500
+IFNDEF TIMOCT,<TIMOCT==^D60>	; number of 5-second ticks of inactivity
+				;  allowed before autologout
+TIMCHN==1			; timer interrupt channel
+
+; AC definitions
+FL==:0				; flags
+A=:1				; JSYS, temporary AC's
+B=:2
+C=:3
+D=:4
+E=:5				; non-JSYS temporary AC's
+F=:6
+G=:7
+H=:10
+PC=:14				; subroutine dispatch
+P=:17				; stack pointer
+
+; Flags
+
+	MSKSTR F%HLO,FL,1B0	; HELO command seen
+	MSKSTR F%FRM,FL,1B1	; have a FROM specification
+	MSKSTR F%TO,FL,1B2	; have a TO specification
+	MSKSTR F%EOL,FL,1B3	; EOL seen
+	MSKSTR F%ELP,FL,1B4	; buffer began with EOL
+	MSKSTR F%EXP,FL,1B5	; EXPN vs. VRFY command
+	MSKSTR F%DOP,FL,3B7	; delivery option code (see DOPTAB)
+	MSKSTR F%NOK,FL,1B8	; PARMBX allows null path (for MAIL FROM:)
+	MSKSTR F%MOK,FL,1B9	; PARMBX allows null domain (for RCPT TO:)
+	MSKSTR F%VLH,FL,1B10	; given host name validated
+	MSKSTR F%REE,FL,1B11	; reenter
+	MSKSTR F%PRO,FL,3B13	; transport protocol:
+	 P%UNK==0		; unknown
+	 P%NCP==1		; NCP
+	 P%TCP==2		; TCP
+	 P%XXX==3		; reserved
+
+	SUBTTL Macro Definitions
+
+; %VER macro.  This macro builds a standard DEC version word.
+DEFINE %VER(VER<0>,EDIT<0>,MINOR<0>,CUST<0>) <
+	EXP BYTE (3) CUST (9) VER (6) MINOR (18) EDIT
+>
+
+DEFINE TMSG ($MSG)<
+	MOVEI B,[ASCIZ \$MSG\]
+	CALL NETMSG>
+
+DEFINE LOG (STRING)<
+	MOVEI B,[ASCIZ \STRING\]
+	CALL LOGMSG>
+
+DEFINE JERR(STRING)<
+	ERJMP [	HRROI D,[ASCIZ/STRING/]
+		JRST JFATAL]>
+
+; Fatal assembly error macro
+DEFINE .FATAL (MESSAGE) <
+ PASS2
+ PRINTX ?'MESSAGE
+ END
+>;DEFINE .FATAL
+
+	SUBTTL Impure storage
+
+	LOC 20			; start data area here
+
+FATACS:	BLOCK 20		; save of fatal ACs
+IF1,<IFN <.-.JBUUO>,<.FATAL .JBUUO in wrong location>>
+.JBUUO:	BLOCK 1			; LUUO saved here
+.JB41:	JSR UUOPC		; instruction executed on LUUO
+
+PDLLEN==.JBSYM-.
+PDL:	BLOCK PDLLEN		; Here's our stack
+.JBSYM:	BLOCK 1			; symbol table pointer
+
+	.PSECT DATA,DATORG	; enter data area
+
+PC1:	BLOCK 1			; Storage for interrupt PC's
+PC2:	BLOCK 1
+PC3:	BLOCK 1
+DEBUGF:	BLOCK 1			; Debug flag
+FILBUF:	BLOCK 30		; file buffer
+
+INICBG==.			; first location cleared at once-only init
+BUFFER:	BLOCK <BUFLEN/5>+1	; general purpose buffer
+ERBUF:	BLOCK <EBUFLN/5>+1	; error buffer
+
+MBXFRK:	BLOCK 1			; mailbox fork
+MBXWIN:	BLOCK 1			; current window pointer into mailbox
+LCLHNM:	BLOCK <HSTNML/5>+1	; local host name
+
+LASTPT:	BLOCK 1
+LASTCT:	BLOCK 1
+PENUPT:	BLOCK 1
+PENUCT:	BLOCK 1
+FRNHST:	BLOCK <HSTNML/5>+1	; foreign host name from DECnet
+FRNHNM:	BLOCK <HSTNML/5>+1	; foreign host name from HELO negotiation
+RETPAT:	BLOCK <BUFLEN/5>+1	; return path
+MYPID:	BLOCK 1			; my IPCF PID
+IPCBLK:	BLOCK .IPCFP+1		; block for IPCF transactions
+
+RSTCBG==.			; first location cleared at RSET time
+MLQJFN:	BLOCK 1			; queued mail file JFN
+RCVPTR: BLOCK 1			;Pointer into receiver-list log buffer
+MBXBEG==.			; first mailbox location
+ATDOML:	BLOCK <ADLLEN/5>+1	; at domain list specification
+MAILBX:	BLOCK <USRNML/5>+1	; mailbox specification
+DOMAIN:	BLOCK <HSTNML/5>+1	; domain specification
+FSTDOM:	BLOCK <HSTNML/5>+1	;First domain in parsing
+MBXEND==.-1			; last path location
+RSTCEN==.-1			; last location cleared at RSET time
+INICEN==.-1			; last location cleared at once-only init
+
+TIMCNT:	BLOCK 1			;Counter for TIMINT
+LOGJFN:	BLOCK 1			;JFN of log file
+LOGBUF: BLOCK 40		;Log buffer
+LOGPTR: BLOCK 1			;Pointer into log buffer
+NETJFN: BLOCK 1			;JFN of network link
+NETBUF: BLOCK 40		;Link buffer
+NETPTR: BLOCK 1			;Pointer into link buffer
+MAIDIR: BLOCK 1			;Number of MAILQ: directory
+
+	SUBTTL LUUO handler
+
+UUOPC:	BLOCK 1			; PC of LUUO
+	MOVEM 17,FATACS+17	; save AC's in FATACS for debugging
+	MOVEI 17,FATACS		; save from 0 => FATACS
+	BLT 17,FATACS+16	; ...to 16 => FATACS+16
+	MOVE 17,FATACS+17	; restore AC17
+	MOVE A,[POINT 7,NETBUF]	;Reset pointer
+	MOVEM A,NETPTR
+	TMSG <421-Illegal instruction >
+	HRROI A,ERBUF		;[5]
+	MOVE B,.JBUUO
+	MOVEI C,^D8		; in octal
+	NOUT%
+	 NOP
+	SETZ C,			;[5]
+	IDPB C,A		;[5]
+	MOVEI B,ERBUF
+	CALL NETMSG
+	TMSG < at >
+	HRRZ B,UUOPC		; output PC which lost
+	CALL OCTOUT
+	JRST IMPERR		; indicate impossible error and die
+
+	.ENDPS
+
+; Pages for PMAP%'ing into mailbox utility
+	.PSECT DATPAG,PAGORG	; data pages
+
+MBXPAG:	BLOCK 2000		; for mailing list forwarding pointers
+WINPAG:	BLOCK 2000		; for mailing list forwarding strings
+
+	.ENDPS
+
+	SUBTTL Start of program
+
+	.PSECT CODE,CODORG	; pure code
+
+; Entry vector
+EVEC:	JRST START		; START address
+	JRST START		; Reenter address
+	%VER(MLSVER,MLSEDT,MLSMIN,MLSWHO) ; Std version number
+EVECL==.-EVEC
+
+START:	SETZ FL,		; clear flags
+	RESET%			; flush all I/O
+	MOVE P,[IOWD PDLLEN,PDL] ; init stack context
+	SETZM INICBG		; clear once-only area
+	MOVE A,[INICBG,,INICBG+1]
+	BLT A,INICEN
+	MOVEI A,.NDGLN		;Get local host name
+	MOVE B,[POINT 7,LCLHNM]
+	MOVEM B,1(P)
+	MOVEI B,1(P)
+	NODE%
+	 JERR <Can't get local node name>
+	MOVX A,.FHSLF
+	MOVX B,<XWD LEVTAB,CHNTAB> ;set table addresses
+	SIR%
+	MOVX B,1B<TIMCHN>	;timer interrupts
+	AIC%
+	EIR%			;enable interrupt system
+	SETOM LOGJFN		;Open log file
+	CALL OPNLOG
+	CALL DTSTMP
+	MOVE A,LOGPTR
+	MOVEI B,[ASCIZ/DMASER version /]
+	CALL MOVSTR
+	MOVEI B,MLSEDT		; Get the edit number
+	MOVEI C,^D8
+	NOUT%
+	 NOP
+	MOVEI B,[ASCIZ/ running on node /]
+	CALL MOVSTR
+	MOVEI B,LCLHNM
+	CALL MOVSTR
+	MOVEM A,LOGPTR
+	CALL LGCRLF
+	CALL CLSLOG
+	MOVX A,RC%EMO		; Get number of mail directory
+	HRROI B,[ASCIZ/MAILQ:/]
+	RCDIR
+	TXNE A,RC%NOM!RC%AMB
+	SETZ C,
+	HRRZM C,MAIDIR
+STARTL:	MOVE P,[IOWD PDLLEN,PDL] ; Some aborts come here
+	CALL OPNLSN		; Open connection and set up interrupt
+	WAIT			; For connect initiate
+
+
+; Come here on connect initiate interrupt.
+CONECT:	MOVE P,[IOWD PDLLEN,PDL] ;Reset stack
+	CALL OPNLOG		;Open log file
+	CALL DTSTMP
+	LOG <----Connect from >
+	CALL T4NHST
+	CALL LGCRLF
+	MOVE A,NETJFN		;Accept connection
+	MOVEI B,.MOCC
+	SETZB C,D
+	MTOPR%
+	 JERR <Couldn't accept net connection>
+	CALL STIMER		;Start timing now
+	CALL WRTBAN		;Write banner announcing service
+
+	SUBTTL Command loop
+
+GETCMD:	DO.
+	  MOVNI A,TIMOCT	; reset timeout count
+	  MOVEM A,TIMOUT
+	  SETZM BUFFER		; make sure command delimiter byte clear
+	  MOVE A,NETJFN		; Get our net JFN back
+	  HRROI B,BUFFER	; pointer to command buffer
+	  MOVEI C,BUFLEN-1	; up to this many characters
+	  MOVX D,.CHCRT		; terminate on carriage return
+	  SIN%			; read a command
+	   JERR <Can't read from net connection> ; CU1
+	  IFE. C		; if count unsatisfied, must have seen CR
+	    LDB D,B		; get last byte
+	    CAIN D,.CHCRT	; was it a CR?
+	    IFSKP.
+	      TMSG <500 Line too long>
+	      JRST NXTCMD
+	    ENDIF.
+	  ENDIF.
+	  SETZ D,		; Get a null
+	  DPB D,B		; Drop it in over CR to terminate
+	  BIN%			; get expected LF
+	  CAIN B,.CHLFD		; was it a line feed?
+	  IFSKP.
+	    TMSG <500 Line does not end with CRLF>
+	    JRST NXTCMD
+	  ENDIF.
+	  LDB C,[POINT 7,BUFFER,34] ; make sure space or NUL
+	  CAIE C,.CHSPC
+	   JUMPN C,SYNERR
+	  MOVE A,BUFFER		; get command from buffer
+	  ANDCM A,[BYTE (7) 040,040,040,040,177] ; upper caseify
+	  MOVSI B,-CMDTBL	; length of command table
+	  DO.
+	    CAMN A,CMDTAB(B)	; command matches?
+	     JRST @CMDDSP(B)	; yes, do it
+	    AOBJN B,TOP.	; try next command
+	  ENDDO.
+	  TMSG <500 Command unrecognized: >
+	  MOVE B,[POINT 7,BUFFER] ; scan for NUL or space
+	  DO.
+	    ILDB A,B		; get byte
+	    CAIE A,.CHSPC	; found a space?
+	     JUMPN A,TOP.	; no, continue scan unless found NUL
+	  ENDDO.
+	  DPB C,B		; tie off buffer here
+	  MOVE A,NETJFN		; Get our net JFN back
+	  HRROI B,BUFFER	; output the losing command
+	  SETZB C,D
+	  SOUT%
+	   JERR <Couldn't output to net connection> ; CU1
+NXTCMD:	  CALL CRLF		; output CRLF after message
+	  LOOP.
+	ENDDO.
+
+	SUBTTL Command table and dispatch
+
+DEFINE COMMANDS <
+; "Minimum required for an SMTP implementation" commands
+	CMD HELO
+	CMD MAIL
+	CMD RCPT
+	CMD DATA
+	CMD RSET
+	CMD NOOP
+	CMD QUIT
+; "Optional" commands
+	CMD SEND
+	CMD SOML
+	CMD SAML
+	CMD VRFY
+	CMD EXPN
+	CMD HELP
+	CMD TURN
+>;DEFINE COMMANDS
+
+DEFINE CMD (CM) <ASCII/'CM'/>
+
+CMDTAB:	COMMANDS		; command names
+CMDTBL==.-CMDTAB
+
+DEFINE CMD (CM) <.'CM>
+
+CMDDSP:	COMMANDS		; command dispatch
+
+	SUBTTL Command service routines
+
+;HELO - HELLO: negotiate identities
+.HELO:	JUMPE C,MISARG		; must have argument
+	TQZ <F%HLO,F%VLH>	; Cancel HELO and validation
+	SETZM FRNHNM		; No foreign host name yet
+	DMOVE A,[POINT 7,BUFFER+1 ; pointer to foreign host name
+		 POINT 7,FRNHNM] ; where we store it
+	MOVEI D,HSTNML		; length of a host name
+	CALL GETDOM		; get domain name
+	 JRST SYMFLD		;  No good.  Tell 'em
+	JUMPN C,SYMFLD		; error if not newline here
+	TMSG <250 >		; hello success reply
+	MOVEI B,LCLHNM
+	CALL NETMSG
+
+; MAISER has some host validation code here.  We aren't going to do this yet,
+; as it's a little complicated right now to do it properly.  Just say that the
+; host is valid.
+
+	TQO F%VLH		; Always flag host as valid
+HELO1:	TQO F%HLO		; flag HELO command seen
+	JRST RSET2		; enter RSET code
+
+
+;RSET - RESET state to initial
+.RSET:	JUMPN C,BADARG		; can't have an argument
+RSET1:	TMSG <250 OK>		; acknowledge command
+RSET2:	SKIPN A,MLQJFN		; Check if we have a queue file open
+	IFSKP.
+	  TXO A,CZ%ABT		; If so, flush it
+	  CLOSF%
+	   ERCAL FATAL
+	ENDIF.
+	SETZM RSTCBG		; clear reset area
+	MOVE A,[RSTCBG,,RSTCBG+1]
+	BLT A,RSTCEN
+	TQZ <F%FRM,F%TO>	; no more FROM or TO specification known
+	JRST NXTCMD
+
+
+;VRFY - VERIFY mailbox
+;EXPN - EXPAND mailing list
+.VRFY:	TQZA F%EXP		; flag not expand
+.EXPN:	 TQO F%EXP		; flag expand
+	JUMPE C,MISARG		; must have an argument
+	CALL RUNMBX		; validate address
+	IFNSK.
+	  SKIPGE MBXFRK		; couldn't find mailbox fork?
+	   JRST NOTIMP		; yes, command not implemented
+	  SKIPE MBXFRK		; did mailbox fork run successfully?
+	  IFSKP.
+	    TMSG <421-Mailbox lookup process terminated abnormally>
+	    JRST IMPERR
+	  ENDIF.
+	  TMSG <550 No such mailbox>
+	  JRST NXTCMD
+	ENDIF.
+	JN F%EXP,,EXPN0		; if want expand, do it
+	TMSG (250 <)		;> expand not wanted, just echo back the
+	MOVE A,NETPTR		; mailbox name given
+	MOVEI B,BUFFER+1
+	CALL MOVSTR
+	MOVEI B,"@"
+	IDPB B,A
+	MOVEI B,LCLHNM
+	CALL MOVSTR
+	MOVEI B,76
+	IDPB B,A
+	MOVEM A,NETPTR
+	JRST NXTCMD
+
+
+; Here to output contents of mailing list
+EXPN0:	MOVEI D,MBXPAG+300	; pointer to list of addresses
+EXPN1:	SKIPN C,(D)		; if end of list, return
+	 JRST GETCMD		; get next command
+	SKIPN 1(D)		; is this the last item on the list?
+	 SKIPA B,[[ASCIZ/250 </]] ; yes, no continuation (>)
+	  MOVEI B,[ASCIZ/250-</] ; no, indicate continuation coming (>)
+	CALL NETMSG		;Output reply code and opening bracket
+	HRRZ A,C		; get user address
+	CALL MBXOUT		; output string from inferior
+	MOVEI B,"@"		;Output mailbox/host delimiter
+	IDPB B,NETPTR
+	TLNE C,-1		; was a host specified?
+	IFSKP.
+	  MOVEI B,LCLHNM	; no, output local host name
+	  CALL NETMSG
+	ELSE.
+	  HLRZ A,C		; use specified host name
+	  CALL MBXOUT		; output string from inferior
+	ENDIF.
+	MOVEI B,76
+	IDPB B,NETPTR
+	CALL CRLF
+	AOJA D,EXPN1		; continue until done
+
+
+DOPTAB:	PHASE 0			; delivery option names and F%DOP indices
+D%MAIL:!ASCIZ/MAIL/		; mail
+D%SEND:!ASCIZ/SEND/		; send
+D%SOML:!ASCIZ/SOML/		; send or mail
+D%SAML:!ASCIZ/SAML/		; send and mail
+IFN <.-4>,<.FATAL Incorrect number of delivery options>
+	DEPHASE
+
+;SEND - initiate SEND transaction
+.SEND:	JUMPE C,MISARG		; must have an argument
+	JE F%HLO,,BADSEQ	; bad sequence if HELO not done yet
+	JN F%FRM,,BADSEQ	; bad sequence if transaction already started
+	MOVEI A,D%SEND		; set delivery option
+	JRST MAKQUE		; Go do the real work
+
+;SOML - initiate SEND transaction, mail if not on-line
+.SOML:	JUMPE C,MISARG		; must have an argument
+	JE F%HLO,,BADSEQ	; bad sequence if HELO not done yet
+	JN F%FRM,,BADSEQ	; bad sequence if transaction already started
+	MOVEI A,D%SOML		; set delivery option
+	JRST MAKQUE
+
+;SAML - initiate SEND transaction and mail
+.SAML:	JUMPE C,MISARG		; must have an argument
+	JE F%HLO,,BADSEQ	; bad sequence if HELO not done yet
+	JN F%FRM,,BADSEQ	; bad sequence if transaction already started
+	MOVEI A,D%SAML		; set delivery option
+	JRST MAKQUE
+
+;MAIL - initiate MAIL transaction
+.MAIL:	JUMPE C,MISARG		; must have an argument
+	JE F%HLO,,BADSEQ	; bad sequence if HELO not done yet
+	JN F%FRM,,BADSEQ	; bad sequence if transaction already started
+	MOVEI A,D%MAIL		; set delivery option
+	JRST MAKQUE
+
+
+; Table of devices to queue mail to
+MLQTAB:	-1,,[ASCIZ/MAILQ:/]	; MAILQ: is the official directory
+	-1,,[ASCIZ/SYSTEM:/]	; if not, MMAILR still scans SYSTEM:
+	-1,,[ASCIZ/DSK:/]	; otherwise must use connected directory
+MLQTBL==.-MLQTAB
+
+; Make a mailer queued request file
+MAKQUE:	STOR A,F%DOP		; set delivery options
+	MOVE A,BUFFER+1		; get what comes after MAIL<SP>
+	ANDCM A,[BYTE (7) 040,040,040,040,000] ; uppercaseify if needed
+	CAME A,[ASCII/FROM:/]	; was it MAIL FROM:, etc.?
+	 JRST SYNERR		; no, syntax error
+	MOVE A,[POINT 7,BUFFER+2] ; start parse after the colon
+	TQO F%NOK		; allow null mailbox
+	TQZ F%MOK		; if mailbox non-null, must have domain
+	CALL PARMBX		; parse a mailbox
+	 JRST SYMFLD		; syntax error in mailbox
+	MOVSI D,-MLQTBL		; pointer to table of mail queue devices
+	DO.
+	  HRROI A,FILBUF	; pointer to name of queued mail file we build
+	  MOVE B,MLQTAB(D)	; get device to try
+	  SETZ C,
+	  SOUT%
+	   JERR <Couldn't output to queue file>	; CU1
+	  HRROI B,[ASCIZ/[--QUEUED-MAIL--].NEW-DMASER.-1;P770000/]
+	  SOUT%			; set up initial part of name
+	   JERR <Couldn't output to queue file>	; CU1
+	  SETZ D,		; Get a null
+	  IDPB D,B		; Tie off the buffer
+	  MOVX A,GJ%NEW!GJ%FOU!GJ%PHY!GJ%SHT ; want new file
+	  HRROI B,FILBUF		; with name we build
+	  GTJFN%			; try to get JFN on it
+	  IFJER.
+	    AOBJN D,TOP.	; can't do it, try alternative place
+	    TMSG <421-Unable to get queue file - >
+	    CALL ERROUT		; output last JSYS error
+	    JRST IMPERR		; now die
+	  ENDIF.
+	  MOVEM A,MLQJFN	; save JFN for later use
+	  MOVX B,<<FLD 7,OF%BSZ>!OF%WR> ; open for write, 7-bit bytes
+	  OPENF%
+	  IFJER.
+	    MOVE A,MLQJFN	; OPENF% failed, release the JFN
+	    RLJFN%
+	     ERJMP .+1
+	    AOBJN D,TOP.	; can't do it, try alternative place
+	    TMSG <421-Unable to open queue file - >
+	    CALL ERROUT		; output last JSYS error
+	    JRST IMPERR		; now die
+	  ENDIF.
+	ENDDO.
+	SETZ C,			; make C be 0 for SOUT%'ing below
+	MOVEI B,.CHFFD		; Write a NET-MAIL-FROM-HOST line
+	BOUT%			; (MLQJFN still in A)
+	 ERCAL FATAL
+	HRROI B,[ASCIZ/=NET-MAIL-FROM-HOST:/]
+	SOUT%
+	 ERCAL FATAL
+	HRROI B,FRNHST		; Output host name
+	SOUT%
+	 ERCAL FATAL
+	HRROI B,[ASCIZ/
+/]				; output trailing CRLF
+	SOUT%
+	 ERCAL FATAL
+	MOVEI B,.CHFFD		; write delivery options line
+	BOUT%
+	 ERCAL FATAL
+	HRROI B,[ASCIZ/=DELIVERY-OPTIONS:/]
+	SOUT%
+	 ERCAL FATAL
+	LOAD B,F%DOP		; get delivery options
+	HRROI B,DOPTAB(B)
+	SOUT%
+	 ERCAL FATAL
+	HRROI B,[BYTE (7) .CHCRT,.CHLFD,.CHFFD]
+	SOUT%
+	 ERCAL FATAL
+	SKIPN MAILBX		; was a proper return path specified?
+	IFSKP.
+	  HRROI B,[ASCIZ/=RETURN-PATH:/]
+	  SOUT%
+	   ERCAL FATAL
+	  SKIPN ATDOML		; is an at-domain-list defined?
+	  IFSKP.
+	    MOVEI B,"@"		; yes, output it
+	    BOUT%
+	     ERCAL FATAL
+	    HRROI B,ATDOML
+	    SOUT%
+	     ERCAL FATAL
+	    MOVEI B,":"
+	    BOUT%
+	     ERCAL FATAL
+	  ENDIF.
+	  HRROI B,MAILBX	; output mailbox
+	  SOUT%
+	   ERCAL FATAL
+	  MOVEI B,"@"		; mailbox/domain delimiter
+	  BOUT%
+	   ERCAL FATAL
+	  HRROI B,DOMAIN	; output domain
+	  SOUT%
+	   ERCAL FATAL
+	  HRROI B,[BYTE (7) .CHCRT,.CHLFD,.CHFFD,"_"]
+	  SOUT%			; write sender specification
+	   ERCAL FATAL
+	  HRROI B,DOMAIN	; output domain
+	  SOUT%
+	   ERCAL FATAL
+	  HRROI B,[BYTE (7) .CHCRT,.CHLFD]
+	  SOUT%
+	   ERCAL FATAL
+	  HRROI B,MAILBX	; output mailbox
+	  SOUT%
+	   ERCAL FATAL
+	  HRROI B,[BYTE (7) .CHCRT,.CHLFD,.CHFFD]
+	  SOUT%
+	   ERCAL FATAL
+	ENDIF.
+	TQO F%FRM		; flag "from" part of transaction complete
+	TMSG <250 >		; acknowlege command
+	LOAD B,F%DOP		; get delivery options
+	HRROI B,DOPTAB(B)
+	CALL NETMSG		; Output to net JFN
+	TMSG < accepted>
+	JRST NXTCMD		; get next command
+
+
+;RCPT - identify a RECIPIENT for this transaction
+.RCPT:	JUMPE C,MISARG		; must have an argument
+	JE F%FRM,,BADSEQ	; bad sequence if transaction not started yet
+	MOVE A,BUFFER+1		; get what comes after RCPT<SP>
+	ANDCM A,[BYTE (7) 040,040,000,177,177] ; uppercaseify if needed
+	CAME A,[ASCII/TO:/]	; was it RCPT TO:?
+	 JRST SYNERR		; no, syntax error
+	MOVE A,[POINT 7,BUFFER+1,20] ; start parse after the colon
+	TQZ F%NOK		; do not allow null mailbox
+	TQO F%MOK		; if domain null, assume local host
+	CALL PARMBX		; parse a mailbox
+	 JRST SYMFLD		; syntax error
+	SKIPN DOMAIN		; if domain given, see if our own
+	IFSKP.
+	  HRROI A,DOMAIN	; look up recipient host name
+	  SETO C,		; through all naming registries
+	  CALL $GTPRO		; get address and registry
+	  IFSKP.
+	    MOVE D,B		; save address
+	    HRROI A,BUFFER	; store local name out of the way
+	    SETO B,		; want local address for this protocol
+	    CALL $GTNAM		; get local name
+	    IFSKP.
+	      CAMN B,D		; was destination host in fact us?
+	       SETZM DOMAIN	; yes, note local domain
+	    ELSE.
+	      TMSG <421-Unable to get local host for recipient naming registry>
+	      JRST IMPERR
+	    ENDIF.
+	  ELSE.
+	    TMSG <550 Host name ">
+	    HRROI A,DOMAIN	; output the bad host
+	    PSOUT%
+	    TMSG <" unknown, recipient rejected>
+	    JRST NXTCMD
+	  ENDIF.
+	ENDIF.
+	SKIPE DOMAIN		; local domain?
+	IFSKP.
+	  HRROI A,MAILBX
+	  JSP PC,VALMBX		; validate mailbox
+	   NOP			; can't validate mailbox, assume okay
+	ENDIF.
+	SKIPE A,MLQJFN		; get JFN of queue file
+	IFSKP.
+	  TMSG <421-Queue not set up in RCPT command>
+	  JRST IMPERR
+	ENDIF.
+	SKIPN DOMAIN		; domain specified?
+	 SKIPA B,[-1,,LCLHNM]	; no, use local host as default domain
+	  HRROI B,DOMAIN	; output destination domain
+	SETZ C,
+	SOUT%
+	 ERCAL FATAL
+	HRROI B,[ASCIZ/
+/]
+	SOUT%
+	 ERCAL FATAL
+	HRROI B,MAILBX		; now output destination mailbox
+	SOUT%
+	 ERCAL FATAL
+	HRROI B,[BYTE (7) .CHCRT,.CHLFD,.CHFFD]
+	SOUT%
+	 ERCAL FATAL
+	TQO F%TO		; flag "to" part of transaction complete
+	TMSG <250 Recipient accepted> ; acknowledge
+	JRST NXTCMD		; and get next command
+
+
+;DATA - DATA for mail transaction
+.DATA:	JUMPN C,BADARG		; must not have an argument
+	JNAND <F%HLO,F%FRM,F%TO>,,BADSEQ ; have FROM/TO specifications?
+	SKIPE A,MLQJFN		; get JFN of queue file
+	IFSKP.
+	  TMSG <421-Queue not set up in DATA command>
+	  JRST IMPERR
+	ENDIF.
+	HRROI B,[ASCIZ/
+Received: from /]		; now, write Received line
+	SETZ C,
+	SOUT%
+	 ERCAL FATAL
+	HRROI B,FRNHNM		; write foreign host
+	SOUT%
+	 ERCAL FATAL
+	TQNE F%VLH		; foreign host number validated?
+	IFSKP.
+	  HRROI B,[ASCIZ/ (/]	; no, start a comment
+	  SOUT%
+	   ERCAL FATAL
+	  HRROI B,FRNHST	; output foreign host name
+	  SOUT%
+	   ERCAL FATAL
+	  MOVEI B,")"		; terminate comment
+	  BOUT%
+	   ERCAL FATAL
+	ENDIF.
+	HRROI B,[ASCIZ/ by /]
+	SOUT%
+	 ERCAL FATAL
+	HRROI B,LCLHNM		; write local host
+	SOUT%
+	 ERCAL FATAL
+	HRROI B,[ASCIZ/ with DECnet; /]
+	SOUT%
+	 ERCAL FATAL
+	SETO B,			; output current date/time
+	MOVX C,OT%DAY!OT%SPA!OT%TMZ!OT%SCL
+	ODTIM%			; RFC 822 standard date
+	HRROI B,[ASCIZ/
+/]				; now output terminating CRLF
+	SETZ C,
+	SOUT%
+	 ERCAL FATAL
+	TMSG <354 Start mail input; end with <CRLF>.<CRLF>>
+	CALL CRLF
+	DO.
+	  MOVNI A,TIMOCT	; reset timeout count
+	  MOVEM A,TIMOUT
+	  MOVE A,NETJFN		; Get our net JFN back
+	  HRROI B,BUFFER	; pointer to buffer
+	  MOVEI C,BUFLEN-1	; up to this many characters
+	  MOVX D,.CHLFD		; terminate on linefeed
+	  TQZ F%EOL		; Flag no EOL seen on this line yet
+	  SIN%			; read a line
+	   JERR <Can't read from net connection> ; CU1
+	  SETZ D,		; Get a null
+	  IDPB D,B		; Drop it in at the end of our buffer
+	  SKIPE C		; Byte count exhausted?
+	   TQO F%EOL		;  No, so flag EOL seen
+	  MOVE B,[POINT 7,BUFFER] ; buffer we read into
+	  SUBI C,BUFLEN-1	; negative count of bytes to output
+	  IFQN. F%ELP		; buffer begin with EOL?
+	    LDB A,[POINT 7,BUFFER,6] ; yes, get first byte of buffer
+	    CAIE A,"."		; was it a period?
+	    IFSKP.
+	      IBP B		; yes, skip over it
+	      ADDI C,1		; account for it in the count
+	      IFQN. F%EOL	; buffer end with EOL?
+		CAMN C,[-2]	; yes, only two bytes to output?
+		 EXIT.		; yes, must be EOM
+	      ENDIF.
+	    ENDIF.
+	  ENDIF.
+	  MOVE A,MLQJFN		; output buffer to queue file
+	  SOUT%
+	   ERCAL FATAL
+	  TQZE F%EOL		; EOL seen?
+	   TQOA F%ELP		; yes, set EOL seen in previous buffer
+	    TQZ F%ELP		; no EOL in previous buffer
+	  LOOP.
+	ENDDO.
+	MOVE A,MLQJFN		; yes, must be EOM
+	CLOSF%
+	 ERCAL FATAL
+	SETZM MLQJFN		; flush the JFN
+	TMSG <250 Message accepted and queued for delivery>
+	CALL WAKEUP		; wake up MMailr
+	JRST RSET2		; now do an implicit RSET
+
+
+; Here to send a wakeup call to MMailr, called via CALL WAKEUP.  Returns +1.
+WAKEUP:	SKIPE B,MYPID		; have a PID already?
+	 TDZA A,A		; yes, use it
+	  MOVX A,IP%CPD		; no, create a PID
+	MOVEM A,IPCBLK+.IPCFL
+	MOVEM B,IPCBLK+.IPCFS	; PID to use if one there
+	SETZM IPCBLK+.IPCFR	; send to INFO
+	MOVX A,<.IPCI2+3,,BUFFER> ; length of INFO msg,,where INFO msg is
+	MOVEM A,IPCBLK+.IPCFP
+	MOVX A,.IPCIW		; return PID associated with name
+	MOVEM A,BUFFER+.IPCI0
+	SETZM BUFFER+.IPCI1	; duplicate copy not needed
+	DMOVE A,[ASCII/[SYSTEM]MM/] ; 1st part of PID to look up
+	DMOVEM A,BUFFER+.IPCI2
+	MOVE A,[ASCII/AILR/]	; 2nd part of PID to look up
+	MOVEM A,BUFFER+.IPCI2+2
+	MOVX A,.IPCFP+1		; length of block
+	MOVEI B,IPCBLK		; get MMailr's PID
+	MSEND%
+	 ERJMP R		; looks like INFO isn't there
+	MOVE A,IPCBLK+.IPCFS	; get the PID I made
+	MOVEM A,MYPID		; remember it for next time
+	DO.
+	  SETZM IPCBLK+.IPCFL	; no flags
+	  SETZM IPCBLK+.IPCFS	; any sender
+	  MOVE A,MYPID		; I'm the receiver
+	  MOVEM A,IPCBLK+.IPCFR
+	  MOVX A,<10,,BUFFER>	; place to put the reply
+	  MOVEM A,IPCBLK+.IPCFP
+	  MOVX A,.IPCFP+1	; length of block
+	  MOVEI B,IPCBLK	; get reply from INFO
+	  MRECV%
+	   ERJMP R		; failure irrelevant here
+	  LOAD A,IP%CFC,IPCBLK+.IPCFL ; see who sent message
+	  CAIE A,.IPCCC		; from <SYSTEM>IPCF?
+	   CAIN A,.IPCCF	; no, from <SYSTEM>INFO?
+	   IFSKP.
+	     LOOP.		; no, get another message
+	   ENDIF.
+	ENDDO.
+	JN <IP%CFE,IP%CFM>,IPCBLK+.IPCFL,R ; give up if undeliverable
+	SETZM IPCBLK+.IPCFL	; no flags
+	MOVE A,MYPID		; I'm the sender
+	MOVEM A,IPCBLK+.IPCFS
+	MOVE A,BUFFER+.IPCI1	; MMailr is the recipient
+	MOVEM A,IPCBLK+.IPCFR
+	MOVX A,<1,,BUFFER>	; one word from BUFFER
+	MOVEM A,IPCBLK+.IPCFP
+	MOVX A,'PICKUP'		; magic word to wake up MMailr
+	MOVEM A,BUFFER
+	MOVX C,^D20
+	DO.
+	  MOVX A,.IPCFP+1	; length
+	  MOVEI B,IPCBLK	; send wakeup to MMailr
+	  MSEND%
+	  IFJER.
+	    MOVEI A,^D1000	; failed, wait a bit
+	    DISMS%
+	    SOJG C,TOP.		; try a few times
+	    RET			; failed, give up
+	  ENDIF.
+	ENDDO.
+	MOVX A,.MUQRY		; query function for MUTIL%
+	MOVEM A,BUFFER
+	MOVE A,MYPID		; query packets for our PID
+	MOVEM A,BUFFER+1
+	MOVX C,^D20		; number of retries
+	DO.
+	  MOVX A,.IPCFP+2	; number of words to return
+	  MOVEI B,BUFFER	; argument block in BUFFER
+	  MUTIL%
+	  IFJER.
+	    MOVEI A,^D1000	; wait a bit
+	    DISMS%
+	    SOJG C,TOP.		; retry a few times
+	    RET
+	  ENDIF.
+	ENDDO.
+	DO.
+	  SETZM IPCBLK+.IPCFL	; no flags
+	  SETZM IPCBLK+.IPCFS	; sender is filled in by monitor
+	  MOVE A,MYPID		; I'm the receiver
+	  MOVEM A,IPCBLK+.IPCFR
+	  MOVX A,<10,,BUFFER>	; where MMailr reply will go
+	  MOVEM A,IPCBLK+.IPCFP
+	  MOVX A,.IPCFP+1	; size of block
+	  MOVEI B,IPCBLK	; get reply from MMailr
+	  MRECV%
+	   ERJMP .+1		; error uninteresting here
+	  LOAD A,IP%CFC,IPCBLK+.IPCFP ; get sender code
+	  IFN. A		; special sender?
+	    CAIE B,.IPCCF	; from <SYSTEM>INFO
+	     CAIN B,.IPCCP	; or private <SYSTEM>INFO?
+	      LOOP.		; yes, try for another message
+	  ENDIF.
+	ENDDO.
+	RET
+
+
+;QUIT - QUIT out of mail service
+.QUIT:	JUMPN C,BADARG		; must not have an argument
+	TMSG <221 >		; start acknowledgement
+QUIT1:	MOVEI B,LCLHNM		; output our host name
+	CALL NETMSG
+	TMSG < Service closing transmission channel>
+	CALL CRLF
+HANGUP:	CALL CLZNET		;Close and reopen net link
+	CALL CTIMER		;Cancel the timer
+	SKIPE LOGPTR		;If there is a log line being built,
+	CALL LGCRLF		; finish it
+	CALL DTSTMP
+	LOG <----Connection closed>
+	CALL LGCRLF
+	CALL CLSLOG
+	SKIPN A,MLQJFN		;If the queue file is still open
+	IFSKP.
+	  TXO A,CZ%ABT		;Throw it away
+	  CLOSF%
+	    NOP
+	  SETZM MLQJFN
+	ENDIF.
+	DEBRK			;Return to background
+	 JERR <DEBRK at HANGUP failed>
+
+
+;NOOP - NOOP null command
+.NOOP:	JUMPN C,BADARG		; must not have an argument
+	TMSG <250 OK>		; acknowledge command
+	JRST NXTCMD
+
+;HELP - HELP message
+.HELP:	JUMPN C,BADARG		; must not have an argument
+	MOVEI B,HLPMSG		; output help message
+	CALL NETMSG
+	JRST NXTCMD
+
+HLPMSG:	ASCIZ/214-The following commands are implemented:
+214- HELO, MAIL, RCPT, DATA, RSET, NOOP, QUIT, SEND, SOML, SAML,
+214- VRFY, EXPN, HELP, TURN
+214 This system is a DECSYSTEM-20 running the TOPS-20 operating system/
+
+;TURN - TURN around transaction
+.TURN:	JUMPN C,BADARG		; must not have an argument
+	JRST NOTIMP		; turn around is not implemented and won't be
+
+	SUBTTL Subroutines
+
+;  Here to parse a mailbox specification pointed to in A.  Skips if success.
+; Returns a-d-l in ATDOML, mailbox in MAILBX, and domain in DOMAIN.
+; F%NOK indicates that a null mailbox is allowed, to allow null return-paths
+; per the SMTP specification.
+; F%MOK indicates that a domain is optional, that is, the command:
+;	RCPT TO:<FOO>
+; will be interpreted as local mailbox FOO.
+
+PARMBX:	SETZM MBXBEG		; clear mailbox area
+	MOVE C,[MBXBEG,,MBXBEG+1]
+	BLT C,MBXEND
+	ILDB C,A		; get opening character
+	CAIE C,"<"		; must be opening broket
+	 RET			; parse fails
+	SETZM ATDOML		; clear previous a-d-l
+	SETZM MAILBX		; clear previous mailbox
+	SETZM DOMAIN		; clear previous domain
+	ILDB C,A		; get first character in path
+	CAIE C,">"		; is this a close broket?
+	IFSKP.
+	  JN F%NOK,,PRMDUN	; yes, if null mailbox okay then return success
+	ENDIF.
+	CAIE C,"@"		; a-d-l present?
+	IFSKP.
+	  MOVE B,[POINT 7,ATDOML] ; set up pointer to a-d-l
+	  MOVEI D,ADLLEN	; set up limit of domain list length
+	  DO.
+	    CALL GETDOM		; get a domain
+	     RET		; syntax error in domain
+	    CAIE C,","		; another domain in route list?
+	    IFSKP.
+	      IDPB C,B		; yes, save domain in route list
+	      ILDB C,A		; get next byte
+	      CAIE C,"@"	; start of next at-domain?
+	       SOJA D,ENDLP.	; no, must be mailbox (RFC 788 compatibility)
+	      SUBI D,2		; account for delimiting characters
+	      LOOP.		; get next domain
+	    ENDIF.
+	    CAIE C,":"		; end of domain?
+	     RET		; no, syntax error in domain
+	    ILDB C,A		; get character in mailbox
+	  ENDDO.
+	ENDIF.
+
+; Here to process the local part of a mailbox
+	MOVE B,[POINT 7,MAILBX]	; set up pointer to mailbox
+	MOVEI D,USRNML		; set up maximum length of user name
+	CAIE C,""""		; quoted string?
+	IFSKP.
+	  DO.
+	    ILDB C,A		; yes, get next quoted byte
+	    CAIE C,""""		; end of quoted string?
+	    IFSKP.
+	      ILDB C,A		; get expected at
+	      CAIN C,"@"	; was it an at?
+	       EXIT.		; saw an at, finished with mailbox
+	      CAIN C,">"	; is this a close broket?
+	       SKIPN MAILBX	; yes, was mailbox non-null?
+		RET		; not close broket or mailbox null, syntax err
+	      JN F%MOK,,PRMDUN	; yes, if F%MOK then allow missing domain
+	      RET		; syntax error
+	    ENDIF.
+	    CAIE C,.CHCRT	; CR or LF invalid in quoted string
+	     CAIN C,.CHLFD
+	      RET
+	    CAIN C,"\"		; quote next byte literally?
+	     ILDB C,A		; yes, get next byte
+	    IDPB C,B		; store byte in string
+	    SOJGE D,TOP.	; continue with next byte unless overflowed
+	    RET			; mailbox name too long
+	  ENDDO.
+	ELSE.
+	  DO.			; parse unquoted string
+	    MOVEI E,(C)		; get copy of character
+	    IDIVI E,^D32	; E/ word to check, F/bit to check
+	    MOVNS F
+	    MOVX G,1B0		; make bit to check
+	    LSH G,(F)
+	    TDNE G,SPCMSK(E)	; is it a special character?
+	     RET		; yes, syntax error
+	    CAIE C,">"		; is this a close broket?
+	    IFSKP.
+	      SKIPN MAILBX	; yes, was mailbox non-null?
+	      IFSKP.
+		JN F%MOK,,PRMDUN ; yes, if F%MOK then allow missing domain
+	      ENDIF.
+	      RET		; else syntax error
+	    ENDIF.
+	    CAIN C,"@"		; was it an at?
+	    IFSKP.
+	      CAIN C,"\"	; quote next byte literally?
+	       ILDB C,A		; yes, get next byte
+	      IDPB C,B		; store byte in string
+	      ILDB C,A		; get next byte to consider
+	      SOJGE D,TOP.	; continue byte unless overflowed
+	      RET
+	    ENDIF.
+	  ENDDO.
+	ENDIF.
+
+; Process the destination domain and terminate the command string
+	MOVE B,[POINT 7,DOMAIN]	; point at domain string
+	MOVEI D,HSTNML		; maximum length of a host name
+	CALL GETDOM		; get domain name
+	 RET			; syntax error in domain
+	CAIE C,">"		; closing broket?
+	 RET			; no, syntax error
+	SKIPE MAILBX		; mailbox required
+	 SKIPN DOMAIN		; domain required
+	  RET			; mailbox or domain missing
+PRMDUN:	ILDB C,A		; see if line ends now
+	JUMPN C,R		; it doesn't, return
+	RETSKP
+
+
+; Table of special characters
+
+	BRINI.			; initialize break mask
+
+	BRKCH. (.CHNUL,.CHSPC)	; all controls are special characters
+	BRKCH. (042)		; """"
+	BRKCH. (050,051)	; "(", ")"
+	BRKCH. (054)		; ","
+	BRKCH. (072,074)	; ":", ";", "<"
+;	BRKCH. (076)		; ">" commented out because processed in code
+;	BRKCH. (100)		; "@" commented out because processed in code
+	BRKCH. (133)		; "["
+;	BRKCH. (134)		; "\" commented out because processed in code
+	BRKCH. (135)		; "]"
+
+SPCMSK:	EXP W0.,W1.,W2.,W3.	; form table of special characters
+
+
+; Here to get a domain string, source pointer in A, destination pointer in B,
+; maximum number of bytes in D.  Skips if success with delimiter in C.
+GETDOM: ILDB C,A		; get first byte of domain string
+	CAIE C,"#"		; monolithic number?
+	IFSKP.
+	  IDPB C,B		; save indicator of moby number
+	  SUBI D,1		; account for character
+	  ILDB C,A		; get first byte of number
+	  CAIL C,"0"		; is it a number?
+	   CAILE C,"9"
+	    RET			; must have at least one digit
+	  DO.
+	    IDPB C,B		; save digit
+	    ILDB C,A		; get subsequent digit(s)
+	    CAIL C,"0"		; is it a number?
+	     CAILE C,"9"
+	      EXIT.		; no, end of domain
+	    SOJGE D,TOP.	; else store digit and try again 
+	    RET			; string too long
+	  ENDDO.
+	ELSE.
+	  CAIE C,"["		; dot-number?
+	  IFSKP.
+	    MOVEI E,3		; number of dots expected in field
+	    DO.
+	      IDPB C,B		; save bracket or dot
+	      SOJL D,R		; account for character (syn err if full)
+	      ILDB C,A		; get first byte of number
+	      CAIL C,"0"	; is it a number?
+	       CAILE C,"9"
+		RET		; must have at least one digit
+	      DO.		; collect a number into the buffer
+		IDPB C,B	; save digit
+		ILDB C,A	; get subsequent digit(s)
+		CAIL C,"0"	; is it a number?
+		 CAILE C,"9"
+		  EXIT.		; no, leave
+		SOJGE D,TOP.	; numeric, store digit and try again 
+		RET		; string too long
+	      ENDDO.
+; TEMPORARY: This is to work around a MACSYM bug that fails to save ENDLP.
+; in nested DO.'s.
+IF2,<IFLE ENDLP.-.,<.FATAL Wrong version of MACSYM -- must fix ENDLP. bug>>
+	      SOJL E,ENDLP.	; if seen three dots then done
+	      CAIN C,"."	; dot expected, did we see one?
+	       LOOP.		; yes, store it and collect next number
+	      RET		; else syntax error
+	    ENDDO.
+	    CAIE C,"]"		; closing bracket?
+	     RET		; no, syntax error
+	    IDPB C,B		; store closing bracket in string
+	    SOJL D,R		; see if it makes string too long
+	    ILDB C,A		; get delimiter byte for caller
+	  ELSE.
+	    CAIL C,"A"		; non-alphabetic?
+	     CAILE C,"z"
+	      RET		; first character must be alphabetic
+	    CAILE C,"Z"		; further alphabetic checking
+	     CAIL C,"a"
+	      CAIA
+	       RET		; non-alphabetic, lose
+	    DO.
+	      IDPB C,B		; store byte in string
+	      SOJL D,R		; length check
+	      ILDB C,A		; get next byte of string
+	      CAIE C,"."	; dot?
+	       CAIN C,"-"	; hyphen?
+		LOOP.		; yes, store in string
+	      CAIL C,"A"	; non-alphabetic?
+	       CAILE C,"z"
+	       IFSKP.
+		 CAILE C,"Z"	; further alphabetic checking
+		  CAIL C,"a"
+		   LOOP.	; character is alphabetic, store in string
+	       ENDIF.
+	      CAIL C,"0"	; numeric?
+	       CAILE C,"9"
+		EXIT.		; no, end of domain
+	      LOOP.		; character is numeric, store in string
+	    ENDDO.
+	    LDB E,B		; get last byte in string
+	    CAIE E,"."		; disallow null domain element
+	     CAIN E,"-"		; domain string may not end in hyphen
+	      RET		; it did, syntax error
+	  ENDIF.
+	ENDIF.
+	SETZ E,			; tie off string with null
+	IDPB E,B
+	RETSKP			; return success to caller
+
+; Validate a mailbox pointed to in A, called via JSP PC,VALMBX.  Non-skip
+; if no MMAILBOX, skips if success.  Outputs error and returns to top level
+; otherwise.
+VALMBX:	CALL RUNMBX		; validate address
+	IFSKP.			; validated?
+	  JRST 1(PC)		; and give success return
+	ENDIF.
+	SKIPGE MBXFRK		; couldn't find mailbox fork?
+	 JRST (PC)		; command not implemented
+	SKIPE MBXFRK		; did mailbox fork run successfully?
+	IFSKP.
+	  TMSG <451 Mailbox lookup process terminated abnormally>
+	  JRST NXTCMD
+	ENDIF.
+	LOAD B,F%DOP		; get delivery options
+	CAIE B,D%MAIL		; if not MAIL
+	 CAIN B,D%SAML		; or SEND-AND-MAIL
+	 IFSKP.			; then SEND or SOML, can have terminal number
+	   MOVEI C,^D8		; radix octal
+	   NIN%			; try to read in terminal number
+	   IFNJE.
+	     LDB A,A		; succeeded, get char that stopped NIN%
+	     JUMPE A,1(PC)	; if ended on null, we have a number
+	   ENDIF.
+	 ENDIF.
+	TMSG <550 No such local mailbox as ">
+	HRROI B,MAILBX		; output the bad mailbox
+	CALL NETMSG
+	TMSG <", recipient rejected>
+	JRST NXTCMD
+
+
+; Here to output a banner announcing the service.
+WRTBAN:	TMSG <220 >		; start banner
+	MOVEI B,LCLHNM		; output host name
+	CALL NETMSG
+	TMSG < DECnet SMTP Service >
+	MOVE A,NETPTR		;Build this right in the buffer
+	MOVEI B,MLSVER		; get major version number
+	MOVEI C,^D8		; octal output for all version components
+	NOUT%
+	 ERCAL FATAL
+	MOVEI B,MLSMIN		; get minor version number
+	IFN. B			; Output only if nonzero
+	  MOVEI C,"."		; output delimiting dot
+	  IDPB C,A
+	  MOVEI C,^D8
+	  NOUT%
+	   ERCAL FATAL
+	ENDIF.
+	MOVEI B,MLSEDT		; get edit version
+	IFN. B			; Output only if nonzero
+	  MOVEI C,"("		; edit delimiter
+	  IDPB C,A
+	  MOVEI C,^D8
+	  NOUT%
+	   ERCAL FATAL
+	  MOVEI C,")"		; closing edit delimiter
+	  IDPB C,A
+	ENDIF.
+	MOVEI B,MLSWHO		; get who last edited
+	IFN. B			; Output only if not last edited at DEC
+	  MOVEI C,"-"		; output delimiting hyphen
+	  IDPB C,A
+	  MOVEI C,^D8
+	  NOUT%
+	   ERCAL FATAL
+	ENDIF.
+	HRROI B,[ASCIZ / at /]
+	CALL MOVSTR
+	SETO B,			; time now
+	MOVX C,OT%SPA!OT%TMZ!OT%SCL
+	ODTIM%			; RFC 822 standard date
+	MOVEM A,NETPTR
+	CALLRET CRLF
+
+
+; Here to lookup a mailbox pointed to in A in the mailbox database.  Skips
+; if mailbox found, with pointers in MBXPAG+300.
+RUNMBX:	SAVEAC <A>		; don't clobber mailbox pointer
+	STKVAR <MBXPTR>
+	MOVEM A,MBXPTR		; save mailbox pointer
+	SKIPLE MBXFRK		; see if already a mailbox fork
+	IFSKP.
+	  SETOM MBXFRK		; no, flag trying to get a mailbox fork
+	  SETOM MBXWIN		; clear memory of cached mailbox window
+	  MOVX A,GJ%OLD!GJ%SHT	; get JFN of forwarder
+	  HRROI B,[ASCIZ/SYS:MMAILBOX.EXE/]
+	  GTJFN%
+	   RET 			; not implemented if no mailbox fork
+	  MOVEM A,MBXFRK	; save here temporarily
+	  MOVX A,CR%CAP		; create an inferior fork
+	  CFORK%
+	   ERCAL FATAL
+	  EXCH A,MBXFRK		; save fork handle, get JFN
+	  HRL A,MBXFRK		; get prog into fork
+	  GET%
+	   ERCAL FATAL
+	ENDIF.
+	HRLZ A,MBXFRK		; page 0 of inferior
+	DMOVE B,[.FHSLF,,MBXPAG/1000 ; mapped to this fork's MBXPAG
+		 PM%RD!PM%WR!PM%CNT+2] ; read+write access
+	PMAP%
+	 ERCAL FATAL
+	MOVE A,[POINT 7,MBXPAG+200] ; destination
+	MOVE B,MBXPTR		; source address
+	MOVEI C,USRNML		; maximum length of an address
+	SOUT%
+	MOVE A,MBXFRK		; get fork handle back again
+	MOVEI B,2		; MM entry
+	SFRKV%			; start fork
+	 ERCAL FATAL
+	WFORK%			; wait for it to halt
+	 ERCAL FATAL
+	RFSTS%			; see if it finished ok
+	 ERCAL FATAL
+	HLRZ A,A
+	CAIN A,.RFHLT		; halted normally?
+	IFSKP.
+	  SETO A,		; unmap shared pages
+	  DMOVE B,[.FHSLF,,MBXPAG/1000 ; mapped to this fork's MBXPAG
+		   PM%CNT+2]
+	  PMAP%
+	   ERCAL FATAL
+	  DMOVE B,[.FHSLF,,WINPAG/1000 ; mapped to this fork's WINPAG
+		   PM%CNT+2]
+	  PMAP%
+	   ERCAL FATAL
+	  MOVE A,MBXFRK		; flush the fork
+	  KFORK%
+	   ERCAL FATAL
+	  SETZM MBXFRK
+	  RET
+	ENDIF.
+	SKIPLE MBXPAG+177	; yes, success answer?
+	 SKIPN MBXPAG+300	; for paranoia, make sure a list was returned
+	  RET			; no, non-skip return
+	RETSKP			; success, skip return with fork still mapped
+
+
+; Output string from mailbox starting from address in A
+MBXOUT:	SAVEAC <A,B,C>		; preserve ACs
+	PUSH P,A		; save address we're going to PSOUT% for later
+	LSH A,-<^D9>		; get inferior page number desired
+	CAMN A,MBXWIN		; already cached?
+	IFSKP.
+	  MOVEM A,MBXWIN	; no, set as new mailbox window page
+	  HRL A,MBXFRK		; mailbox fork,,page number
+	  DMOVE B,[.FHSLF,,WINPAG/1000 ; map two pages to our WINPAG
+		   PM%CNT!PM%RD!PM%CPY+2]
+	  PMAP%
+	   ERCAL FATAL
+	ENDIF.
+	POP P,B			; get address back (in B though)
+	HRROI A,777000!<WINPAG/1000> ; -1,,pageaddr shifted by 9 bits
+	DPB A,[POINT 27,B,26]	; set up as new address
+	MOVE A,NETPTR		; Get our buffer pointer back
+	CALL MOVST1		; Output this string
+	MOVEM A,NETPTR		; Save updated pointer back
+	RET
+
+
+; Common routine called to output last error code's message
+ERROUT:	HRROI A,ERBUF
+	HRLOI B,.FHSLF		; dumb ERSTR%
+	HRLI C,EBUFLN		; max error string size
+	ERSTR%
+	 NOP
+	 NOP
+	MOVEI B,ERBUF
+	CALLRET NETMSG
+
+; Miscellaneous error messages
+SYMFLD:	TMSG <500 Syntax error or field too long>
+	JRST NXTCMD
+
+SYNERR:	TMSG <500 Syntax error in command>
+	JRST NXTCMD
+
+NOTIMP:	TMSG <502 Command not implemented>
+	JRST NXTCMD
+
+BADSEQ:	TMSG <503 Bad sequence of commands>
+	JRST NXTCMD
+
+MISARG:	TMSG <500 Missing required argument>
+	JRST NXTCMD
+
+BADARG: TMSG <500 Argument given when none expected>
+	JRST NXTCMD
+
+
+; Fatal errors arrive here
+FATAL:	MOVEM 17,FATACS+17	; save AC's in FATACS for debugging
+	MOVEI 17,FATACS		; save from 0 => FATACS
+	BLT 17,FATACS+16	; ...to 16 => FATACS+16
+	MOVE 17,FATACS+17	; restore AC17
+	CALL CRLF		; new line first if necessary
+	TMSG <421-Fatal system error: >
+	CALL ERROUT		; output last JSYS error
+	TMSG <, >
+	MOVE B,(P)		; get PC
+	MOVE B,-2(B)		; get instruction which lost
+	CALL OCTOUT		;Output instruction
+	TMSG < at PC >
+	POP P,B
+	MOVEI B,-2(B)		; point PC at actual location of the JSYS
+	CALL OCTOUT		;Output PC
+
+; Entry point to ask for a report for non-JSYS "impossible" error
+IMPERR:	CALL CRLF
+	TMSG <421-This isn't expected to happen; please report this
+421 >
+	JRST QUIT1		; skip over 221 reply code in QUIT code
+
+;Fatal JSYS errors arrive here
+JFATAL:	HRROI A,[ASCIZ/?DMASER error: /]
+	PSOUT%
+	MOVE A,D
+	PSOUT%
+	HRROI A,[ASCIZ/ because: /]
+	PSOUT%
+	MOVEI A,.PRIOU
+	HRLOI B,.FHSLF
+	ERSTR%
+	 NOP
+	 NOP
+	CALL OPNLOG		;Open it in case
+	SKIPE LOGPTR		;If there is a line being built,
+	CALL LGCRLF		; finish it
+	CALL DTSTMP
+	MOVE B,D
+	CALL LOGMSG
+	LOG < because: >
+	MOVE A,LOGPTR
+	HRLOI B,.FHSLF
+	ERSTR%
+	 NOP
+	 NOP
+	MOVEM A,LOGPTR
+	CALL LGCRLF
+	CALL CLSLOG
+RFATAL:	RESET%
+	MOVX A,^D30000		; Sleep awhile
+	DISMS%
+	JRST START
+
+	SUBTTL	DECnet link managment routines
+
+;Open the net connection and listen for connect initiates
+OPNLSN:	MOVX A,GJ%SHT
+	HRROI B,[ASCIZ/SRV:125/]
+	SKIPE DEBUGF
+	 HRROI B,[ASCIZ/SRV:129/]
+	GTJFN%
+	 ERJMP [CALL OPNLOG
+		CALL DTSTMP
+		LOG <Can't GTJFN server because: >
+		MOVE A,LOGPTR
+		HRLOI B,.FHSLF
+		SETZ C,
+		ERSTR%
+		 NOP
+		 NOP
+		CALL LGCRLF
+		CALL CLSLOG
+		MOVX A,^D30000
+		DISMS%
+		JRST OPNLSN]
+	MOVX B,OF%RD!OF%WR!FLD(7,OF%BSZ)
+	OPENF%
+	 JERR <Can't open net JFN>
+	MOVEM A,NETJFN
+	MOVX B,.MOACN		;Enable for PSI on network transitions
+	MOVX C,0B8+<.MOCIA>B17+<.MOCIA>B26 ;Channel zero
+	MTOPR%
+	MOVX A,.FHSLF		;Activate channel zero
+	MOVX B,1B0
+	AIC%
+	MOVE A,[POINT 7,NETBUF]	;Ready for next line
+	MOVEM A,NETPTR
+	RET
+
+
+; Close the net link.
+CLZNET: MOVX A,.FHSLF		;Turn on interrupts
+	MOVX B,1B2
+	AIC%
+	MOVX A,<.FHSLF,,.TIMEL>	;Set timer
+	MOVX B,^D60000		;Give up in a minute
+	MOVEI C,2
+	TIMER%
+	 JERR <TIMER failure at CLZNET>
+	MOVE A,NETJFN		;Close connection
+	MOVEI B,.MOCLZ
+	MTOPR%
+	 ERJMP .+1
+	MOVE A,NETJFN		;Close file
+	CLOSF%
+	 ERJMP [MOVE A,NETJFN
+		TXO A,CZ%ABT
+		CLOSF%
+		 JERR <Failure while closing net connection>
+		JRST .+1]
+	SETZM NETJFN
+CLZNT1:	CALL CTIMER		;Cancel the timer
+	CALL OPNLSN
+	RET
+
+
+T4NHST:	SETZM FRNHST		;Clear the name first
+	MOVE A,NETJFN		;Get host name from system
+	MOVX B,.MORHN
+	HRROI C,FRNHST
+	MTOPR%
+	 JERR <Failure getting host name>
+	MOVEI B,FRNHST
+	CALLRET LOGMSG
+
+; Output string B to network link
+NETMSG:	MOVE A,NETPTR		;Accumulate into buffer
+	CALL MOVSTR
+	MOVEM A,NETPTR
+	RET
+
+; Finish line with CRLF and flush buffer
+CRLF:	MOVEI A,.CHCRT		;Finish the buffered line
+	MOVE B,NETPTR
+	IDPB A,B
+	MOVEI A,.CHLFD
+	IDPB A,B
+	SETZ A,
+	IDPB A,B
+	MOVE A,NETJFN		;Now put out the line
+	HRROI B,NETBUF
+	SETZB C,D
+	SOUTR%
+	 ERJMP [CALL DTSTMP
+		LOG <SOUT to net link failed: >
+		MOVE A,LOGPTR
+		HRLOI B,.FHSLF
+		ERSTR%
+		 NOP
+		 NOP
+		MOVEM A,LOGPTR
+		CALL LGCRLF
+		JRST DMPLNK]
+	SKIPN DEBUGF		;Debugging?
+	IFSKP.
+	  CALL DTSTMP		;Log the reply
+	  LOG <S: >
+	  SETZ A,		;Terminate it before the newline
+	  IDPB A,NETPTR
+	  MOVEI B,NETBUF
+	  CALL LOGMSG
+	  CALL LGCRLF
+	ENDIF.
+	MOVE A,[POINT 7,NETBUF]	;Ready for next line
+	MOVEM A,NETPTR
+	RET
+
+
+;Here is link dies while outputting to it
+DMPLNK:	CIS			;Clear things
+	MOVE A,NETJFN		;Abort the link
+	TXO A,CZ%ABT
+	CLOSF%
+	 NOP
+	SETZM NETJFN
+	CALL DTSTMP		;Log the failure
+	LOG <----Connection aborted>
+	CALL LGCRLF
+	CALL CLSLOG
+	SKIPN A,MLQJFN		;If the queue file is still open
+	IFSKP.
+	  TXO A,CZ%ABT
+	  CLOSF%
+	    NOP
+	  SETZM MLQJFN
+	ENDIF.
+	MOVX A,.FHSLF		;Deactivate connect initiate channel
+	MOVX B,1B0
+	DIC%
+	CALL CTIMER		;Cancel timer
+	JRST STARTL		;Start again
+
+	SUBTTL Logging routines
+
+;Open log file
+OPNLOG:	SKIPLE LOGJFN		;Is it already there?
+	RET			;Yes, fine
+	MOVX A,GJ%SHT
+	HRROI B,[ASCIZ/MAIL:DMASER.LOG/] ; Point it at MAIL:
+	SKIPE DEBUGF
+	HRROI B,[ASCIZ/MAIL:DMASER-DEBUG.LOG/] ; Basically the same here
+	GTJFN%
+	 ERJMP [SKIPN DEBUGF
+		JRST OPNERR
+		MOVX A,GJ%SHT
+		HRROI B,[ASCIZ/DMASER.LOG/]
+		GTJFN%
+		 ERJMP OPNERR
+		JRST .+1]
+	MOVX B,FLD(7,OF%BSZ)+OF%APP
+	OPENF%
+	 ERJMP OPNERR
+	MOVEM A,LOGJFN
+	SETZM LOGPTR
+	RET
+
+OPNERR:	HRROI A,[ASCIZ/?DMASER: Can't open log file because: /]
+	PSOUT%
+	MOVX A,.PRIOU
+	HRLOI B,.FHSLF
+	SETZ C,
+	ERSTR%
+	 NOP
+	 NOP
+	MOVEI A,.NULIO
+	MOVEM A,LOGJFN
+	RET
+
+; Close the log file.
+CLSLOG:	SKIPE LOGPTR
+	JRST [	HRROI A,[ASCIZ/CLSLOG: buffer in use/]
+		PSOUT%
+		JRST .+1]
+	MOVE A,LOGJFN
+	CLOSF%
+	 NOP
+	SETOM LOGJFN
+	RET
+
+
+;Time stamp log entry
+DTSTMP:	SKIPE LOGPTR		;Is the buffer in use?
+	JRST [	HRROI A,[ASCIZ/DTSTMP: buffer in use/]
+		PSOUT%
+		JRST .+1]
+	HRROI A,LOGBUF		;Start the line right
+	SETO B,
+	SETZ C,
+	ODTIM%
+	 ERCAL LOGBAD
+	MOVEI B," "
+	IDPB B,A
+	MOVEM A,LOGPTR
+	RET
+
+;Log string in B
+LOGMSG:	SKIPN A,LOGPTR
+	JRST [	HRROI A,[ASCIZ/LOGMSG: buffer idle/]
+		PSOUT
+		MOVE A,[POINT 7,LOGBUF]
+		JRST .+1]
+	CALL MOVSTR
+	MOVEM A,LOGPTR
+	RET
+
+;Append a CRLF and write the line to the log file
+LGCRLF:	SKIPN A,LOGPTR		;Finish the line
+	JRST [	HRROI A,[ASCIZ/LGCRLF: buffer idle/]
+		PSOUT
+		RET]
+	MOVEI B,[ASCIZ/
+/]
+	CALL MOVSTR
+	SETZ B,			;Terminate it
+	IDPB B,A
+	MOVE A,LOGJFN		;Write it
+	HRROI B,LOGBUF
+	SETZ C,
+	SOUT%
+	 ERCAL LOGBAD
+	SETZM LOGPTR
+	RET
+
+;Here on failure to write log file
+LOGBAD:	HRROI A,[ASCIZ /
+?DMASER: Failure to write log file because: /]
+	PSOUT
+	MOVX A,.PRIOU	
+	MOVX B,<.FHSLF,,-1>
+	SETZ C,
+	ERSTR			;Tell what happened
+	 JFCL
+	 JFCL
+	HRROI B,[ASCIZ / at /]
+	SETZ C,
+	SOUT
+	HRRZ B,(P)		;And where
+	MOVX C,8
+	NOUT
+	 JFCL
+	HRROI B,[ASCIZ /
+/]
+	SETZ C,
+	SOUT
+	JRST RFATAL
+
+	SUBTTL Interrupt and timer handling
+	
+; Interrupt level table.
+LEVTAB:	PC1
+	PC2
+	PC3
+
+; Channel table.
+CHNTAB:	XWD 2,CONECT		; Connect initiate
+	XWD 1,TIMINT		; Timeout
+	XWD 1,CLZBAD		; Timeout in CLZNET
+REPEAT ^D33,<Z>
+
+; We are using timer interrupts as a "keep alive cease" counter.  Every
+; second we decrement a counter.  If it gets to zero, we abort the
+; session.  Whenever something arrives, we reset the counter.
+
+; Here on once a second interrupt.  Decr count and abort if it gets to zero.
+TIMINT:	SOSG TIMCNT
+	JRST TIMERR		;too long - do error
+	PUSH P,A
+	PUSH P,B
+	PUSH P,C
+	MOVX A,<XWD .FHSLF,.TIMEL> ;interrupt me after
+	MOVX B,TIMCLK*^D1000	;this many msec. later for next
+	MOVX C,TIMCHN		;on this channel
+	TIMER%			;interrupt at specified time
+	 JFCL			;if error, we still do our job
+	POP P,C
+	POP P,B
+	POP P,A
+	DEBRK%
+	
+; Here if we timed out trying to close the net link.  Clean up.
+CLZBAD:	SKIPE LOGPTR		;If there is a log line being built,
+	CALL LGCRLF		; finish it
+	CALL DTSTMP
+	LOG <?Timeout closing net connection>
+	CALL LGCRLF
+	MOVE A,NETJFN
+	TXO A,CZ%ABT
+	CLOSF
+	 JRST [	CAIE A,CLSX1	;Already closed?
+		CAIN A,DESX3	;No such JFN?
+		JRST .+1
+		HRROI D,[ASCIZ/CLOSF failed at CLZBAD/]
+		JRST JFATAL]
+	CAIE A,CLSX1
+	IFSKP.
+	  MOVE A,NETJFN
+	  RLJFN
+	  NOP
+	ENDIF.
+	SETZM NETJFN
+	MOVX A,<PC%USR!CLZNT1>
+	MOVEM A,PC1
+	DEBRK
+	 JERR <DEBRK failed at CLZBAD>
+
+
+; Here when the count overflows.
+TIMERR:	 CALL CRLF
+	 TMSG <421-Too long with no input; terminating connection
+421 >
+	 JRST QUIT1		; skip over 221 reply code in QUIT code
+
+; Reset the counter
+RESETT:	PUSH P,A
+	MOVX A,<TIMOUT/TIMCLK>	;in seconds
+	MOVEM A,TIMCNT
+	POP P,A
+	RET
+
+; Start the timer
+STIMER:	CALL RESETT		;make sure we start OK
+	MOVX A,<XWD .FHSLF,.TIMEL> ;interrupt me after
+	MOVX B,TIMCLK*^D1000	;this many msec. later for next
+	MOVX C,TIMCHN		;on this channel
+	TIMER%			;interrupt at specified time
+	 JFCL			;if error, we still do our job
+	RET	
+
+; Cancel the timer
+CTIMER:	MOVE A,[.FHSLF,,.TIMAL]	;Remove all pending requests
+	MOVX C,TIMCHN		;For this channel
+	TIMER%
+	 JERR <Can't remove pending timer request>
+	RET
+
+	SUBTTL Other randomness
+
+;Log number in B
+OCTOUT:	MOVE A,NETPTR
+	MOVEI C,^D8
+	NOUT%
+	 JRST 4,.-1
+	MOVEM A,NETPTR
+	RET
+
+; Move a string from B to A
+MOVSTR:	HRLI B,(<POINT 7,0>)
+MOVST1:	ILDB D,B
+	JUMPE D,R
+	IDPB D,A
+	JRST MOVST1
+
+	LIT			; generate literals
+
+	END <EVECL,,EVEC>

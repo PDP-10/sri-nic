@@ -1,0 +1,290 @@
+;-*-Midas-*-
+
+	Title @PIPE - Fake Unix pipelines.
+
+.DECSAV
+
+A=5
+B=6
+C=7
+T=10
+TT=11
+F=13
+P=17
+
+ PDLen==20
+MaxFrk==20			;How many forks at once?
+JCLlen==40			;Words for each JCL buffer
+InBufl==40
+AtBufl==20
+
+.INSRT SYSTEM:SYMBOLS
+.INSRT SYSTEM:MACROS
+
+Define NOISE &string
+	Hrroi 1,[Asciz string]
+	Movem 1,NoiFDB+.CMDAT
+	Movei 1,CmdBlk
+	Movei 2,NoiFDB
+	COMND
+Termin
+
+PDList:	-PDLen,,.
+	Block PDLen
+
+nForks:	0			;Number of forks...
+nJCLs:	0			;Number of JCL blocks
+FrkJFN:	Block MaxFrk		;JFNs for Fork .EXE's
+ForkPH:	Block MaxFrk		;Process Handles
+FrkPIO:	Repeat MaxFrk,-1 ?
+				;Primary input JFN,,Primary output JFN
+FrkJCL:	Block MaxFrk		;Address of JCL buffer or 0 if none.
+
+IniFDB:	Field(.CMFLD,CM%FNC) ? 0 ? 0 ? 0
+NoiFDB:	Field(.CMNOI,CM%FNC) ? 0 ? 0 ? 0
+
+BigFDB:	ToFDB
+
+ToFDB:	Field(.CMTOK,CM%FNC)\CM%SDH\CM%HPP+FrFDB ? -1,,[Asciz ">"]
+	-1,,[Asciz /">" to direct primary output to a file/] ? 0
+FrFDB:	Field(.CMTOK,CM%FNC)\CM%SDH\CM%HPP+PipFDB ? -1,,[Asciz "<"]
+	-1,,[Asciz /"<" to get primary input from a file/] ? 0
+PipFDB:	Field(.CMTOK,CM%FNC)\CM%SDH\CM%HPP+QstFDB ? -1,,[Asciz "|"]
+	-1,,[Asciz /"|" to pipe primary output to another program/] ? 0
+QstFDB:	Field(.CMQST,CM%FNC)\CM%HPP+ConFDB ? 0
+	-1,,[Asciz "JCL to give program,"] ? 0
+ConFDB:	Field(.CMCFM,CM%FNC) ? 0 ? 0 ? 0
+
+CmdBlk:	CM%XIF+CM%WKF+Repars
+	.PRIIN,,.PRIOU
+	-1,,[Asciz ""]
+	440700,,InBuf
+	440700,,InBuf
+	5*InBufl-1
+	0
+	440700,,AtmBuf
+	AtBufl*5-1
+	0
+
+FilFDB:	Field(.CMFIL,CM%FNC) ? 0 ? 0 ? 0
+
+EXEblk:	GJ%OLD+.GJDEF
+	.PRIIN,,.PRIOU
+	-1,,[Asciz "SYS"]
+	0
+	0
+	-1,,[Asciz "EXE"]
+	Block 8
+
+OFIblk:	GJ%FOU
+	.PRIIN,,.PRIOU
+	Block 12.
+
+IFIblk:	GJ%OLD
+	.PRIIN,,.PRIOU
+	Block 12.
+
+InBuf:	Block InBufl
+AtmBuf:	Block AtBufl
+JCLbuf:	Block JCLlen+5
+
+.INSRT SYSTEM:PRARG
+
+Begin:	RESET
+	Move P,PDList
+
+	Movei 1,.RSINI
+	RSCAN
+	  Nop
+	Jrst Repar1
+
+Repars:	Skipg CmdBlk+.CMINC
+	  Jrst Die
+Repar1:	Setzm nJCls
+	Skipn nForks
+	  Jrst Parse
+	Movs A,nForks
+	Movns A
+UnJFN:	Setzm FrkJCL(A)
+	Move 1,FrkJFN(A)
+	RLJFN
+	  Nop
+	Setzm FrkJFN(A)
+	Hlre 1,FrkPIO(A)
+	Came 1,[-1]
+	  RLJFN
+	    Nop
+	Hrre 1,FrkPIO(A)
+	Came 1,[-1]
+	  RLJFN
+	    Nop
+	Setom FrkPIO(A)
+	Aobjn A,UnJFN
+	Setzm nForks
+	Movei T,ToFDB
+	Movem T,BigFDB
+	Movei T,FrFDB
+	Hrrm T,ToFDB+.CMFLG
+	Movei T,PipFDB
+	Hrrm T,FrFDB+.CMFLG
+	Movei T,QstFDB
+	Hrrm T,PipFDB+.CMFLG
+
+Parse:	Movei 1,CmdBlk
+	Movei 2,IniFDB
+	COMND			;Skip jane.
+
+Parse1:	Movei T,EXEblk
+	Movem T,CmdBlk+.CMGJB
+	Movei 1,CmdBlk
+	Movei 2,FilFDB		;Read programname.
+	COMND
+	Txne 1,CM%NOP
+	  Jrst Errdie
+	Move F,nForks
+	Movem 2,FrkJFN(F)
+	Aos nForks
+
+Parse2:	Movei 1,CmdBlk
+	Move 2,BigFDB
+	COMND
+	Txne 1,CM%NOP
+	  Jrst Errdie
+	Ldb T,[.BP CM%FNC,(3)]
+	Cain T,.CMCFM
+	  Jrst DoIt
+	Cain T,.CMQST		;Quoted string, JCL
+	  Jrst [Move T,nJCLs	;Number of JCL blocks
+		IMuli T,JCLlen	;Start of buffer block
+		Addi T,JCLadr
+		Movem T,FrkJCL(F)
+		Hrro 1,T
+		Hrroi 2,AtmBuf
+		Setz 3,
+		SOUT
+		Movei T,QstFDB
+		Call DeFDB
+		Jrst Parse2]
+	Tlz 3,-1		;RH has address of FDB
+	Caie 3,ToFDB		;">"
+	  Jrst FrFDBp
+	Movei T,OFIblk
+	Movem T,CmdBlk+.CMGJB
+	Movei 2,FilFDB
+	COMND
+	Txne 1,CM%NOP
+	  Jrst Errdie
+	Hrrm 2,FrkPIO(F)
+	Movei T,ToFDB
+	Call DeFDB
+	Movei T,PipFDB
+	Call DeFDB
+	Jrst Parse2
+
+FrFDBp:	Caie 3,FrFDB
+	  Jrst Parse1		;Must be "|", so get another program
+	Movei T,IFIblk
+	Movem T,CmdBlk+.CMGJB
+	Movei 2,FilFDB
+	COMND
+	Txne 1,CM%NOP
+	  Jrst Errdie
+	Hrlm 2,FrkPIO(F)
+	Movei T,FrFDB
+	Call DeFDB
+	Jrst Parse2
+
+DoIt:	Movs F,nForks
+	Movns F
+MakJCL:	Hlre 1,FrkPIO(F)
+	Came 1,[-1]
+	  Jrst [Move 2,[Field(7,OF%BSZ)+OF%RD]
+		OPENF
+		  .Lose
+		Jrst .+1]
+	Hrre 1,FrkPIO(F)
+	Came 1,[-1]
+	  Jrst [Move 2,[Field(7,OF%BSZ)+OF%WR]
+		OPENF
+		  .Lose
+		Jrst .+1]
+	Hrroi 1,JCLbuf
+	Move 2,FrkJFN(F)
+	Move 3,[Field(.JSAOF,JS%NAM)]
+	JFNS
+	Skipe FrkJCL(F)
+	  Jrst [Movei 2,40
+		Idpb 2,1
+		Hrro 2,FrkJCL(F)
+		Setz 3,
+		SOUT
+		Jrst .+1]
+	Movei 2,^J
+	Idpb 2,1
+
+	Hrroi 1,JCLbuf		;Set the RSCAN buffer for this fork...
+	RSCAN
+	  Nop
+
+	Movx 1,CR%CAP
+	Setz 2,
+	CFORK
+	  Jrst Errdie
+	Movem 1,ForkPH(F)
+	Movss 1
+	Hrr 1,FrkJFN(F)
+	GET
+	  Erjmp Errdie
+	Move 1,ForkPH(F)
+	Move 2,FrkPIO(F)
+	SPJFN
+	Setz 2,
+	SFRKV
+	WFORK
+	Hlre 1,FrkPIO(F)
+	Came 1,[-1]
+	  CLOSF
+	    Nop
+	Hrre 1,FrkPIO(F)
+	Came 1,[-1]
+	  CLOSF
+	  Nop
+	Aobjn F,MakJCL
+	Hrroi 1,[Asciz ""]
+	RSCAN			;Zero out the RSCAN buffer.
+	  Nop
+	Jrst Die
+
+;;
+;;	Given an FDB address in T, remove it from the BigChain
+;;
+
+DeFDB:	Camn T,BigFDB
+	  Jrst [Hrrz TT,.CMFLG(T)
+		Movem TT,BigFDB
+		Return]
+	Move TT,BigFDB
+
+FolFDB:	Hrrz 1,.CMFLG(TT)
+	Jumpe 1,CPopj
+	Camn 1,T
+	  Jrst [Hrrz 2,.CMFLG(T)
+		Hrrm 2,.CMFLG(TT)
+		Return]
+	Move TT,1
+	Jrst FolFDB
+
+Popj1:	Aos (P)
+CPopj:	Return
+
+Errdie:	Call Terpri
+	CType "?
+	Call Barf
+Die:	.Logout
+
+Variables
+Constants
+
+JCLadr:	0
+
+	End Begin

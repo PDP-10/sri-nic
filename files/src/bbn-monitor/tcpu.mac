@@ -1,0 +1,5871 @@
+; get fin, send ack+fin, get rx of fin, sends ack but includes fin @ seq+1
+; disp w/o output file - no priou
+; don't assign local host if can do without - e.g. no logical field
+;	(must ask for logical field)
+
+	TITLE TCPUQS	; IP User Queue program to sink TCP packets
+	SEARCH ANAUNV,MACSYM,MONSYM
+
+VWHO==7		; CLYNN
+VMAJOR==0
+IFNDEF VMINOR,<VMINOR==0>
+VEDIT==122	;28-May-85 CLynn Add UDP to WATCH, fixed char/packet lossage,
+;				 cleanup SHOW
+;VEDIT==121	;21-Feb-85 CLynn Get default local host on 1822 net
+;VEDIT==114	; 4-Dec-84 CLynn Add DROP nth & MASK DROP commnads
+;VEDIT==111	;24-Oct-84 CLynn Expand WINDOW functions, update PARSE etal
+;VEDIT==110	;16-Oct-84 CLynn Changes to watch arbitrary protocol, cleanup
+;VEDIT==5	;   Mar-84 CLynn Added ICMP functions + numerous changes
+;VEDIT==4	;28-Dec-83 CLynn Lots of edits and changes, etc...
+;VEDIT==3	; 2-May-82 CLynn Wait for ACK of FIN, Delay before ACK
+;VEDIT==2	;26-Apr-82 CLynn Use logical host 4
+;VEDIT==1	;15-Apr-82 CLynn Started it
+
+
+; AC definitions
+
+F==0		; Flags
+F.RS==0400000,,0	; Received SYN
+F.SSA==200000,,0	; Sent ACK for SYN
+F.RF==0040000,,0	; Received FIN
+F.SFA==020000,,0	; Sent ACK for FIN
+
+F.SS==0004000,,0	; Sent SYN
+F.RSA==002000,,0	; Received ACK to SYN
+F.SF==0000400,,0	; Sent FIN
+F.RFA==000200,,0	; Received ACK to FIN
+
+F.WATC==00002,,0	; WATCH function (Within .SHOW)
+F.SINK==00001,,0	; SINK function
+
+F.SEG==0,,400000	; Send segment size option
+F.SG1==0,,200000	; Only send segment size once
+F.SEL==0,,100000	; Allow seg size to decrease
+F.RND==0,,040000	; Use random delay up to max
+
+DEFINE RHFLAG<
+FLAG1(F.SAF,000400,<	Separate ACK(FIN) & FIN>)
+FLAG1(F.RXA,000100,<	Retransmit ACK with larger window>)
+FLAG1(F.QUE,000010,<	Queue packets to be sent>)
+>
+DEFINE FLAG1(nam,val,ttl)<nam==val>
+	RHFLAG
+
+T1=1
+T2=2
+T3=3
+T4=4
+T5=5		; HNO2NA
+Q1=5
+Q2=6
+
+
+FCT=7		; Command Keyword Variable
+EST=10		; Parsing error msg
+PRT=11		; Parsing port
+HST=12		; Parsing host
+
+HA==10
+HB==HA+1
+
+TPKT=14		;Pointer to TCP header in R/SBFR
+PKT=15		;Pointer to packet pseudo header before R/SBFR
+
+CX=16		; Standard temp
+P=17		; Stack pointer
+
+
+; AC definitions   printer subroutines 
+
+
+F==0
+ F%EOF== 400000,,0	; Saw input EOF
+ F%GB==  200000,,0	; Print garbage octets
+ F%GGP== 100000,,0	; Print GGP packets
+ F%HLP== 040000,,0	; Requested help
+ F%ICMP==020000,,0	; Print ICMP packets
+ F%182L==010000,,0	; Print local (1822) leaders
+;F%1822==004000,,0	; Print local net (1822) samples
+ F%NIP== 002000,,0	; Not an IP traced packet
+ F%NNIP==001000,,0	; Next F%NIP
+ F%PG==  000400,,0	; Paginate
+ F%PKT== 000200,,0	; Print only specified packets
+ F%LF==  000100,,0	; Use long format
+ F%TCP== 000040,,0	; Print TCP packets
+ F%TX==  000020,,0	; Print TCP data as ascii
+ F%0PKT==000010,,0	; No packet in PACKET
+ F%FCOR==000004,,0	; Input file is from core dump
+ F%CORD==000002,,0	; Data is core, not packet
+ F%INTL==000001,,0	; List internal fields
+
+ F.NO==000,,400000	; Saw "NO"
+ F.ER==000,,200000	; Error was detected, print current (EST) error message
+ F.XT==000,,100000	; Command should cause return from PARSE
+ F.DROP==0,,004000	; Going to drop packet
+
+
+; During data packet processing
+OP=10		; Byte pointer into packet
+PL=11		; # bytes remaining from trace info
+VL=12		; # bytes remaining from full packet
+COD=13
+TMP=14		; Points to (included) TCP header
+IPKT=15		; Points to (included) IP header (-PKTELI)
+
+
+C.LF==12
+
+FLDEF==1B18		; Field bit for "DEFAULT"
+FLDNO==1B19		; Field bit for "NO"
+
+
+
+DEFINE	GREET	(MJ,MN,ED)<
+	HRROI T1,[ASCIZ /Dummy TCP via User Queue Program   V'MJ'.'MN(ED)
+/]>
+
+
+DEFSTR LEFT32,0,31,32		; Left-justified 32-bit field
+DEFSTR BYT1,0,7,8
+DEFSTR BYT2,0,15,8
+DEFSTR BYT3,0,23,8
+DEFSTR BYT4,0,31,8
+DEFSTR QDBLH,0,23,24		; QDB logical host field
+DEFSTR QDBLP,0,15,16		; QDB local port
+
+DEFSTR TMXSG,TOPMSG,31,16	; Segment size bytes in TCP max seg option
+
+DEFINE PNTR(ac,of,ms)<POINTR of,ms>
+
+DEFINE XNOUT(fmt)<
+	MOVX T3,<fmt>
+	NOUT%
+	  JFCL
+>
+
+
+DEFINE SSOUT(string)<
+	HRROI T2,[ASCIZ \string\]
+	SETZ T3,
+	SOUT%
+>
+
+
+DEFSTR	(NOKY,0,23,4)	; Flags for NO ...
+DEFSTR	(OKKY,0,29,4)	; Flags for ...
+DEFSTR	(CRKY,0,35,4)	; Current falgs: CM%ABR, CM%NOR, CM%INV
+
+DEFINE TEXT(string,no<0>,yes<0>)<CM%FW+FLD(no,NOKY)+FLD(yes,OKKY)
+	ASCIZ \string\>
+
+
+;	XX (Lnam,bit,oct,title,nam,off,fmt)
+LSTBIT==0
+LSTLTH==1
+LSTTTL==2
+LSTT2==3
+LSTT3==4
+LSTSIZ==5
+
+DEFINE	XX(lab,bit,oct,ttl,nam,off,fmt)<
+IFNB <lab>,<lab:>
+	EXP bit,oct
+IFNB <ttl>,<	[ASCIZ \ttl\]>
+IFB  <ttl>,<	[ASCIZ \ \]>
+IFDEF  %'nam,<	%'nam (PNTR,,<off>,nam)	>
+IFNDEF %'nam,<	[ASCIZ \off\]>
+	EXP fmt
+.XX==.XX+1
+> ; End of DEFINE XX
+
+
+
+PTDTAL==5		; Length of tracer data
+
+
+DECRAD==^D10
+OCTRAD==^D8
+
+; UDP Header Information
+
+.UDPFM==^D17		; UDP protocol not in MONSYM
+DEFSTR UDPSP,0,15,16	; UDP source port
+DEFSTR UDPDP,0,31,16	; UDP destination port
+DEFSTR UDLEN,1,15,16	; UDP length, including 8-byte UDP header
+DEFSTR UDCKS,1,31,16	; UDP checksum (incl. PISH, PIDH, =.UDPFM, UDLEN)
+
+
+DEFINE N1822<
+ ONENET (ARPANET,^D10)
+ ONENET (MILNET,^D26)
+ ONENET (BBN-NET-TEMP,^D8)
+>
+
+; Names of 1822 networks ...
+
+DEFINE ONENET(nam,num)<POINT 7,[ASCIZ /nam/]>
+
+NETNAM:	N1822
+NNETS==.-NETNAM
+
+
+DEFINE ONENET(nam,num)<num>
+
+NETNUM:	N1822
+
+
+ENTVEC:	JRST START
+	JRST RELQ
+	<VWHO>B7+<VMAJOR>B11+<VMINOR>B17+VEDIT
+
+	SUBTTL	Initialize & Assign Queue
+
+	LOC 2000
+
+	SUBTTL	Top-level Command Keyword Table
+
+
+;	HELPTX,,HLPKEY		;Parallel HELP keywords
+	0,,0
+	CALL TOPINI		; Reparse: instruction
+TOPFDB:	FLDDB.(.CMKEY,,TOPKEY)	; First parameter is keyword
+
+TOPKEY:	NTOP,,NTOP		; Table of parameter keywords
+	TXA,,.HOSTA		;  A(host)
+	TXACK,,.ACK		;  ACK
+	TXASCO,,.ASCO		;  ASCII-OUTPUT file
+	TXB,,.HOSTB		;  B(host)
+	TXBINO,,.BINO		;  BINARY-OUTPUT file
+	TXDTUN,,.DESTU		;  DESTINATION UNREACHABLE
+	TXDISP,,.DISP		;  DISPLAY
+	TXDRPK,,.DROP		;  DROP-PACKET
+	TXEXIT,,.EXIT		;  EXIT
+	TXFIN,,.FIN		;  FIN
+	TXFLAG,,.FLAGS		;  FLAGS
+	TXGATW,,.GATEW		;  GATEWAY
+	TXGO,,.GO		;  GO
+	TXHSTA,,.HOSTA		;  HOST-A
+	TXHSTB,,.HOSTB		;  HOST-B
+;	TXHELP,,.HELP		;  HELP
+	TXINPU,,.INPTF		;  INPUT
+	TXLOCH,,.LCHST		;  LOCAL-HOST address
+	TXLOGH,,.LGHST		;  LOGICAL-HOST number and position
+	TXMSK,,.MASKF		;  MASK
+;	TXPROT,,WPROT		;  PROTOCOL
+	TXREDR,,.REDIR		;  REDIRECT
+	TXSEGM,,.SEGME		;  SEGMENT
+	TXSHOW,,.SHOW		;  SHOW
+	TXSINK,,.SINK		;  SINK
+	TXSRCQ,,.SRCQ 		;  SOURCE-QUENCH
+	TXWATC,,.WATCH		;  WATCH
+	TXWIND,,.WINDOW		;  WINDOW
+NTOP==.-TOPKEY-1
+
+repeat 0,<
+HLPKEY:	NHLP,,NHLP		; Table size
+	TXEXIT,,HEXIT
+	TXFILT,,HFILT
+	TXFRMT,,HFRMT
+	TXFUNC,,HFUNC
+	TXGO,,HGO
+	TXINPU,,HINPUT
+	TXOUTP,,HOUTPU
+	TXSHOW,,HTSHOW
+	TXSKIP,,HSKIP
+NHLP==.-HLPKEY-1
+> ; end of repeat 0
+
+
+
+TOPINI:	SETZM DFN
+	SETZM DEX
+	RET
+
+	SUBTTL	Initialization and Command Parsing
+
+START:	MOVE P,PDLP		; Reset the stack
+	CALL PARSIN		; Initialize the parser
+
+	GREET	\VMAJOR,\VMINOR,\VEDIT ; Give program id
+BOMB:	PSOUT%			; Print error message
+
+	MOVE T5,[-NNETS,,NETNAM] ; AOBJN for 1822 networks
+	DO.
+	  MOVX T1,.GTHSN	; Network name to address
+	  TXO T1,GH%NET
+	  MOVE T2,(T5)		; Pointer to string
+	  GTHST%
+	    AOBJN T5,TOP.	; Not found, try another name
+	  IFL. T5
+	    MOVX T1,.GTHLN	; Get local host address on specified net
+	    MOVE T2,T3		; Network address
+	    GTHST%
+	      AOBJN T5,TOP.	; No interface on that net, try next
+	  ENDIF.
+	ENDDO.
+
+	SETOM HAVLGL		; Assume have 1822 address
+	IFGE. T5		; Make sure have some address
+	  MOVE T5,[-NNETS,,NETNUM] ; AOBJN for networks
+	  DO.
+	    MOVX T1,.GTHLN
+	    MOVE T2,(T5)
+	    GTHST%
+	      AOBJN T5,TOP.
+	  ENDDO.
+	  ANDGE. T5
+	    HRROI T1,[ASCIZ /Unable to find local interface on an 1822 net.
+/]
+	    PSOUT%
+	    SETZM HAVLGL	; No 1822 address
+	    SETZRO QDBLH,+PROTOC+1 ; Bits off in mask
+	    SETZRO QDBLH,+PROTOC	; Value
+	    MOVX T1,.GTHSZ	; Get local host address
+	    GTHST%
+	    IFSKP.		; Got some name
+	      MOVE T2,T4	; Local address
+	    ELSE.
+	      SETZ T2,		; No local address??
+	    ENDIF.
+	ENDIF.
+	MOVEM T2,ICMPGW		; Gateway address
+	MOVEM T2,ICMPSH		; Source of source quench messages
+	STOR T2,LEFT32,+LCLHST	; Save local host address
+
+	MOVX T1,.PRIOU		; Translate address into name
+	IFN. T2
+	  MOVX T3,HNO%NP+HNO%NA+HNO%AD	; Name + address
+	  CALL HNO2NA
+	ELSE.
+	  SSOUT <Site Unknown >
+	  SETZ T3,
+	  SOUT%
+	ENDIF.
+
+	SSOUT < on >
+
+	SETO T2,		; Current time stamp
+	MOVX T3,<OT%DAY+<0*OT%FDY>+OT%NSC+OT%TMZ+OT%SCL>
+	ODTIM%			; Format of time
+
+	CALL CRLF
+
+RSTART:	MOVE P,PDLP		; Reset the stack
+
+	SETO T1,
+	CAME T1,QH		; Have old queue handle?
+	  JRST RELQ		; Yes, get rid of it
+
+	CALL CLOSIT		; Close files from last time
+	  JFNO
+	CALL CLOSIT
+	  TRCJFN
+	CALL CLOSIT
+	  JFNI
+
+	RESET%			; Reset the process
+
+	MOVX T2,TOPFDB		; Top-level parameters and the prompt
+	MOVX T3,<POINT 7,[ASCIZ /Parameters:/]>
+	CALL PARSE		; Process Parameters
+				; GO Command returns here
+
+	HRROI T1,[ASCIZ /? No function specified.
+/]
+	SKIPG FCT,FUNCTN	; Make sure have a function
+	  JRST BOMB
+	CAIN FCT,RELQ		; Exit?
+	  JRST RELQ		; Yes
+
+	SETZB T1,PKTCNT		; Reset packet count
+	MOVX T2,1		; Reset packet ring counter
+	DMOVEM T1,PKTBIT
+	MOVE T1,DROPKC+1	; Reset event counters
+	MOVEM T1,DROPKC
+	MOVE T1,ICMRDC+1
+	MOVEM T1,ICMRDC
+	MOVE T1,ICMSQC+1
+	MOVEM T1,ICMSQC
+	MOVE T1,ICMDUC+1
+	MOVEM T1,ICMDUC
+
+	MOVX T2,<OF%RD+OF%WR+FLD(^D7,OF%BSZ)>
+	SKIPLE T1,JFNO		; Have output JFN?
+	 OPENF%			; Yes, open it
+	  SETZM JFNO		; Need better cleanup
+	HRROI T1,[ASCIZ /% No output listing file specified.
+/]
+	SKIPG JFNO		; Have listing file?
+	  PSOUT%
+
+	MOVX T2,<OF%RD+OF%WR+FLD(^D36,OF%BSZ)>
+	SKIPLE T1,TRCJFN	; Have trace file?
+	 OPENF%			; Yes, open it
+	  SETZM TRCJFN		; Need better cleanup
+	HRROI T1,[ASCIZ /% No output trace file specified.
+/]
+	SKIPG TRCJFN		; Have trace file?
+	  PSOUT%
+
+	JRST (FCT)		; Perform function
+
+	SUBTTL	ACK Command
+
+ACKKEY:	2,,2
+	[ASCIZ /BY-PACKETS/],,0
+	[ASCIZ /EVERY/],,1
+
+ACWKEY:	1,,1
+	[ASCIZ /RETRANSMISSION/],,0
+
+ACDFDB:	FLDDB.(.CMNUM,CM%SDH,^D10,<# msec to delay>,<0>)
+
+ACRKEY:	1,,1
+	[ASCIZ /RANDOMLY/],,0
+
+.ACK:	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /data/]>)]
+	CALL CCOMND
+	MOVEI T2,[FLDDB.(.CMKEY,,ACKKEY,,<BY-PACKETS>)]
+	CALL CCOMND
+	HRRZ FCT,(T2)		; Mode
+	IFN. FCT		; Must get octet count
+	  MOVX T2,<POINT 7,[ASCIZ /# octets/]>
+	  CALL CCMDEC
+	  HRLZ FCT,T2
+	  MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /octets/]>)]
+	  CALL CCOMND
+	ENDIF.
+
+	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /waiting for/]>)]
+	CALL CCOMND
+
+	MOVEI T2,[FLDDB.(.CMKEY,,ACWKEY,,,ACDFDB)]
+	CALL CCOMND
+	CAME T3,T4
+	IFSKP.
+	  MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /#/]>)]
+	  CALL CCOMND
+	  MOVX T2,<POINT 7,[ASCIZ /# retransmissions/]>
+	  CALL CCMDEC
+	  HRR FCT,T2
+	  MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /and delaying/]>)]
+	  CALL CCOMND
+	  MOVEI T2,ACDFDB		; # msec to delay
+	  CALL CCOMND
+	ENDIF.
+
+	PUSH P,T2			; Save # msec
+
+	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /msec/]>)]
+	CALL CCOMND
+
+	MOVEI T2,[FLDDB.(.CMKEY,,ACRKEY,,,[FLDDB.(.CMCFM)])]
+	CALL CCOMND
+	CAME T3,T4
+	IFSKP.
+	  CALL CCMCFM		; Confirm randomly
+	  MOVX T2,F.RND
+	  IORM T2,F0		; Remember it
+	ELSE.
+	  MOVX T2,F.RND
+	  ANDCAM T2,F0		; Not randomly
+	ENDIF.
+
+	POP P,ACKDLY		; Set new ACK delay
+	HRRZM FCT,ACKRX0	; # retransmissions to ignore
+	HLRZM FCT,ACKCN0	; # octets to be acked
+
+	RET
+
+	SUBTTL	FIN Command
+
+FINKEY:	2,,2
+	[ASCIZ /DROPPED/],,FINDC0
+	[ASCIZ /RETRANSMITTED/],,FINRX0
+
+.FIN:	MOVEI T2,[FLDDB.(.CMKEY,,FINKEY)]
+	CALL CCOMND
+	HRRZ FCT,(T2)
+
+	CAIE FCT,FINDC0		; Dropped?
+	IFSKP.			; Yes
+	  MOVX T2,<POINT 7,[ASCIZ /# times FIN to be dropped/]>
+	  CALL CCMDEC
+	  HRL FCT,T2
+	  MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /times when received/]>)]
+	  CALL CCOMND
+	ENDIF.
+
+	CAIE FCT,FINRX0		; Retransmitted?
+	IFSKP.			; Yes
+	  MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /every/]>)]
+	  CALL CCOMND
+	  MOVX T2,<POINT 7,[ASCIZ /# msec between retransmissions/]>
+	  CALL CCMDEC
+	  HRL FCT,T2
+	  MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /msec/]>)]
+	  CALL CCOMND
+	ENDIF.
+
+	CALL CCMCFM
+
+	HLRZ T1,FCT		; Value
+	HRRZ T2,FCT		; Variable
+	MOVEM T1,(T2)		; Set it
+
+	RET
+
+	SUBTTL	FLAGS Command
+
+	0,,0
+	JFCL			; Reparse instruction
+FLGLVL:	FLDDB.(.CMKEY,,FLGKEY,,,[FLDDB.(.CMCFM)]) ; First parameter is keyword
+
+FLGKEY:	NFLG,,NFLG		; Table of parameter keywords
+	TXACKR,,F.RXA		;  ACK-RETRANSMITED
+FLGHLP:	TXHELP,,0		;  HELP
+FLGNO:	TXNO,,0			;  NO
+FLGNUN:	TXNONE,,0		;  NONE
+	TXQPKT,,F.QUE		;  QUEUE-PACKETS-TO-SEND
+	TXFSAF,,F.SAF		;  SEPARATE-FIN-AND-ACK-OF-FIN
+NFLG==.-FLGKEY-1
+
+DEFINE FLAG1(nam,val,ttl)<ASCII \nam ttl
+\>
+FLGMSG:	RHFLAG
+FLGMSL==<.-FLGMSG>*5
+
+
+
+.FLAGS:	HRRZ FCT,F0
+	DO.
+	  MOVX T2,FLGLVL		; Top-level parameters and the prompt
+	  CALL CCOMND			; Get keyword
+	  CAIN T3,T4			; Confirm?
+	  IFSKP.
+	    HRRM FCT,F0			; Yes, update flags
+	    RET
+	  ENDIF.
+
+	  HRRZS T2			; Get entry address
+	  CAIE T2,FLGNUN
+	  IFSKP.
+	    TXZ FCT,1B0			; Forget NO
+	    SETZM F0
+	    LOOP.
+	  ENDIF.
+
+	  CAIE T2,FLGNO
+	  IFSKP.
+	    TXO FCT,1B0			; Remember NO
+	    LOOP.
+	  ENDIF.
+
+	  CAIN T2,FLGHLP
+	  IFSKP.
+	    HRRZ T2,(T2)		; Get bit
+	    TXZE FCT,1B0		; NO?
+	     TDZA FCT,T2		; Clear bit (NO foo)
+	      TDO FCT,T2		; Set bit   (foo)
+	    LOOP.			; Back for more
+	  ENDIF.
+
+	  MOVX T1,.PRIOU
+	  HRROI T2,FLGMSG
+	  MOVX T3,-FLGMSL
+	  SOUT%
+	  TXZ FCT,1B0			; Forget NO
+	  LOOP.
+	ENDDO.
+
+	SUBTTL	DISPLAY, DROP, and EXIT Commands
+
+; DISPLAY on/off
+
+	0,,0
+	JFCL
+DISFDB:	FLDDB.(.CMKEY,,DISKEY)
+DISKEY:	2,,2
+	[ASCIZ /OFF/],,0
+	[ASCIZ /ON/],,1
+
+.DISP:	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /passing packets/]>)]
+	CALL CCOMND
+	MOVEI T2,DISFDB
+	CALL CCOMND
+	HRRZ FCT,(T2)		; Get ON-1/OFF-0 switch
+	CALL CCMCFM
+	MOVEM FCT,DISPSW
+	RET
+
+
+; DROP (every) nth (packet)
+
+.DROP:	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /every/]>)]
+	CALL CCOMND
+
+	MOVX T2,<POINT 7,[ASCIZ /repetition count/]>
+	CALL CCMDEC		; Every Nth packet
+	MOVE FCT,T2
+
+	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /packet/]>)]
+	CALL CCOMND
+
+	CALL CCMCFM
+	MOVEM FCT,DROPKC+1
+	RET
+
+
+; EXIT (to exec)
+
+.EXIT:	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /to exec/]>,,,)]
+	CALL CCOMND
+	CALL CCMCFM		; Confirm parameter
+	MOVEI T1,RELQ
+	MOVEM T1,FUNCTN
+	TXO F,F.XT
+	RET
+
+	SUBTTL HOST Command
+
+.HOSTA:	MOVEI Q1,HOSTA
+	SKIPA
+.HOSTB:	  MOVEI Q1,HOSTA+1
+	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /is/]>,,,)]
+
+;T2/	Noise FDB
+;Q1/	Pointer to host address variable
+
+GETHST:	CALL CCOMND
+
+	MOVX T2,HSTFLD		; Host specification
+	CALL CCOMND
+	CALL NAMES
+	  JRST PARSER
+	CALL CCMCFM
+	MOVEM HST,(Q1)		; Save host
+	RET
+
+	SUBTTL INPUT Command
+
+.INPTF:	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /from file/]>,,,)]
+	CALL CCOMND
+
+	CALL CLOSIT			; Get rid of trash JFN
+	  JFNT
+
+	MOVE T1,[[	GJ%OLD
+			0
+			0		; DEV
+			0		; DIR
+			0		; NAM
+			[ASCIZ /BIN/]	; EXT
+			0
+			0
+			0],,GJFN]
+	BLT T1,GJFN+10		; Initialize GTJFN block
+
+	MOVEI T2,[FLDDB.(.CMFIL)]
+	CALL CCOMND
+	MOVE FCT,T2		; Save JFN
+	MOVEM FCT,JFNT		; Trash JFN
+
+	CALL CCMCFM		; Confirm it
+
+	CALL CLOSIT		; Close last input file
+	  JFNI
+
+INPUX:	MOVEM FCT,JFNI		; Set new file
+	SETZM JFNT		; No longer trash
+
+	SETZM DFN		; Setup default output name
+	HRROI T1,DFN
+	MOVE T2,JFNI
+	MOVX T3,<FLD(.JSAOF,JS%NAM)>
+	MOVX T4,0
+	JFNS%
+	IDPB T4,T1		; End string
+
+	RET
+
+	SUBTTL	OUTPUT Command
+
+.BINO:	TDZA FCT,FCT		; BINARY-OUTPUT
+.ASCO:	  MOVSI FCT,1		; ASCII-OUTPUT
+	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /to file/]>)]
+	CALL CCOMND
+
+	CALL CLOSIT		; Get rid of trash JFN
+	  JFNT
+
+	MOVE T2,[ASCIZ /LST/]
+	SKIPN FCT
+	  MOVE T2,[ASCIZ /BIN/]
+	MOVEM T2,DEX
+
+	MOVE T1,[[	GJ%FOU+GJ%SHT
+			0
+			0		; DEV
+			0		; DIR
+			0,,DFN		; NAM [ASCIZ /TCPUQS/]
+			0,,DEX		; EXT [ASCIZ /BIN/]
+			0
+			0
+			0],,GJFN]
+	BLT T1,GJFN+10		; Initialize GTJFN block
+
+	MOVEI T2,[FLDDB.(.CMFIL)]
+	CALL CCOMND
+	HRR FCT,T2		; Save JFN
+	MOVEM T2,JFNT		; Save trash JFN
+	CALL CCMCFM		; Confirm it
+
+	TLNN FCT,-1		; Ascii?
+	IFSKP.
+	  CALL CLOSIT
+	    JFNO
+	  HRRZM FCT,JFNO
+	ELSE.
+	  CALL CLOSIT
+	    TRCJFN
+	  HRRZM FCT,TRCJFN
+	ENDIF.
+	SETZM JFNT		; No longer trash
+	RET
+
+	SUBTTL	GATEWAY, LOCAL-HOST, LOGICAL-HOST Commands
+
+; GATEWAY (sending ICMP messages is) host
+
+.GATEW:	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /sending ICMP messages is/]>)]
+	MOVEI Q1,ICMPSH		; Set address sending ICMP messages
+	CALLRET GETHST
+
+
+
+; LOCAL-HOST (for program is) host
+
+.LCHST:	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /address is/]>)]
+	CALL CCOMND
+
+	MOVX T2,HSTFLD		; Host specification
+	CALL CCOMND
+	CALL NAMES
+	  JRST PARSER
+
+	CALL CCMCFM
+
+	SKIPL HST		; If host specified,
+	  STOR HST,LEFT32,+LCLHST ; Save left-justified host address
+
+	LOAD T4,QDBLH,+PROTOC	; Get current logical host field
+	LDB T2,LGHBYP		; Get field from address
+	CAMN T2,T4		; Same?
+	IFSKP.			; No
+	  HRROI T1,[ASCIZ /% Logical host field not correct, changing /]
+	  PSOUT%
+	  MOVX T1,.PRIOU
+	  XNOUT DECRAD		; Value from address
+	  SSOUT < to >
+	  MOVE T2,T4
+	  XNOUT DECRAD		; Previously specified value
+	  HRROI T1,[ASCIZ /
+/]
+	  PSOUT%
+	  DPB T4,LGHBYP		; Do it
+	ENDIF.
+
+	RET
+
+
+; LOGICAL-HOST (for program is) number mask
+
+.LGHST:	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /number is/]>)]
+	CALL CCOMND
+
+	MOVEI T2,[FLDDB.(.CMNUM,,^D10)]
+	CALL CCOMND
+	HRROI EST,[ASCIZ /Logical host number must be 0 to 255/]
+	SKIPL FCT,T2
+	 CAILE T2,377
+	  JRST PARSER
+
+	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /mask/]>)]
+	CALL CCOMND
+
+	MOVEI T2,[FLDBK.(.CMFLD,,,<logical host mask>,<0.0.255.0>,HSTBRK,)]
+	CALL CCOMND
+	CALL NAMES
+	  JRST PARSER
+
+	CALL CCMCFM
+
+	MOVEM HST,LGHMSK	; Save mask for SHOW command
+	MOVE T1,HST		; Right justified mask
+	LSH T1,4		; Left justified
+	CALL MSK2BP		; Build byte pointer
+	ADDI T1,LCLHST		; Address into pointer
+	MOVEM T1,LGHBYP		; Save it
+	DPB FCT,T1		; Insert logical host field
+
+	SKIPE FCT		; Logical host value
+	IFSKP.
+	  SETZRO QDBLH,+PROTOC+1 ; Bits off in mask
+	ELSE.
+	  SETONE QDBLH,+PROTOC+1 ; Bits on in mask
+	ENDIF.
+	STOR FCT,QDBLH,+PROTOC	; Value
+
+	RET
+
+	SUBTTL	MASK Command
+
+; MASK (for) action (is) octal-mask (and) octal-mask
+
+	0,,0 ;HELPTX,,HLPKEY	; Parallel HELP keywords
+	JFCL			; Reparse instruction
+MSFDB:	FLDDB.(.CMKEY,,MSKEY)	; First parameter is keyword
+
+MSKEY:	4,,4			; Table of parameter keywords
+	TXDTUN,,ICMDUM		;  DESTINATION-UNREACHABLE
+	TXDRPK,,DROPKT		;  DROP-PACKET
+	TXREDR,,ICMRDM		;  REDIRECT
+	TXSRCQ,,ICMSQM 		;  SOURCE-QUENCH
+
+
+.MASKF:	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /for/]>)]
+	CALL CCOMND
+
+	MOVX T2,MSFDB
+	CALL CCOMND
+	HRRZ FCT,(T2)
+
+	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /is/]>)]
+	CALL CCOMND
+
+	MOVX T2,<POINT 7,[ASCIZ /octal mask for 1-st 32 packets/]>
+	CALL CCMOCT		; Get first 32 bits
+	MOVE Q1,T2
+
+	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /and/]>)]
+	CALL CCOMND
+
+	MOVX T2,<POINT 7,[ASCIZ /octal mask for 2-nd 32 packets/]>
+	CALL CCMOCT		; Get second 32 bits
+	MOVE Q2,T2
+
+	CALL CCMCFM
+
+	DMOVEM Q1,(FCT)		; Set new masks
+	RET
+
+	SUBTTL	REDIRECT Command
+
+; REDIRECT (packets to) type (via) gateway (after every) # (packets received)
+
+	0,,0			; Parallel HELP keywords
+	CALL OKKEYS		; Reparse instruction
+RDFDB:	FLDDB.(.CMKEY,,RDKEY,,NET)	; First parameter is keyword
+
+RDKEY:	NRD,,NRD		; Table of parameter keywords
+	TXH,,.+1
+	TXHOST,,RD%HST
+	TXHSTO,,RD%TSH
+	TXN.,,.+1
+	TXNET,,RD%NET
+	TXNETO,,RD%TSN
+NRD==.-RDKEY-1
+
+OKKEYS:	MOVE TMP,[LOAD T1,OKKY,(T3)]
+	CALLRET KEYINI
+
+.REDIR:	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /packets to/]>)]
+	CALL CCOMND
+
+	MOVX T2,RDFDB
+	XCT -1(T2)		; Reset keywords
+	CALL CCOMND		; Types to be redirected
+	HRR FCT,(T2)
+
+	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /via/]>)]
+	CALL CCOMND
+
+	MOVX T2,HSTFLD
+	CALL CCOMND		; Host specification
+	CALL NAMES
+	  JRST PARSER
+
+	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /after every/]>)]
+	CALL CCOMND
+
+	MOVX T2,<POINT 7,[ASCIZ /repetition count/]>
+	CALL CCMDEC		; Every Nth packet
+	HRL FCT,T2
+
+	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /packets received/]>)]
+	CALL CCOMND
+	CALL CCMCFM
+
+	MOVEM HST,ICMPGW	; Save host
+	HRRZM FCT,ICMRDT	; Save type of packets to be redirected
+	HLRZM FCT,ICMRDC+1
+	RET
+
+	SUBTTL	SEGMENT-SIZE-OPTION Command
+
+SEGKEY:	4,,4
+	[ASCIZ /ALL-PACKETS/],,2
+	[ASCIZ /DECREASING/],,3
+	[ASCIZ /FIRST-PACKET/],,1
+	[ASCIZ /OFF/],,0
+
+SEGBIT:	F.SEG+F.SEL+F.SG1		; Off
+	F.SEG+F.SG1			; First
+	F.SEG				; All
+	F.SEG+F.SEL			; Decreasing
+
+.SEGME:	MOVEI T2,[FLDDB.(.CMKEY,,SEGKEY,,<FIRST>)]
+	CALL CCOMND
+	HRRE FCT,(T2)			; Get mode flags
+	IFN. FCT
+	  MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /max size/]>)]
+	  CALL CCOMND
+
+	  MOVX T2,<POINT 7,[ASCIZ /max # octets/]>
+	  CALL CCMDEC
+	  ANDI T2,177777
+	  HRLZS T2
+	  EXCH FCT,T2			; Get mode
+	  IOR FCT,T2			; Save size,,mode
+
+	  CAIE T2,3			; Decreasing?
+	  ANSKP.			; Yes
+	    MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /decreasing every/]>)]
+	    CALL CCOMND
+
+	    MOVX T2,<POINT 7,[ASCIZ /# packets/]>
+	    CALL CCMDEC
+	    ANDI T2,777
+	    LSH T2,3
+	    IOR FCT,T2
+
+	    MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /packets/]>)]
+	    CALL CCOMND
+	ENDIF.
+
+	CALL CCMCFM		; Confirm it
+
+	HRRZ T1,FCT		; Mode
+	ANDI T1,7
+	MOVEM T1,SEGMOD		; Save mode
+
+	MOVE T2,SEGBIT
+	ANDCAM T2,F0		; Turn off segment size option
+
+	IFN. T1			; Want on
+	  MOVE T2,SEGBIT(T1)	; Bits required
+	  IORM T2,F0		; Set them
+
+	  HLRZM FCT,SEGMAX	; Max seg size
+
+	  CAIE T1,3		; Decreasing?
+	  ANSKP.		; Yes
+	    HRRZ T2,FCT
+	    LSH T2,-3
+	    MOVEM T2,SEGCN0	; Set frequency
+	ENDIF.
+
+	RET
+
+	SUBTTL	SHOW Command
+
+.SHOW:	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /parameters/]>)]
+	CALL CCOMND
+	CALL CCMCFM
+
+	MOVX T1,.PRIOU		; Where to show parameters
+	TXZ F,F.SINK+F.WATC
+	MOVE T2,FUNCTN		; Get function
+	CAIN T2,SINKF		; SINK?
+	  TXO F,F.SINK
+	CAIN T2,WATCHF		; WATCH?
+	  TXO F,F.WATC
+
+	SKIPG JFNO
+	IFSKP.
+	  SSOUT <Ascii output to  >
+	  MOVE T2,JFNO
+	  MOVX T3,0
+	  JFNS%
+	  SSOUT <
+>
+	ENDIF.
+
+	SKIPG TRCJFN
+	IFSKP.
+	  SSOUT <Binary output to >
+	  MOVE T2,TRCJFN
+	  MOVX T3,0
+	  JFNS%
+	  SSOUT <
+>
+	ENDIF.
+
+	SKIPE DISPSW
+	IFSKP.
+	  SSOUT <Display OFF
+>
+	ELSE.
+	  SSOUT <Display ON
+>
+	ENDIF.
+
+	SKIPG T4,ICMPSH
+	IFSKP.
+	  SSOUT <Gateway:    >
+	  MOVE T2,T4
+	  MOVX T3,HNO%NP+HNO%NA+HNO%AD
+	  CALL HNO2NA		; Host name and address
+	  SSOUT <
+>
+	ENDIF.
+
+	TXNN F,F.SINK
+	 SKIPG T4,HOSTA
+	IFSKP.
+	  SSOUT <Host-a:     >
+	  MOVE T2,T4
+	  MOVX T3,HNO%NP+HNO%NA+HNO%AD
+	  CALL HNO2NA		; Host name and address
+	  SSOUT <
+>
+	ENDIF.
+
+	TXNN F,F.SINK
+	 SKIPG T4,HOSTA+1;B
+	IFSKP.
+	  SSOUT <Host-b:     >
+	  MOVE T2,T4
+	  MOVX T3,HNO%NP+HNO%NA+HNO%AD
+	  CALL HNO2NA		; Host name and address
+	  SSOUT <
+>
+	ENDIF.
+
+	LOAD T4,LEFT32,+LCLHST	; Get left-justified host address
+	IFG. T4
+	  SSOUT <Local host: >
+	  MOVE T2,T4
+jfcl;	  ANDCM T2,LGHMSK	; Drop logical host part
+	  MOVX T3,HNO%NP+HNO%NA+HNO%AD
+	  CALL HNO2NA		; Host name and address
+	  SSOUT <
+>
+	ENDIF.
+
+	LOAD T4,QDBLH,+PROTOC	; Logical host value
+	SSOUT <Logical host >
+	MOVE T2,T4
+	XNOUT DECRAD
+	IFG. T4
+	  SSOUT < in position >
+	  MOVE T2,LGHMSK	; Right justified mask
+	  MOVX T3,HNO%NP+HNO%AD
+	  CALL HNO2NA
+	ENDIF.
+	SSOUT <
+>
+
+	MOVE T4,DROPKC+1
+	TRNN T4,-1
+	IFSKP.
+	  SSOUT <Drop every >
+	  MOVE T2,T4
+	  XNOUT DECRAD
+	  SSOUT <. th packet
+>
+	ENDIF.
+
+	MOVEI T4,DROPKT
+	HRROI T2,[ASCIZ /Dropped packet mask:          /]
+	CALL PKTMSK
+
+	MOVE T4,ICMDUC+1
+	TRNN T4,-1
+	IFSKP.
+	  SSOUT <Destination unreachable after every >
+	  MOVE T2,T4
+	  XNOUT DECRAD
+	  SSOUT <. th packet
+>
+	ENDIF.
+
+	MOVEI T4,ICMDUM
+	HRROI T2,[ASCIZ /Destination unreachable mask: /]
+	CALL PKTMSK
+
+	MOVE T4,ICMRDC+1
+	TRNN T4,-1
+	IFSKP.
+	  SSOUT <Redirect after every >
+	  MOVE T2,T4
+	  XNOUT DECRAD
+	  SSOUT <. th packet
+>
+	ENDIF.
+
+	MOVEI T4,ICMRDM
+	HRROI T2,[ASCIZ /Redirect mask:                /]
+	CALL PKTMSK
+
+	MOVE T4,ICMSQC+1
+	TRNN T4,-1
+	IFSKP.
+	  SSOUT <Source quench after every >
+	  MOVE T2,T4
+	  XNOUT DECRAD
+	  SSOUT <. th packet
+>
+	ENDIF.
+
+	MOVEI T4,ICMSQM
+	HRROI T2,[ASCIZ /Source quench mask:           /]
+	CALL PKTMSK
+
+	TXNN F,F.SINK
+	IFSKP.
+	  SSOUT <ACKing >
+	  SKIPLE ACKCN0
+	  IFSKP.
+	    SSOUT <whole packets>
+	  ELSE.
+	    SSOUT <every >
+	    MOVE T2,ACKCN0
+	    XNOUT DECRAD
+	    SSOUT < octets>
+	  ENDIF.
+	  SKIPG ACKRX0
+	  IFSKP.
+	    SSOUT < after waiting for the >
+	    MOVE T2,ACKRX0
+	    XNOUT DECRAD
+	    SSOUT < retransmission>
+	  ENDIF.
+	  SKIPG ACKDLY
+	  IFSKP.
+	    SSOUT < after a >
+	    MOVE T2,F0
+	    TXNN T2,F.RND
+	    IFSKP.
+	      SSOUT <random >
+	    ENDIF.
+	    MOVE T2,ACKDLY
+	    XNOUT DECRAD
+	    SSOUT < msec delay>
+	  ENDIF.
+	  SSOUT <
+>
+
+	  SKIPG FINDC0
+	  IFSKP.
+	    SSOUT <Dropping first >
+	    MOVE T2,FINDC0
+	    XNOUT DECRAD
+	    SSOUT < FINs received
+>
+	  ENDIF.
+
+	  MOVE T2,F0
+	  TXNN T2,F.SAF
+	  IFSKP.
+	    SSOUT <FIN and ACK of received FIN in separate packets
+>
+	  ENDIF.
+
+	  SKIPG FINRX0
+	  IFSKP.
+	    SSOUT <Retransmitting FIN every >
+	    MOVE T2,FINRX0
+	    XNOUT DECRAD
+	    SSOUT < msec.
+>
+	  ENDIF.
+
+	  SSOUT <Segment size option >
+	  MOVE T4,SEGMOD			; Get mode
+	  HRRO T2,[[ASCIZ /off/]
+		   [ASCIZ /in first packet of /]
+		   [ASCIZ /in all packets of /]
+		   [ASCIZ /in all packets of /]](T4)
+	  SOUT%
+	  IFG. T4
+	    MOVE T2,SEGMAX
+	    XNOUT DECRAD
+	    SSOUT < octets>
+
+	    CAIE T4,3			; Decreasing?
+	    ANSKP.			; Yes
+	      SSOUT <, decreasing every >
+	      MOVE T2,SEGCN0
+	      XNOUT DECRAD
+	      SSOUT < packets>
+	  ENDIF.
+	  SSOUT <
+>
+
+	  SSOUT <Window >
+	  SKIPG T2,WNDSZ0			; Size, if fixed
+	  IFSKP.
+	    XNOUT DECRAD
+	    SSOUT < octets >
+	  ELSE.
+	    SSOUT <* >
+	    MOVE T2,WNDMUL
+	    XNOUT DECRAD
+	    SSOUT < segsiz >
+	  ENDIF.
+
+	  SKIPL T2,WNDMOD
+	  IFSKP.
+	    SSOUT <extending, initially >
+	  ELSE.
+	    IFE. T2
+	      SSOUT <decreasing & shut for >
+	    ELSE.
+	      SSOUT <shutting at >
+	      MOVE T2,WNDMOD
+	      XNOUT DECRAD
+	      SSOUT < octets for >
+	    ENDIF.
+	    MOVE T2,WNDMSC
+	    XNOUT DECRAD
+	    SSOUT < msec, initially >
+	  ENDIF.
+	  SKIPE WNDTI0
+	  IFSKP.
+	    SSOUT <closed
+>
+	  ELSE.
+	    SSOUT <open
+>
+	  ENDIF.
+	ENDIF.
+
+	MOVE T2,FUNCTN		; Get function
+	CAIE T2,SINKF		; SINK?
+	IFSKP.
+	  SSOUT <Function: Sink on port >
+	  LOAD T2,QDBLP,+PORT	; Get port
+	  XNOUT DECRAD
+	ELSE.
+	  CAIE T2,WATCHF	; WATCH?
+	  IFSKP.
+	    SSOUT <Function: Watch protocol >
+	    LOAD T2,BYT4,+PROTOC ; Get protocol
+	    XNOUT DECRAD
+	  ELSE.			; Other
+	    SSOUT <Function: None specified>
+	  ENDIF.
+	ENDIF.
+	SSOUT <
+>
+
+	SSOUT <Logical+Protocol   Foreign host       Local host         Port
+>
+					; Output values
+	LOAD T2,LEFT32,+PROTOC
+	CALL PADHST
+	LOAD T2,LEFT32,+PROTOC+2
+	CALL PADHST
+	LOAD T2,LEFT32,+LCLHST
+	CALL PADHST
+	LOAD T2,LEFT32,+PORT
+	CALL PADHST
+
+	SSOUT <
+>					; Now do masks
+	LOAD T2,LEFT32,+PROTOC+1
+	CALL PADHST
+	LOAD T2,LEFT32,+PROTOC+2+1
+	CALL PADHST
+	LOAD T2,LEFT32,+LCLHST+1
+	CALL PADHST
+	LOAD T2,LEFT32,+PORT+1
+	CALL PADHST
+
+	SSOUT <
+>
+	RET
+
+
+;T2/	Host or mask
+
+PADHST:	PUSH P,T1
+	MOVX T1,<POINT 7,TEMP>		; Temp string
+	MOVX T3,HNO%NP+HNO%AD+HNO%SP
+	CALL HNO2NA			; 4 decimal byte into it
+	SETZ T4,
+	IDPB T4,T1			; End string
+	POP P,T1
+	HRROI T2,TEMP			; Now to user
+	MOVX T3,^D19			; Field width
+	MOVX T4," "			; Stop at space
+	SOUT%
+	MOVNI T3,(T3)			; Number of padding spaces required
+	HRROI T2,SPACES
+	SOUT%				; Trailing filler
+	RET
+
+
+;T2/	Address of string
+;T4/	Address of mask
+
+PKTMSK:	SKIPN (T4)
+	 SKIPE 1(T4)
+	IFNSK.
+	  SETZ T3,
+	  SOUT%
+	  MOVE T2,(T4)
+	  XNOUT <NO%MAG+NO%LFL+NO%ZRO+FLD(^D12,NO%COL)+OCTRAD>
+	  MOVX T2," "
+	  BOUT%
+	  MOVE T2,1(T4)
+	  XNOUT <NO%MAG+NO%LFL+NO%ZRO+FLD(^D12,NO%COL)+OCTRAD>
+	  SSOUT <
+>
+	ENDIF.
+	RET
+
+	SUBTTL	SOURCE-QUENCH Command
+
+; SOURCE-QUENCH (after every) Decimal-Number (received packets)
+
+.SRCQ:	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /after every/]>)]
+	CALL CCOMND
+
+	MOVX T2,<POINT 7,[ASCIZ /repetition count/]>
+	CALL CCMDEC		; Every Nth packet
+	MOVE FCT,T2
+
+	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /received packets/]>)]
+	CALL CCOMND
+	CALL CCMCFM
+
+	MOVEM FCT,ICMSQC+1
+	RET
+
+	SUBTTL	DESTINATION-UNREACHABLE Command
+
+; DESTINATION-UNREACHABLE (packets to) type (after) Decimal-Number (received packets)
+
+	0,,0			; Parallel HELP keywords
+	CALL OKKEY2		; Reparse instruction
+DUFDB:	FLDDB.(.CMKEY,,DUKEY,,HOST)	; First parameter is keyword
+
+DUKEY:	NDU,,NDU		; Table of parameter keywords
+	TXFRGR,,DU%FRG
+	TXHOST,,DU%HST
+	TXNET,,DU%NET
+	TXPORT,,DU%PRT
+	TXPROT,,DU%PRO
+	TXSOUR,,DU%SRF
+NDU==.-DUKEY-1
+
+
+OKKEY2:	MOVE TMP,[LOAD T1,OKKY,(T3)]
+	MOVX T2,DUFDB
+	CALLRET KEYINI
+
+
+.DESTU:	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /packets to/]>)]
+	CALL CCOMND
+
+	MOVX T2,DUFDB
+	CALL CCOMND		; destination unreachable type
+	HRR FCT,(T2)
+
+	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /after/]>)]
+	CALL CCOMND
+
+	MOVX T2,<POINT 7,[ASCIZ /number processed/]>
+	CALL CCMDEC		; number processed before unreachable
+	HRL FCT,T2
+
+	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /received packets/]>)]
+	CALL CCOMND
+	CALL CCMCFM
+
+	HRRZM FCT,ICMDUT	; Save type of packets to be redirected
+	HLRZM FCT,ICMDUC+1
+	RET
+
+	SUBTTL	WINDOW Command
+
+; WINDOW (size is) decimal number
+
+
+STAR:	ASCIZ /*/
+WN0FDB:	FLDDB.(.CMNUM,CM%HPP!CM%SDH,DECRAD,<decimal #>,<536>)
+
+WNDKEY:	3,,3			; Table of mode keywords
+	[ASCIZ /DECREASING/],,0
+	[ASCIZ /EXTENDING/],,-1
+	[ASCIZ /SHUTTING/],,1
+
+WNOKEY:	2,,2			; Table of initial state keywords
+	[ASCIZ /CLOSED/],,0
+	[ASCIZ /OPEN/],,1
+
+.WINDO:	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /size is/]>)]
+	CALL CCOMND
+
+	MOVEI T2,[FLDDB.(.CMTOK,,<POINT 7,STAR>,,<*2>,WN0FDB)]
+	CALL CCOMND
+	CAME T3,T4		; Multiplier?
+	IFSKP.			; Yes
+	  PUSH P,[-1]		; Not fixed
+	  MOVEI T2,WN0FDB	; Get multiplier
+	  CALL CCOMND
+	  PUSH P,T2		; Save it
+	  MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /segment size/]>)]
+	ELSE.
+	  PUSH P,T2		; Save fixed size
+	  PUSH P,[-1]		; No multiplier
+	  MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /octets/]>)]
+	ENDIF.
+	CALL CCOMND
+
+	MOVEI T2,[FLDDB.(.CMKEY,,WNDKEY,,EXTENDING)]
+	CALL CCOMND
+	HRRE FCT,(T2)		; Which
+
+	MOVE T2,1+[
+	 [FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /automatically as used/]>)]
+	 [FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /as used until zero and delaying/]>)]
+	 [FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /to zero when it reaches/]>)]  ](FCT)
+	CALL CCOMND	
+
+	IFG. FCT
+	  MOVX T2,<POINT 7,[ASCIZ /decimal # octets/]>
+	  CALL CCMDEC
+	  MOVE FCT,T2
+
+	  MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /octets for/]>)]
+	  CALL CCOMND
+	ENDIF.
+
+	PUSH P,[0]		; Assume window doesn't remain closed
+	PUSH P,[1]		; Assume initially open
+	IFGE. FCT		; Not extend mode
+	  MOVX T2,<POINT 7,[ASCIZ /# milliseconds window closed/]>
+	  CALL CCMDEC
+	  MOVEM T2,-1(P)
+
+	  MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /msec, initially/]>)]
+	  CALL CCOMND
+
+	  MOVEI T2,[FLDDB.(.CMKEY,,WNOKEY,,<OPEN>)]
+	  CALL CCOMND
+	  HRRE T2,(T2)		; Initial WNDTIM
+	  MOVEM T2,(P)
+	ENDIF.
+
+	CALL CCMCFM		; Confirm it
+
+	POP P,WNDTI0		; Initial WNDTIM
+	POP P,WNDMSC		; Msec to remain zero
+	MOVEM FCT,WNDMOD	; Mode -1, 0, or force to zero threshold
+	POP P,WNDMUL		; Multiplier
+	POP P,WNDSZ0		; Fixed size
+
+	RET
+
+	SUBTTL	WATCH Function
+
+WATKEY:	2,,2
+	TXTCP,,.TCPFM
+	TXUSDG,,.UDPFM
+
+.WATCH:	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /protocol/]>)]
+	CALL CCOMND
+
+	MOVEI T2,[FLDDB.(.CMKEY,,WATKEY,,,[FLDDB.(.CMNUM,CM%SDH,^D10,<8-bit protocol>)])]
+	CALL CCOMND
+	CAMN T3,T4		; Keyword?
+	  HRRZ T2,(T2)		; Yes, get value
+	HRROI EST,[ASCIZ /Protocol code must be 1 to 255/]
+	SKIPLE FCT,T2
+	 CAILE T2,377
+	  JRST PARSER
+
+	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /packets between host a and host b/]>)]
+	CALL CCOMND
+	CALL CCMCFM		; Confirm WATCH
+
+	STOR FCT,BYT4,+PROTOC	; Set protocol
+	SETZM PORT		; Wild Port
+	SETZM PORT+1
+
+	MOVEI T1,WATCHF
+	HRRM T1,FUNCTN		; Set it for GO
+
+	HRROI T1,DFN
+	HRROI T2,[ASCIZ /TCPUQS/]
+	SETZ T3,
+	SOUT%
+
+	HRROI T1,DEX
+	HRROI T2,[ASCIZ /BIN/]
+	SOUT%
+	RET
+
+WATCHF:	HRROI T1,[ASCIZ /? Hosts a and b must be specified.
+/]
+	SKIPLE HOSTA		; Make sure args were specified
+	 SKIPG HOSTA+1
+	  JRST BOMB		; No, lose
+
+	CALL ASNQ		; Assign user queue
+
+	HRROI T1,[ASCIZ /Watching /]
+	PSOUT%
+
+; Main loop of WATCH function
+
+	DO.(WATCHL)		; Forever
+	  SETZ T1,		; Wait for packet
+	  CALL RCVPKT		; Receive packet
+	      CALL WATCHS	; XCT datum - Fixups before trace sample
+	    LOOP.		; Dropping packet
+	    JFCL		; Ignore bad checksum - other end should
+				; be able to deal with it
+
+; Change packet to be from us to ultimate destination
+
+	  STOR HA,IPSH,+RBFR+1	; From us
+	  CALL FIXSES		; Fix session level leader
+
+; Send received packet on
+
+	  MOVE T1,QH
+	  MOVEI T2,RBFR
+	  SETZ T3,
+WSND:	  SNDIN%		; Send packet onward
+	  IFNSK.
+	    MOVEI T2,[ASCIZ /
+SNDIN% error: /]
+	    CALL EMSG
+	  ENDIF.
+	  LOOP.			; Do it again
+	ENDDO.
+
+
+
+;FIXSES	Fix session leader due to switching hosts
+;PKT/	For IP leader
+;TPKT/	At session leader
+;	CALL FIXSES
+
+FIXSES:	LOAD T1,PIPRO,(PKT)	; Get protocol code
+	CAIE T1,.ICMFM		; ICMP?
+	IFSKP.			; Yes
+				; If inbedded packet, fix ipsh/ipdh
+	  RET
+	ENDIF.
+
+	CAIE T1,.TCPFM		; TCP?
+	IFSKP.			; Yes
+	  SETZRO PTCKS,(TPKT)	; Start with 0
+	  CALL TCPCKS		; TCP checksum
+	  STOR T1,PTCKS,(TPKT)	; Into packet
+	  RET
+	ENDIF.
+
+	CAIE T1,.UDPFM		; UDP?
+	IFSKP.			; Yes
+	  SETZRO UDCKS,(TPKT)	; Start with 0
+	  CALL UDPCKS		; UDP checksum
+	  STOR T1,UDCKS,(TPKT)	; Into packet
+	  RET
+	ENDIF.
+
+	RET
+
+; Fixup received packet to make it look like it is to ultimate desstination
+;and not the watcher.  Sets  PKT, TPKT, T1/ -1,,[ASCIZ /abx/],
+;HA/ local adr, HB/ other(ab)
+
+WATCHS:	MOVEI PKT,RBFR+1-PKTELI	; Set PKT and TPKT
+	LOAD TPKT,PIDO,(PKT)
+	ADDI TPKT,PKTELI(PKT)
+
+	DMOVE T1,[EXP PT%A2B
+		  EXP PT%B2A]
+	DMOVE HA,HOSTA		; HA, HB from HOSTA, HOSTB
+	LOAD T3,PISH,(PKT)
+	CAMN T3,HA		; Which way?
+	IFSKP.			; Not from host-a
+	  EXCH T1,T2
+	  EXCH HA,HB		; Assume other way
+	  CAMN T3,HA
+	  ANSKP.		; And not from host-b
+	    LOAD T1,PIPRO,(PKT)
+	    CAIE T1,.ICMFM	; Maybe an ICMP message
+	    IFSKP.	
+	      LOAD T3,PIDO,(PKT)
+	      ADD T3,PKT	; ICMP header
+	      LOAD T1,CMTYP,(T3) ; ICMP type
+	      CAIG T1,IF%MAX	; Valid Type?
+	       SKIPN T1,ICMPFD(T1) ; Yes, Get fields for this Type
+	      ANSKP.		; No, or no fields, error
+	        TXNN T1,IF%INH	; This Type have included IP header?
+	        ANSKP.		; Yes
+;zzz
+	          DMOVE T1,[EXP PT%I2A
+			    EXP PT%I2B]
+	          LOAD CX,IPDH,+.CMINH(T3) ; Included destination is wrong end
+	          CAME CX,HB	; Included from A?
+	            EXCH T1,T2	; No
+	          CAME CX,HB	; Included from A?
+	            EXCH HA,HB	; No
+				; HA has source of packet in error, T1/ PT%xxx
+	          LOAD T2,PIDH,(PKT) ; Save our address
+;fix included pkt, cksum, dest
+	    ELSE.		; Not ICMP error message
+	      MOVX T1,PT%BYP	; Received it
+	      DMOVEM HA,HOSTP	; Get direction of last packet
+	      EXCH HA,HB	; Assume this is a reply to last
+	      DMOVEM HA,HOSTP	; Save direction of this packet
+	    ENDIF.
+	    STOR T1,DPTRC,(T4)	; Dummy trace code
+	    MOVX CX,ND.PKT	; Packet Data Type Traced
+	    STOR CX,DTYPE,(T4)
+	    LOAD HA,PIDH,(PKT)	; Save our address
+	    HRROI T1,ASCX
+	    RET			; Back to get it logged, etc
+	ENDIF.
+	STOR T1,DPTRC,(T4)	; Dummy trace code
+	MOVX CX,ND.PKT		; Packet Data Type Traced
+	STOR CX,DTYPE,(T4)
+	DMOVEM HA,HOSTP		; Save direction of this packet
+	LOAD HA,PIDH,(PKT)	; Save our address
+	STOR HB,PIDH,(PKT)	; Ultimate destination
+
+	CALL FIXSES		; Fix session level leader
+
+	MOVEI T4,PKTELI(PKT)	; Pointer to IP header
+	CALL IPCKSM ;(T4)	; Correct IP checksum to make traced data valid
+
+	HRROI T1,ASCA		; Assume came from Host-a
+	CAME HB,HOSTA+1		; Correct?
+	  HRROI T1,ASCB		; No, came from Host-b
+	RET			; Back to log the "received" packet
+
+
+;Table of ICMP packet Fields by message Type.
+
+;Following macro gets called for each ICMP Type with a list of its fields.
+;It calls ICMPFD to set ..IF% to the configuration word for a Type.
+
+DEFINE ICMPTP(nam,sym,val,cod,fields,codsym,a1,a2)<
+IFG <val&177777>-IF%MAX,<IF%MAX==<val&177777>>	; Get max table length
+..IF%==0				; Initialize configuration value
+IRP fields,<ICMPF0 fields>		; Set bits in it
+	LOC ICMPFD+<val&177777>		; Move to proper position in table
+	EXP ..IF%			; Configuration word
+> ;; End of DEFINE ICMPTP
+
+
+DEFINE ICMPF0(arg)<ICMPF1(arg)>		; Separate <field name,length> pair
+
+
+;For each field, define the field name (if it isn't) and OR its bit into ..IF%
+
+DEFINE ICMPF1(icfld,iclen)<
+IFNDEF IF%'icfld,<IF%'icfld==NXTBIT	; Define a symbol for each field name
+		  NXTBIT==NXTBIT/2>	; Bit for next name
+..IF%==..IF%+IF%'icfld			; Set bit in configuration value
+> ; End of DEFINE ICMPF1
+
+
+;Now build the table.
+
+IF%MAX==0				; Max Type defined
+NXTBIT==200000000000			; First bit (Positive for divide)
+
+ICMPFD:	ICMPDF				; Table of ICMP packet fields by Type
+	LOC ICMPFD+IF%MAX+1		; Location after table
+
+
+; Now build the table indexed by type code that says we can send an ICMP
+;message about an ICMP message.
+DEFINE ICMPTP(nam,sym,val,cod,fields,codsym,a1,a2)<
+	RELOC ICMPFE+<val&177777>
+	EXP val&1b0;;1B0 means we can send ICMP messages about ICMP messages 
+> ;; End of DEFINE ICMPTP
+
+ICMPFE:	ICMPDF				; Fill table in
+	LOC ICMPFE+IF%MAX+1		; Location after table
+
+	SUBTTL	SINK Function
+
+; SINK (received TCP data)
+
+.SINK:	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /received TCP data on port/]>)]
+	CALL CCOMND
+
+	MOVEI T2,[FLDDB.(.CMNUM,CM%SDH,^D10,<16-bit port>,<9>)]
+	CALL CCOMND
+	HRROI EST,[ASCIZ /Port number must be 1 to 65535/]
+	SKIPLE FCT,T2
+	 CAILE T2,177777
+	  JRST PARSER
+	CALL CCMCFM		; Confirm SINK
+
+	STOR FCT,QDBLP,+PORT	; Save port
+	SETONE QDBLP,+PORT+1
+
+	MOVEI T1,SINKF
+	HRRM T1,FUNCTN		; Set it for GO
+
+	HRROI T1,DFN
+	HRROI T2,[ASCIZ /TCPUQS/]
+	SETZ T3,
+	SOUT%
+
+	HRROI T1,DEX
+	HRROI T2,[ASCIZ /LST/]
+	SOUT%
+	RET
+
+
+SINKF:	MOVE F,F0		; Initial flags
+	MOVEI T1,PKTQ0		; INIT packet queue
+	MOVEM T1,PKTQI		; Where to insert
+	MOVEM T1,PKTQO		; Nothing to be read
+
+	CALL ASNQ		; Assign user queue
+
+SETZ T2,;MOVE T2,ACKCN0		; Set initial count
+	MOVEM T2,ACKCNT
+
+	HRROI T2,[ASCIZ /Waiting for a SYN ...
+/]
+	CALL OUTLST
+
+	SUBTTL	Wait for a SYN, Initialize "Connection"
+
+SYNWAT:	SETZ T1,			; Wait for a packet
+	CALL GETP
+	  JFCL				; Nothing?
+	  JRST SYNWAT			; Bad checksum
+				; Pass T1 to WRAPUP
+NEWSYN:	TXNN T4,PSYN			; Waiting for SYN
+	  JRST SYNWAT			; Didn't get one
+	SETZRO PTCTL,+TB		; Clear old flags in packet
+	TXZ F,<F.RS+F.SSA+F.RF+F.SFA+F.SS+F.RSA+F.SF+F.RFA> ; Clear flags
+;wrapup	TXO F,F.RS			; Received SYN
+
+; First time init
+
+	MOVE CX,RBFR+1+.IPKDH		; Received Dest is our address
+	ANDX CX,PIDH
+	MOVEM CX,HOSTF+1
+	MOVEM CX,SBFR+1+.IPKSH		; We will be source of returned pkts
+
+	MOVE CX,RBFR+1+.IPKSH		; Received Sorc is their address
+	ANDX CX,PISH
+	MOVEM CX,HOSTF
+	MOVEM CX,SBFR+1+.IPKDH		; They will be destination
+
+	MOVEM T2,RCVLFT			; Initial receive seq #
+	LSH T2,-4			; Right justify
+	AOS T2				; Initial window is after SYN
+	MOVEM T2,WNDRIT
+	MOVE T2,WNDTI0			; Initial window
+	MOVEM T2,WNDTIM
+
+	MOVEM T3,PORTFL			; TCP ports
+	MOVE T2,T3
+	LSH T3,^D16			; Swap received ports
+	LSH T2,^D<-16>
+	IOR T3,T2
+	MOVEM T3,(TPKT)			; Ports for returned packets
+
+; See how to react to SYN
+
+	LOAD T3,PSEQ,(TPKT)
+	MOVEM T3,SNDRIT			; Right edge of window
+
+; Segment size option
+
+	MOVE T2,SEGMAX			; Initial size
+	STOR T2,TMXSG			; TMXSG must be set for window comp.
+	TXNN F,F.SEG+F.SEL		; Segment sizes?
+	IFSKP.				; Yes
+ddt1:	  SETZM SEGCNT			; Count packets sent
+	  MOVEI T2,6
+	  STOR T2,PTDO,(TPKT)		; Include 4 option bytes in TCP header
+	  MOVEI T2,<SBFE+1-PPL>*4
+	  STOR T2,PIPL,(PKT)		; Include 4 option bytes in IP packet
+	ENDIF.
+
+; Finish IP header
+
+	SETONE PSYN,(TPKT)		; Set SYN
+
+	CALL WRAPUP	; T1,T4 from GETP ; Do things & send packet
+
+;	TXNE F,F.SEG
+	 TXNN F,F.SG1			; Only sending segment size once?
+	IFSKP.				; Yes
+	  MOVEI T2,5
+	  STOR T2,PTDO,(TPKT)		; Exclude 4 option bytes in TCP header
+	  MOVEI T2,<SBFE-PPL>*4
+	  STOR T2,PIPL,(PKT)		; Exclude 4 option bytes in IP packet
+	ENDIF. 
+
+	MOVE T2,ACKCN0			; Set initial count
+	MOVEM T2,ACKCNT
+
+	SUBTTL	ACK Received Packets
+
+	DO. (GETNXT)
+	  SETZ T1,			; Wait for a packet
+	  CALL GETP
+	    JFCL			; Nothing?
+	    LOOP.			; Bad checksum
+				; Pass T1 to WRAPUP
+	  TXNN T4,PSYN			; Get a SYN?
+	  IFSKP.			; No.
+	    TXC F,<F.RS+F.SSA+F.SS+F.RSA+F.RF+F.SFA+F.SF+F.RFA>
+	    TXCN F,<F.RS+F.SSA+F.SS+F.RSA+F.RF+F.SFA+F.SF+F.RFA>
+	    ANNSK.			; Yes, last finished, must be another
+	      HRROI T2,[ASCIZ /Beginning new connection.
+/]
+	      CALL OUTLST
+	      JRST NEWSYN
+	  ENDIF.
+	  CALL CHKNXT			; Next packet needed?
+	    LOOP.			; No, forget it
+	  TXNE T4,PRST			; A RST?
+	    JRST RELQ ;SYNWAT	;msg	; Yes, start over
+	  TXNE T4,PSYN			; A SYN?
+	    LOOP.		;msg	; Yes, ignore it
+	  TXO F,F.RSA			; Must have this by now
+	  TXNE T4,PFIN			; A FIN?
+	    EXIT.			; Yes, go close up
+
+; Data/ACKs
+
+	  TXNN T4,PSYN+PFIN		; ACK controls or
+	   SKIPE T1			; ACK if have data
+	    CALL WRAPUP	; T1 from GETP	; Do things & send packet
+	  LOOP.
+	ENDDO.
+
+	SUBTTL	FIN Related Processing
+
+GOTFIN:					; Have first FIN...
+	SKIPG T2,FINDC0			; Want to drop FINs?
+	IFSKP.				; Yes (Forget segment length in T1)	
+	  PUSH P,T2			; Save it
+	  DO.
+	    HRROI T2,[ASCIZ /Ignoring til specified # FINs dropped.
+/]
+	    CALL OUTLST			; Tell ignoring it
+	    SETZ T1,			; Wait for a packet
+	    CALL GETP			; Next packet
+	      JFCL			; Nothing?
+	      LOOP.			; Bad checksum, forget it
+	    CALL CHKNXT			; Next packet needed?
+	      LOOP.			; No, forget it
+	    TXNE T4,PFIN		; Next packet have a FIN?
+	     SOSL (P)			; Yes, is it the Nth FIN?
+	      LOOP.			; No or not yet, ignore it
+	  ENDDO.
+	  POP P,(P)			; Drop counter
+	ENDIF.				; T1 set to segment length
+
+	PUSH P,T1			; Save segment length
+DYF:	SKIPLE T1,FINDLY		; Delay when receive FIN?
+	  CALL DELAY			; Yes
+	POP P,T1			; Restore segment length
+
+	TXNE F,F.SAF			; Separate ACK & FIN?
+	IFSKP.
+	  SETONE PFIN,(TPKT)		; No, include FIN with ACK
+	ENDIF.
+	CALL WRAPUP	; T1 from GETP	; ?FIN + ?ACK(FIN)
+
+	SKIPLE T1,FINDLY		; Separation
+	  CALL DELAY
+
+	SETONE PFIN,(TPKT)		; In case separate packets
+	SETZ T1,			; No change to ACK sequence #
+	TXNN F,F.SF			; Already sent FIN?
+	  CALL WRAPUP	; T1 = 0	; No, do it now
+
+GETACK:	DO.
+	  SETZ T1,			; Wait for a packet
+	  CALL GETP
+	    JFCL			; Nothing?
+	    LOOP.			; Bad checksum
+					; Pass T1 to WRAPUP
+	  CALL CHKNXT			; Next packet needed?
+	    LOOP.			; No, forget it
+	  TXO F,F.RFA			; Got ACK of FIN
+
+jfcl;	  TXNE T4,PRST			; A RST?
+jfcl;	    JRST RELQ ;SYNWAT		; Yes, start over
+	  TXNN T4,PRST			; A RST?
+	   TXNE T4,PSYN			; A SYN?
+	  IFNSK.
+	    HRROI T2,[ASCIZ /Ignoring.
+/]
+	    CALL OUTLST
+	    LOOP.			; Yes, ignore it
+	  ENDIF.
+	ENDDO.
+
+	SKIPG FINRX0			; Retransmitting FIN?
+	IFSKP.				; Yes
+	  DO. (RXIT)
+	    MOVE T3,LSBFR
+	    MOVE T2,[LSBFR,,SBFR]	; Restore last packet sent
+	    BLT T2,SBFR-1(T3)
+
+	    SETZB T1,T4			; Fake no data, no controls
+	    CALL WRAPUP	; T1 from GETP	; RX last packet
+
+	    SKIPLE T1,FINRX0		; Wait a little
+	      CALL DELAY
+;zzz shouldn't be needed now....
+	    DO.
+	      MOVX T1,RIQ%NW		; Report anything received
+	      CALL GETP
+	        EXIT.			; Nothing there, go retransmit
+	        JFCL			; Checksum error
+					; Ok
+	      HRROI T2,[ASCIZ /Ignored, just listening.
+/]
+	      CALL OUTLST
+	      LOOP.			; Look for another
+	    ENDDO.
+	    LOOP.
+	  ENDDO.
+	ENDIF.
+
+	DO. (TODQ)
+	  MOVE T4,PKTQO			; Next packet to be sent
+	  TXNE F,F.QUE			; Queued packets?
+	   CAML T4,PKTQI		; All done?
+	    JRST RELQ			; No
+	  TIME%
+	  PUSH P,T1			; Save time
+	  MOVNS T1
+	  SUB T1,(T4)			; How long have to wait
+	  SKIPLE T1
+	    CALL DELAY
+	  POP P,T1			; TODCLK again
+	  CALL DQRST			; Send packet off
+	  LOOP.
+	ENDDO.
+
+	SUBTTL	GETP	Wait for next packet & return extracted data
+
+;T1/	0 or RIQ%NW
+;	CALL GETP
+;Ret+1:		RIQ%NW and no packet, ICMP packet
+;Ret+2:		Checksum error
+;Ret+3:		OK with
+;T1/	# Data bytes
+;T2/	Seq #
+;T3/	Ports
+;T4/	Control flag word
+;PKT/	Points to psuedo output packet
+;TPKT/	Points to TCP header in output packet
+
+
+GETP:	CALL RCVPKT			; Get next packet
+	  SETZ T1,			; Nothing to do here
+	 RET		;+1		; +1, Nothing waiting
+	  AOSA (P)			; +2, Checksum bad
+	   TRNA				; +3, All ok
+	    RET		;+2		; +2
+
+	MOVEI PKT,RBFR+1-PKTELI		; Pseudo header address
+	LOAD TPKT,PIDO,(PKT)		; TCP header address
+	ADDI TPKT,PKTELI(PKT)
+
+	LOAD T1,PIPRO,(PKT)		; Get protocol code
+	CAIE T1,.TCPFM			; TCP?
+	  RET		;+1		; No
+
+	AOS (P)				; Change to +2
+
+	CALL TCPCKS			; Compute checksum
+	IFN. T1				; Bad
+	  HRROI T2,[ASCIZ /TCP Checksum error.
+/]
+	  CALL OUTLST
+	  RET		;+2		; Return+2 - Checksum error
+	ENDIF.
+
+	LOAD T3,PIDO,(PKT)		; TCP header address
+	LOAD T4,PTDO,(TPKT)
+	LOAD T1,PIPL,(PKT)		; Length of whole packet in bytes
+	ADD  T3,T4			; Total header word count
+	ASH  T3,2			; Byte count
+	SUB  T1,T3			; Difference is # bytes in data portion
+
+	MOVE T2,1(TPKT)			; Received sequence #
+	ANDX T2,PSEQ
+
+	MOVE T3,(TPKT)			; Ports
+	ANDX T3,<PSP!PDP>
+
+	MOVE T4,3(TPKT)			; Control flags
+
+	MOVEI PKT,SBFR+1-PKTELI
+	LOAD TPKT,PIDO,(PKT)
+	ADDI TPKT,PKTELI(PKT)
+
+	AOS (P)		;+3		; Good return+3
+	RET
+
+	SUBTTL	CHKNXT	Check that received packet is the next one needed
+
+;T1/	# data octets to be ACKed (from GETP)
+;T2/	Sequence # (from GETP)
+;T3/	Ports (from GETP)
+;T4/	Control flags (from GETP)
+;	CALL CHKNXT
+;Ret+1:	Not what want
+;Ret+2:	Proper sequence #, T1, T4 preserved
+
+CHKNXT:
+
+; Make sure packet is for this connection - Foreign & Local Host & port
+
+	MOVE CX,RBFR+1+.IPKSH		; Received source should be HOSTF
+	CAMN CX,HOSTF
+	IFSKP.				; Not what we want
+	  HRROI T2,[ASCIZ /Ignored: Wrong foreign host.
+/]
+	  CALLRET OUTLST
+	ENDIF.
+
+	MOVE CX,RBFR+1+.IPKDH		; Received destination should be HOSTL
+	CAMN CX,HOSTF+1
+	IFSKP.				; Not what we want
+	  HRROI T2,[ASCIZ /Ignored: Wrong local host.
+/]
+	  CALLRET OUTLST
+	ENDIF.
+
+	CAMN T3,PORTFL			; Check ports
+	IFSKP.				; Not what we want
+	  HRROI T2,[ASCIZ /Ignored: Wrong port number(s).
+/]
+	  CALLRET OUTLST
+	ENDIF.
+
+; See if packet contains RCVLFT, adjust T1 so just has # new octets
+
+	MOVE T3,T1			; # octets
+	LSH T3,4			; Left justified
+	ADD T3,T2			; End sequence(+1)
+	CAMLE T2,T3			; Cross from + to -?
+	IFSKP.				; No
+	  CAMG T2,RCVLFT		; PSEQ .le. RCVLFT  and
+	   CAMGE T3,RCVLFT		; RCVLFT .le. PESEQ?
+	     CALLRET BADSEQ		; No, not what is needed
+	ELSE.				; Wrap around
+	  CAMGE T3,RCVLFT		; PESEQ .lt. RCVLFT  or
+	   CAMG T2,RCVLFT		; RCVLFT .lt. PSEQ?
+	    TRNA			; Yes
+	     CALLRET BADSEQ		; Not what is needed
+	ENDIF.
+	SUB T2,RCVLFT			; Left justified # old data octets
+	ASH T2,-4			; Right justify
+	ADD T1,T2			; # new octets
+
+; Received packet contains RCVLFT
+
+; Wait for ACKRX0 th retransmission
+
+	SKIPLE T2,ACKRX0		; Waiting for retransmissions and
+	 SOSGE ACKRXC			; Ignore count not exhausted?
+	IFSKP.				; Yes
+	  HRROI T2,[ASCIZ /Ignored: Waiting for retransmission.
+/]
+	  CALLRET OUTLST
+	ENDIF.
+	MOVEM T2,ACKRXC			; Reset count
+
+	AOS (P)				; Skip return
+	RET
+
+
+BADSEQ:	HRROI T2,[ASCIZ /ACKing: Bad sequence #.
+/]
+	CALL OUTLST
+	SETZB T1,T4
+	CALLRET WRAPUP
+
+	SUBTTL	WRAPUP	Send ACK for received packet
+
+;T1/	# octets to be acked (e.g. data length)
+;T4/	Received flags
+;PKT/	Output packet with Control flags
+;	CALL WRAPUP
+;SNDE0:	On SNDIN% error
+;Ret+1:	OK, ACK sent
+
+
+WRAPUP:	AOS T3,IPID			; Next sequence number
+	STOR T3,PISID,+SPKT
+
+	MOVEI TPKT,PKTELI(PKT)		; IP header address
+	LOAD T3,PIDO,(PKT)		; IP header length, words
+	ADD TPKT,T3			; TCP header address
+
+; Finish TCP header
+
+	TXNN F,F.RS			; If this is the first
+	 TXNN T4,PSYN			; SYN
+	IFSKP.				; It is in the sequence space
+	  ADDI T1,1			; Count it
+	  TXO F,F.RS+F.SSA		; Got it, ACKing it
+	ENDIF.
+
+	TXNN F,F.RF			; If this is the first
+	 TXNN T4,PFIN			; FIN
+	IFSKP.				; It is in the sequence space
+	  ADDI T1,1			; Count it
+	  TXO F,F.RF+F.SFA		; Got it, ACKing it
+	ENDIF.
+
+; Maybe not ACKing whole packets
+
+	DO.
+	  SKIPG T2,ACKCNT		; Only acking part of packet?
+	  IFSKP.			; Yes
+	    CAML T1,T2			; Enough to ACK?
+	    IFSKP.			; No
+	      MOVN T2,T1
+	      ADDM T2,ACKCNT		; # octets needed before ACK
+	      LSH T1,4			; Left justify
+	      ADDM T1,RCVLFT		; Advance RCVLFT over octets
+	      RET
+	    ENDIF.
+	    CAMG T1,T2			; And have more than number to ack?
+	    IFSKP.			; Yes
+	      SUB T1,T2			; For next time
+	      PUSH P,T1
+	      MOVE T1,T2		; Number to be acked
+	      LSH T1,4			; Left justify ACK count
+	      CALL WRAPUL		; Send an ACK
+	      MOVE T2,ACKCN0
+	      MOVEM T2,ACKCNT		; Reset count
+	      POP P,T1
+	      LOOP.			; Back for next
+	    ENDIF.
+	    MOVE T2,ACKCN0		; Exactly right number to ack,
+	    MOVEM T2,ACKCNT		; Reset count
+	  ENDIF.
+	ENDDO.
+	LSH T1,4			; Left justify ACK count
+
+WRAPUL:	MOVE T4,T1			; Octets to be acked
+	ADDB T1,RCVLFT			; Update receive-left
+	MOVEM T1,$PACKS(TPKT)		; Ack it
+	SETONE PACK,(TPKT)
+
+; Process segment option
+
+	TXNE F,F.SEG			; Segment sizes and
+	 TXNE F,F.SG1			; Sending segment size more than once?
+	IFSKP.				; Yes
+	  AOS T3,SEGCNT			; Count packets sent
+	  TXNE F,F.SEL			; Descease size?
+	   CAMGE T3,SEGCN0		; Reached change threshold?
+	  ANSKP.			; Yes
+	    SETZM SEGCNT		; Reset counter
+	    LOAD T3,TMXSG		; Size
+	    LSH T3,-1			; Half as big
+	    SKIPG T3			; Don't get too small
+	      MOVE T3,SEGMAX		; Start over
+	    STOR T3,TMXSG		; New size
+	ENDIF.
+
+; Window processing	T4/ Octets to be acked
+
+	MOVE T3,WNDMOD			; What mode
+	SKIPG WNDTIM			; Still forcing zero?
+	IFSKP.				; Yes
+	  SETO T3,			; Mode -1 to reinit window
+	  TIME%				; Current time
+	  CAMLE T1,WNDTIM		; Time over?
+	  ANSKP.			; No
+	    SETZ T1,			; Use zero
+	ELSE.
+	  SETZM WNDTIM			; No longer forcing
+	  LOAD T2,PACKS,(TPKT)		; Ack is base for window
+	  IFL. T3			; Constant size
+	    SKIPLE T1,WNDSZ0		; Absolute?
+	    IFSKP.			; No, proportional to segment size
+	      LOAD T1,TMXSG
+	      IMUL T1,WNDMUL		; Multiplier
+	    ENDIF.
+	    ADD T2,T1
+	    MOVEM T2,WNDRIT		; New right end of window
+	  ELSE.				; Size varies
+	    MOVE T1,WNDRIT		; Right end of window
+	    SUB T1,T2			; Less ack sequence
+	    TLNE T1,020000		; Negative?
+	      SETZ T1,			; Yes, use zero
+	    MODSEQ T1			; Remaining space in window
+	    IFG. T3			; Want to shut window
+	      CAMGE T1,T3		; Below threshold?
+	        SETZ T1,		; Yes, shut window
+	    ENDIF.
+	    ANDLE. T1			; Window shut
+	      TIME%			; Get time
+	      ADD T1,WNDMSC		; When it can open
+	      MOVEM T1,WNDTIM
+	      SETZ T1,
+	  ENDIF.
+	ENDIF.
+	STOR T1,PWNDO,(TPKT)		; Set window size
+
+	SETZRO PTCKS,(TPKT)		; Start with 0
+	CALL TCPCKS			; TCP checksum
+	STOR T1,PTCKS,(TPKT)		; Into packet
+
+	LOAD T1,PIPL,(PKT)		; Packet length, bytes
+	ADDI T1,3+4			; Round up and add 1
+	LSH T1,-2			; Words
+	HRRZM T1,SBFR			; Set packet buffer length
+
+	CALL GTAKDY			; Get ACK delay
+
+	TXNN F,F.QUE			; Queue packets?
+	IFSKP.				; Yes
+
+	  MOVE T4,PKTQI			; Where next packet goes
+	  MOVEM T1,(T4)			; Delay
+	  TIME%
+	  ADDM T1,(T4)			; When
+
+	  HRLI T2,SBFR
+	  HRRI T2,1(T4)
+	  HRRZ T3,SBFR			; # words
+	  ADDI T3,1-1(T4)		; Last address
+	  BLT T2,(T3)			; Queue packet
+	  HRRZM T2,PKTQI		; For next packet
+
+	  TXNN F,F.RXA			; Retransmit ACK with larger window?
+	  IFSKP.			; Yes
+
+	    LOAD T1,PWNDO,(TPKT)	; Current size
+	    ADDI T1,^D100
+	    STOR T1,PWNDO,(TPKT)	; Window now larger
+
+	    SETZRO PTCKS,(TPKT)		; Start with 0
+	    CALL TCPCKS			; TCP checksum
+	    STOR T1,PTCKS,(TPKT)	; Into packet
+
+	    CALL GTAKDY			; Get ACK delay
+
+	    MOVE T4,PKTQI		; Where next packet goes
+	    MOVEM T1,(T4)		; Delay
+	    TIME%
+	    ADDM T1,(T4)		; When
+
+	    HRLI T2,SBFR
+	    HRRI T2,1(T4)
+	    HRRZ T3,SBFR		; # words
+	    ADDI T3,1-1(T4)		; Last address
+	    BLT T2,(T3)			; Queue packet
+	    HRRZM T2,PKTQI		; For next packet
+	  ENDIF.
+DQRST:	  CALL DQPKT			; Dequeue next packet if its time
+	    JRST NOQ9			; Nothing or not yet time
+	ELSE.
+	  SKIPLE T1,ACKDLY		; Want any delay?
+	    CALL DELAY			; Delay before ACK
+	  MOVEI T2,SBFR			; Buffer to be sent
+	ENDIF.
+
+	PUSH P,T2			; User queue header
+
+	MOVEI T4,1(T2)			; Point to IP header
+	CALL IPCKSM ;(T4)		; Compute IP checksum
+
+; List packet about to be sent
+
+	MOVE T2,(P)			; Header @ xBFR
+	MOVEI T1,1(T2)			; IP header
+	SETZ T4,			; No message
+	CALL PRNTCP			; Print returned tcp info
+	MOVE T2,(P)			; Pointer to packet buffer @ xBFR
+
+; Save last packet sent
+
+	HRRZ T1,0(T2)		; # words in buffer
+	MOVEI T3,LSBFR
+	HRLI T3,(T2)
+	BLT T3,LSBFR-1(T1)	; Copy last packet sent
+
+	HRRZ T2,(P)		; Pointer to bfr header
+	MOVEI T2,1(T2)		; IP header
+	MOVX T3,PT%QLN		; Trace code
+	MOVX T4,JFCL
+	CALL LOGPKT ;(T2,T3:T1)	; Log packet about to be sent
+
+; Finally, send the packet
+
+	POP P,T2		; Pointer to buffer
+	SETZ T3,
+	MOVE T1,QH
+SND:	SNDIN%
+	  JRST SNDE0
+
+	TXNN F,F.QUE			; If not queued send packets,
+	 TXNN F,F.RXA			; Retransmit acks with larger window?
+	IFSKP.				; Yes
+
+	  LOAD T1,PWNDO,(TPKT)		; Current size
+	  ADDI T1,^D100
+	  STOR T1,PWNDO,(TPKT)		; Window now larger
+
+	  SETZRO PTCKS,(TPKT)		; Start with 0
+	  CALL TCPCKS			; TCP checksum
+	  STOR T1,PTCKS,(TPKT)		; Into packet
+
+	  PUSH P,T2			; User queue header
+
+	  MOVEI T4,1(T2)		; Point to IP header
+	  CALL IPCKSM ;(T4)		; Compute the IP checksum
+
+	  MOVEI T1,SBFR+1
+	  SETZ T4,			; No message
+	  CALL PRNTCP			; Print returned tcp info
+
+	  CALL ACKDLA			; Maybe delay a little
+
+; Retransmit ACK with larger window
+
+	  LOAD T1,PIPL,(PKT)		; Packet length, bytes
+	  ADDI T1,3+4			; Round up and add 1
+	  LSH T1,-2			; Words
+	  HRRZM T1,SBFR			; Set packet buffer length
+
+	  MOVE T2,[SBFR,,LSBFR]		; Copy last packet sent
+	  BLT T2,LSBFR-1(T1)
+
+	  MOVEI T2,SBFR+1		; Location of IP header
+	  MOVX T3,PT%QLN		; Packet sent
+	  MOVX T4,JFCL
+	  CALL LOGPKT ;(T2,T3:T1)	; Log packet about to be sent
+
+	  MOVE T1,QH
+	  MOVEI T2,SBFR			; Finally, send the packet
+	  SETZ T3,
+SND2:	  SNDIN%
+	    JRST SNDE0
+	ENDIF.
+
+NOQ9:
+	OPSTR SKIPE,PSYN,(TPKT)		; SYN in pkt?
+	  TXO F,F.SS			; Sent a SYN
+	OPSTR SKIPE,PFIN,(TPKT)		; FIN in pkt?
+	  TXO F,F.SF			; Sent a FIN
+
+jfcl
+
+; Find # sequence #s contained in packet just sent
+
+	LOAD T1,PIPL,(PKT)		; Packet length, bytes
+	LOAD T2,PIDO,(PKT)		; IP header length, words
+	LOAD T3,PTDO,(TPKT)		; TCP header length, words
+	ADD T2,T3			; Length of headers, words
+	LSH T2,2			; Bytes
+	SUB T1,T2			; Data length, bytes
+
+	OPSTR SKIPE,PSYN,(TPKT)		; SYN is in
+	  ADDI T1,<BYTE (32)1>		; sequence space
+	OPSTR SKIPE,PFIN,(TPKT)		; FIN is in
+	  ADDI T1,<BYTE (32)1>		; sequence space
+	ADDM T1,1(TPKT)			; Bump for controls sent
+	SETZRO <PACK,PSYN,PFIN>,(TPKT)
+
+	RET
+
+	SUBTTL	Utility Routines
+
+;T2/	Address of IP header, word -1 is buffer header
+;T3/	Trace code
+;T4/	Instruction to be executed
+;	CALL LOGPKT
+;Ret+1:	Always, T1/ as returned by Inst
+
+LOGPKT:	PUSH P,T4
+	PUSH P,T2		; Save location of IP header
+
+	MOVEI T4,PPBUFF		; Sample header
+
+	HRRZ T1,-1(T2)		; Actual length, words
+	ADDI T1,PPPKTO+PKTELI-1	; Header length, words
+	STOR T1,DLENW,(T4)	; Sample size
+	STOR T3,DPTRC,(T4)
+	MOVX CX,ND.PKT		; Packet Data Type Traced
+	STOR CX,DTYPE,(T4)
+	AOS T1,PKTCNT		; Count packet
+	STOR T1,DPKTP,(T4)
+	TIME%
+	STOR T1,DTIME,(T4)	; Time of sample
+
+	XCT -1(P)		; Maybe something to do
+	MOVEM T1,-1(P)		; Might reply
+
+	MOVNI T3,PPPKTO+PKTELI	; Tracing header length, words
+	MOVE T2,[POINT 36,PPBUFF]
+	SKIPLE T1,TRCJFN
+	  SOUT%			; Write out sample
+
+	MOVE T2,(P)		; Address of IP header
+	HRRZ T3,-1(T2)		; Buffer length, words
+	SUBI T3,1		; IP length, words
+	MOVNS T3
+	ADD T2,[POINT 36,0]
+	SKIPLE T1,TRCJFN
+	  SOUT%			; Write out sample
+
+	POP P,T2		; IP header address
+	POP P,T1		; Possible value
+	RET
+
+; Compute the IP checksum
+;T4/	Pointer to IP header
+
+IPCKSM:	SETZ T1,			; No pseudo header
+	LOAD T3,IPDO,(T4)		; IP header length, words
+	LSH T3,2			; Bytes
+	SETZRO IPCKS,(T4)		; Make sure checksum field is zero
+	PUSH P,T4
+	CALL CHKSUM			; Compute checksum
+	POP P,T4
+	STOR T1,IPCKS,(T4)		; Insert checksum
+	RET
+
+
+;Close/Release JFN
+
+;	CALL CLOSIT
+;	  Address of JFN variable
+
+CLOSIT:	MOVE T2,@(P)			; Get possible JFN
+	MOVE T1,(T2)
+	IFN. T1
+	  CLOSF%			; Try to close it
+	  ANNSK.			; Failed
+	    MOVE T1,(T2)
+	    RLJFN%			; Try to release it
+	      JFCL
+	ENDIF.
+	SETZM (T2)			; Gone
+	AOS (P)
+	RET
+
+;ASNQ	Assing a User Queue
+
+
+ASNQ:	DMOVE T1,PORT		; Port and mask
+	MOVEM T1,QDB+.IQPTV
+	MOVEM T2,QDB+.IQPTM
+
+	DMOVE T1,PROTOC		; Protocol
+	MOVEM T1,QDB+.IQPRV
+	MOVEM T2,QDB+.IQPRM
+
+	DMOVE T1,LCLHST		; Logical host and mask
+	MOVEM T1,QDB+.IQSHV
+	MOVEM T2,QDB+.IQSHM
+
+	MOVEI T1,QDB
+	TXO T1,AQ%ICM		; Allow ICMP messages
+	SETZB T2,T3
+AQ:	ASNIQ%			; Assign queue
+	  JRST ASQER
+	MOVEM T1,QH
+	RET
+
+
+;OUTLST	List to either terminal of file
+
+;T2/	Pointer to string to be listed
+;	CALL OUTLST
+;All registers preserved
+
+OUTLST:	PUSH P,T1
+	PUSH P,T2
+	PUSH P,T3
+	SETZ T3,
+
+	SKIPLE T1,JFNO		; Output designator
+	  SOUT%
+	
+	MOVX T1,.PRIOU
+	MOVE T2,-1(P)
+	SKIPE DISPSW		; Want it displayed?
+	  SOUT%
+
+	POP P,T3
+	POP P,T2
+	POP P,T1
+	RET
+
+;T1/	Error code
+
+ASQER:	MOVEI T2,[ASCIZ /ASNIQ% error: /]
+	JRST ESTOP
+SNDE0:	MOVEI T2,[ASCIZ /SNDIN% error: /]
+	JRST RELQE
+
+; T1/	Possible error code
+; T2/	Error message header address or 0 if no error
+;Enter here on REENTER
+
+RELQ:	SETZ T2,
+RELQE:	PUSH P,T1
+	PUSH P,T2
+	SETZB T2,T3
+	SKIPL T1,QH
+RQ:	 RELIQ%
+	  JFCL
+	SETOM QH
+	POP P,T2
+	POP P,T1
+
+ESTOP:	CALL EMSG
+STOP:	CALL CLOSIT		; Close trace file
+	  IFIW TRCJFN
+	CALL CLOSIT		; Close output file
+	  IFIW JFNO
+	CALL CLOSIT		; Close input file
+	  IFIW JFNI
+	HALTF%
+	JRST RSTART
+
+;T1/	Error code
+;T2/	Address of a message, or 0 if none
+
+EMSG:	SKIPN T2
+	  RET
+	PUSH P,T1
+
+	MOVX T1,.PRIOU
+	HRRO T2,T2
+	SETZ T3,
+	SOUT%
+
+	POP P,T2
+	HRLI T2,.FHSLF
+	ERSTR%
+	  JFCL
+	  JFCL
+	CALLRET CRLF
+
+;RCVPKT	Receive next packet
+
+;T1/	0 or RIQ%NW
+;	CALL RCVPKT
+;	  INST	To be executed before sample is traced
+;Ret+2:	RIQ%NW and no packet
+;Ret+3:	Checksum error
+;Ret+4:	OK, T1 from INST
+					; T1/ has flags
+RCVPKT:	HRR T1,QH			; Include Queue handle with flags
+	MOVX T2,RBFR
+	MOVX T4,400
+	HRRZM T4,(T2)			; Max size packet
+	SETZ T3,
+RCV:	RCVIN%
+	IFNSK.				; Error
+	  CAIN T1,-1			; Nothing there error?
+	  IFSKP.
+	    MOVEI T2,[ASCIZ /
+RCVIN% error: /]
+	    CALL EMSG
+	  ENDIF.
+	  AOS (P)			; Skip INST
+	  RET				; Ret+2, nothing waiting
+	ENDIF.
+
+	TXZ F,F.DROP		; Assume not dropping packet
+	DMOVE T1,PKTBIT		; Next packet received
+	ROTC T1,-1
+	DMOVEM T1,PKTBIT
+	TDNN T1,DROPKT		; Drop packet?
+	 TDNE T2,DROPKT+1
+	  TRNA
+	   SOSN DROPKC
+	    TXO F,F.DROP	; Dropping packet
+
+	MOVEI T2,RBFR+1		; IP header
+	HLRS -1(T2)		; Both halves to actual length
+	MOVX T3,PT%RGW		; Packet received
+	TXNE F,F.DROP		; Dropping?
+	  MOVX T3,PT%KDP	; Yes
+	MOVE T4,@(P)		; Instruction
+	CALL LOGPKT		; Log the packet
+	TXNE F,F.DROP		; Dropping?
+	  AOS T1		; Yes
+	PUSH P,T1		; Save reply while
+
+	MOVE T4,T1		; Reply
+	MOVEI T1,RBFR+1		; IP leader
+	CALL PRNINP		; Print input packet
+
+	MOVX T1,3		; Assume ok return, +4
+	ADDM T1,-1(P)
+
+	DMOVE T1,PKTBIT
+	TDNN T1,ICMRDM		; ICMP Redirect scheduled for this packet?
+	 TDNE T2,ICMRDM+1
+	  TRNA
+	   SOSN ICMRDC
+	    CALL DOICMR		; Yes, so respond
+
+	DMOVE T1,PKTBIT
+	TDNN T1,ICMSQM		; ICMP Source Quench scheduled for this packet?
+	 TDNE T2,ICMSQM+1
+	  TRNA
+	   SOSN ICMSQC
+	    CALL DOICMS		; Yes, so respond
+
+	DMOVE T1,PKTBIT
+	TDNN T1,ICMDUM		; ICMP Destination Unreachable
+	 TDNE T2,ICMDUM+1	;    scheduled for this packet?
+	  TRNA
+	   SOSN ICMDUC
+	    CALL DOICMU		; Yes, so respond
+
+	TXNN F,F.DROP		; Dropping packet?
+	IFSKP.			; Yes
+	  MOVE T1,DROPKC+1
+	  MOVEM T1,DROPKC
+	  MOVX T1,-2
+	  ADDM T1,-1(P)		; Back to Ret+2 return
+	ENDIF.
+	POP P,T1		; Get reply back
+	RET
+
+; Send ICMP Redirect
+
+DOICMR:	MOVE T1,ICMRDC+1
+	MOVEM T1,ICMRDC
+	MOVX T3,ICM%RD
+	MOVE T2,ICMRDT		; Which packets should be redirected
+	MOVE T1,ICMPGW		; To whom packets should be redirected
+	JRST CMNICM
+
+
+; Send ICMP Source Quench
+
+DOICMS:	MOVE T1,ICMSQC+1
+	MOVEM T1,ICMSQC
+	MOVX T3,ICM%SQ
+	SETZ T1,T2		; Unused word, code 0
+	JRST CMNICM
+
+
+; Send ICMP Destination Unreachable
+
+DOICMU:	MOVE T1,ICMDUC+1
+	MOVEM T1,ICMDUC
+	MOVX T3,ICM%DU
+	SETZ T1			; Unused word
+	MOVE T2,ICMDUT		; Which destination unknown
+
+
+; Common operations
+
+CMNICM:
+
+; Build ICMP header
+
+	STOR T1,CMGWA,+ICB	; Aux info
+	STOR T2,CMCOD,+ICB	; Code
+	STOR T3,CMTYP,+ICB	; Type
+
+	AOS T1,IPID		; Next sequence number
+	STOR T1,PISID,+ICPKT
+
+	MOVE T1,ICMPSH		; Source of ICMP message
+	STOR T1,PISH,+ICPKT
+	LOAD T1,PISH,+RPKT	; Who sent packet
+	STOR T1,PIDH,+ICPKT	; Gets reply
+
+; Include the IP packet
+
+	MOVE T1,[RBFR+1,,ICIP]	; Copy IP header + 64-bits
+	LOAD T3,PIDO,+RPKT	; Words in IP header
+	BLT T1,ICIP+2-1(T3)
+
+	ADDI T3,2+ICIP-ICB	; Include ICMP header, 64-bits in checksum
+	LSH T3,2		; # bytes
+	MOVE T1,T3
+	ADDI T1,<ICB-<ICBFR+1>>*4 ; Include ICMP header, 64-bits in checksum
+	STOR T1,PIPL,+ICPKT	; Total packet length
+
+; Compute the ICMP checksum
+
+	SETZ T1,		; No pseudo header
+	MOVEI T4,ICB		; Point at ICMP header
+	SETZRO CMCKS,+ICB	; Make sure checksum field is zero
+	CALL CHKSUM		; Compute checksum
+	STOR T1,CMCKS,+ICB	; Insert checksum
+
+; Compute the IP checksum
+
+	SETZ T1,		; No pseudo header
+	LOAD T3,PIDO,+ICPKT	; IP header length, words
+	LSH T3,2		; Bytes
+	MOVEI T4,ICBFR+1	; Point at header
+	SETZRO PICKS,+ICPKT	; Make sure checksum field is zero
+	CALL CHKSUM		; Compute checksum
+	STOR T1,PICKS,+ICPKT	; Insert checksum
+
+; Print the ICMP packet
+
+	MOVEI T1,ICBFR+1
+	SETZ T4,		; No message
+	CALL PRNTCP		; List packet about to be sent
+
+	MOVEI T2,ICBFR+1	; IP header
+	MOVX T3,PT%BYP		; Packet "bypassed"
+	MOVX T4,<JFCL>
+	CALL LOGPKT		; Log ICMP packet about to be sent
+
+; Now send ICMP packet
+
+	MOVE T1,QH
+	MOVEI T2,ICBFR		; ICMP buffer
+	SETZ T3,
+SND3:	SNDIN%
+	IFNSK.
+	  MOVEI T2,[ASCIZ /
+SNDIN% error sending ICMP message: /]
+	  CALL EMSG
+	ENDIF.
+	RET			; ICMP sample traced and sent
+
+
+;T1/TODCLK
+;	CALL DQPKT
+;Ret+1:	  Nothing or not yet time
+;Ret+2:	T2/ User queue header
+
+DQPKT:	MOVE T4,PKTQO			; Have something queued?
+	CAMGE T4,PKTQI
+	 CAMGE T1,0(T4)			; Time to send packet
+	  RET				; Nothing queued or not yet time
+	AOS (P)				; SKip return
+
+	MOVE T2,PKTQO
+	MOVE T3,1(T2)			; Length
+	ADDI T3,1(T2)			; Next PKTQO
+	MOVEM T3,PKTQO
+
+	RET
+
+
+;MSK2BP	Convert mask in a word to the left half of a byte pointer.
+
+;T1/	Mask
+;	CALL MSK2BP
+;T1/	Byte pointer (right half is zero)
+
+MSK2BP:	PUSH P,T2			; Save reg
+	JFFO T1,.+2			; Count lead zeros
+	  MOVX T2,^D36			; All zeros, fake nul pointer
+	PUSH P,T2			; Number of lead zeros before mask
+	MOVN T2,T1			; Find lsb of mask
+	AND T1,T2
+	JFFO T1,.+2			; Find bits before lsb
+	  MOVX T2,^D35
+	MOVX T1,^D35
+	SUB T1,T2
+	LSH T1,6			; Position field
+	ADDI T1,1(T2)
+	SUB T1,(P)
+	POP P,(P)			; Drop number of lead zeros
+	LSH T1,^D36-6-6			; Left justify pointer
+	POP P,T2			; Restore register
+	RET
+
+	SUBTTL	Subroutine to print IP info
+
+;T1/	Address of IP leader
+;T4/	-1,,[ASCIZ /msg/], or 0
+
+PRNINP:	SKIPG JFNO		; Have output listing file or
+	 SKIPE DISPSW		; Output to terminal?
+	IFSKP.			; No
+	  SKIPGE T1,T4		; Have message?
+	    PSOUT%		; Yes, output message
+	  RET			; Don't bother
+	ENDIF.
+
+	MOVX CX,<0,,ACS>	; Save everything
+	BLT CX,ACS+CX
+
+	MOVE IPKT,T1		; Address of IP leader
+
+	SKIPLE T1,JFNO		; Listing file?
+	  CALL PRNINQ		; Yes
+
+	MOVX T1,.PRIOU
+	MOVE T4,ACS+T4
+	SKIPE DISPSW		; Terminal output?
+	  CALL PRNINQ		; Yes
+
+	SKIPGE T1,ACS+T4	; Have message and
+	 SKIPE DISPSW		; No terminal output?
+	  TRNA			; No
+	   PSOUT%		; Yes, give message
+
+	MOVX CX,<ACS,,0>
+	BLT CX,CX
+	RET
+
+
+PRNINQ:	HLRZ VL,RBFR		; Words received+header
+	SUBI VL,1
+	LSH VL,2		; Bytes w/o header
+	LOAD PL,IPPL,(IPKT)	; IP length, bytes
+
+	MOVE T2,PKTCNT		; Current packet count
+	XNOUT <NO%LFL+FLD(5,NO%COL)+DECRAD>
+	MOVX T2," "
+	BOUT%
+
+	SETO T2,
+	MOVX T3,<OT%NDA+OT%NCO>
+	ODTIM%
+
+	SSOUT < Received:>
+	SKIPGE T2,T4
+	  SOUT%
+
+	MOVEI COD,CRLF		; In case IPHDRL doesn't set COD
+	CALL IPHDRL		; IP header
+	CALL (COD)		; Protocol header (E.g. TCP)
+	CALL CRLF
+
+	IFG. PL
+	  SSOUT <Omitted: >
+	  MOVE T2,PL
+	  XNOUT DECRAD
+	  SSOUT <.
+>
+	ENDIF.
+	RET
+
+
+;T1/	Address of IP header
+;T4/	-1,,[ASCIZ /msg/], or 0
+
+PRNTCP:	SKIPG JFNO		; Have output listing file or
+	 SKIPE DISPSW		; Output to terminal?
+	  TRNA
+	   RET			; No, Don't bother
+
+	MOVX CX,<0,,ACS>	; Save everything
+	BLT CX,ACS+CX
+
+	MOVE IPKT,T1		; Pointer to IP leader
+
+	SKIPLE T1,JFNO		; Listing file?
+	  CALL PRNTCQ		; Yes
+
+	MOVX T1,.PRIOU
+	MOVE T4,ACS+T4
+	SKIPE DISPSW		; Terminal output?
+	  CALL PRNTCQ		; Yes
+
+	MOVX CX,<ACS,,0>
+	BLT CX,CX
+	RET
+
+;IPKT/	Address of IP leader
+
+PRNTCQ:	LOAD TPKT,IPDO,(IPKT)	; Length IP header, words
+	ADD TPKT,IPKT		; Point to session leader
+
+	MOVE T2,PKTCNT		; Current packet count
+	XNOUT <NO%LFL+FLD(5,NO%COL)+DECRAD>
+	MOVX T2," "
+	BOUT%
+
+	SETO T2,
+	MOVX T3,<OT%NDA+OT%NCO>
+	ODTIM%
+
+	SSOUT < Sent:>
+	SKIPGE T2,T4
+	  SOUT%
+
+	HRRZ VL,-1(IPKT)		; Words sent+header
+	SUBI VL,1
+	LSH VL,2			; Bytes w/o header
+	LOAD PL,IPPL,(IPKT)		; IP length, bytes
+
+	LOAD T2,IPDO,(IPKT)		; Find session length, bytes
+	LSH T2,2
+	SUB PL,T2
+	SUB VL,T2
+
+	LOAD T2,IPPRO,(IPKT)		; Session protocol code
+	CAIL T2,NCODTA
+	  SETZ T2,
+	CALL @CODTAB(T2)		; Call it's print routine
+	CALLRET CRLF
+
+;	RANDOM
+
+RANDOM:	MOVX T1,<4544503720>
+	MUL T1,SEED
+	ASHC T1,4
+	LSH T2,-4
+	ADD T1,T2
+	TLZE T1,760000
+	  ADDI T1,1
+	MOVEM T1,SEED
+	ASH T1,5
+	RET
+
+;	CALL GTAKDY
+;Ret+1:	Always, T1/ # msec to dealy
+
+GTAKDY:	SKIPLE T1,ACKDLY		; Specified dealy
+	 TXNN F,F.RND			; Use random #?
+	IFSKP.
+	  CALL RANDOM
+	  MUL T1,ACKDLY			; Fraction into msec
+	ENDIF.
+	RET
+
+;	CALL ACKDLA
+
+ACKDLA:	CALL GTAKDY			; Get ACK delay
+
+;T1/	Msec to delay
+;	CALL DELAY
+
+DELAY:	SKIPG T1			; Any delay?
+	  RET				; No
+	PUSH P,T1
+	DO.
+	  MOVEI T1,^D1000		; Wait a little
+	  DISMS%
+IFSKP.
+	  MOVX T1,RIQ%NW		; Just look for a packet
+	  CALL RCVPKT
+	    JFCL			; Nothing special before tracing
+	   JFCL				; Nothing there
+	   JFCL				; Checksum error
+ENDIF.					; Got packet (traced and listed)
+
+	  MOVX T1,<-^D1000>		; Negative amount waited
+	  ADDB T1,(P)			; Reduce total
+	  JUMPG T1,TOP.			; Back if more
+	ENDDO.
+	POP P,(P)			; Drop timer
+	RET
+
+	SUBTTL	TCPCKS, UDPCKS	Compute TCP/UDP Checksum
+
+;PKT/	Points to pseudo IP header
+;TPKT/	Points to TCP header
+;	CALL TCPCKS
+;Ret+1:	Always with T1/ Computed checksum
+
+UDPCKS:	JFCL			; Same pseudo header as TCP
+TCPCKS:	JFCL			; Compute sum of pseudo header
+				; PISH + PIDH + PIPRO + Len
+
+; Add 16 bit bytes, rigth justified, using ILDB
+; Cannot overflow 32 bit sum so don't have to check
+
+	LOAD T3,PIPL,(PKT)	; IP + TCP + Data, b
+	LOAD T2,PIDO,(PKT)	; IP, w
+	LSH T2,2		; IP, b
+	SUB T3,T2		; TCP + Data, b
+
+	MOVE T1,T3		; is part of checksum
+	LOAD T2,PISH,(PKT)	; Also source
+	ADD T1,T2
+	LOAD T2,PIDH,(PKT)	; and destination
+	ADD T1,T2
+	LOAD T2,PIPRO,(PKT)	; and protocol
+
+	MOVE T4,TPKT		; 16-bit bytes beginning
+	ADD T1,T2
+
+;T1/	Pseudo header sum, or 0
+;T3/	# bytes
+;T4/	Pointer to first word
+;CHKSUM
+;T1/	Checksum
+
+CHKSUM:	SETZ T2,
+	ROTC T2,-1		; TCP + Data, 16
+	PUSH P,T2		; Bytes extra (0 or 1)
+
+	HRLI T4,(POINT 16,0)	; Byte pointer to header
+TCK16:	ILDB T2,T4		; Get byte
+	ADD T1,T2		; Into sum
+	SOJG T3,TCK16		; Do all
+
+	POP P,T3		; Odd byte flag
+	JUMPE T3,TCKX		; Odd bytes (0 or 1)
+	TLCA T4,003000	;16 to 8 bits; third byte ADDI Q1,1
+	  HRLI T4,(POINT 8,0)	; Leftmost byte
+TCK8:	ILDB T2,T4		; Get byte
+	LSH T2,10		; Left justify
+	ADD T1,T2		; Into sum
+TCKX:
+	TDZA T2,T2
+TCKN:	  LSH T2,-20		; Right justify rest
+	ADDB T1,T2
+	TDZE T1,[777777,,600000]
+	  JRST TCKN
+
+	SKIPE T1		; Don't complement zero
+	  TRC T1,177777
+	RET
+
+; 32-bit (shift) right justified bytes
+; Cannot overflow before enter loop
+
+TCPCKW:	LOAD T4,PIPL,(PKT)		; Packet length
+	LOAD T2,PIDO,(PKT)
+	LSH T2,2
+	SUB T4,T2
+
+	MOVE T1,T4			; TCP Count (header+data)
+	ADD T1,[BYTE (4)0(16).TCPFM,0]	; & Protocol
+	LOAD T2,PISH,(PKT)		; & Source
+	ADD T1,T2
+	LOAD T2,PIDH,(PKT)		; & Dest
+	ADD T1,T2
+
+	MOVE Q1,T4			; Get mask for last word (or garb)
+	ANDI Q1,3
+	MOVE Q1,[BYTE (4)0(8)0,0,0,0
+		 BYTE (4)0(8)-1,0,0,0
+		 BYTE (4)0(8)-1,-1,0,0
+		 BYTE (4)0(8)-1,-1,-1,0](Q1)
+	LSH T4,-2			; Bytes to 32-bit words
+	MOVNS T4
+	HRLZS T4
+	HRR T4,TPKT			; As AOBJN ptr to TCP header
+
+TCPCK3:	MOVE T2,(T4)			; 32-left just bits
+	LSH T2,-4			; Right just
+	ADD T1,T2
+	TLZE T1,400000			; Overflow?
+	  ADDI T1,10			; Yes, add in count
+	AOBJN T4,TCPCK3
+
+	MOVE T2,(T4)			; Last word (or beyond)
+	AND T2,Q1			; Desired portion
+	LSH T2,-4			; Right justified
+
+TCPCK4:	ADDB T1,T2
+	LSH T2,^D<-16>
+	TDZE T1,[777777600000]
+	  JRST TCPCK4
+
+	TRNE T1,177777			; Don't complement zero
+	  TRC T1,177777
+	RET
+
+ASCA:	ASCIZ /a/
+	ASCIZ /a-/
+ASCB:	ASCIZ /b/
+	ASCIZ /b-/
+ASCX:	ASCIZ /x/
+	ASCIZ /x-/
+
+SPACES:	ASCIZ /                                                           /
+
+	SUBTTL Variables
+
+ACKCNT:	0				; # octets needed before ACK
+ACKRXC:	0				; Count of retransmissions
+ACKCN0:	-1				; # octets to be acked, .le.0 all
+ACKDLY:	0				; ACK delay, msec
+ACKRX0:	0				; # retransmissions to ignore
+
+ACS:	BLOCK 20			; Saved ACs
+DEX:	BLOCK 20			; Default file extension
+DFN:	BLOCK 20			; Default file name
+DISPSW:	0				; Display packets 0-no, nz-yes
+
+DROPKC:	EXP 0,1B1			; Counter for dropping packet
+DROPKT:	EXP 0,0				; 72 packet when to drop the packet
+
+F0:	0				; Initial flags
+
+FINDC0:	0				; # FINs to be dropped
+FINDCT:	0				; # remaining to be dropped
+FINDLY:	0				; Msec to wait before send FIN
+FINRX0:	0				; Msec between RX of FIN
+
+FUNCTN:	0				; Function
+
+HOSTA:	BLOCK 2				; HOST-A
+;HOSTB:	BLOCK 1				; HOST-B
+HOSTP:	BLOCK 2				; Previous src,dst
+
+HOSTF:	BLOCK 2	;B0-31			; Foreign host
+;HOSTL:	BLOCK 1	;B0-31			; Local host, as addressed by foreign
+
+ICMDUT:	DU%HST				; What destination unreachable
+ICMDUC:	EXP 0,1B1			; Counter for sending 
+					;    destination unreachable
+ICMDUM:	EXP 0,0				; 72 packet when to send dest unreach
+
+ICMPSH:	BYTE (4)0(8)0,0,0,0		; Source of ICMP messages
+
+ICMPGW:	BYTE (4)0(8)0,0,0,0		; Gateway
+
+ICMRDT:	RD%NET				; What is to be redirected
+ICMRDC:	EXP 0,1B1			; Counter for sending redirect
+ICMRDM:	EXP 0,0				; 72 packet when to redirect
+
+ICMSQC:	EXP 0,1B1			; Counter for sending quench
+ICMSQM:	EXP 0,0				; 72 packet when to quench
+
+IPID:	0				; IP segment id
+JFNT:	0				; Trash JFN
+JFNI:	0				; Input JFN
+;JFNO:	0				; Output JFN (text)
+
+HAVLGL:	0				; Non-zero if have 1822 net address
+LGHBYP:	POINT 8,LCLHST,23		; Byte pointer to logical host field
+LGHMSK:	1774				; Corresponding mask
+
+PKTBIT:	BLOCK 2				; Packet received 72-bit counter
+PKTCNT:	BLOCK 1				; Count of packets logged
+
+PORTFL:	BLOCK 1	;B0-15,B16-31		; Ports, foreign, local
+
+;User queue parameters
+PROTOC:	BYTE (8)0,0,0,.TCPFM		; Default to TCP packets
+	BYTE (8)0,0,0,-1
+	BYTE (8)0,0,0,0			; Foreign host
+	BYTE (8)0,0,0,0
+LCLHST:	BYTE (8)^D8,4,0,^D12		; Local (logical) host
+	BYTE (8)-1,-1,-1,-1
+PORT:	BYTE (16)^D9,0			; Sink port
+	BYTE (16)177777,0
+
+RCVLFT:	BLOCK 1	;B0-31			; TCP receive-left
+
+SEED:	1777777				; Random number seed
+
+SEGCNT:	0				; TCP max seg size counter
+SEGCN0:	10				; How often to change segment size
+SEGMAX:	^D500				; Initial segment size
+SEGMOD:	0				; 0-off, 1-First, 2-all, 3-decreasing
+
+SNDRIT:	0				; Right edge of window
+
+TEMP:	BLOCK 30			; String space
+TRCJFN:	0				; Trace file JFN
+
+WNDRIT:	0				; Right end of window (B4-35)
+WNDTIM:	0				; TODCLK when window can be opened
+WNDSZ0:	-1				; >0: Fixed window size, or
+WNDMUL:	2				; >0: Segment size multiplier
+WNDMOD:	-1				; -1: Extend window
+					;  0: Let it go to zero
+					; >0: Force to zero when at threshold
+WNDMSC:	0				; Msec to keep window shut
+WNDTI0:	1				; NZ to open window at SYN
+
+
+
+PKTQ0=400000				; Packet queue buffers
+;Entries are TODCLK to be sent, user queue header(length), packet
+PKTQI:	BLOCK 1				; Insertion pointer
+PKTQO:	BLOCK 1				; Extraction pointer
+
+QH:	-1				; Queue assigned
+QDB:	BLOCK ^D10
+
+
+; Packet printer header buffer
+
+PPBUFF:	BLOCK PPPKTO			; Packet printer header size
+PPBUFP:	BLOCK PKTELI			; Internal info is missing
+	BLOCK 0				; IP header begins here
+
+; ICMP packet buffer
+
+ICPKT:	BLOCK PKTELI-1				; Pointer to make structures ok
+ICBFR:	0,,ICBFE-ICBFR
+	BYTE (4).INTVR,<ICB-.>(8)0(16)<ICBFE-.>*4 ; v,do,tos,pl
+	BYTE (16)12345 (1)0,0,0 (13)0		; id,,df,mf,fo
+	BYTE (8)5,.ICMFM (16)0-0		; ttl,prot,cks
+	BYTE (32)0-0				; source
+	BYTE (32)0-0				; dest
+	BYTE (8)1,0,0,0				; IP options here
+ICB:	BYTE (8)0-0,0-0 (16)0-0			; type, code, checksum
+	BYTE (32)0-0				; Redirect gateway
+ICIP:	BLOCK 17+2				; Maximal IP header + 64 bits
+ICBFE:
+
+; Send packet buffer
+
+SPKT:	BLOCK PKTELI-1				; Pointer to make structures ok
+SBFR:	0,,SBFE-SBFR
+PPL:	BYTE (4).INTVR,<TB-.>(8)0(16)<SBFE-.>*4	; v,do,tos,pl
+SID:	BYTE (16)0 (1)0,0,0 (13)0		; id,,df,mf,fo
+	BYTE (8)5,.TCPFM (16)0-0		; ttl,prot,cks
+SH:	BYTE (32)0-0				; source
+DH:	BYTE (32)0-0				; dest
+;	BYTE (8)				; IP options here
+TB:
+TSD:	BYTE (16)0-0,0-0			; ports
+TS:	BYTE (32)1234500000			; seq
+TA:	BYTE (32)0-0				; ack
+TF:	BYTE (4)<TD-TB>,0-0 (8)0 (16)1704	; do,,ctl,wnd
+	BYTE (16)0,0				; cks, urg
+;	BYTE (8)				; TCP options here
+TD:
+;	BYTE (8)				; TCP data here
+SBFE:
+TOPMSG:	BYTE (8)2,4(16)0-0		; Max seg size
+	BLOCK 400
+
+
+; Image of last (regular) packet sent
+
+LSBFR:	BLOCK 400
+
+
+;  Receive packet buffer
+
+RPKT:	BLOCK PKTELI-1		; Internal and Local headers
+RBFR:	0,,400			; User queue header over last Local header
+ 212000001260
+    404000000
+   6032604060
+   6000000120
+   6000010120
+   4000000220
+     24713560
+            0
+ 240010024700
+ 315314000000
+   2010030000
+	BLOCK 400
+	BLOCK 10
+
+
+DEFLPT:	BLOCK 1		; Default local port
+DEFPRT:	BLOCK 4
+
+PRT7:	ASCIZ /000  7/	; Port specification strings
+PRT9:	ASCIZ /000  9/	; "000" may be replaced by job #
+PRT19:	ASCIZ /000  19/
+
+JOBSTR:	BLOCK 2		; Job number string & guard word
+
+PDLP:	IOWD PDLL,PDL		; Control Stack pointer
+
+HDRCNT:	0		; # of header lines listed
+PAGCNT:	0		; Count down lines in page
+OLDTIM:	0		; Time of last packet
+
+PRT0:	ASCIZ /000  0/
+
+; varibles for print section
+; Print tcp packet information
+
+;Variables
+
+repeat 0,<
+FINT:	DFINT		; Bits for Internal packet information
+FLN:	DFLN		; Bits for Local Net Leader to be listed
+> ;end of repeat 0
+FIP:	DFIP		; Bits for IP Header fields to be listed
+FICMP:	DFICMP		; Bits for ICMP Header fields to be listed
+FTCP:	DFTCP		; Bits for TCP Header fields to be listed
+
+JFNO:	.PRIOU		; Ascii output jfn (usually in T1)
+TDATA:	0		; Points to TCP data
+VERSUN:	VMAJOR		; Trace file format
+
+PKTN:	0		; Sample # in packet
+IPOCT:	0		; # IP octets in sample
+PTDTA:	BLOCK PPPKTO	; Trace info
+	BLOCK 1
+MAXPKT=400
+PACKET:	BLOCK MAXPKT	; Binary trace data
+
+
+; Parameter parsing
+
+CMDBSZ==50		; Length (words) of COMND input buffer
+ATMBSZ==10		; Length (words) of COMND atom buffer
+CMDSZ==.CMGJB+1		; Length of COMND State Block
+GJFNSZ==.GJATR+1	; Length of GTJFN Block
+ERMSGS==10		; Words in error string buffer
+
+MSKSTR	(NXFDB,.CMFNP,777777)	; Addess of next Function Descriptor Block
+
+;DEFSTR	(NOKY,0,23,4)	; Flags for NO ...
+;DEFSTR	(OKKY,0,29,4)	; Flags for ...
+;DEFSTR	(CRKY,0,35,4)	; Current falgs: CM%ABR, CM%NOR, CM%INV
+
+
+CMDBUF:	BLOCK CMDBSZ	; COMND input buffer
+ATMBUF:	BLOCK ATMBSZ	; COMND atom buffer
+
+CMD:	BLOCK CMDSZ	; Command State Block
+GJFN:	BLOCK GJFNSZ	; Long-form GTJFN Block
+
+CURFDB: 0		;Current FLDDB, Address
+CURP:   0		;Current Stack Pointer
+CURPMT: 0		;Current Prompter Pointer
+LSTFDB: 0		;Last FDB used by NOCMD
+
+ERMSG:	ASCII /     /	; For system error string
+	BLOCK ERMSGS-1
+
+	0			; Parallel HELP keywords
+	JFCL			; Reparse instruction
+DECFDB:	FLDDB.(.CMNUM,CM%HPP!CM%SDH,DECRAD,,,)
+	EXP 0,0			; Help/Default
+DECHLP==DECFDB+2
+
+	0			; Parallel HELP keywords
+	JFCL			; Reparse instruction
+OCTFDB:	FLDDB.(.CMNUM,CM%HPP!CM%SDH,OCTRAD,,,)
+	EXP 0,0			; Help/Default
+OCTHLP==OCTFDB+2
+
+	SUBTTL	Common Parsing Routines
+
+; First, initialize COMND State Block
+;	CALL PARSIN		; Initialize command parser
+
+PARSIN:	MOVEI T1,CMD		; Locate State block
+
+	MOVX T2,<.PRIIN,,.PRIOU>
+	MOVEM T2,.CMIOJ(T1)	; Input/Output JFNs
+
+	MOVX T2,<POINT 7,CMDBUF>
+	MOVEM T2,.CMBFP(T1)	; Input buffer
+
+	MOVX T2,<POINT 7,CMDBUF>
+	MOVEM T2,.CMPTR(T1)
+
+	MOVX T2,CMDBSZ*5-1
+	MOVEM T2,.CMCNT(T1)	; Input buffer size
+
+	SETZM .CMINC(T1)	; Buffer is empty
+
+	MOVX T2,<POINT 7,ATMBUF>
+	MOVEM T2,.CMABP(T1)	; Atom buffer
+
+	MOVX T2,ATMBSZ*5-1
+	MOVEM T2,.CMABC(T1)	; Atom buffer size
+
+	MOVX T2,GJFN
+	MOVEM T2,.CMGJB(T1)	; GTJFN block
+
+	RET
+
+; Then, to parse
+;T2/	Address of FLDDB.  The two words preceeding the FLDDB. contain:
+;	-2: address of help text,,help keyword table
+;	-1: instruction to be executed when a reparse is necessary
+;	Case 1,  Keyword table:  The right half of the keyword table
+;	entries contains the address of a routine to be called.
+;	Case 2,  Not keywords:   T1/ Address of routine to call.
+;T3/	Byte Pointer to prompting string
+;	CALL PARSE
+; Function(T1) is called to process the rest of the command line.  It should
+;	return +1 to loop back for another command, +2 to get a command
+;	following "NO".  It should set F.XT if PARSE should return to its
+;	caller, or F.ER if an error was detected and (EST) should be printed.
+;Ret+1:	Always.
+
+PARSE:	PUSH P,CURFDB		; Save previous state
+	PUSH P,CURP
+	PUSH P,CURPMT
+	PUSH P,T1		; Possible function address
+	MOVEM T2,CURFDB		; Set new parameters for Reparse
+	MOVEM T3,CURPMT		; Descriptor, Prompt,
+	MOVEM P,CURP		; Stack pointer
+
+	DO. (NEWCMD)		; Parse next command line
+	  MOVX T2,<REPARS>
+	  MOVEM T2,.CMFLG+CMD	; No flags/reparse
+	  MOVE T3,CURPMT
+	  MOVEM T3,.CMRTY+CMD	; Retype text
+
+	  IFSKP.		; Never
+				; General Error Exit Routine
+PARSER:	    HRROI T1,[ASCIZ /
+? Error /]
+	    PSOUT%		; Begin error message
+	    SKIPE T1,EST	; Maybe some
+	      PSOUT%		; Specific information
+	    HRROI T1,[ASCIZ /.
+/]
+	    PSOUT%
+	  ENDIF.
+
+	  MOVX T1,CMD		; Locate State block
+	  MOVEI T2,[FLDDB.(.CMINI)] ; Initialize for next command
+	  COMND%
+
+REPARS:	  MOVE P,CURP		; Restore stack
+	  SETZ EST,		; No error string
+
+	  MOVE T2,CURFDB	; Usually keyword table
+	  MOVE TMP,[LOAD T1,OKKY,(T3)] ; Also frequently needed
+	  XCT -1(T2)		; Perform reset action(s)
+	  HLLZS F		; Reset flags and variables
+jfcl;	  HRRZS CMD		; Clear flags in state block on reparse
+
+	  MOVE T2,CURFDB	; Function to be parsed
+	  DO.			; Loop back here when saw a "NO"
+	    MOVE P,CURP		; Be safe from REPARSes
+	    MOVX T1,CMD
+	    MOVEM T2,LSTFDB	; Save function block to be parsed
+	    LOAD T4,CM%FNC,(T2)	; Get function code
+	    COMND%
+	    TXNE T1,CM%NOP	; Parse ok?
+	    IFSKP.		; Yes
+	      CAIE T4,.CMKEY	; Keyword table?
+	       SKIPA FCT,(P)	; No, get routine to call
+	        HRRZ FCT,(T2)	; Yes, right-half of keyword entry is routine
+	      ANDG. FCT		; Have one
+				; All ok, proceed
+	    ELSE.		; Parsing error
+	      HRROI T1,[ASCIZ /
+? Sorry, "/]
+	      PSOUT%
+	      HRROI T1,ATMBUF
+	      PSOUT%
+	      HRROI T1,[ASCIZ /" is not a valid command.
+/]
+	      PSOUT%
+	      SETZ FCT,		; No routine if error
+	    ENDIF.
+
+	    SKIPLE FCT		; If no error, then
+	     CALL (FCT)		; Dispatch to processing routine
+	      TRNA		; All OK
+	       LOOP.		; Saw NO, back for new word
+	  ENDDO.		; Command processed
+	  TXZE F,F.ER		; Detect an error?
+	    JRST PARSER		; Yes, report error then to REPARS
+	  TXZN F,F.XT		; Suppose to return from PARSE?
+	    LOOP.		; No, back for next
+	ENDDO.
+
+	MOVE P,CURP		; Restore stack & prior parameters
+	POP P,(P)		; Drop possible function
+	POP P,CURPMT		; Restore higher level parsing state
+	POP P,CURP
+	POP P,CURFDB
+	RET			; Return from parse
+
+	SUBTTL	CCMCFM, CCMDEC, CCMOCT, and CCOMND Routines
+
+; CALL CCMDEC to parse a decimal number
+
+CCMDEC:	MOVEM T2,DECHLP
+	MOVEI T2,DECFDB		; Decimal number
+	JRST CCOMND
+
+
+
+; CALL CCMOCT to parse an octal number
+
+CCMOCT:	MOVEM T2,OCTHLP
+	MOVX T2,OCTFDB		; Octal number
+	JRST CCOMND
+
+
+
+; CALL CCMCFM to confirm a command
+
+CCMCFM:	MOVEI T2,[FLDDB.(.CMCFM)] ; Confirm
+
+
+
+;  Then to parse rest of line,
+;	MOVX T2,<first fdb>
+;	CALL CCOMND
+;Ret+1:	OK, T4 first fdb, T3 actual
+; Jumps to PARSER on parse error
+
+CCOMND:	MOVEI T1,CMD
+	HRRZ T4,T2		; Save initial function
+	COMND%
+	HRRZS T3		; Actual function
+	TXNN T1,CM%NOP		; Parse ok?
+	  RET			; Yes
+
+	TRNA
+COMND1:	  HRR T2,T1		; T1 has error code...
+COMND2:	HRLI T2,.FHSLF		; T2 has error code...
+	MOVX T1,<POINT 7,ERMSG,6>
+	HRLI T3,-<<5*ERMSGS>-2>
+	ERSTR%			; Get system error string
+	  JFCL
+	  JFCL
+	SETZ T2,		; End string with a NUL
+	BOUT%
+
+	HRROI EST,ERMSG		; Point to error string
+	JRST PARSER
+
+	SUBTTL	Set Keyword Table Flags
+
+;	MOVX T2,<fdb of a .cmkey table>
+;	MOVX TMP,<instruction to get new flags into T1>
+;	CALL KEYINI
+
+KEYINI:	MOVE T3,.CMDAT(T2)	; Address of keyword table
+	HLRZ T4,(T3)		; Acutal Number of entries
+	MOVNS T4
+	HRLZS T4
+	HRRI T4,1(T3)		; AOBJN pointer to keys
+	DO.
+	  HLRZ T3,(T4)		; Address of text block
+	  XCT TMP		; Get new flags
+	  STOR T1,CRKY,(T3)
+	  AOBJN T4,TOP.
+	ENDDO.
+	RET
+
+
+
+	SUBTTL	GO Command
+
+HGO:	ASCIZ	/GO begins processing the data file./
+
+.GO:	MOVEI T2,[FLDDB.(.CMNOI,CM%SDH,<POINT 7,[ASCIZ /process data/]>,,,)]
+	CALL CCOMND
+	CALL CCMCFM		; Confirm command
+	TXO F,F.XT		; Return from PARSE
+	RET
+
+
+	SUBTTL	NO Prefix
+
+HNOT:	ASCIZ \NOT negates the following command.\
+HNO:	ASCIZ \NO negates the following command.\
+
+.NOT:
+.NO:	MOVE T2,LSTFDB		; Current keyword fdb
+	MOVE TMP,[LOAD T1,NOKY,(T3)]	; Seen "NO" instruction
+	CALL KEYINI		; Remove parameters which cannot follow NO
+	TXO F,F.NO		; Seen "NO"
+	AOS (P)			; Skip return
+	RET			; Get parameter
+
+	SUBTTL	HELP Command
+
+; Basic structure for multiple level help function:
+;
+;	<General help text adr>,,<Help sub-command keyword table adr>
+;	<Reparse instruction to be executed>
+;CURFDB->FLDDB.(.CMKEY, ... of keywords for this level
+
+; Top-level HELP
+
+; HELP Text
+
+HELPTX:	ASCIZ	/HELP    displays information about the commands which may be
+specified.  Information about a particular topic is obtained by typing
+HELP ,  then pressing RETURN and entering a topic name./
+
+
+HLPSUB:	FLDDB.(.CMCFM,<CM%HPP!CM%SDH>,,<RETURN for general information>,
+,HLPCMA)
+HLPCMA:	FLDDB.(.CMCMA,,,
+<Comma followed by RETURN for help about a particular topic>)
+
+
+; HELP Sub-Commnad
+
+HSUBC:	FLDDB.(.CMKEY,,0-0,,,HSBCFM)
+HSBCFM:	FLDDB.(.CMCFM,<CM%HPP!CM%SDH>,,<RETURN to terminate help>,,)
+
+
+
+.HELP:	HRROI T1,[ASCIZ /No more help available./]
+
+	MOVE T2,CURFDB
+	HRRZ T2,-2(T2)		; Help keyword table address, or 0 if none
+	JUMPE T2,HELPX		; none
+
+	MOVEM T2,HSUBC+.CMDAT	; Set keyword address into FDB block
+	MOVX T2,HLPSUB		; Confirm is initial function
+	CALL CCOMND
+	CAME T3,T4		; Carriage return?
+	  JRST HLPSB		; No, comma for subcommands
+
+	MOVE T1,CURFDB		; Find current level
+	HLRO T1,-2(T1)		; Help for this level
+HELPX:	PSOUT%
+	RET
+
+
+
+; Sub commands for HELP
+
+HLPSB:	CALL CCMCFM		; Confirm HELP,
+HLPSBL:	MOVX T2,<HREPAR>	; Reparse and prompt
+	MOVX T3,<POINT 7,[ASCIZ /Give help about:/]>
+
+	MOVX T1,CMD		; Locate State block
+	MOVEM T2,.CMFLG(T1)	; No flags/reparse
+	MOVEM T3,.CMRTY(T1)	; Retype text
+
+	MOVEI T2,[FLDDB.(.CMINI)]
+	COMND%
+
+	TDZA EST,EST		; No error string
+				; Skip over error
+	  CALL HLPSBE		; Error reset
+HREPAR:	HRROI EST,[ASCIZ / sorry, do not have any more help about that./]
+	MOVX T2,HSUBC
+	CALL CCOMND
+	CAME T3,T4		; Get a subcommand or CRLF?
+	  RET			; CRLF ends subcommands
+
+	HRRO FCT,(T2)		; Subcommand, right-half of keyword entry
+	CALL CCMCFM		; Confirm HELP subcommand
+
+	HRRO T1,FCT		; Exetended help message
+	PSOUT%
+	JRST HLPSBL		; Get next subcommand
+
+
+; Get/Reparse sub-command
+
+HLPSBE:	HRROI T1,[ASCIZ /
+? Sorry, do not have any help about that./]
+	PSOUT%
+	SKIPE T1,EST
+	  PSOUT%
+	HRROI T1,[ASCIZ /
+
+/]
+	PSOUT%
+	JRST HLPSBL		; Reinitialize
+
+	SUBTTL Input Host and Port Specification Routine
+
+HHOST:
+ ASCIZ / A host is specified by either its ACSII name, e.g. BBNA, or its
+address.  The address may be expressed as either four decimal numbers,
+e.g. 10.2.0.5, or as a 32-bit octal number, e.g. 1200400005./
+
+HPORT:
+ ASCIZ / A port is specified by two decimal numbers, separated by a period.
+It is reccommended that the first number by your job number and the second
+anything you choose. Standard servers require the first number to be 0 and
+the second identifies the desired function./
+
+
+
+HSTPRT:	MOVX HST,1B0		; Not yet parsed host or
+	MOVX PRT,1B0		; Port
+
+	MOVE T2,HOSTGW		; Start with (host) or (port) guide word
+	CALL CCOMND
+	CAME T3,T4		; Which?
+	  JRST PRTGW		; Not (host) so must be (port)
+
+	MOVX T2,HSTFLD		; If (host) then parse host specification
+	CALL CCOMND
+	CALL NAMES
+	  JRST PARSER		; Treat as CM%NOP
+
+; Now get port
+
+	MOVX T2,PORTGW		; After host, get port
+	CALL CCOMND
+PRTGW:	CALL GPORT
+	  JRST PARSER		; Treat as CM%NOP
+	RET			; FROM HSTPRT
+
+
+; Host Specifications
+
+HSTFLD:	FLDBK.(.CMFLD,,<POINT 7,[ASCIZ /Host NAME or ADDRESS/]>,,,HSTBRK,)
+
+HSTBRK:	BRMSK.(FLDB0.,FLDB1.,FLDB2.,FLDB3.,<#.[]>,)
+
+HOSTGW:	FLDDB.(.CMNOI,CM%SDH,<POINT 7,[ASCIZ /HOST/]>,,,PORTGW)
+
+
+; Port Specifications
+
+PORTGW:	FLDDB.(.CMNOI,CM%SDH,<POINT 7,[ASCIZ /PORT/]>,,,)
+
+PRTFDB:	FLDDB.(.CMKEY,,PRTKEY,<PORT NAME,>,,PRTFLD)
+
+PRTKEY:	NPRT,,NPRT
+;	TXAFM,,^D059	TXAFM:	TEXT <AUGMENT-FILE-MOVER>
+;	TXCSMP,,^D105	TXCSMP:	TEXT <CSNET-MAILBOX-NAME-SERVER-PROGRAM>
+;	TXCSMT,,^D105	TXCSMT:	TEXT <CSNET-MAILBOX-NAME-SERVER-TELNET>
+;	TXDC,,^D131	TXDC:	TEXT <DATACOMPUTER>
+;	TXDCCA,,^D067	TXDCCA:	TEXT <DATACOMPUTER-CCA>
+;	TXDCS,,^D097	TXDCS:	TEXT <DATACOMPUTER-STATUS>
+;	TXDAT,,^D013	TXDAT:	TEXT <DATE-TIME>
+;	TXDCP,,^D093	TXDCP:	TEXT <DEVICE-CONTROL-PROTOCOL>
+	TXDROP,,^D009
+	TXECH,,^D007
+;	TXFNGR,,^D079	TXFNGR:	TEXT <FINGER>
+;	TXFTP,,^D021	TXFTP:	TEXT <FTP>,CM%NOR
+;	TXFTPD,,^D020	TXFTPD:	TEXT <FTP-DATA>
+;	TXGRPH,,^D041	TXGRPH:	TEXT <GRAPHICS>
+;	TXHST2,,^D081	TXHST2:	TEXT <HOSTS2-NAME-SERVER>
+;	TXIOSS,,^D035	TXIOSS:	TEXT <IO-STATION-SPOOLER>
+;	TXGRPL,,^D055	TXGRPL:	TEXT <ISI-GRAPHICS-LANGUAGE>
+;	TXLNK,,^D245	TXLNK:	TEXT <LINK>
+;	TXMETR,,^D099	TXMETR:	TEXT <METAGRAM-RELAY>
+;	TXMITD,,^D091	TXMITD:	TEXT <MIT-DOVER-SPOOLER>
+;	TXMIT1,,^D083	TXMIT1:	TEXT <MIT-ML-DEVICE-1>
+;	TXMIT2,,^D085	TXMIT2:	TEXT <MIT-ML-DEVICE-2>
+;	TXMPMR,,^D045	TXMPMR:	TEXT <MPM-RECEIVE>
+;	TXMPMS,,^D046	TXMPMS:	TEXT <MPM-SEND>
+;	TXMSGA,,^D031	TXMSGA:	TEXT <MSG-AUTHENTICATION>
+;	TXMSGI,,^D029	TXMSGI:	TEXT <MSG-ICP>
+;	TXNAMS,,^D042	TXNAMS:	TEXT <NAME-SERVER>
+;	TXNRJ1,,^D071	TXNRJ1:	TEXT <NETRJS-1>
+;	TXNRJ2,,^D072	TXNRJ2:	TEXT <NETRJS-2>
+;	TXNRJ3,,^D073	TXNRJ3:	TEXT <NETRJS-3>
+;	TXNRJ4,,^D074	TXNRJ4:	TEXT <NETRJS-4>
+;	TXNSTS,,^D015	TXNSTS:	TEXT <NETSTAT>
+;	TXNNAM,,^D101	TXNNAM:	TEXT <NIC-HOST-NAME-SERVER>
+;	TXNIFT,,^D047	TXNIFT:	TEXT <NIFTP>
+;	TXNIML,,^D061	TXNIML:	TEXT <NIMAIL>
+;	TXNSWU,,^D027	TXNSWU:	TEXT <NSW-USER-SYSTEM-FE>
+;	TXOFTP,,^D003	TXOFTP:	TEXT <OLD-FTP>
+;	TXOTN,,^D001	TXOTN:	TEXT <OLD-TELNET>
+;	TXPRJE,,^D077	TXPRJE:	TEXT <PRIVATE-RJE-SERVER>
+;	TXRTN,,^D107	TXRTN:	TEXT <REMOTE-TELNET-SERVICE>
+;	TXRJE,,^D005	TXRJE:	TEXT <RJE>
+;	TXSMTP,,^D025	TXSMTP:	TEXT <SMTP>
+;	TXSMGY,,^D089	TXSMGY:	TEXT <SU-MIT-TELNET-GATEWAY>
+;	TXSPDP,,^D095	TXSPDP:	TEXT <SUPDUP>
+;	TXSURM,,^D243	TXSURM:	TEXT <SURVEY-MEASUREMENT>
+;	TXSYST,,^D011	TXSYST:	TEXT <SYSTAT>
+	TXTELN,,^D023
+;	TXTERM,,^D087	TXTERM:	TEXT <TERMINAL-LINK>
+;	TXTEXT,,^D017	TXTEXT:	TEXT <TEXT-MESSAGE>
+;	TXTFTP,,^D069	TXTFTP:	TEXT <TFTP>
+;	TXTIMS,,^D037	TXTIMS:	TEXT <TIME-SERVER>
+	TXTTYT,,^D019
+;	TXWHOI,,^D043	TXWHOI:	TEXT <WHOIS>
+NPRT==.-PRTKEY-1
+
+PRTFLD:	FLDBK.(.CMFLD,,,<PORT NUMBER>,,PRTBRK,)
+PORT2D:	FLDDB.(.CMNUM,CM%DPP!CM%SDH,DECRAD,<port>,,)
+	POINT 7,DEFPRT		; Dumb macro!
+
+..X==777777777760
+PRTBRK:	BRMSK.(..X,..X,..X,..X,<0123456789.>,)
+
+
+; Port Guide Word
+
+GPORT:	MOVX PRT,1B0		; Assume no port
+	MOVX T2,PRTFDB		; If (port) then port specification
+	CALL CCOMND		; Get port's first byte
+	CAMN T3,T4		; Keyword specified?
+	  JRST GPRTK		; Yes
+	MOVX T1,<POINT 7,ATMBUF>
+
+	MOVE T2,T1
+	ILDB T3,T2
+	CAIN T3,0		; Have anything?
+	  JRST GPRTX		; No
+	MOVX T3,DECRAD
+	NIN%			; Read decimal #
+	  JRST [HRROI EST,[ASCIZ / invalid port/]
+		RET]
+	MOVEM T2,PRT
+
+	LDB T2,T1
+	CAIE T2,"."		; Another byte?
+	  JRST GPRTX		; No
+	NIN%
+	  JRST [HRROI EST,[ASCIZ / invalid 2nd byte of port/]
+		RET]
+	LSH PRT,10
+	IOR PRT,T2
+
+	LDB T2,T1
+	CAIE T2,0		; End of specification?
+	  JRST [HRROI EST,[ASCIZ / garbage following port specification/]
+		RET]		; Trailing garbage is bad
+	SKIPA
+GPRTK:	  HRRZ PRT,(T2)		; Get value corresponding to keyword
+GPRTX:	AOS (P)
+	RET
+
+
+; Decide which case: Name, 4 decimal bytes, 32-bit octal #
+
+NAMES:	MOVX HST,1B0		; No name yet
+	SETZ T2,
+	MOVX T1,<POINT 7,ATMBUF> ; Host name
+
+	ILDB T3,T1		; Get character
+	CAIN T3,"#"		; #<octal address>?
+	  JRST NAMESO		; Yes
+
+	CAIN T3,"["		; [a.b.c.d] address?
+	  JRST NAMESC		; Yes
+	 
+
+	MOVX T1,<POINT 7,ATMBUF> ; Host name again
+	JUMPE T3,NAMESY		; Nothing?
+
+	CAIL T3,"0"
+	 CAILE T3,"9"
+	  JRST NAMESN		; Name
+	JRST NAMESD		; Decimal #
+
+; 32-Bit Octal address
+
+NAMESO:	MOVX T3,OCTRAD
+	NIN%			; Host name is octal number
+	  JRST [HRROI EST,[ASCIZ / invalid octal host address/]
+		RET]
+	MOVE HST,T2
+	SETZ T4,		; Zero flag
+	JRST NAMESX
+
+; ASCII host name
+
+NAMESN:	MOVX T1,<.GTHSN>	; Name to address
+	HRROI T2,ATMBUF
+	GTHST%
+	  JRST [HRROI EST,[ASCIZ / invalid host name/]
+		RET]
+	MOVE HST,T3		; Address to T2
+	SETZ T4,		; Zero flag
+	JRST NAMESX		; Go make sure
+
+; 4 8-bit decimal byte address
+
+NAMESC:	MOVX T4,<-4,,100000>	; FOUR BYTES in []
+	SKIPA
+NAMESD:	  MOVX T4,<-4,,0>	; FOUR BYTES
+	MOVX T3,DECRAD		; Get first decimal byte
+	SETZ HST,
+
+	DO.
+	  NIN%			; BAD
+	    JRST [HRROI EST,[ASCIZ / invalid decimal host address byte/]
+		  RET]
+	  CAIL T2,0		; Change help message
+	   CAILE T2,377		; for each byte
+	    JRST [HRROI EST,[ASCIZ / invalid port byte, not in range 0 to 255/]
+		  RET]		; Not 8 bits is bad
+	  LSH HST,10
+	  IOR HST,T2		; Insert next byte
+
+	  LDB T2,T1
+	  CAIN T2,"."		; Another byte?
+	    AOBJN T4,TOP.	; Yes, back for it
+	ENDDO.
+
+NAMESX:	LDB T2,T1
+	TRNN T4,100000		; Allow ] following?
+	IFSKP.
+	  CAIN T2,"]"		; Is a ]?
+	   ILDB T2,T1		; Yes, should get a null
+	ENDIF.
+	CAIE T2,0
+	  JRST [HRROI EST,[ASCIZ / garbage following host specification/]
+		RET]		; Trailing garbage is bad
+
+	TLNE HST,340000		; Only 32 bits
+	  JRST [HRROI EST,[ASCIZ / invalid host address exceeds 32 bits/]
+		RET]
+NAMESY:	AOS (P)			; Skip return
+	RET
+
+	SUBTTL	Subroutine to print host number/port
+
+; T1/	Destination string pointer
+; T2/	32-bit Internet address
+; T3/	Port number, and flags
+;	CALL HNO2NA
+; T1/	Updated pointer
+HNO%NP==1B0	; No port
+HNO%NA==1B1	; Print name
+HNO%AD==1B2	; Print address
+HNO%SP==1B3	; Print trailing space
+HNO%PT==1B4	; Inverted HNO%NP
+HNO%ER==1B5	; GTHST% error
+.byt23==177777B23
+
+HNO2NA:	PUSH P,T5+1
+	PUSH P,T5
+	PUSH P,T4		; Save temp reg
+	PUSH P,T3		; Save Port
+	PUSH P,T2		; Save Host address & setup bytes
+
+	STOR T3,.byt23,+T3	; Shift port left
+	TRO T3,<377B31>		; Stop after ports
+	TXZN T3,HNO%NP		; Flip bit
+	  TXO T3,HNO%PT
+	  
+	MOVX T5,<POINT 8,T5,3>	; First 8 bits
+	PUSH P,T5		; Initial address pointer
+
+	DMOVE T5,T2		; Address & flags, port, stop
+	TXNN T5+1,HNO%NA	; Want name?
+	IFSKP.			; Yes
+
+; Translate address to name
+
+	  MOVE T3,T2		; Address
+	  TLZ T3,740000		; Just 32 bit address
+	  MOVE T2,T1		; Destination pointer
+	  MOVX T1,.GTHNS	; Address to name
+	  GTHST%
+	    TXO T5+1,HNO%AD+HNO%ER ; Error, force address
+	  MOVE T1,T2		; Restore destination pointer
+
+	  MOVX T2," "
+	  TXNN T5+1,HNO%ER	; No space if error
+	   TXNN T5+1,HNO%AD+HNO%PT ; Space if anything will follow
+	    TRNA
+	     BOUT%
+	ENDIF.
+
+	TXNN T5+1,HNO%AD	; Want address?
+	IFSKP.			; Yes
+	  MOVX T2,"["		; Delimiter and
+	  MOVX T4,<-4,,0>	; 4 bytes of host
+	ELSE.
+	  MOVX T4,<77B5>	; Position field
+	  ANDCAB T4,(P)		; Skip over address
+	  ILDB T3,0(P)		; Skip flag bits
+	  SETZ T2,
+	  TXNN T5+1,HNO%PT	; Inverted want ports?
+	  ANSKP.		; Yes
+	    MOVX T4,<-2,,0>	; Doing ports
+	ENDIF.
+
+; 4 address bytes, or 2 port bytes
+
+	IFL. T4			; Any bytes?
+	  DO.
+	    SKIPE T2
+	      BOUT%
+	    ILDB T2,0(P)	; Next byte
+	    XNOUT DECRAD	; Network virtual radix
+	    MOVX T2,"."		; Bytes separated by dot
+	    AOBJN T4,TOP.
+	    MOVX T2,"]"
+	    TRNE T4,4		; End of address?
+	      BOUT%		; Yes
+
+; See if have port, back if so, with space separating address & port
+
+	    ILDB T2,0(P)	; Control bits or stop flag bytes
+	    TRNN T2,200		; No stop bit and
+	     TXNN T5+1,HNO%PT	; Want port?
+	    IFSKP.		; No
+	      MOVX T2," "	; Space before port
+	      MOVX T4,<-2,,0>	; If doing port
+	      LOOP.		; Go for port
+	    ENDIF.
+	  ENDDO. 
+	ENDIF.
+	MOVX T2," "
+	TXNE T5+1,HNO%SP	; Want space?
+	  BOUT%			; Yes
+
+	POP P,0(P)		; Drop pointer
+	POP P,T2		; Restore Host address,
+	POP P,T3		; Port, and
+	POP P,T4		; Temp register
+	POP P,T5
+	POP P,T5+1
+	RET
+
+TX1TY:	TEXT <1822-TYPE>
+TXA:	TEXT <A>
+TXACK:	TEXT <ACK>
+TXACKR:	TEXT <ACK-RETRANSMITED>
+TXACKS:	TEXT <ACK-SEQUENCE>
+TXADR:	TEXT <ADDRESS>
+TXALL:	TEXT <ALL>,CM%NOR
+TXASCO:	TEXT <ASCII-OUTPUT>,CM%NOR
+TXAFM:	TEXT <AUGMENT-FILE-MOVER>
+TXB:	TEXT <B>
+TXSTBM:	TEXT <BACKROOM-SATNET-MONITORING>,CM%NOR
+TXRCC:	TEXT <BBN-RCC-MONITORING>,CM%NOR
+TXBACK:	TEXT <BEFORE-ACKING-DELAY>
+TXBINO:	TEXT <BINARY-OUTPUT>,CM%NOR
+TXCHAS:	TEXT <CHAOS>,CM%NOR
+TXCHKS:	TEXT <CHECKSUM>
+TXCKSM:	TEXT <CHECKSUM>,CM%NOR
+TXCLER:	TEXT <CLEAR>,CM%NOR
+TXCMCC:	TEXT <CMCC-GATEWAY-MONITORING-MSG>,CM%NOR
+TXCODE:	TEXT <CODE>
+TXCODS:	TEXT <CODES>
+TXCNTL:	TEXT <CONTROL>
+TXCORF:	TEXT <CORE-INPUT-FILE>
+TXCSMP:	TEXT <CSNET-MAILBOX-NAME-SERVER-PROGRAM>
+TXCSMT:	TEXT <CSNET-MAILBOX-NAME-SERVER-TELNET>
+TXDC:	TEXT <DATACOMPUTER>
+TXDCCA:	TEXT <DATACOMPUTER-CCA>
+TXDCS:	TEXT <DATACOMPUTER-STATUS>
+TXDATO:	TEXT <DATA-OFFSET>
+TXDAT:	TEXT <DATE-TIME>
+TXDCN:	TEXT <DCN>,CM%NOR
+TXDCT:	TEXT <DESTROY-TIME>
+TXDFLT:	TEXT <DEFAULT>,CM%NOR
+TXDEST:	TEXT <DESTINATION>
+TXDSTP:	TEXT <DESTINATION-PORT>
+TXDTUN:	TEXT <DESTINATION-UNREACHABLE>
+TXDCP:	TEXT <DEVICE-CONTROL-PROTOCOL>
+TXDROP:	TEXT <DISCARD>,CM%NOR
+TXDISP:	TEXT <DISPLAY>,CM%NOR
+TXDONE:	TEXT <DONE>,CM%NOR
+TXDONF:	TEXT <DONT-FRAGMENT>
+TXDRPK:	TEXT <DROP-PACKET>,CM%NOR
+TXDRVB:	TEXT <DRV-BEGIN>
+TXDRVE:	TEXT <DRV-END>
+TXECH:	TEXT <ECHO>,CM%NOR
+TXECHO:	TEXT <ECHO>
+TXECRP:	TEXT <ECHO-REPLY>
+TXESE:	TEXT <END-SEQUENCE>
+TXENTR:	TEXT <ENTER>,CM%NOR
+TXEXIT:	TEXT <EXIT>,CM%NOR
+TXFILT:	TEXT <FILTER>,CM%NOR
+TXFIN:	TEXT <FIN>
+TXFNGR:	TEXT <FINGER>
+TXFLAG:	TEXT <FLAGS>
+TXFRMT:	TEXT <FORMAT>,CM%NOR
+TXFRGR:	TEXT <FRAGMENTATION-REQUIRED>
+TXFRGO:	TEXT <FRAGMENT-OFFSET>
+TXFTP:	TEXT <FTP>,CM%NOR
+TXFTPD:	TEXT <FTP-DATA>
+TXGARB:	TEXT <GARBAGE-OCTETS>
+TXGATW:	TEXT <GATEWAY>
+TXGWIN:	TEXT <GATEWAY-INPUT>,CM%NOR
+TXGWOU:	TEXT <GATEWAY-OUTPUT>,CM%NOR
+TXGGP:	TEXT <GGP-PACKETS>,CM%NOR
+TXGO:	TEXT <GO>,CM%NOR
+TXGRPH:	TEXT <GRAPHICS>
+TXH:	TEXT <H>,CM%ABR!CM%INV,CM%ABR!CM%INV
+TXHTY:	TEXT <HANDLING-TYPE>
+TXHELP:	TEXT <HELP>,CM%NOR
+TXHIRE:	TEXT <HI-RELIABILITY>
+TXHITR:	TEXT <HI-THROUGHPUT>
+TXHOST:	TEXT <HOST>
+TXHSTA:	TEXT <HOST-A>,CM%NOR
+TXHSTB:	TEXT <HOST-B>,CM%NOR
+TXHSTO:	TEXT <HOST-TOS>
+TXHSTP:	TEXT <HOSTS-PORTS>
+TXHST2:	TEXT <HOSTS2-NAME-SERVER>
+TAINTF:	TEXT <I-FIELDS>
+TAINTL:	TEXT <I-LEADERS>
+TXICMF:	TEXT <ICMP-FIELDS>,CM%NOR
+TXICMP:	TEXT <ICMP-PACKETS>,CM%NOR
+TXID:	TEXT <IDENTIFIER>
+TXIHOS:	TEXT <IHHOST>
+TXITRA:	TEXT <IHTRACE>
+TXIRP:	TEXT <INFORMATION-REPLY>
+TXIRQ:	TEXT <INFORMATION-REQUEST>
+TXINPU:	TEXT <INPUT>,CM%NOR
+TXINT:	TEXT <INTERNAL-FIELDS>
+TXINTL:	TEXT <INTERNAL-LEADERS>
+TXPKCU:	TEXT <INTERNET-PACKET-CORE-UTILITY>,CM%NOR
+TXIOSS:	TEXT <IO-STATION-SPOOLER>
+TXIPF:	TEXT <IP-FIELDS>,CM%NOR
+TXGRPL:	TEXT <ISI-GRAPHICS-LANGUAGE>
+TALCF:	TEXT <L-FIELDS>
+TALCL:	TEXT <L-LEADERS>
+TXLNK:	TEXT <LINK>
+TXLDF:	TEXT <LEADER-FLAGS>
+TXLENB:	TEXT <LENGTH-BITS>
+TXLENO:	TEXT <LENGTH-BYTES>
+TXLINK:	TEXT <LINK>
+TALONG:	TEXT <LO>,CM%NOR!CM%ABR!CM%INV,CM%ABR!CM%INV
+TXLODY:	TEXT <LO-DELAY>
+TXLCF:	TEXT <LOCAL-FIELDS>
+TXLOCH:	TEXT <LOCAL-HOST>,CM%NOR
+TXLCL:	TEXT <LOCAL-LEADERS>
+TXLNAL:	TEXT <LOCAL-NET-ALL>,CM%NOR
+TXLNIN:	TEXT <LOCAL-NET-INPUT>,CM%NOR
+TXLNOU:	TEXT <LOCAL-NET-OUTPUT>,CM%NOR
+TXLOGH:	TEXT <LOGICAL-HOST>,CM%NOR
+TXLONG:	TEXT <LONG-FORMAT>,CM%NOR
+TXMSK:	TEXT <MASK>
+TXMASK:	TEXT <MASK:>
+TXMETR:	TEXT <METAGRAM-RELAY>
+TXMITD:	TEXT <MIT-DOVER-SPOOLER>
+TXMIT1:	TEXT <MIT-ML-DEVICE-1>
+TXMIT2:	TEXT <MIT-ML-DEVICE-2>
+TXMIT:	TEXT <MIT-SUBNET-SUPPORT>,CM%NOR
+TXMORF:	TEXT <MORE-FRAGMENTS>
+TXMPMR:	TEXT <MPM-RECEIVE>
+TXMPMS:	TEXT <MPM-SEND>
+TXMHT:	TEXT <MSB-HANDLING-TYPE>
+TXMSGA:	TEXT <MSG-AUTHENTICATION>
+TXMSGI:	TEXT <MSG-ICP>
+TXMSID:	TEXT <MSG-ID>
+TXMSST:	TEXT <MSG-SUB-TYPE>
+TXMSTY:	TEXT <MSG-TYPE>
+TXMPLX:	TEXT <MULTIPLEXING>,CM%NOR
+TXN.:	TEXT <N>,CM%ABR!CM%INV,CM%ABR!CM%INV
+TXNAMS:	TEXT <NAME-SERVER>
+TXNET:	TEXT <NET>
+TXNETO:	TEXT <NET-TOS>
+TXNRJ1:	TEXT <NETRJS-1>
+TXNRJ2:	TEXT <NETRJS-2>
+TXNRJ3:	TEXT <NETRJS-3>
+TXNRJ4:	TEXT <NETRJS-4>
+TXNSTS:	TEXT <NETSTAT>
+TXNTST:	TEXT <NETSTAT>,CM%NOR
+TXNNAM:	TEXT <NIC-HOST-NAME-SERVER>
+TXNIFT:	TEXT <NIFTP>
+TXNIML:	TEXT <NIMAIL>
+TXNO:	TEXT <NO>,CM%NOR
+TXNONE:	TEXT <NONE>,CM%NOR
+TXNOT:	TEXT <NOT>,CM%NOR
+TXNSW:	TEXT <NSW>,CM%NOR
+TXNSWU:	TEXT <NSW-USER-SYSTEM-FE>
+TXNVP:	TEXT <NVP>,CM%NOR
+TXOFTP:	TEXT <OLD-FTP>
+TXOTN:	TEXT <OLD-TELNET>
+TXOUTP:	TEXT <OUTPUT>,CM%NOR
+TXPAGE:	TEXT <PAGINATE-LISTING>
+TXPARP:	TEXT <PARAMETER-PROBLEM>
+TXPLRB:	TEXT <PLURIBUS>,CM%NOR
+TXPNTR:	TEXT <POINTER>
+TXPORT: TEXT <PORT>
+TXPREC:	TEXT <PRECEDENCE>
+TXPRJE:	TEXT <PRIVATE-RJE-SERVER>
+TXPROT:	TEXT <PROTOCOL>
+TXPROS:	TEXT <PROTOCOLS>
+TXPUP:	TEXT <PUP>,CM%NOR
+TXPUSH:	TEXT <PUSH>
+TXQUE:	TEXT <QUEUE>
+TXQPKT:	TEXT <QUEUE-PACKETS-TO-SEND>
+TXREDR:	TEXT <REDIRECT>
+TXRTN:	TEXT <REMOTE-TELNET-SERVICE>
+TXRPMS:	TEXT <REPLY-MASK>
+TXREST:	TEXT <RESET>
+TXRXI:	TEXT <RETRANSMIT-INTERVAL>
+TXRFB:	TEXT <RFNM-BLOCK-CNT>
+TXRJE:	TEXT <RJE>
+TXSATB:	TEXT <SATNET-BACKROOM-EXPAK>,CM%NOR
+TXSATM:	TEXT <SATNET-MONITORING>,CM%NOR
+TXSCR:	TEXT <SECURE>,CM%NOR
+TXSGID:	TEXT <SEGMENT-ID>
+TXSEGM:	TEXT <SEGMENT-SIZE-OPTION>
+TXFSAF:	TEXT <SEPARATE-FIN-AND-ACK-OF-FIN>
+TXSEQN:	TEXT <SEQUENCE>
+TXSHRT:	TEXT <SHORT-FORMAT>,CM%NOR
+TXSHOW:	TEXT <SHOW>,CM%NOR
+TXSINK:	TEXT <SINK>,CM%NOR
+TXSKIP:	TEXT <SKIP>,CM%NOR
+TXSMTP:	TEXT <SMTP>
+TXSORC:	TEXT <SOURCE>
+TXSOUP:	TEXT <SOURCE-PORT>
+TXSRCQ:	TEXT <SOURCE-QUENCH>
+TXSOUR:	TEXT <SOURCE-ROUTE>
+TXST:	TEXT <ST>,CM%NOR
+TXSMGY:	TEXT <SU-MIT-TELNET-GATEWAY>
+TXSPDP:	TEXT <SUPDUP>
+TXSURM:	TEXT <SURVEY-MEASUREMENT>
+TXSYN:	TEXT <SYN>
+TXSYST:	TEXT <SYSTAT>
+TXTAC:	TEXT <TAC-MONITORING>,CM%NOR
+TXTCPF:	TEXT <TCP-FIELDS>,CM%NOR
+TXTCP:	TEXT <TCP-PACKETS>,CM%NOR
+TXTELE:	TEXT <TELENET>,CM%NOR
+TXTELN:	TEXT <TELNET>,CM%NOR
+TXTERM:	TEXT <TERMINAL-LINK>
+TXTEXT:	TEXT <TEXT-MESSAGE>
+TXTFTP:	TEXT <TFTP>
+TXTG:	TEXT <T-GENERATED>
+TXTO:	TEXT <T-ORIGINATE>
+TXTQ:	TEXT <T-QUEUED>
+TXTR:	TEXT <T-RECEIVE>
+TXTRX:	TEXT <T-RETRANSMIT>
+TXTS:	TEXT <T-SEND>
+TXTT:	TEXT <T-TRANSMIT>
+TXTMEX:	TEXT <TIME-EXCEEDED>
+TXTIML:	TEXT <TIME-LIVE>
+TXTIMS:	TEXT <TIME-SERVER>
+TXTSMP:	TEXT <TIMESTAMP>
+TXTSRP:	TEXT <TIMESTAMP-REPLY>
+TXTRCD:	TEXT <TRACE-CODES>
+TXTTYT:	TEXT <TTYTST>
+TXTYPE:	TEXT <TYPE>
+TXTYPS:	TEXT <TYPE-SERVICE>
+TXUCL:	TEXT <UCL>,CM%NOR
+TXURG:	TEXT <URG-POINTER>
+TXURGF:	TEXT <URGENT>
+TXUSDG:	TEXT <USER-DATAGRAM-PACKETS>,CM%NOR
+TXVER:	TEXT <VERSION>
+TXVERS:	TEXT <VERSION>,CM%NOR
+TXWATC:	TEXT <WATCH>,CM%NOR
+TXWHOI:	TEXT <WHOIS>
+TXWBEX:	TEXT <WIDEBAND-EXPAK>,CM%NOR
+TXWBMN:	TEXT <WIDEBAND-MONITORING>,CM%NOR
+TXWIND:	TEXT <WINDOW>
+TXXNET:	TEXT <XNET>,CM%NOR
+
+
+
+; Version 1 format
+
+PPKT==PTDTA
+
+;Name		IP/TCP Sample Format	Local Net Sample (PT%%NT=1 in DPTRC)
+;=======	=====================	====================================
+;DLENW		Length of sample	Length of sample
+;DPTRC		Trace code		Trace code
+;DTIME		TODCLK			TODCLK
+;DSTAT		TCB STAT word		0
+;DAUXI		Lost samples		Lost samples
+;DPKTP		Packet address		Packet address
+;DTYPE		Network Data Type (eg. ND.xxx)
+;DTCBN/DTCBO	# of word sampled from TCB/Starting offset in TCB
+;PPPKTO		Info @ Packet address	Info @ Packet address + SAMPKT
+;		...			(SAMPKT to LCLPKT 0 for NCP pkts)
+
+
+;	Find IP Header fields that should be listed
+
+
+FRMIIP:	MOVE TMP,[LOAD T1,OKKY,(T3)]
+	MOVEI T2,IPFFDB		; Haven't yet seen NO
+	CALL KEYINI
+	RET
+
+
+
+FRMIP:	MOVEI T1,FIP		; Address of flag words
+	MOVX T2,IPFFDB		; Get field name or confirm
+	CALLRET FRMXXX		; Parse & update
+
+
+
+	CALL FRMIIP		; Init keywords
+IPFFDB:	FLDDB.(.CMKEY,,IPFKEY,,,[FLDDB.(.CMCFM)])
+
+IPFKEY:	NIPF,,NIPF
+	TXALL,,[377777777777]	; ALL
+	TXCHKS,,LPICKS		; CHECKSUM
+	TXDATO,,LPIDO		; DATA-OFFSET
+IPDFLT:	TXDFLT,,<FLDEF+[DFIP]>	; DEFAULT
+	TXDONF,,LPIDF		; DONT-FRAGMENT
+	TXDEST,,LPIDH		; DESTINATION
+	TXFLAG,,LPIFLG		; FLAGS
+	TXFRGO,,LPIFO		; FRAGMENT-OFFSET
+	TXHIRE,,LPIHRL		; HI-RELIABILITY
+	TXHITR,,LPIHTR		; HI-THROUGHPUT
+	TXLENO,,LPIPL		; LENGTH-BYTES
+	TXLODY,,LPILDY		; LO-DELAY
+	TXMORF,,LPIMF		; MORE-FRAGMENTS
+IPNO:	TXNO,,FLDNO		; NO
+	TXPREC,,LPIPRC		; PRECEDENCE
+	TXPROT,,LPIPRO		; PROTOCOL
+	TXSGID,,LPISID		; SEGMENT-ID
+	TXSORC,,LPISH		; SOURCE
+	TXTIML,,LPITTL		; TIME-LIVE
+	TXTYPS,,LPITOS		; TYPE-SERVICE
+	TXVER,,LPIVER		; VERSION
+NIPF==.-IPFKEY-1
+
+; Find ICMP Header fields which should be listed
+
+FRMIIC:	MOVE TMP,[LOAD T1,OKKY,(T3)]
+	MOVEI T2,ICMFDB		; Haven't yet seen NO
+	CALL KEYINI
+	RET
+
+
+FRMICM:	MOVEI T1,FICMP		; Address of flag word
+	MOVX T2,ICMFDB		; Get field name or confirm
+	CALLRET FRMXXX		; Parse & update
+
+
+	CALL FRMIIC		; Init keywords
+ICMFDB:	FLDDB.(.CMKEY,,ICMKEY,,,[FLDDB.(.CMCFM)])
+
+ICMKEY:	NICM,,NICM
+	TXALL,,[377777777777]	; ALL
+	TXCHKS,,LCMCKS		; CHECKSUM
+	TXCODE,,LCMCOD		; CODE
+ICMDFL:	TXDFLT,,<FLDEF+[DFICMP]>; DEFAULT
+	TXGATW,,LCMGWA		; GATEWAY
+	TXID,,LCMID		; IDENTIFIER
+ICMPNO:	TXNO,,FLDNO		; NO
+	TXPNTR,,LCMPTR		; POINTER
+	TXSEQN,,LCMSEQ		; SEQUENCE
+	TXTO,,LCMTSO		; T-ORIGINATE
+	TXTR,,LCMTSR		; T-RECEIVE
+	TXTT,,LCMTST		; T-TRANSMIT
+	TXTYPE,,LCMTYP		; TYPE
+NICM==.-ICMKEY-1
+
+
+; Find TCP Header fields which should be listed
+
+FRMITC:	MOVE TMP,[LOAD T1,OKKY,(T3)]
+	MOVEI T2,TCPFDB		; Haven't yet seen NO
+	CALL KEYINI
+	RET
+
+
+
+FRMTCP:	MOVEI T1,FTCP		; Address of flag word
+	MOVX T2,TCPFDB		; Get field name or confirm
+	CALLRET FRMXXX		; Parse & update
+
+
+	CALL FRMITC		; Init instruction
+TCPFDB:	FLDDB.(.CMKEY,,TCPKEY,,,[FLDDB.(.CMCFM)])
+
+TCPKEY:	NTCP,,NTCP
+	TXACK,,LPACK		; ACK
+	TXACKS,,LPACKS		; ACK-SEQUENCE
+	TXALL,,[377777777777]	; ALL
+	TXCHKS,,LPTCKS		; CHECKSUM
+	TXCNTL,,LPTCTL		; CONTROL
+	TXDATO,,LPTDO		; DATA-OFFSET
+TCPDFL:	TXDFLT,,<FLDEF+[DFTCP]>	; DEFAULT
+	TXDSTP,,LPDP		; DESTINATION-PORT
+	TXFIN,,LPFIN		; FIN
+TCPNO:	TXNO,,FLDNO		; NO
+	TXPUSH,,LPEOL		; PUSH
+	TXREST,,LPRST		; RESET
+	TXSEQN,,LPSEQ		; SEQUENCE
+	TXSOUP,,LPSP		; SOURCE-PORT
+	TXSYN,,LPSYN		; SYN
+	TXURG,,LPURGP		; URG-POINTER
+	TXURGF,,LPURG		; URGENT
+	TXWIND,,LPWNDO		; WINDOW
+NTCP==.-TCPKEY-1
+
+
+; Routine to process fields in a header
+
+;	MOVEI T1,Fxxx		; Address of flag word
+;	MOVX T2,[FLDDB.()]	; Address of parsing block
+;	CALL FRMXXX		; Parse field names & update flag word
+
+
+FRMXXX:	PUSH P,(T1)		; Initial flags
+	PUSH P,T1		; Save flag word address
+	PUSH P,T2		; FLDDB address
+	MOVE T3,-1(T2)		; Init instruction
+	PUSH P,T3
+	SKIPA
+FRMXXY:	 CALL .NO ;skips
+FRMXXZ:	  XCT (P)		; Init NO
+	MOVE T2,-1(P)		; Get field name or confirm
+	call ccomnd
+	CAIE T3,T4		; Confirm?
+	  JRST FRMXXW		; Yes
+	HRRZ T2,(T2)		; Address of bit, or no, or default
+
+	TRZE T2,FLDEF		; Default?
+	  SETZM -3(P)		; Forget initial flags
+	TRZE T2,FLDNO		; "No"?
+	  JRST FRMXXY		; Correct
+
+	MOVE T2,(T2)		; Bit corresponding to field
+	TXNN F,F.NO		; "NO" prefix?
+	  IORM T2,-3(P)		; Another YES
+	TXZE F,F.NO		; "NO" prefix?
+	  ANDCAM T2,-3(P)	; Another NO
+	JRST FRMXXZ		; Back for more
+
+FRMXXW:	POP P,(P)		; Drop init inst
+	POP P,(P)		; Drop FLDDB address
+	POP P,T1		; Address of flag variable
+	POP P,(T1)		; Put the new flags there
+	RET
+
+
+	SUBTTL	Routine to Generate Header Line
+
+; T1/	Otput JFN
+
+PP:	AOS HDRCNT		; Count header lines output
+	SSOUT <
++>
+	SOS PAGCNT		; Count lines per page
+
+	TXNE F,F%FCOR		; IF SAMPLE ISN'T AN IP PACKET
+	  JRST IMPD		; SKIP TIMES
+
+	LOAD T2,DTIME,<+PPKT>
+	SKIPN OLDTIM		;Got an old time?
+	  MOVEM T2,OLDTIM	;No, it is the first
+	SUB T2,OLDTIM
+
+	PUSH P,T2		; Save increment
+	XNOUT <NO%LFL+FLD(7,NO%COL)+DECRAD>
+	SSOUT <.  >
+	POP P,T2		; Increment
+
+	ADDB T2,OLDTIM		; Plus last
+	XNOUT <NO%LFL+FLD(^D10,NO%COL)+DECRAD>
+
+	HRROI T2,[ASCIZ /., Sample /]
+	CAIA
+IMPD:	  HRROI T2,[ASCIZ /                      Sample /]
+	SETZ T3,
+	SOUT%
+
+	MOVE T2,PKTN		; SAMPLE NUMBER
+	XNOUT DECRAD
+	SSOUT <.>
+
+;	TXNE F,F%NIP		; IF SAMPLE ISN'T AN IP PACKET
+;	  JRST IMPF		; SKIP PACKET BUFFER ADDRESS
+
+	LOAD T3,DPKTP,<+PPKT>	; PACKET BUFFER ADDRESS
+	JUMPE T3,NOADR		; BUT SKIP ZERO
+
+	MOVX T2,","
+	BOUT%
+	MOVE T2,T3		; LIST ADDRESS
+	XNOUT OCTRAD
+NOADR:
+	TXNE F,F%FCOR		; IF SAMPLE ISN'T AN IP PACKET
+	  JRST IMPF
+repeat 0,<
+	SSOUT < PP% >
+
+	LOAD T4,DFLAG,<+PPKT>	; SAMPLED FLAGS
+	JUMPE T4,NOPFL		; NOT TCP PACKET IF ZERO
+	AND T4,PFLGSS-1		; DISCARD UNKNOW BITS
+	MOVEI COD,PFLGSS	; NAME OF LEFTMOST BIT
+PFLGL:	HRRO T2,COD		; STRING POINTER TO NAME
+	SKIPGE T4		; BIT SET ?
+	  SOUT%			; YES, PRINT NAME
+	ADDI COD,1		; NEXT NAME
+	LSH T4,1		; NEXT BIT
+	JUMPN T4,PFLGL		; BACK IF MORE TO DO
+NOPFL:
+> ; End of repeat 0
+IMPF:
+	LOAD T4,DPTRC,+PPKT	; FUNNY NEW CODE OR ZERO
+	HRROI T2,[ASCIZ / NOTE: /]
+	SKIPE T4		; SKIP NOTE IF ZERO
+	  SOUT%
+
+	MOVX T3,OCTRAD		; OCTAL DATA
+	SKIPE T2,T4		; SKIP # IF ZERO
+	 NOUT%
+	  JFCL
+
+	RET
+
+
+repeat 0,<
+	PP%MT+PP%SK+PP%DK+PP%SNT+PP%RCV+PP%REX+PP%PZ+PP%RA+PP%GSS+PP%GDS+PP%DUN
+PFLGSS:	ASCIZ /MT /
+	ASCIZ /SK /
+	ASCIZ /DK /
+	ASCIZ /SNT /
+	ASCIZ /RCV /
+	ASCIZ /REX /
+	ASCIZ /PZ /
+	ASCIZ /RA /
+	ASCIZ /GSS /
+	ASCIZ /GDS /
+	ASCIZ /DUN /
+> ; End of repeat 0
+
+	SUBTTL Subroutine to List Packet's Internal Data
+repeat 0,<
+PKTLDR:	MOVX T2,<-LCLPKT+2,,PACKET+1>
+
+	SKIPN (T2)		; Check if anything sampled
+	 AOBJN T2,.-1
+	  SKIPN (T2)		; All zeros?
+	   RET			; Yes, nothing to list
+
+	MOVE Q1,FINT		; Field bits
+	MOVE T4,INTTB-1		; AOBJN pointer
+	CALLRET LSTHDR		; List the header
+
+
+;	XX (Lnam,bit,oct,title,nam,off,fmt)
+
+.XX=0
+	-INTTL,,INTTB
+INTTB:
+XX (LINT,1B0,01,<>,zzz,<
+ Int'l Hdr:>,0)
+XX (LSQUE,1B2,0,< Q=>,PKTQ.,(IPKT),<NO%LFL+OCTRAD>)
+XX (LPTG,1B3,0,< TG=>,PTG,(IPKT),<NO%LFL+DECRAD>)
+XX (LPXT,1B4,0,< TX=>,PXT,(IPKT),<NO%LFL+DECRAD>)
+XX (LPRXI,1B5,0,< RXI=>,PRXI,(IPKT),<NO%LFL+DECRAD>)
+XX (LPDCT,1B6,0,< TO=>,PDCT,(IPKT),<NO%LFL+DECRAD>)
+XX (LPTS,1B7,0,< TS=>,PTS,(IPKT),<NO%LFL+DECRAD>)
+XX (LPESEQ,1B8,0,< ESEQ=>,PESEQ,(IPKT),<NO%LFL+DECRAD>)
+XX (LPLNDE,1B9,0,< LNDE=>,PLNDE,(IPKT),<NO%LFL+DECRAD>)
+XX (LPLNDB,1B10,0,< LNDB=>,PLNDB,(IPKT),<NO%LFL+DECRAD>)
+XX (LPLNQD,1B11,0,< LNQD=>,PLNQD,(IPKT),<NO%LFL+DECRAD>)
+XX (LPFLGS,1B12,0,< FLG=>,PFLGS,(IPKT),<NO%MAG+NO%LFL+OCTRAD>)
+INTTL==.XX
+
+DFINT=1B0+1B4+1B5+1B6+1B8+1B12
+
+	SUBTTL Subroutine to List 1822 Leader
+
+; IPKT/	Points to 1822 leader in PACKET
+
+DP1822:	MOVX Q1,<<LCLPKT-PKTELI>,,0>
+	HRR Q1,IPKT		; AOBJN pointer to local leader
+
+	SKIPN (Q1)		; Have something?
+	  AOBJN Q1,.-1		; Not yet
+	SKIPGE Q1		; Anything at all?
+	 TXNN F,F%182L+F%NIP	; or if dont want 1822 leader
+	  RET			; Return & continue
+
+	MOVE T4,LN18TB-1	; AOBJN pointer for 1822 local leader
+	LOAD T3,DPTRC,<+PPKT>	; Trace code
+	TXNE T3,PT%%NT		; Local net sample and
+	 SKIPE .NFEDH-1(IPKT)	; Doesn't look like 1822?
+	  CAIA			; No
+	   JRST NFEPKT		; Looks like NFE packet
+
+	MOVE Q1,FLN		; Format bits
+
+	CALL LSTHDR		; List header
+
+	LOAD T3,IHMTY,(IPKT)		; Get 1822 message type
+	JUMPN T3,LCLQUT			; All done if not Type 0
+
+	LOAD T3,IHLNK,(IPKT)		; 1822 link
+	TXNE F,F%NIP			; If sample is an IP packet or
+	 CAIN T3,233			; an 1822 packet on the Internet link
+	  RET				; Proceed to IP code, otherwise
+
+
+	LOAD PL,NBBSZ,LCLPKT(IPKT)	; 1822 packet length
+	SUBI PL,<PKTELI-LCLPKT>		; Required length
+	LSH PL,2			; In bytes
+	ADDI OP,<PKTELI-LCLPKT>		; Point to data
+
+	HRROI T2,[ASCIZ /
+Local Data:/]
+	MOVX Q1,40			; Max bytes to list
+	CALL BOCT			; List 1822 data & endline
+
+LCLQUT:	POP P,(P)			; Stop when return
+	CALLRET CRLF
+
+TB1822:
+;0
+	4,,[	-1,,[ASCIZ /Reg Std/]
+		-1,,[ASCIZ /Reg Ref/]
+		-1,,[ASCIZ /Reg Rdy/]
+		-1,,[ASCIZ /Reg Unc/]	]
+;1
+	4,,[	-1,,[ASCIZ /Err FF/]
+		-1,,[ASCIZ /Err lt 80/]
+		-1,,[ASCIZ /Err Typ/]
+		-1,,[ASCIZ /Err Ldr/]	]
+;2
+	-1,,[ASCIZ /IMP going down/]
+;3
+	-1,,[ASCIZ /3 ??/]
+;4
+	-1,,[ASCIZ /NOP/]
+;5
+	2,,[	-1,,[ASCIZ /RFNM Std/]
+		-1,,[ASCIZ /RFNM Ref/]	]
+;6
+	20,,[	-1,,[ASCIZ /Host dead 0?/]
+		-1,,[ASCIZ /Host dropped READY/]
+		-1,,[ASCIZ /Host tardy/]
+		-1,,[ASCIZ /Host non-ex/]
+		-1,,[ASCIZ /IMP SW/]
+		-1,,[ASCIZ /Host PM/]
+		-1,,[ASCIZ /Host HW/]
+		-1,,[ASCIZ /Host SW/]
+		-1,,[ASCIZ /Host emergency restart/]
+		-1,,[ASCIZ /Host power fail/]
+		-1,,[ASCIZ /Host BPT/]
+		-1,,[ASCIZ /Host HW failure/]
+		-1,,[ASCIZ /Host not up/]
+		-1,,[ASCIZ /Host down/]
+		-1,,[ASCIZ /Host 14?/]
+		-1,,[ASCIZ /Host coming up/]	]
+;7
+	4,,[	-1,,[ASCIZ /Dest IMP unreachable/]
+		-1,,[ASCIZ /Dest IMP not up/]
+		-1,,[ASCIZ /Dest IMP Ldr fmt/]
+		-1,,[ASCIZ /Dest IMP not allowed/]	]
+;8
+	-1,,[ASCIZ /Error in data/]
+;9
+	6,,[	-1,,[ASCIZ /Incomplete, host slow/]
+		-1,,[ASCIZ /Incomplete, Msg too long/]
+		-1,,[ASCIZ /Incomplete, Host-IMP timeout/]
+		-1,,[ASCIZ /Incomplete, Msg lost/]
+		-1,,[ASCIZ /Incomplete, IMP resource timeout/]
+		-1,,[ASCIZ /Incomplete, Src IMP failure/]	]
+
+;10
+	-1,,[ASCIZ /Interface reset/]
+;11
+	2,,[	-1,,[ASCIZ /Refused no IMP buffer/]
+		-1,,[ASCIZ /Refused no IMP transmit block/]	]
+;12
+	6,,[	-1,,[ASCIZ /Refused 0?/]
+		-1,,[ASCIZ /Refused 1?/]
+		-1,,[ASCIZ /Refused no connection/]
+		-1,,[ASCIZ /Refused no RA space/]
+		-1,,[ASCIZ /Refused Msg # not available/]
+		-1,,[ASCIZ /Refused no transaction block/]	]
+;13
+	-1,,[ASCIZ /Refused, still trying/]
+;14
+	-1,,[ASCIZ /Ready/]
+;15
+
+
+LNTRHF:	PUSH P,T4
+
+	MOVE T4,T2		; IHLDF field
+	SETZ T3,
+
+	HRROI T2,[ASCIZ / Trace/]
+	TRZE T4,10
+	  SOUT%			; List TRACE if flag set
+
+	HRROI T2,[ASCIZ / Host/]
+	TRZE T4,4
+	  SOUT%			; List HOST if flag set
+
+	MOVX T3,<NO%LFL+FLD(2,NO%COL)+OCTRAD>
+	SKIPE T2,T4
+	 NOUT%			; List other bits, if any
+	  JFCL
+
+	POP P,T4
+	AOS (P)			; RETSKP
+	RET
+
+
+LNTST:	PUSH P,Q1
+	PUSH P,T4
+
+	MOVX T2," "
+	BOUT%
+
+	LOAD T4,IHSTY,(IPKT)
+	LOAD Q1,IHMTY,(IPKT)
+
+	CAIL Q1,17
+	  JRST DP182X
+	MOVE T3,TB1822(Q1)
+	SKIPG T2,T3
+	  JRST DP182W
+
+	HLRZS T2
+	CAMLE T4,T2
+	  JRST DP182X
+	HRRZ T2,T3
+	ADD T4,T2
+	HRRO T2,(T4)
+DP182W:
+	SETZ T3,
+	SOUT%
+	JRST DP182Z
+
+DP182X:
+	SSOUT <Type >
+
+	MOVE T2,Q1
+	XNOUT DECRAD
+	MOVX T2," "
+	BOUT%
+	MOVE T2,T4
+	XNOUT DECRAD
+DP182Z:
+	POP P,T4
+	POP P,Q1
+
+	AOS (P)			; RETSKP
+	RET
+
+
+;	XX (Lnam,bit,oct,title,nam,off,fmt)
+
+.XX=0
+	-LN18TL,,LN18TB
+LN18TB:
+XX (LLN,1B0,01,<>,zzz,<
+ Local Hdr:>,0)
+XX (LIHFTY,1B2,01,< Format=>,IHFTY,(IPKT),<NO%LFL+FLD(2,NO%COL)+DECRAD>)
+XX (LIHNET,1B3,02,< Net=>,IHNET,(IPKT),<NO%LFL+FLD(3,NO%COL)+DECRAD>)
+XX (LIHLDF,1B5,03,< Flags=>,IHLDF,(IPKT),<NO%LFL+FLD(2,NO%COL)+OCTRAD>)
+XX (LIHLTF,1B6,03,< >,IHLDF,(IPKT),LNTRHF)
+XX (LIHHT2,1B10,05,< Pri=>,IHHT2,(IPKT),<NO%LFL+FLD(2,NO%COL)+OCTRAD>)
+XX (LIHMTY,1B11,04,< Type=>,IHMTY,(IPKT),<NO%LFL+FLD(3,NO%COL)+DECRAD>)
+XX (LIHHTY,1B12,05,< #Pkts=>,IHHTY,(IPKT),<NO%LFL+FLD(1,NO%COL)+DECRAD>)
+XX (LIHADR,1B13,10,< Adr=>,IHADR,(IPKT),<NO%LFL+FLD(8,NO%COL)+OCTRAD>)
+XX (LIADDR,1B14,10,< >,IHNET,(IPKT),HPLN)
+XX (LIHLNK,1B15,11,< Link=>,IHLNK,(IPKT),<NO%LFL+FLD(3,NO%COL)+DECRAD>)
+XX (LIHMI2,1B16,12,< >,IHMI2,(IPKT),<NO%LFL+FLD(2,NO%COL)+DECRAD>)
+XX (LIHSTY,1B17,12,< Subt=>,IHSTY,(IPKT),<NO%LFL+FLD(2,NO%COL)+DECRAD>)
+XX (LIHLEN,1B21,14,< Bits=>,IHLEN,(IPKT),<NO%LFL+FLD(5,NO%COL)+DECRAD>)
+XX (LIHNAM,1B22,12,< >,IHMTY,(IPKT),LNTST)
+XX (LIHPD1,1B23,12,< RFNM=>,IHPD1,(IPKT),<NO%LFL+FLD(5,NO%COL)+DECRAD>)
+LN18TL==.XX
+
+DFLN=1B0+1B12+1B14+1B15+1B21+1B22
+
+
+	SUBTTL	List NCP Packet
+
+; IPKT/	Point at Host-Host Leader
+
+
+NCPPKT:	MOVE Q1,FIP	;*****
+	MOVE T4,NCPFTB-1	; AOBJN pointer
+	CALL LSTHDR
+
+	MOVX OP,<POINT 0,1(IPKT)>; Point to NCP data
+	LOAD T2,HHSIZ,-.NBHHL(IPKT); Byte size
+	LSH T2,^D<36-12>
+	IOR OP,T2
+	LOAD PL,HHCNT,-.NBHHL(IPKT); Byte count
+	MOVE Q1,PL
+	CALL BOCT
+	RET
+
+;	XX (Lnam,bit,oct,title,nam,off,fmt)
+
+.XX==0
+	-NCPFTL,,NCPFTB
+NCPFTB:
+XX (LNCP,1B0,01,<>,zzz,<
+NCP:>,0)
+XX (,1B2,01,< Vr=>,PIVER,(IPKT),<NO%LFL+FLD(2,NO%COL)+DECRAD>)
+XX (LHHSIZ,1B3,01,< Bsz=>,HHSIZ,-.NBHHL(IPKT),<NO%LFL+FLD(2,NO%COL)+DECRAD>)
+XX (LHHCNT,1B10,04,< Ln=>,HHCNT,-.NBHHL(IPKT),<NO%LFL+FLD(5,NO%COL)+DECRAD>)
+NCPFTL==.XX
+
+; NFE local leader -- First word is link/size, the last word describes
+; the type of packet.  If .gt. 2^24 then packet is an internet packet,
+; header word is the internet address of the interface it was received on
+; (11 to 10) or the Internet address of the immediate destination (10 to 11).
+
+; If the PKTNET is 0 then PKTCMD encodes the packet type further as:
+C%NOP==0  ; NOP
+C%RPKT==1 ; Raw network packet, third byte is the interface number.
+C%IRST==2 ; Interface reset. Byte 3  is the interface number,
+;	    byte 4 is the network type code. If this command is sent
+;	    from the 11 to the 10 then the packet data is the local
+;	    address of the interface (size depends on the network type).
+;	    If sent from the 10 to the 11 the first 32 bits of data are
+;	    the internet address to be used on that front-end.
+C%AERR==3 ; Address error (Interface unreachable). Probably only
+;	    11 to 10. If the 3rd byte is 255 then the first 32 bits of data 
+;	    are the Internet address that can't be reached, otherwise
+;	    it is the interface number that is not-usable
+
+.NFEHL==2			; Length of header
+.NFEDH==PKTELI-LCLPKT-1		; Destination host word
+
+DEFSTR	NFENET,.NFEDH,7,8	; Non-zero if internet address
+DEFSTR	NFECMD,.NFEDH,15,8	; Command byte in word
+DEFSTR	NFEINN,.NFEDH,23,8	; Interface number
+DEFSTR	NFEITY,.NFEDH,31,8	; Network type
+DEFSTR	NFEADR,.NFEDH,31,32	; Destination address
+
+.NFENU==MAXLDR			; Net unreachable address
+DEFSTR	NFEIAD,.NFENU,31,32	; Interface address
+
+
+NFEPKT:	SSOUT <
+ Local Hdr: >
+
+	LOAD T2,NFENET,(IPKT)	; What type of packet
+	JUMPN T2,NFEADD		; Regular message
+
+	LOAD T4,NFECMD,(IPKT)	; Get command code
+	CAIN T4,C%NOP
+	  JRST NFENOP
+	CAIN T4,C%RPKT
+	  JRST NFERAW
+	CAIN T4,C%IRST
+	  JRST NFERST
+	CAIN T4,C%AERR
+	  JRST NFEAER
+
+	SSOUT <Command code >
+	MOVE T2,T4
+	XNOUT DECRAD
+	RET
+
+; NFE commands
+
+NFENOP:	SSOUT <NOP>
+	JRST NFEQUT
+
+
+NFERAW:	SSOUT <Raw packet from interface >
+	LOAD T2,NFEINN,(IPKT)
+	XNOUT DECRAD
+	RET
+
+
+NFERST:	SSOUT <Interface reset on interface >
+	LOAD T2,NFEINN,(IPKT)
+	XNOUT DECRAD
+
+	SSOUT < for net type >
+	LOAD T2,NFEITY,(IPKT)
+	XNOUT DECRAD
+
+NFEQUT:	SETZB PL,VL
+	POP P,(P)		; Nothing more to do but
+	CALLRET CRLF		; End the line
+
+
+NFEAER:	LOAD T2,NFEINN,(IPKT)
+	CAIN T2,^D255
+	  JRST NFEIER
+
+	XNOUT DECRAD
+	SSOUT <Interface unusable>
+	RET
+
+NFEIER:	SSOUT <Address unreachable >
+	LOAD T2,NFEIAD,(IPKT)
+
+NFEADD:	MOVX T3,HNO%NP+HNO%AD
+	CALL HNO2NA
+	RET
+
+.XX=0
+	-LNFNTL,,LNFNTB
+LNFNTB:
+XX (,1B0,01,<>,zzz,<
+ Local Hdr:>,0)
+XX (,1B2,01,< Format=>,IHFTY,(IPKT),<NO%LFL+FLD(2,NO%COL)+DECRAD>)
+XX (,1B14,<<PKTELI-LCLPKT>*4>,< Adr=>,NFEADR,(IPKT),HPIN2)
+LNFNTL==.XX
+> ; end of repeat 0
+	SUBTTL	List IP Header, Long Format
+
+IPHDRL:
+
+; Reenter here for included IP packet (in ICMP packets)
+; T1/ destination pointer
+; VL/ octets left in sample, IPKT points to IP header
+
+REGO:	MOVX OP,<POINT 9,(IPKT)>; Point to IP header as data
+	SUBI IPKT,PKTELI	; Point to use IP header symbols
+
+	LOAD TPKT,PIDO,(IPKT)	; Get IP header length
+	ADDI TPKT,PKTELI(IPKT)	; Point after IP header
+				; for ICMP/TCP symbols
+	MOVX T2,<POINT 8,0>
+	ADD T2,TPKT		; Point to ICMP/TCP header
+
+; IPKT/	Point for IP Header
+; PL/	Packet length, octets
+; VL/	# octets in sample
+
+	SKIPG VL		; Have anything at all?
+	  RET			; No, give up now
+
+
+; Compute checksum
+
+	LOAD T2,PIDO,(IPKT)	; Find actual IP checksum
+	LSH T2,2		; # octets in IP header
+	CAMLE T2,VL		; Have whole header in sample?
+	  JRST ICKM		; No
+
+	LSH T2,-1		; # 16-bit words in IP header
+	MOVEI T4,PKTELI(IPKT)
+	HRLI T4,(POINT 16,0)	; Point to first
+	SETZ Q1,		; Clear sum
+
+ICKL:	ILDB T3,T4		; Get 16-bits
+	ADD Q1,T3		; Sum them
+	SOJG T2,ICKL		; All
+
+	LOAD T4,PICKS,(IPKT)
+	SUB Q1,T4		; Remove checksum
+
+ICKN:	MOVE T3,Q1
+	ANDI Q1,177777		; Fold sum into 16-bits
+	LSH T3,-20
+	ADD Q1,T3
+	JUMPN T3,ICKN		; Loop if still more than 16-bits
+
+	SKIPE Q1		; If not zero
+	  XORI Q1,177777	; Complement
+
+	CAMN Q1,T4		; Checksum correct?
+	  JRST ICKM		; Yes
+
+	SSOUT <
+	[IP Checksum error: computed = >
+	SOS PAGCNT
+
+	MOVE T2,Q1		; Computed value
+	XNOUT OCTRAD
+
+	SSOUT <, packet = >
+
+	MOVE T2,T4		; Packet value
+	XNOUT OCTRAD
+
+	SSOUT <]>
+ICKM:
+; Begin listing IP Header
+
+	MOVX COD,XXXPKT		; Assume unknown protocol
+
+	MOVE Q1,FIP		; IP Format bits
+	MOVE T4,IPFTB-1		; AOBJN pointer
+	CALL LSTHDR		; List the header
+repeat 0,<
+	LOAD Q1,DFLAG,<+PPKT>	; GET PACKET PRINTER FLAGS
+	LOAD T4,DSS,<+PPKT>	; AND SOURCE STATUS
+	TXNE Q1,PP%GSS		; IF SOURCE INFORMATION IS VALID
+	  CALL TCBST		; LIST IT
+
+	LOAD T4,DDS,<+PPKT>	; GET DESTINATION STATUS
+	TXNE Q1,PP%GDS		; IF DESTINATION IS VALID
+	  CALL TCBST		; LIST IT
+> ; End of repeat 0
+	SUBI PL,<5*4>		; # Bytes processed by
+	SUBI VL,<5*4>		; IP header
+	ADDI OP,5		; Point to IP options
+
+	CALL IPOPT		; Possible IP options
+
+	RET
+
+	SUBTTL List IP Fragmentation Information
+
+FRAG:	JE <PIDF,PIMF,PIFO>,(IPKT),RETSKP ; Omit if nothing there
+
+	SSOUT < F=>
+
+	LOAD T3,PIDF,(IPKT)
+	MOVX T2,"-"		; Minus if not fragmentation is not allowed
+	CAIE T3,0		; Nothing if allowed
+	  BOUT%
+
+	LOAD T3,PIMF,(IPKT)
+	MOVX T2,"+"		; Plus if not last fragment of a packet
+	CAIE T3,0		; Nothing if last fragment
+	  BOUT%
+
+	LOAD T2,PIFO,(IPKT)
+	MOVX T3,<NO%LFL+FLD(5,NO%COL)+DECRAD>
+	TXNE F,F%LF		; If long format
+	  TXZ T3,NO%COL		; Don't columnize
+	RET			; Back for NOUT%
+
+; List Protocol Name or Number and Select Protocol Listing Routine
+
+PROT:	MOVX T2," "
+	BOUT%
+
+	LOAD T2,PIPRO,(IPKT)	; Get Protocol Number
+	CAIGE T2,NCODTA		; Is it in table of known protocols?
+	  JRST PRO1		; Yes
+				; No, list number of protocol
+	XNOUT <NO%LFL+FLD(3,NO%COL)+DECRAD>
+
+	MOVEI COD,XXXPKT	; Use general octet listing routine
+	JRST PRO2
+
+PRO1:	MOVE COD,CODTAB(T2)	; Get known protocol listing routine
+	HRROI T2,PROTAB(T2)	; List its name
+	SETZ T3,
+	SOUT%
+
+	JE PIFO,(IPKT),PRO2	; If have a fragment (except first)
+	  MOVE COD,CODTAB-1	; Use general routine
+PRO2:
+
+RETSKP:	AOS (P)
+	RET
+
+
+
+; Basic Protocol Name Table
+
+PROTAB:	ASCIZ /0   /
+	ASCIZ /1ICM/
+	ASCIZ /2SCR/
+	ASCIZ /3GGP/
+	ASCIZ /4   /
+	ASCIZ /5   /
+	ASCIZ /6TCP/
+	ASCIZ /7   /
+
+; List Host Address - Local leader, IP source/destination
+
+HPLN:	LSH T2,30		; Net field
+	PUSH P,T2
+	LOAD T2,IHADR,(IPKT)	; Address within net
+	ADDM T2,(P)
+	JRST HPCOM
+
+HPSRC:	LOAD T3,PSP,(TPKT)	; Assumed source port
+	CAIA
+HPDST:	  LOAD T3,PDP,(TPKT)	; Assumed destination port
+HPIN2:	PUSH P,T2
+
+	MOVEI T2,1(TPKT)	; Find # octets needed to get ports
+	SUBI T2,PKTELI(IPKT)	; IP header+ports, words
+	LSH T2,2		; Octets
+	CAIN COD,TCPPKT		; TCP and
+	 CAMGE VL,T2		; Have ports?
+HPCOM:	  MOVX T3,HNO%NP	; Not TCP or ports not in sample
+
+	MOVX T2," "
+	TXNN F,F%LF
+	  BOUT%
+	TXNN F,F%LF
+	  BOUT%
+
+	POP P,T2
+	AOS (P)			; RETSKP
+	TXO T3,HNO%AD
+	CALLRET HNO2NA		; List host/port
+
+
+CHK4:	CAIE T2,4		; Better be 4
+	  TDO Q1,LPIVER+LSTBIT	; Force version
+	AOS (P)			; Skip return
+	RET
+
+; For T2/	nz,,x	LDB pointer
+;		 0,,x	Becomes -1,,x
+;
+; For T3/	    0	SOUT%
+;		nz,,x	NOUT%
+;		 0,,x	CALL x
+;	XX (Lnam,bit,oct,title,nam,off,fmt)
+
+.XX==0
+	-IPFTL,,IPFTB
+IPFTB:
+XX (LIP,1B0,01,<>,zzz,<
+ IP:>,0)
+XX (,1B1,01,<>,PIVER,(IPKT),CHK4)
+XX (LPIVER,1B2,01,< Vr=>,PIVER,(IPKT),<NO%LFL+FLD(2,NO%COL)+DECRAD>)
+XX (LPIDO,1B3,01,< Do=>,PIDO,(IPKT),<NO%LFL+FLD(2,NO%COL)+DECRAD>)
+XX (LPITOS,1B4,02,< Tos=>,PIPRC,(IPKT),<NO%LFL+NO%ZRO+FLD(2,NO%COL)+OCTRAD>)
+XX  (LPIPRC,1B5,02,< P=>,PIPRC,(IPKT),<NO%LFL+FLD(1,NO%COL)+DECRAD>)
+XX  (LPILDY,1B6,02,< D=>,PILDY,(IPKT),<NO%LFL+FLD(1,NO%COL)+DECRAD>)
+XX  (LPIHTR,1B7,02,< T=>,PIHTR,(IPKT),<NO%LFL+FLD(1,NO%COL)+DECRAD>)
+XX  (LPIHRL,1B9,02,< R=>,PIHRL,(IPKT),<NO%LFL+FLD(1,NO%COL)+DECRAD>)
+XX (LPIPL,1B10,04,< Ln=>,PIPL,(IPKT),<NO%LFL+FLD(5,NO%COL)+DECRAD>)
+XX (LPISID,1B13,06,< ID=>,PISID,(IPKT),<NO%LFL+FLD(6,NO%COL)+DECRAD>)
+XX (LPIDF,1B11,10,<>,PIDF,(IPKT),FRAG)
+XX  (LPIFLG,1B14,07,< Flg=>,PIFLG,(IPKT),<NO%LFL+FLD(1,NO%COL)+OCTRAD>)
+XX  (LPIMF,1B15,07,< MF=>,PIMF,(IPKT),<NO%LFL+FLD(1,NO%COL)+DECRAD>)
+XX  (LPIFO,1B16,10,< FO=>,PIFO,(IPKT),<NO%LFL+FLD(5,NO%COL)+DECRAD>)
+XX (LPITTL,1B17,11,< TTL=>,PITTL,(IPKT),<NO%LFL+FLD(3,NO%COL)+DECRAD>)
+XX (LPIPRO,1B21,12,,PIPRO,(IPKT),PROT)
+XX (LPICKS,1B22,14,< Cks=>,PICKS,(IPKT),<NO%LFL+FLD(6,NO%COL)+OCTRAD>)
+XX (LPISH,1B23,20,< S=>,PISH,(IPKT),HPSRC)
+XX (LPIDH,1B24,24,< D=>,PIDH,(IPKT),HPDST)
+IPFTL==.XX
+
+DFIP=1B0+1B1+1B3+1B4+1B10+1B13+1B11+1B17+1B21+1B23+1B24
+
+
+	SUBTTL List IP Options
+
+IPOPT:	SKIPG VL		; Have anything at all?
+	  RET			; No, give up now
+
+	HRROI T2,[ASCIZ /
+ IP Option: /]
+
+	MOVEI OP,PKTELI+.IPKDH+1(IPKT) ; Address of end of minimal IP header
+	MOVEI Q1,(TPKT)		; Address of ICMP/TCP header
+	SUB Q1,OP		; # extra words in IP header
+	LSH Q1,2		; # bytes
+	HRLI OP,(POINT 8,0)	; Point to first IP option byte
+
+	CALLRET OPTS		; List IP options
+
+	SUBTTL Subroutine to List Options
+
+; T2/	String pointer to title
+; OP/	Byte pointer
+; Q1/	Byte count
+
+OPTS:	SKIPG Q1
+	  RET			; All done
+	PUSH P,Q1		; Save count
+
+	MOVE T3,OP		; Temp prt to read
+	ILDB Q1,T3		; Option code
+	TRZ Q1,CPYOPT		; Discard copy-on-fragmentation
+
+	PUSH P,Q1		; Save Option code
+
+
+	CAIG Q1,1		; MAX(ENDOPT,NOPOPT)
+	 SKIPA Q1,[1]		; Their length
+	  ILDB Q1,T3		; Length of others
+
+	CAMLE Q1,-1(P)		; Don't process more than
+	  MOVE Q1,-1(P)		; have
+
+	MOVNS Q1		; Decrement
+	ADDM Q1,-1(P)		; remaining
+	MOVNS Q1		; count
+
+	CALL OUTD		; Decimal option bytes
+
+	POP P,T3		; Option just listed
+	POP P,Q1		; Remaining option bytes
+	HRROI T2,[ASCIZ /
+      Next: /]
+	JUMPN T3,OPTS		; More if not ENDOPT
+
+	HRROI T2,[ASCIZ /
+   Garbage: /]
+	TXNE F,F%GB		; Want to see garbage?
+	  CALLRET OUTO		; Yes, Rest are garbage
+
+	SKIPLE Q1		; Don't move pointer if at end
+	 ILDB T2,OP
+	  SOJG Q1,.-1
+
+	RET
+
+
+	FRGPKT
+CODTAB:	XXXPKT
+	ICMPKT
+	SCRPKT
+	GGPPKT
+	XXXPKT
+	XXXPKT
+	TCPPKT
+	XXXPKT
+NCODTA==.-CODTAB
+
+
+	SUBTTL Subroutine to List Other Packets
+
+; T2/	String pointer to title
+; PL/	# Bytes of remaining packet data
+; VL/	# Bytes of remaining sampled data
+; OP/	Byte pointer to next byte
+
+
+GGPPKT:	HRROI T2,[ASCIZ /
+  GGP Data: /]
+	CALLRET XXX
+
+FRGPKT:	HRROI T2,[ASCIZ /
+   IP Frag: /]
+	CALLRET XXX
+
+SCRPKT:	HRROI T2,[ASCIZ /
+  SCR Data: /]
+	CALLRET XXX
+
+XXXPKT:	HRROI T2,[ASCIZ /
+   IP Data: /]
+;	CALLRET
+
+XXX:	SKIPG VL		; Have anything at all?
+	  RET			; No, give up now
+	SOS PAGCNT
+	MOVE Q1,PL		; # Bytes to be listed
+	CALL BOCT		; List all rest
+
+	RET
+
+	SUBTTL Subroutine to List ICMP Packets
+
+ICF%IDS==1B0	; Has ID & Seq
+ICF%PTR==1B1	; Has Pointer
+ICF%GWA==1B2	; Has Gateway address
+ICF%IPP==1B3	; Has IP packet
+ICF%TIM==1B4	; Has times
+
+ICSIZ==4	; Words per entry
+
+DEFINE ICTB (SIZ,WRD),<	LOC ..X
+	WRD
+..X==..X+SIZ
+	LOC ..X
+> ; End of DEFINE ICTB
+
+ICMCOD:
+..X==.
+ICTB (ICSIZ,<EXP ^D0,0,ICF%IDS>)
+ICTB (ICSIZ,<EXP ^D3,ICMUNR,ICF%IPP>)
+ICTB (ICSIZ,<EXP ^D4,0,ICF%IPP>)
+ICTB (ICSIZ,<EXP ^D5,ICMRED,ICF%IPP!ICF%GWA>)
+ICTB (ICSIZ,<EXP ^D8,0,ICF%IDS>)
+ICTB (ICSIZ,<EXP ^D11,ICMTE,ICF%IPP>)
+ICTB (ICSIZ,<EXP ^D12,0,ICF%IPP!ICF%PTR>)
+ICTB (ICSIZ,<EXP ^D13,0,ICF%IDS!ICF%TIM>)
+ICTB (ICSIZ,<EXP ^D14,0,ICF%IDS!ICF%TIM>)
+ICTB (ICSIZ,<EXP ^D15,0,ICF%IDS>)
+ICTB (ICSIZ,<EXP ^D16,0,ICF%IDS>)
+ICMTYP==<.-ICMCOD>/ICSIZ
+
+
+ICMNAM:
+ICTB (ICSIZ,<ASCIZ /Echo Reply />)
+ICTB (ICSIZ,<ASCIZ /Unreachable />)
+ICTB (ICSIZ,<ASCIZ /Source Quench />)
+ICTB (ICSIZ,<ASCIZ /Redirect />)
+ICTB (ICSIZ,<ASCIZ /Echo />)
+ICTB (ICSIZ,<ASCIZ /Time Exceeded />)
+ICTB (ICSIZ,<ASCIZ /Parameter Problem />)
+ICTB (ICSIZ,<ASCIZ /Timestamp Request />)
+ICTB (ICSIZ,<ASCIZ /Timestamp Reply />)
+ICTB (ICSIZ,<ASCIZ /Info Request />)
+ICTB (ICSIZ,<ASCIZ /Info Reply />)
+
+SICMCD==3
+	NICMUN
+ICMUNR:
+..X==.
+ICTB (SICMCD,<ASCIZ / Net />)
+ICTB (SICMCD,<ASCIZ / Host />)
+ICTB (SICMCD,<ASCIZ / Protocol />)
+ICTB (SICMCD,<ASCIZ / Port />)
+ICTB (SICMCD,<ASCIZ / Frag Required />)
+ICTB (SICMCD,<ASCIZ / Source Route />)
+NICMUN==<.-ICMUNR>/SICMCD
+
+	NICMRE
+ICMRED:
+..X==.
+ICTB (SICMCD,<ASCIZ / Net />)
+ICTB (SICMCD,<ASCIZ / Host />)
+ICTB (SICMCD,<ASCIZ / TOS+Net />)
+ICTB (SICMCD,<ASCIZ / TOS+Host />)
+NICMRE==<.-ICMRED>/SICMCD
+
+	NICMTE
+ICMTE:
+..X==.
+ICTB (SICMCD,<ASCIZ / Packet Life />)
+ICTB (SICMCD,<ASCIZ / Reassembly />)
+NICMTE==<.-ICMTE>/SICMCD
+
+
+
+
+ICMPKT:	SKIPG VL		; Have anything at all?
+	  RET			; No, give up now
+
+	MOVE Q1,FICMP		; ICMP format bits
+	MOVE T4,ICMPTB-1	; AOBJN pointer
+	CALL LSTHDR
+
+	MOVEI IPKT,.CMINH(TPKT)	; Included IP header address
+	SUBI VL,4*.CMINH	; Remaining octets
+	SUBI PL,4*.CMINH	; Remaining octets
+
+	LOAD T3,CMTYP,(TPKT)	; ICMP Type
+	MOVX T4,<-ICMTYP,,ICMCOD>
+ICMPK2:	CAMN T3,(T4)		; This it?
+	  JRST ICMPK4		; Yes
+	ADDI T4,ICSIZ-1
+	AOBJN T4,ICMPK2		; Try next
+	CALLRET BOCT		; Just list octets
+
+ICMPK4:	MOVE T2,2(T4)		; Flags
+	TXNN T2,ICF%IPP		; Included packet?
+	  RET			; No, stop
+
+	SSOUT <
+Included Packet:>
+
+jfcl;	POP P,(P)		; Forget return for garbage
+	JRST REGO		; Go do it, Then garbage
+
+; Print name for ICMP Type/Code
+; T2 has the CODE
+
+ICMXXX:	LOAD T3,CMTYP,(TPKT)	; ICMP Type
+	MOVX T4,<-ICMTYP,,ICMCOD>
+ICMPKL:	CAMN T3,(T4)		; This it?
+	  JRST ICMPKN		; Yes
+	ADDI T4,ICSIZ-1
+	AOBJN T4,ICMPKL		; Try next
+
+; Unknown TYPE
+
+	HRROI T2,[ASCIZ //]	; Already printer title
+	MOVE Q1,PL		; Maximum length remaining
+	CALLRET XXX		; New code - octal
+
+; Known TYPE
+
+ICMPKN:	SKIPE T3,1(T4)		; Code table or 0
+	 CAML T2,-1(T3)		; Known code?
+	  JRST ICMPKD		; No
+
+; Known CODE
+
+	IMULI T2,SICMCD		; Words per message
+	ADDI T2,(T3)		; Plus table address
+	HRROS T2		; Into string pointer
+	SETZ T3,
+	SOUT%
+
+	HRROI T2,ICMNAM-ICMCOD(T4) ; ICMP Type
+	SOUT%
+	JRST ICMPKE
+
+; Unknown CODE
+
+ICMPKD:	HRROI T2,ICMNAM-ICMCOD(T4) ; ICMP Type
+	SETZ T3,
+	SOUT%
+
+	LOAD T2,CMCOD,(TPKT)
+	JUMPE T2,ICMPKE		; Omit code 0
+	SSOUT <Code >
+	LOAD T2,CMCOD,(TPKT)
+	CALL DECNUM		; List decimal code
+ICMPKE:
+
+	SSOUT <  Cks = >
+	LOAD T2,CMCKS,(TPKT)	; List checksum
+	XNOUT OCTRAD
+
+	MOVE T2,2(T4)		; Flags
+	TXNN T2,ICF%IDS		; Have ID & SEQ?
+	  JRST ICMNID		; No
+
+	SSOUT <, ID = >
+	LOAD T2,CMID,(TPKT)	; List ID
+	CALL DECNUM
+
+	SSOUT <, Seq = >
+	LOAD T2,CMSEQ,(TPKT)	; List SEQ
+	CALL DECNUM
+ICMNID:
+
+	MOVE T2,2(T4)		; Flags
+	TXNN T2,ICF%PTR		; Have pointer?
+	  JRST ICMNPT		; No
+
+	SSOUT <, Pointer = >
+	LOAD T2,CMPTR,(TPKT)	; List pointer
+	CALL DECNUM
+ICMNPT:
+
+	MOVE T2,2(T4)		; Flags
+	TXNN T2,ICF%GWA		; Have address?
+	  JRST ICMNGW		; No
+
+	SSOUT <, Route via >
+	LOAD T2,CMGWA,(TPKT)	; List address
+	MOVX T3,HNO%NP+HNO%NA+HNO%AD
+	CALL HNO2NA
+	SETZ T3,
+ICMNGW:
+
+	MOVE T2,2(T4)		; Flags
+	TXNN T2,ICF%TIM		; Have timestamps?
+	  JRST ICMNTM		; No
+
+	SSOUT <
+          Originate = >
+	LOAD T2,CMTSO,(TPKT)
+	CALL DECNUM
+
+	SSOUT <, Receive = >
+	LOAD T2,CMTSR,(TPKT)
+	CALL DECNUM
+
+	SSOUT <, Transmit = >
+	LOAD T2,CMTST,(TPKT)
+	CALL DECNUM
+ICMNTM:
+	AOS (P)			; Skip return to avoid NOUT%
+	RET
+
+
+.XX=0
+	-ICMPTL,,ICMPTB
+ICMPTB:
+XX (LICMP,1B0,01,<>,zzz,<
+  ICMP Hdr:>,0)
+XX (LCMTYP,1B1,01,< Type=>,CMTYP,(IPKT),<NO%LFL+FLD(3,NO%COL)+DECRAD>)
+XX (LCMCOD,1B2,02,< Code=>,CMCOD,(IPKT),<NO%LFL+FLD(4,NO%COL)+DECRAD>)
+XX (LCMCKS,1B3,04,< Cks=>,CMCKS,(IPKT),<NO%LFL+FLD(7,NO%COL)+OCTRAD>)
+XX (LCMPTR,1B4,05,< Pntr=>,CMPTR,(IPKT),<NO%LFL+FLD(3,NO%COL)+DECRAD>)
+XX (LCMGWA,1B5,10,< Gwy=>,CMGWA,(IPKT),LSTHST)
+XX (LCMID,1B6,12,< Id=>,CMID,(IPKT),<NO%LFL+FLD(6,NO%COL)+DECRAD>)
+XX (LCMSEQ,1B7,14,< Seq=>,CMSEQ,(IPKT),<NO%LFL+FLD(6,NO%COL)+DECRAD>)
+XX (LCMTSO,1B9,14,< TSo=>,CMTSO,(IPKT),<NO%LFL+FLD(9,NO%COL)+DECRAD>)
+XX (LCMTSR,1B10,20,< TSr=>,CMTSR,(IPKT),<NO%LFL+FLD(9,NO%COL)+DECRAD>)
+XX (LCMTST,1B11,24,< TSt=>,CMTST,(IPKT),<NO%LFL+FLD(9,NO%COL)+DECRAD>)
+XX (LCMXXX,1B17,04,<>,CMCOD,(IPKT),ICMXXX)
+ICMPTL==.XX
+
+DFICMP==1B0+1B17
+
+	SUBTTL Subroutine to List TCB State
+repeat 0,<
+TCBST:	LDB T2,[POINT 3,T4,23]		; GET RECEIVE STATE NUMBER
+	ADD T2,T2			; DOUBLE IT
+	HRROI T2,RSTCOD(T2)		; POINTER TO RECEIVE STATE NAME
+	SETZ T3,
+	SOUT%				; LIST IT
+
+	LDB T2,[POINT 3,T4,26]		; GET SEND STATE NUMBER
+	ADD T2,T2			; DOUBLE IT
+	HRROI T2,SSTCOD(T2)		; POINTER TO SEND STATE NAME
+	SOUT%				; LIST IT
+
+	HRROI T2,[ASCIZ / UOP/]		; CHECK FLAG BITS
+	TXNE T4,TSUOP			; IF FLAG IS SET
+	  SOUT%				; LIST CORRESPONDING NAME
+
+	HRROI T2,[ASCIZ / OPN/]
+	TXNE T4,TSOPN
+	  SOUT%
+
+	HRROI T2,[ASCIZ / PRS/]
+	TXNE T4,TSPRS
+	  SOUT%
+
+	HRROI T2,[ASCIZ / ABT/]
+	TXNE T4,TSABT
+	  SOUT%
+
+	HRROI T2,[ASCIZ / SV/]
+	TXNE T4,TSSV
+	  SOUT%
+
+	HRROI T2,[ASCIZ / 10/]
+	TXNE T4,10
+	  SOUT%
+
+	HRROI T2,[ASCIZ / 4/]
+	TXNE T4,4
+	  SOUT%
+
+	HRROI T2,[ASCIZ / SURG/]
+	TXNE T4,TSURG
+	  SOUT%
+
+	HRROI T2,[ASCIZ / RURG/]
+	TXNE T4,TRURG
+	  SOUT%
+
+	RET
+
+RSTCOD:	ASCIZ /NOTSYN/
+	ASCIZ /    ?1/
+	ASCIZ /FINRCV/
+	ASCIZ /    ?3/
+	ASCIZ /SYNABL/
+	ASCIZ /SYNRCV/
+	ASCIZ /    ?6/
+	ASCIZ /SYNCED/
+
+SSTCOD:	ASCIZ / NOTSYN,/
+	ASCIZ /     ?1,/
+	ASCIZ / FINSNT,/
+	ASCIZ /     ?3,/
+	ASCIZ / SYNABL,/
+	ASCIZ / SYNSNT,/
+	ASCIZ /     ?6,/
+	ASCIZ / SYNCED,/
+> ; End of repeat 0
+
+
+
+LSTHST:	MOVX T2," "
+	BOUT%
+	MOVX T3,HNO%NP+HNO%AD
+	CALL HNO2NA		; List it
+	AOS (P)			; Skip return
+	RET
+
+
+
+	SUBTTL Subroutine to List TCP Packets
+
+TCPPKT:	SKIPG VL		; Have anything at all?
+	  RET			; No, give up now
+	MOVE Q1,FTCP		; Format bits
+	MOVE T4,TCPFTB-1	; AOBJN pointer
+	CALL LSTHDR		; List the header
+
+TOPT:	CAIL PL,MINTHS
+	 CAIGE VL,MINTHS
+	  JRST [SETZ PL,
+		RET]		; Not enough for options or data
+
+	MOVEI OP,5(TPKT)
+	HRLI OP,(POINT 8,0)	; Pointer to options
+
+	LOAD Q1,PTDO,(TPKT)	; TCP header length
+	LSH Q1,2		; bytes
+
+	SUB VL,Q1		; Remainder after options
+	SUB PL,Q1
+
+	SUBI Q1,MINTHS		; # option bytes
+	HRROI T2,[ASCIZ /
+TCP Option: /]			; Title
+	CALL OPTS		; List TCP options
+
+	HRROI T2,[ASCIZ /
+  TCP Data: /]
+	MOVEI Q1,20		; Limit to 20 data octets
+	CALLRET TBOCT		; List them, ASCII/BINARY
+
+QURG:	HRROI T3,[ASCIZ / Urg/]
+	JRST QQQ
+QACK:	HRROI T3,[ASCIZ / Ack/]
+	JRST QQQ
+QEOL:	HRROI T3,[ASCIZ / Psh/]
+	JRST QQQ
+QRST:	HRROI T3,[ASCIZ / Rst/]
+	JRST QQQ
+QSYN:	HRROI T3,[ASCIZ / Syn/]
+	JRST QQQ
+QFIN:	HRROI T3,[ASCIZ / Fin/]
+
+QQQ:	PUSH P,T2
+	MOVE T2,T3
+	SETZ T3,
+	SKIPE (P)		; Skip if zero
+	  SOUT%			; Print if non-zero
+	POP P,(P)
+	AOS (P)			; RETSKP
+	RET
+
+
+
+;	XX (Lnam,bit,oct,title,nam,off,fmt)
+
+.XX==0
+	-TCPFTL,,TCPFTB
+TCPFTB:
+XX (LTCP,1B0,00,<>,zzz,<
+TCP:>,0)
+XX (LPSP,1B1,02,< SP=>,PSP,(TPKT),<NO%LFL+FLD(5,NO%COL)+DECRAD>)
+XX (LPDP,1B2,04,< DP=>,PDP,(TPKT),<NO%LFL+FLD(5,NO%COL)+DECRAD>)
+XX (LPSEQ,1B3,10,< Seq=>,PSEQ,(TPKT),<NO%LFL+FLD(^D10,NO%COL)+DECRAD>)
+XX (LPACKS,1B4,14,< Ack=>,PACKS,(TPKT),<NO%LFL+FLD(^D10,NO%COL)+DECRAD>)
+XX (LPTDO,1B5,15,< Do=>,PTDO,(TPKT),<NO%LFL+FLD(2,NO%COL)+DECRAD>)
+XX (LPTCTL,1B8,16,< CTL=>,PTCTL,(TPKT),<NO%LFL+FLD(2,NO%COL)+OCTRAD>)
+;XX (LDUM0,77B14,16,,xxx,< >,0)
+XX  (LPURG,1B9,16,<>,PURG,(TPKT),QURG)
+XX  (LPACK,1B10,16,<>,PACK,(TPKT),QACK)
+XX  (LPEOL,1B11,16,<>,PEOL,(TPKT),QEOL)
+XX  (LPRST,1B12,16,<>,PRST,(TPKT),QRST)
+XX  (LPSYN,1B13,16,<>,PSYN,(TPKT),QSYN)
+XX  (LPFIN,1B14,16,<>,PFIN,(TPKT),QFIN)
+XX (LPWNDO,1B15,20,< Wnd=>,PWNDO,(TPKT),<NO%LFL+FLD(5,NO%COL)+DECRAD>)
+XX (LPTCKS,1B16,22,< Cks=>,PTCKS,(TPKT),<NO%LFL+NO%ZRO+FLD(6,NO%COL)+OCTRAD>)
+XX (LPURGP,1B17,24,< Urgp=>,PURGP,(TPKT),<NO%LFL+FLD(5,NO%COL)+DECRAD>)
+TCPFTL==.XX
+
+DFTCP=1B0+1B3+1B4+1B5+1B9+1B10+1B11+1B12+1B13+1B14+1B15+1B17
+	SUBTTL	Subroutine to List Headers
+
+; Q1/	Format bits
+; T4/	-Length,,Table
+
+; Table entries:	one entry per header field
+;	LSTBIT/	Bit corresponding to this field
+;		If bit in mask is 1, the field is listed
+;	LSTLTH/	Minimum VL required to insure field was sampled
+;	LSTTTL/	Address of ASCIZ string for long format title
+;	LSTT2/	Either:	0,,address of ASCIZ string to be listed,
+;		or:	LDB pointer for datum to be listed
+;	LSTT3/	Either:	0 if have string to SOUT%,
+;		or:	0,,address of routine to be called,
+;		or:	NZ,,x	NOUT% format specification
+;				(columnized in short format)
+
+LSTHDR:	SOS PAGCNT
+LSTFLD:	TDNN Q1,LSTBIT(T4)	; Want this field
+	  JRST LSTNXT		; No
+	CAML PL,LSTLTH(T4)	; Have info?
+	 CAMGE VL,LSTLTH(T4)	; Have info?
+	  JRST LSTNXT		; No
+
+	HRRO T2,LSTTTL(T4)	; Title
+	SETZ T3,
+	TXNE F,F%LF		; Long or short?
+	  SOUT%			; Title if long format
+
+	MOVX T2," "		; Space
+	MOVE T3,LSTT3(T4)	; How to print it	
+	TXNE T3,NO%LFL		; Filler?
+	 TXNE F,F%LF		; Long or short?
+	  CAIA			; Long or no filler
+	   BOUT%			; Space if short format with filler
+
+	MOVE T2,LSTT2(T4)	; LDB pointer or SOUT% pointer?
+	TLNN T2,-1
+	 TLOA T2,-1		; SOUT%
+	  LDB T2,T2		; LDB
+
+	SKIPE T3,LSTT3(T4)	; How to print it
+	  JRST LSTNS		; Not SOUT%
+	SOUT%
+	JRST LSTNXT
+LSTNS:
+	TXNE F,F%LF		; Long or short?
+	  TXZ T3,NO%COL		; Long so suppress columns
+
+	TLNN T3,-1		; Call or NOUT%
+	 CALL (T3)		; Call (RETSKPs)
+	  NOUT%			; NOUT%
+	JFCL
+
+LSTNXT:	ADDI T4,LSTSIZ-1
+	AOBJN T4,LSTFLD
+	RET
+	SUBTTL Subroutines to List Data Bytes
+
+; TBOCT	List ASCII or BINARY bytes
+
+; T2/	String pointer to title
+; PL/	# Bytes of remaining packet data
+; VL/	# Bytes of remaining sampled data
+; OP/	Byte pointer to next byte
+
+
+TBOCT:	SKIPLE PL		; If no more bytes in packet
+	 SKIPG VL		; or in sample, then
+	  RET			; Done
+
+	CAMLE Q1,PL		; Min bytes to list
+	  MOVE Q1,PL		; against packet
+	CAMLE Q1,VL		; and sample lengths
+	  MOVE Q1,VL
+
+	PUSH P,Q1		; Save count
+	CALL TOUT		; List the bytes
+	POP P,Q1		; Restore count
+
+	SUB PL,Q1		; Update remaining counts
+	SUB VL,Q1
+
+	RET
+
+
+; T2/	String pointer to title
+; Q1/	# bytes to list
+; OP/	Byte pointer to data
+
+TOUT:	SKIPG Q1		; If no bytes left,
+	  RET			; Done
+
+	SETZ T3,		; Output title
+	SOUT%
+	SOS PAGCNT
+
+	MOVX T3,<NO%LFL+FLD(3,NO%COL)+OCTRAD>
+TOUTL:	ILDB T2,OP		; Get next byte
+
+	CAIL T2,40
+	 CAILE T2,174
+	   CAIA			; If not letter
+	    TXNN F,F%TX		; or don't want ascii
+	     NOUT%		; List octal byte
+	      BOUT% ;JFCL for NOUT% ; List text byte
+
+	MOVX T2," "
+	BOUT%
+
+	SOJG Q1,TOUTL		; Back for rest
+	RET
+
+; BOCT	List up to 16. BINARY bytes per line
+
+; T2/	String pointer to title
+; PL/	# Bytes of remaining packet data
+; VL/	# Bytes of remaining sampled data
+; OP/	Byte pointer to next byte
+
+
+BOCT:	SKIPLE PL		; If no more bytes in packet
+	 SKIPG VL		; or in sample, then
+	  RET			; Done
+
+	CAMLE Q1,PL		; Min bytes to list
+	  MOVE Q1,PL		; against packet
+	CAMLE Q1,VL		; and sample lengths
+	  MOVE Q1,VL
+
+	PUSH P,Q1		; Save count
+	CALL OUTO		; List the bytes
+	POP P,Q1		; Restore count
+
+	SUB PL,Q1		; Update remaining counts
+	SUB VL,Q1
+
+	RET
+
+
+; DECNUM	List a DECIMAL byte
+
+; T2/	Byte to be listed
+
+DECNUM:	XNOUT DECRAD
+
+	MOVX T2,"."
+	BOUT%
+
+	SETZ T3,
+	RET
+
+; OUTD	List up to 16. Decimal BINARY bytes per line
+
+; T2/	String pointer to title
+; Q1/	# Bytes to list
+; OP/	Byte pointer to next byte
+
+
+OUTD:	SKIPG Q1		; Any more to list?
+	  RET			; No, Done
+
+	SETZ T3,		; Output title
+	SOUT%
+	SOS PAGCNT
+
+	SUBI Q1,20		; Bytes per line
+	JUMPLE Q1,OUTDE		; Last line
+	PUSH P,Q1		; Bytes remaining after
+
+	MOVEI Q1,20		; this line
+	CALL OUTDF
+
+	POP P,Q1		; Remaining
+	HRROI T2,[ASCIZ /
+            /]
+	JRST OUTD		; Back for rest
+
+OUTDE:	ADDI Q1,20		; Positive count
+; Fall into OUTDF
+
+
+OUTDF:	MOVX T3,<NO%LFL+FLD(4,NO%COL)+DECRAD>
+OUTDL:	ILDB T2,OP		; Get byte
+	NOUT%			; List it
+	  MOVX T3,<NO%LFL+FLD(4,NO%COL)+DECRAD>
+	SOJG Q1,OUTDL		; Back for next
+	RET
+
+; OUTO	List up to 16. Octal BINARY bytes per line
+
+; T2/	String pointer to title
+; Q1/	# Bytes to list
+; OP/	Byte pointer to next byte
+
+OUTO:	SKIPG Q1		; Any more to list?
+	  RET			; No, Done
+
+	SETZ T3,		; Output title
+	SOUT%
+	SOS PAGCNT
+
+	SUBI Q1,20		; Bytes per line
+	JUMPLE Q1,OUTOE		; Last line
+	PUSH P,Q1		; Bytes remaining after
+
+	MOVEI Q1,20		; this line
+	CALL OUTOF
+
+	POP P,Q1		; Remaining
+	HRROI T2,[ASCIZ /
+            /]
+	JRST OUTO		; Back for rest
+
+OUTOE:	ADDI Q1,20		; Positive count
+; Fall into OUTOF
+
+
+OUTOF:	MOVX T3,<NO%LFL+FLD(4,NO%COL)+OCTRAD>
+OUTOL:	ILDB T2,OP		; Get byte
+	NOUT%			; List it
+	  MOVX T3,<NO%LFL+FLD(4,NO%COL)+OCTRAD>
+	SOJG Q1,OUTOL		; Back for next
+	RET
+
+
+
+
+
+CRLF:	HRROI T2,[ASCIZ /
+/]
+	SETZ T3,		; End line
+	SOUT%
+	SOS PAGCNT		; Count line
+
+	RET
+
+
+PDLL==200	; Length of stack
+PDL:	BLOCK PDLL	; Control stack
+
+LITS:	LIT
+GARB:	12345
+
+	END	<3,,ENTVEC>

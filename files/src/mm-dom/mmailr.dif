@@ -1,0 +1,2229 @@
+
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 1
+
+
+
+LINE 1, PAGE 1
+1)		TITLE MMailr -- System Mailer Daemon for MM Mailsystem
+LINE 1, PAGE 1
+2)	;[SRI-NIC]SRC:<MM-NEW>MMAILR.MAC.444, 18-Nov-87 02:57:35, Edit by MKL
+2)	; up MAXTMT for bulk mailer so it has a chance to deliver message on time
+2)	;[SRI-NIC]SRC:<MM-NEW>MMAILR.MAC.440,  4-Sep-87 15:46:50, Edit by MKL
+2)	; add DMLRSW (set for domainized mailer)
+2)	;[SRI-NIC]SRC:<MM-NEW>MMAILR.MAC.435,  4-Sep-87 01:58:04, Edit by MKL
+2)	; FWDLST was broken cause call to OUTMSG thought it did a +3 return
+2)	; and it didn't (older MMAILR did).
+2)	;[SRI-NIC]PS:<MKL.TEMP>MMAILR.MAC.2, 27-Aug-87 23:17:54, Edit by MKL
+2)	; Merge NIC MMAILR with latest release
+2)	;  added OT%822 stuff to monitor
+2)	; LOG stuff is now part of standard mmailr.
+2)	;  see LOGP and STATP words
+2)	; Add BULKSW to have explodes go to MAILB:
+2)	; Add $ipfc stuff [NIC373]
+2)	; Make dequeue times longer for -RELAY lists
+2)	; Wait around before starting if system just came up
+2)	; Let file protections default to directory default setting
+2)	; Print time in log files
+2)	; Make changes to file delivery routines [NIC372]
+2)	; Add -RELAY list explosion hack
+2)	; Add switches MMLRSW and BMLSRW (set one for normal mailer or bulk mailer)
+2)	
+2)		TITLE MMailr -- System Mailer Daemon for MM Mailsystem
+
+
+LINE 9, PAGE 1
+1)	MMLEDT==^D521			;MMAILR's edit version
+1)	
+LINE 31, PAGE 1
+2)	MMLEDT==^D507			;MMAILR's edit version
+2)	
+2)	IFNDEF MMLRSW,<MMLRSW==0>	;normal mmailr
+2)	IFNDEF BMLRSW,<BMLRSW==0>	;bulk mailer
+2)	IFNDEF DMLRSW,<DMLRSW==0>	;domain mailer
+2)	
+2)	IFN <1-<MMLRSW+BMLRSW+DMLRSW>>,<
+2)	PRINTX ONLY ONE KIND OF MAILER PLEASE
+2)	>
+2)	IFE <MMLRSW+BMLRSW+DMLRSW>,<
+2)	PRINTX MAILER NOT SELECTED
+2)	>
+2)	
+
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 2
+
+
+
+LINE 18, PAGE 1
+1)		.REQUIRE HSTNAM		;Host name routines
+1)		.REQUIRE WAKEUP		;MMailr wakeup routines - make LINK happy
+LINE 51, PAGE 1
+2)	IFN DMLRSW,<
+2)		.REQUIRE DHSTNM		;Host name routines
+2)	>
+2)	IFE DMLRSW,<
+2)		.REQUIRE HSTNAM		;Host name routines
+2)	>
+2)		.REQUIRE WAKEUP		;MMailr wakeup routines - make LINK happy
+
+
+LINE 23, PAGE 1
+1)	
+LINE 61, PAGE 1
+2)	IFNDEF OT%822,OT%822==:1
+2)	
+
+
+LINE 52, PAGE 1
+1)		EXTERN $GTPRO,$GTNAM,$GTCAN,$GTLCL,$GTHST
+1)		EXTERN $ADDOM,$RMREL,$RRDOM,$UKHST
+1)		EXTERN $GTHNS,$PUPNS,$CHSNS,$DECNS,$SPCNS
+LINE 91, PAGE 1
+2)		EXTERN $GTPRO,$GTNAM,$GTCAN,$GTLCL,$ADDOM,$RMREL
+2)		EXTERN $GTHNS,$PUPNS,$CHSNS,$DECNS,$SPCNS
+
+
+LINE 5, PAGE 2
+1)	IFNDEF DATORG,<DATORG==1000>	;Data on page 1
+LINE 5, PAGE 2
+2)	IFN NICSW,<
+2)	IFNDEF BULKSW,<BULKSW==1>	;-relay lists to MAILB:
+2)	>
+2)	
+2)	IFNDEF DATORG,<DATORG==1000>	;Data on page 1
+
+
+LINE 11, PAGE 2
+1)	IFNDEF MAXTMT,<MAXTMT==^D15*60> ;Max time for Daemon to transmit whole message
+1)	IFNDEF MAXTMC,<MAXTMC==^D15*60> ;Max time for Daemon to transmit one copy
+LINE 15, PAGE 2
+2)	IFE BMLRSW,<
+2)	IFNDEF MAXTMT,<MAXTMT==^D15*60> ;Max time for Daemon to transmit whole message
+2)	>
+2)	IFN BMLRSW,<			;TCP-IP list takes hours to go thru once!
+2)	IFNDEF MAXTMT,<MAXTMT==^D180*60> ;Max time for Daemon to transmit whole message
+2)	>
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 3
+
+
+2)	IFNDEF MAXTMC,<MAXTMC==^D15*60> ;Max time for Daemon to transmit one copy
+
+
+LINE 1, PAGE 4
+1)	^L
+1)	IFNDEF OT%822,OT%822==:1
+1)	
+1)	IFNDEF GTDOM%,<
+1)		OPDEF GTDOM% [JSYS 765]
+1)	
+1)	GD%LDO==:1B0			; local data only (no resolve)
+1)	GD%MBA==:1B1			; must be authoritative (don't use cache)
+1)	GD%RBK==:1B6			; resolve in background
+1)	GD%EMO==:1B12			; exact match only
+1)	GD%RAI==:1B13			; uppercase output name
+1)	GD%QCL==:1B14			; query class specified
+1)	GD%STA==:1B16			; want status code in AC1 for marginal success
+1)	  .GTDX0==:0			; total success
+1)	  .GTDXN==:1			; data not found in namespace (authoritative)
+1)	  .GTDXT==:2			; timeout, any flavor
+1)	  .GTDXF==:3			; namespace is corrupt
+1)	
+1)	.GTDWT==:12			; resolver wait function
+1)	.GTDPN==:14			; get primary name and IP address
+1)	.GTDMX==:15			; get MX (mail relay) data
+1)	  .GTDLN==:0			; length of argblk (inclusive)
+1)	  .GTDTC==:1			; QTYPE (ignored for .GTDMX),,QCLASS
+1)	  .GTDBC==:2			; length of output string buffer
+1)	  .GTDNM==:3			; canonicalized name on return
+1)	  .GTDRD==:4			; returned data begins here
+1)	  .GTDML==:5			; minimum length of argblock (words)
+1)	.GTDAA==:16			; authenticate address
+1)	.GTDRR==:17			; get arbitrary RR (MIT formatted RRs)
+1)	>;IFNDEF GTDOM%
+1)	^L	SUBTTL Flags
+LINE 1, PAGE 4
+2)	^L	SUBTTL Flags
+
+
+LINE 85, PAGE 8
+1)		GTDLEN==.GTDML+10
+1)	GTDBLK:	BLOCK GTDLEN+1		;GTDOM% argument block
+1)		RLYBFL==5*HSTBFL
+1)	RLYBUF:	BLOCK RLYBFL		;MX relays buffer
+1)	USRNUM: BLOCK 1
+LINE 85, PAGE 7
+2)	USRNUM: BLOCK 1
+
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 4
+
+
+
+LINE 121, PAGE 8
+1)		ASCIZ/[SYSTEM]MMAILR/	;The name
+1)	ENDPID==.
+LINE 117, PAGE 7
+2)	IFN MMLRSW,<
+2)		ASCIZ/[SYSTEM]MMAILR/	;The name
+2)	>
+2)	IFN BMLRSW,<
+2)		ASCIZ/[SYSTEM]MMBULK/	;The name
+2)	>
+2)	IFN DMLRSW,<
+2)		ASCIZ/[SYSTEM]DMAILR/	;The name
+2)	>
+2)	ENDPID==.
+
+
+LINE 135, PAGE 8
+1)	; Site-selectable runtime flags
+1)	
+1)	TRALLP:	0			;-1 if transmogrification should always be done
+1)					;   when crossing network registries even if the
+1)					;   name is a domain name.  However, Internet
+1)					;   names are never transmogrified.
+1)					; 0 if transmogrification is suppressed if the
+1)					;   name is a domain name.
+1)	
+1)	PRINTP:	0			;-1 to print activity messages
+1)	DEBUGP:	0			;-1 if debugging network protocol
+1)	
+1)	LOGP:	0			;-1 if should make logs
+1)	
+1)	STATP:	0			;-1 if should keep statistics
+1)	^L
+LINE 139, PAGE 7
+2)	PRINTP:	0			;-1 to print activity messages
+2)	DEBUGP:	0			;-1 if debugging network protocol
+2)	
+2)	LOGP:	-1			;-1 if should make logs
+2)	
+2)	STATP:	-1			;-1 if should keep statistics
+2)	
+2)	IFN NICSW,<
+2)	IP$PID:	0			;[NIC373] PID for $messages
+2)	>
+2)	^L
+
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 5
+
+
+
+LINE 16, PAGE 9
+1)	CHNTAB::PHASE 0
+LINE 16, PAGE 8
+2)	REPEAT 0,<
+2)	REQID=='MM'			;Request ID for our ENQ%'ing
+2)	
+2)	ENQBLK:	1,,ENQBLL		;Number of locks, block size
+2)		REQID			;Interrupt channel, request ID
+2)		0			;Flags, level number,,JFN
+2)		-1,,ENQNAM		;Pointer to name string (this name for
+2)		0			; MM/MS compatibility)
+2)		0
+2)	ENQBLL==.-ENQBLK		;Length of ENQ% BLOCK
+2)	ENQNAM:	ASCIZ/Mail expunge interlock/
+2)	>;REPEAT 0
+2)	
+2)	CHNTAB::PHASE 0
+
+
+LINE 23, PAGE 11
+1)	
+1)	DAEDIR:	ASCIZ/OPERATOR/		;Directory DAEMON runs out of
+1)	MLAGNT:	ASCIZ/Mailer/		;Person handling mail problems
+1)	^L
+LINE 23, PAGE 10
+2)	IFN NICSW,<
+2)	;For bulk mail (-relay explosions)
+2)	BMNTFY:	7,,0			;notify in 7 days
+2)	BMDEQ:	5,,0			;but dequeue in 5 days
+2)	>
+2)	
+2)	DAEDIR:	ASCIZ/OPERATOR/		;Directory DAEMON runs out of
+2)	MLAGNT:	ASCIZ/Mailer/		;Person handling mail problems
+2)	IFN NICSW,<
+2)	BITBUK:	ASCIZ/*NUL:BIT.BUCKET/	;[NIC371] 
+2)	>
+2)	^L
+
+
+LINE 24, PAGE 12
+1)	FILTBL:	FILXX(<[--QUEUED-MAIL--].NEW*>,<[--BAD-QUEUED-MAIL--].>,GQUEQM,GQUEH1,FF%RNM!FF%NEW)
+1)		FILXX(<[--QUEUED-MAIL--].NETWORK>,<[--BAD-QUEUED-MAIL--].NETWORK>,GQUEQM,GQUEH1,FF%RNM!FF%NET)
+LINE 24, PAGE 11
+2)	FILTBL:
+2)	
+2)	IFN MMLRSW,<
+2)		FILXX(<[--QUEUED-MAIL--].NEW*>,<[--BAD-QUEUED-MAIL--].>,GQUEQM,GQUEH1,FF%RNM!FF%NEW)
+2)		FILXX(<[--QUEUED-MAIL--].NETWORK>,<[--BAD-QUEUED-MAIL--].NETWORK>,GQUEQM,GQUEH1,FF%RNM!FF%NET)
+
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 6
+
+
+
+LINE 32, PAGE 12
+1)	NFTBL==<.-FILTBL>/%FLLEN
+LINE 35, PAGE 11
+2)	>;IFN MMLRSW
+2)	
+2)	IFN BMLRSW,<
+2)		FILXX(<[--QUEUED-BULK-MAIL--].NEW*>,<[--BAD-QUEUED-MAIL--].>,GQUEQM,GQUEH1,FF%RNM!FF%NEW)
+2)		FILXX(<[--QUEUED-BULK-MAIL--].NETWORK>,<[--BAD-QUEUED-MAIL--].NETWORK>,GQUEQM,GQUEH1,FF%RNM!FF%NET)
+2)		FILXX(<[--QUEUED-BULK-MAIL--].RETRANSMIT>,<[--BAD-QUEUED-MAIL--].RETRANSMIT>,GQUEQM,GQUEH1,FF%RXM)
+2)		FILXX(<[--RETURNED-BULK-MAIL--].NEW*>,<[--BAD-RETURNED-MAIL--].>,GQUEQM,GQUEH1,FF%RNM!FF%XNT!FF%NEW)
+2)		FILXX(<[--RETURNED-BULK-MAIL--].NETWORK>,<[--BAD-RETURNED-MAIL--].>,GQUEQM,GQUEH1,FF%RNM!FF%XNT!FF%NET)
+2)		FILXX(<[--RETURNED-BULK-MAIL--].RETRANSMIT>,<[--BAD-RETURNED-MAIL--].RETRANSMIT>,GQUEQM,GQUEH1,FF%XNT!FF%RXM)
+2)		FILXX(<[--UNSENT-BULK-MAIL--].*>,</UNDELIVERABLE-MAIL/.>,GQUEUN,GQUEH0,FF%OML!FF%NEW)
+2)		FILXX(<]--UNSENT-BULK-NEGATIVE-ACK--[.*>,</UNDELIVERABLE-MAIL/.>,GQUEUN,GQUEH0,FF%OML!FF%XNT)
+2)	>;IFN BMLRSW
+2)	
+2)	IFN DMLRSW,<
+2)		FILXX(<[--QUEUED-DOMAIN-MAIL--].NEW*>,<[--BAD-QUEUED-MAIL--].>,GQUEQM,GQUEH1,FF%RNM!FF%NEW)
+2)		FILXX(<[--QUEUED-DOMAIN-MAIL--].NETWORK>,<[--BAD-QUEUED-MAIL--].NETWORK>,GQUEQM,GQUEH1,FF%RNM!FF%NET)
+2)		FILXX(<[--QUEUED-DOMAIN-MAIL--].RETRANSMIT>,<[--BAD-QUEUED-MAIL--].RETRANSMIT>,GQUEQM,GQUEH1,FF%RXM)
+2)		FILXX(<[--RETURNED-DOMAIN-MAIL--].NEW*>,<[--BAD-RETURNED-MAIL--].>,GQUEQM,GQUEH1,FF%RNM!FF%XNT!FF%NEW)
+2)		FILXX(<[--RETURNED-DOMAIN-MAIL--].NETWORK>,<[--BAD-RETURNED-MAIL--].>,GQUEQM,GQUEH1,FF%RNM!FF%XNT!FF%NET)
+2)		FILXX(<[--RETURNED-DOMAIN-MAIL--].RETRANSMIT>,<[--BAD-RETURNED-MAIL--].RETRANSMIT>,GQUEQM,GQUEH1,FF%XNT!FF%RXM)
+2)		FILXX(<[--UNSENT-DOMAIN-MAIL--].*>,</UNDELIVERABLE-MAIL/.>,GQUEUN,GQUEH0,FF%OML!FF%NEW)
+2)		FILXX(<]--UNSENT-DOMAIN-NEGATIVE-ACK--[.*>,</UNDELIVERABLE-MAIL/.>,GQUEUN,GQUEH0,FF%OML!FF%XNT)
+2)	>;IFN DMLRSW
+2)	
+2)	NFTBL==<.-FILTBL>/%FLLEN
+
+
+LINE 37, PAGE 14
+1)	
+LINE 37, PAGE 13
+2)	IFN NICSW,<
+2)		TIME%			;4 How long has the system been up?
+2)		MOVX B,^D<5*60*1000>	;4 Number of millisecs in five minutes
+2)		CAML A,B		;4 Have we been up five minutes yet?
+2)		IFSKP.			;4
+2)		  SUB B,A		;4 Take the difference 
+2)		  MOVE A,B		;4
+2)		  DISMS%		;4 Wait around
+2)		ENDIF.			;4
+2)	>;IFN NICSW
+2)	
+
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 7
+
+
+
+LINE 3, PAGE 15
+1)		MOVX A,^D<2*60*1000>	;Wait two minutes for the network to stabilize
+1)		DISMS%
+1)	MAILR2:	MOVEI A,.FHSLF		;Set up PSI
+LINE 3, PAGE 14
+2)	IFE NICSW,<
+2)		MOVX A,^D<2*60*1000>	;Wait two minutes for the network to stabilize
+2)		DISMS%
+2)	>
+2)	MAILR2:	MOVEI A,.FHSLF		;Set up PSI
+
+
+LINE 15, PAGE 16
+1)		HRROI B,[ASCIZ/MAILQ:/]
+1)		RCDIR%
+LINE 15, PAGE 15
+2)	IFN MMLRSW,<
+2)		HRROI B,[ASCIZ/MAILQ:/]
+2)	>
+2)	IFN BMLRSW,<
+2)		HRROI B,[ASCIZ/MAILB:/]
+2)	>
+2)	IFN DMLRSW,<
+2)		HRROI B,[ASCIZ/MAILD:/]
+2)	>
+2)		RCDIR%
+
+
+LINE 18, PAGE 17
+1)		      MOVEI B,[ASCIZ/-MMAILR.LOG/]
+1)		      CALL MOVST0
+LINE 18, PAGE 16
+2)	IFN MMLRSW,<
+2)		      MOVEI B,[ASCIZ/-MMAILR.LOG/]
+2)	>
+2)	IFN BMLRSW,<
+2)		      MOVEI B,[ASCIZ/-MMBULK.LOG/]
+2)	>
+2)	IFN DMLRSW,<
+2)		      MOVEI B,[ASCIZ/-DMAILR.LOG/]
+2)	>
+2)		      CALL MOVST0
+
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 8
+
+
+
+LINE 64, PAGE 17
+1)		      MOVEI B,[ASCIZ/-MMAILR.STAT/]
+1)		      CALL MOVST0
+LINE 72, PAGE 16
+2)	IFN MMLRSW,<
+2)		      MOVEI B,[ASCIZ/-MMAILR.STAT/]
+2)	>
+2)	IFN BMLRSW,<
+2)		      MOVEI B,[ASCIZ/-MMBULK.STAT/]
+2)	>
+2)	IFN DMLRSW,<
+2)		      MOVEI B,[ASCIZ/-DMAILR.STAT/]
+2)	>
+2)		      CALL MOVST0
+
+
+LINE 17, PAGE 33
+1)	MAPFLG:	SKIPGE A,MFLAGP		;Have the mailer flags already?
+1)		 RETSKP			;Yes, don't bother
+LINE 17, PAGE 32
+2)	MAPFLG:	
+2)	IFE MMLRSW,<
+2)		RETSKP
+2)	>
+2)		SKIPGE A,MFLAGP		;Have the mailer flags already?
+2)		 RETSKP			;Yes, don't bother
+
+
+LINE 1, PAGE 34
+1)	^L	SUBTTL Host name routines
+1)	
+LINE 1, PAGE 33
+2)	^L	SUBTTL Host table routines
+2)	
+
+
+LINE 20, PAGE 35
+1)		STKVAR <HSTPTR,<HSTTMP,HSTBFL>,<HSTCAN,HSTBFL>>
+1)		HRROI A,HSTTMP		;Make a copy of the host name
+LINE 20, PAGE 34
+2)		STKVAR <HSTADR,HSTPTR,<HSTTMP,HSTBFL>,<HSTCAN,HSTBFL>>
+2)		HRROI A,HSTTMP		;Make a copy of the host name
+
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 9
+
+
+
+LINE 33, PAGE 35
+1)		HRROI A,HSTTMP		;Name to canonicalize
+1)		HRROI B,HSTCAN		;Where to put the name
+1)		CALL MXNAME		;Do the canonicalization
+1)		IFSKP.
+1)		  IFLE. A		;Did we get a relay list?
+1)		    IFE. A		;No, was it indeterminate?
+1)		      HRROI A,HSTTMP	;If so, see if protocols can help
+1)		      HRROI B,HSTCAN	;Canonical name from MXNAME was just a copy
+1)		    ELSE.		;Otherwise we are the relay for this host
+1)		      HRROI A,HSTCAN	;So sniff at that name
+1)		      HRROI B,HSTTMP	;We don't care what protocols say is canonical
+1)		    ENDIF.
+1)		    CALL HSNAME		;Look up the name through protocols
+1)		  ANSKP.
+1)		    JUMPE A,RSKP	;Handle the local name case
+1)		  ENDIF.
+1)		  MOVEI A,HSTCAN	;Make pointer to canonical name
+1)		  HRLI A,(<POINT 7,>)
+1)		ELSE.
+1)		  HRROI A,HSTTMP	;Get the string pointer
+1)		  HRROI B,HSTCAN	;Where to put canonical name
+1)		  CALL HSNAME
+1)		  IFSKP.
+1)		    JUMPE A,RSKP	;Handle the local name case
+1)		    MOVEI A,HSTCAN	;Make pointer to canonical name
+1)		    HRLI A,(<POINT 7,>)
+1)		  ELSE.
+1)		    HRROI A,HSTTMP	;Try for a relay, return canonical name in A
+1)		    CALL $GTRLY
+1)		     RET
+1)		  ENDIF.
+1)		ENDIF.
+LINE 33, PAGE 34
+2)		HRROI A,HSTTMP		;Get the string pointer
+2)		HRROI B,HSTCAN		;Where to put canonical name
+2)		MOVEI C,SNDRTS		;Check all protocols known at this point
+2)		CALL $GTCAN		;Get canonical name, address, and registry
+2)		IFSKP.
+2)		  MOVEM B,HSTADR	;Success, save host address
+2)		  HRROI A,HSTTMP	;Where to store name
+2)		  SETO B,		;Local host address for this protocol
+2)		  CALL $GTNAM		;Canonicalize the name
+2)		  IFSKP.		;Can't fail most places
+2)		    CAME B,HSTADR	;Is this our local host?
+2)		  ANSKP.
+2)		    MOVEI B,LCLNAM	;Yes, return local host name and be done!
+2)		    RETSKP
+2)		  ENDIF.
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 10
+
+
+2)		  MOVEI A,HSTCAN	;Make pointer to canonical name in A
+2)		  HRLI A,(<POINT 7,>)
+2)		ELSE.
+2)		  HRROI A,HSTTMP	;Try for a relay, return canonical name in A
+2)		  CALL $GTRLY
+2)		   RET
+2)		ENDIF.
+
+
+LINE 2, PAGE 36
+1)	; GETPRO - Get host address and find protocol supported by host
+1)	; Accepts:
+1)	;	A/ host name string
+1)	;	C/ pointer to protocol list or -1 to try all supported protocols
+1)	;	CALL GETPRO
+1)	; Returns +1: Failed
+1)	;	  +2: Success, updated pointer in A, host address in B,
+1)	;			protocol address in C
+1)	
+1)	GETPRO:	STKVAR <HSTPTR,HSTPT1,<HSTTMP,HSTBFL>>
+1)		MOVEM A,HSTPTR		;Save host pointer
+1)		HRROI B,HSTTMP		;See if an MX entry for this guy
+1)		CALL MXNAME		;Well, is there?
+1)		IFSKP.
+1)		ANDG. A			;Must have a relay list
+1)		  MOVE A,(A)		;Get CAR of relay list
+1)		  MOVEM A,HSTPT1	;Get name of first relay
+1)		  MOVE B,HSTPTR		;Compare with name user wants
+1)		  STCMP%
+1)		  IFXN. A,SC%SUB	;Is relay name a subset name user wants?
+1)		    ILDB A,B		;Yes, see what follows
+1)		    CAIE A,"."		;Relative domain delimiter?
+1)		  ANSKP.
+1)		    ILDB A,B		;If we have a relative domain, it means the
+1)		    CAIN A,"#"		; relay is really the host itself, so we must
+1)		     SETZ A,		; skip all the MX games
+1)		  ENDIF.
+1)		ANDN. A			;Relay must be different from host
+1)		  MOVE A,HSTPT1		;Get back relay name
+1)		ELSE.
+1)		  MOVE A,HSTPTR		;Get back host pointer
+1)		  SETZM GTDBLK+.GTDRD	;Note no MX in progress in case optional %<host>
+1)		ENDIF.
+1)		CALLRET $GTPRO		;Now do the normal $GTPRO
+1)	
+1)		ENDSV.
+1)	^L
+1)	; HSNAME - Get canonical name and relays for physical host
+1)	; Accepts:
+1)	;	A/ host name string
+1)	;	B/ destination host name string
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 11
+
+
+1)	;	CALL HSNAME
+1)	; Returns +1: Failed
+1)	;	  +2: Success, A/ 0 and B/ LCLNAM if local host, A/ non-zero otherwise
+1)	
+1)	HSNAME:	SAVEAC <C>
+1)		STKVAR <HSTADR,<HSTTMP,HSTBFL>>
+1)		MOVEI C,SNDRTS		;Check all protocols known at this point
+1)		CALL $GTCAN		;Get canonical name, address, and registry
+1)		 RET			;Fails
+1)		MOVEM B,HSTADR		;Success, save host address
+1)		HRROI A,HSTTMP		;Where to store name
+1)		SETO B,			;Local host address for this protocol
+1)		CALL $GTNAM		;Canonicalize the name
+1)		IFSKP.			;Can't fail most places
+1)		  CAME B,HSTADR		;Is this our local host?
+1)		ANSKP.
+1)		  SETZ A,		;Yes, flag as such
+1)		  MOVEI B,LCLNAM	;Return the local name pointer here
+1)		ENDIF.
+1)		RETSKP
+1)	
+1)		ENDSV.
+1)	^L
+1)	; MXNAME - Get canonical name and relays for MX host
+1)	; Accepts:
+1)	;	A/ host name string
+1)	;	B/ destination host name string
+1)	;	CALL MXNAME
+1)	; Returns +1: Failed
+1)	;	  +2: Success, A/ pointer to relay list
+1)	;			  0 if indeterminate, -1 if we are the relay
+1)	
+1)	MXNAME:	SAVEAC <B,C,D>
+1)		STKVAR <DSTPTR,<HSTTMP,HSTBFL>>
+1)		MOVEM B,DSTPTR		;Save destination pointer
+1)		MOVE B,A		;Copy string so we can muck with it
+1)		HRROI A,HSTTMP		;Into HSTTMP
+1)		MOVX C,5*<HSTBFL-1>	;Up to this many characters
+1)		SETZ D,			;Terminate on null
+1)		SOUT%
+1)		 ERJMP R		;Percolate failure up to caller
+1)		JUMPE C,R		;String too long if exhausted
+1)		HRROI A,HSTTMP		;Now remove Internet domain
+1)		HRROI B,[ASCIZ/Internet/]
+1)		CALL $RRDOM
+1)		 RET
+1)		ILDB A,A		;Sniff at first character
+1)		CAIE A,"#"		;Looks like a literal?
+1)		 CAIN A,"["
+1)		  RET			;Yes, can't possibly be MX then!!
+1)		MOVX A,GTDLEN		;Set up length of argument block
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 12
+
+
+1)		MOVEM A,GTDBLK+.GTDLN
+1)		SETZM GTDBLK+.GTDTC	;No special query type/class
+1)		MOVX A,<RLYBFL*5>-1	;Length of relay buffer
+1)		MOVEM A,GTDBLK+.GTDBC	;Save relay buffer length
+1)		SETZM GTDBLK+.GTDNM	;This gets returned
+1)		SETZM GTDBLK+.GTDRD	;So does this
+1)		MOVX A,.GTDMX		;Want MX poop
+1)		HRROI B,HSTTMP		;Source pointer
+1)		HRROI C,RLYBUF		;Destination string buffer
+1)		MOVEI D,GTDBLK		;Argument block
+1)		CALL $GTHST
+1)		 RET
+1)		IFN. A			;Have determinate information?
+1)		  MOVE A,DSTPTR		;Indeterminate, just copy the argument
+1)		  HRROI B,HSTTMP	;As the canonical name
+1)		  SETZ C,
+1)		  SOUT%
+1)		  SETZ A,		;No relay pointer
+1)		ELSE.
+1)		  MOVE A,DSTPTR		;Copy to canonical name
+1)		  MOVE B,GTDBLK+.GTDNM	;Get pointer to canonical string
+1)		  MOVX C,5*<HSTBFL-1>	;Up to this many characters
+1)		  SETZ D,		;Terminate on null
+1)		  SOUT%
+1)		   ERJMP R		;Percolate failure up to caller
+1)		  JUMPE C,R		;String too long if exhausted
+1)		  MOVEI D,GTDBLK+.GTDRD	;Scan relay list
+1)		  DO.
+1)		    SKIPN A,(D)		;Get item from relay list
+1)		     EXIT.
+1)		    HRROI B,LCLNAM	;Compare with local name
+1)		    STCMP%
+1)		    IFE. A		;Handle even the unlikely case
+1)		      SETO A,		;So flag that
+1)		      RETSKP		;And return success
+1)		    ENDIF.
+1)		    IFXN. A,SC%SUB	;Is relay name a subset of our name?
+1)		      ILDB A,B		;Yes, see what follows
+1)		      CAIE A,"."	;Relative domain delimiter?
+1)		    ANSKP.
+1)		      ILDB A,B
+1)		      CAIE A,"#"
+1)		    ANSKP.		;We are the relay to this MX!
+1)		      SETO A,		;So flag that
+1)		      RETSKP		;And return success
+1)		    ENDIF.
+1)		    AOJA D,TOP.		;Else consider next relay
+1)		  ENDDO.
+1)		  MOVEI A,GTDBLK+.GTDRD	;Return pointer to relay list
+1)		ENDIF.
+1)		RETSKP
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 13
+
+
+1)	
+1)		ENDSV.
+1)	^L
+1)	; Make a host a permanent table entry
+LINE 2, PAGE 35
+2)	; Make a host a permanent table entry
+
+
+LINE 36, PAGE 58
+1)		CALL MOVSTR
+LINE 36, PAGE 54
+2)	IFE NICSW,<
+2)		CALL MOVSTR
+
+
+LINE 40, PAGE 58
+1)		DO.
+LINE 41, PAGE 54
+2)	>;IFE NICSW
+2)	IFN NICSW,<
+2)		CALL MOVST0
+2)	>
+2)		DO.
+
+
+LINE 4, PAGE 59
+1)	RESPQN:	SKIPA A,[[ASCIZ/[--RETURNED-MAIL--].NEW-NOTIFY-/]]
+1)	RESPQF:	 MOVEI A,[ASCIZ/[--RETURNED-MAIL--].NEW-FAILURE-/]
+1)		STKVAR <<GTJARG,2>,TMPJFN,RESPQT>
+LINE 4, PAGE 55
+2)	IFN MMLRSW,<
+2)	RESPQN:	SKIPA A,[[ASCIZ/[--RETURNED-MAIL--].NEW-NOTIFY-/]]
+2)	RESPQF:	 MOVEI A,[ASCIZ/[--RETURNED-MAIL--].NEW-FAILURE-/]
+2)	>
+2)	IFN BMLRSW,<
+2)	RESPQN:	SKIPA A,[[ASCIZ/[--RETURNED-BULK-MAIL--].NEW-NOTIFY-/]]
+2)	RESPQF:	 MOVEI A,[ASCIZ/[--RETURNED-BULK-MAIL--].NEW-FAILURE-/]
+2)	>
+2)	IFN DMLRSW,<
+2)	RESPQN:	SKIPA A,[[ASCIZ/[--RETURNED-DOMAIN-MAIL--].NEW-NOTIFY-/]]
+2)	RESPQF:	 MOVEI A,[ASCIZ/[--RETURNED-DOMAIN-MAIL--].NEW-FAILURE-/]
+2)	>
+2)		STKVAR <<GTJARG,2>,TMPJFN,RESPQT>
+
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 14
+
+
+
+LINE 18, PAGE 59
+1)		MOVEI B,[ASCIZ/;P770000/]
+1)		CALL MOVST0
+1)		MOVX A,GJ%NEW!GJ%FOU!GJ%SHT
+LINE 28, PAGE 55
+2)	IFE NICSW,<
+2)		MOVEI B,[ASCIZ/;P770000/]
+2)		CALL MOVST0
+2)	>
+2)		MOVX A,GJ%NEW!GJ%FOU!GJ%SHT
+
+
+LINE 19, PAGE 62
+1)	
+1)	;  Don't transmogrify if the source and destination are on the same network
+1)	; providing that network is a full-connectivity net.  At the present time,
+1)	; only Special is not (or rather is not guaranteed to be such).  This tries
+1)	; to avoid unnecessary transmogrification.
+1)		MOVE A,SRCPTR		;Check source
+1)		HRLI A,(<POINT 7,>)
+1)		SETZM DOMPTR		;Look for relative domain
+1)		DO.
+1)		  ILDB B,A
+1)		  IFN. B
+1)		    CAIN B,"."
+1)		     MOVEM A,DOMPTR
+1)		    LOOP.
+1)		  ENDIF.
+1)		ENDDO.
+1)		ILDB A,DOMPTR		;Now see if it's really relative
+1)		CAIE A,"#"
+1)		IFSKP.
+1)		  MOVE A,DOMPTR		;It is, see if it's a full-connectivity net
+1)		  HRROI B,[ASCIZ/Special/] ;"Special" is the only one that isn't
+1)		  STCMP%
+1)		ANDN. A			;Full-connectivity net?
+1)		  MOVE A,ULTPTR		;Check destination
+1)		  HRLI A,(<POINT 7,>)
+1)		  SETZM ATPTR		;Look for relative domain in destination
+1)		  DO.
+1)		    ILDB B,A
+1)		    IFN. B
+1)		      CAIN B,"."
+1)		       MOVEM A,ATPTR
+1)		      LOOP.
+1)		    ENDIF.
+1)		  ENDDO.
+1)		  ILDB A,ATPTR		;Now see if it's really relative
+1)		  CAIE A,"#"
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 15
+
+
+1)		ANSKP.
+1)		  MOVE A,DOMPTR		;It is, see if it's the same net
+1)		  MOVE B,ATPTR
+1)		  STCMP%
+1)		  JUMPE A,R		;If the same, then no transmogrification
+1)		ENDIF.
+1)	
+1)		SETZM DOMPTR		;See if there is a real domain
+1)		MOVE A,BUFPTR
+1)		DO.
+LINE 19, PAGE 58
+2)		SETZM DOMPTR		;See if there is a real domain
+2)		DO.
+
+
+LINE 74, PAGE 62
+1)		  MOVE A,DOMTBL		;Yes, it one of the pseudo-domains?
+1)		  TBLUK%
+1)		  IFXE. B,TL%EXM	;Found it?
+1)		    SKIPN TRALLP	;No, do we always transmogrify?
+1)		     RET		;No, no transmogrification needed then
+1)		  ELSE.
+1)		    SETZ C,
+1)		    DPB C,DOMPTR	;Remove pseudo-domain
+1)		    MOVE A,DOMPTR	;Pointer to pseudo-domain
+1)		    HRROI B,[ASCIZ/$Internet/]
+1)		    STCMP%		;See if going to Internet
+1)		    JUMPE A,R		;Yes, so don't bother transmogrifying
+1)		  ENDIF.
+1)		ENDIF.
+LINE 30, PAGE 58
+2)		  MOVE A,DOMTBL		;Yes, is the domain relayed to?
+2)		  TBLUK%
+2)		  JXE B,TL%EXM,R	;Not found, go back
+2)		  HRRZ D,(A)		;Yes, get domain block
+2)		  SETZ C,
+2)		  DPB C,DOMPTR		;Remove pseudo-domain
+2)		  MOVE A,DOMPTR		;Pointer to pseudo-domain
+2)		  HRROI B,[ASCIZ/Internet/]
+2)		  STCMP%		;See if going to Internet
+2)		  JUMPE A,R		;Yes, so don't bother transmogrifying
+2)		ENDIF.
+
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 16
+
+
+
+LINE 99, PAGE 62
+1)		HRROI B,[ASCIZ/$Internet/]
+1)		TBLUK%
+LINE 52, PAGE 58
+2)		HRROI B,[ASCIZ/Internet/]
+2)		TBLUK%
+
+
+LINE 111, PAGE 62
+1)		ANSKP.
+1)		  MOVEI B,DM%TRN	;Yes, it is Internet use transmog. string
+1)		  CALL PTHADD		;Put it in the path
+1)		  JRST BLDPTH		;Since Internet, jump directly to build path
+1)		ENDIF.
+LINE 64, PAGE 58
+2)		  IFSKP.
+2)		    MOVEI B,DM%TRN	;Yes, it is Internet use transmog. string
+2)		    CALL PTHADD		;Put it in the path
+2)		    JRST BLDPTH		;Since Internet, jump directly to build path
+2)		  ENDIF.
+2)		ENDIF.
+
+
+LINE 333, PAGE 62
+1)		  CALL GETPRO		;Is it directly connected to us?
+1)		  IFSKP.
+1)		    CAME B,$UKHST	;Do the relay thing if we really don't know
+1)		     RET		;Looks good, return
+1)		  ENDIF.
+1)		  HRRO A,SRCPTR		;Get the host to find relay for
+LINE 287, PAGE 58
+2)		  CALL $GTPRO		;Is it directly connected to us?
+2)		   SKIPA		;NO, do some relaying
+2)		    RET			;YES, return
+2)		  HRRO A,SRCPTR		;Get the host to find relay for
+
+
+LINE 364, PAGE 62
+1)		  CALL GETPRO		;Is it directly connected to us?
+1)		  IFSKP.
+1)		    CAME B,$UKHST	;Do the relay thing if we really don't know
+1)		     RET		;Looks good, return
+1)		  ENDIF.
+1)		  HRRO A,DSTPTR		;Get the host to find relay for
+LINE 316, PAGE 58
+2)		  CALL $GTPRO		;Is it directly connected to us?
+2)		   SKIPA		;NO, do some relaying
+2)		    RET			;YES, return, all done
+2)		  HRRO A,DSTPTR		;Get the host to find relay for
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 17
+
+
+
+
+LINE 42, PAGE 64
+1)	;allow more flexibility in MAILER-RELAY-INFO.TXT.
+1)		    DO.
+LINE 42, PAGE 60
+2)	;allow more flexibility in DOMAINS.TXT.
+2)		    DO.
+
+
+LINE 99, PAGE 64
+1)		    HRRO B,FRNHST	;Get back host pointer
+LINE 99, PAGE 60
+2)	IFN NICSW,<
+2)		    SETO B,		;1 Write current time
+2)		    SETZ C,		;1 Standard format
+2)		    ODTIM%		;1
+2)		    MOVX B," "		;1 And a space
+2)		    BOUT%		;1
+2)		     ERJMP .+1		;1
+2)	>;IFN NICSW
+2)		    HRRO B,FRNHST	;Get back host pointer
+
+
+LINE 18, PAGE 66
+1)		CALL GETPRO		;Try to find a protocol
+1)		 RET			;None
+LINE 18, PAGE 62
+2)		CALL $GTPRO		;Try to find a protocol
+2)		 RET			;None
+
+
+LINE 19, PAGE 73
+1)		    ELSE.
+LINE 19, PAGE 69
+2)	IFN NICSW,< ;huh?
+2)	;1 Also log local stuff to stat file
+2)		      MOVE A,FORKX	;2 Retrieve fork handle
+2)		      CAIE A,1		;2 Is this fork 1?
+2)		      IFSKP.		;2
+2)		        SKIPN A,STAJFN	;2 And do we have a jfn?
+2)		      ANSKP.		;2
+2)			MOVNI B,1	;1 Write current time
+2)			MOVEI C,0	;1 Standard format
+2)			ODTIM%		;1
+2)			MOVX B," "	;1 And a space
+2)			BOUT%		;1
+2)			 ERJMP .+1	;1
+2)			MOVE B,RCPBPT(O);1
+2)			HRRZ C,RCPCNT(O);1
+2)			SOUT%		;1
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 18
+
+
+2)			 ERJMP .+1	;1
+2)			SKIPN MSGFHS(M)	;3 Foreign sender?
+2)			IFSKP.		;3
+2)			  HRROI B,[ASCIZ/-FOREIGN/];3
+2)			  MOVEI C,0	;3
+2)			  SOUT%		;3
+2)			   ERJMP .+1	;3
+2)			ENDIF.		;3
+2)			MOVX B,","	;1 Delimiter
+2)			BOUT%		;1
+2)			ERJMP .+1	;1
+2)			MOVE B,MSGHCN(M);1 Length of headers generated
+2)			ADD B,MSGTCN(M)	;1
+2)			MOVX C,^D10	;1 In decimal
+2)			NOUT%		;1
+2)			 ERJMP .+1	;1
+2)			HRROI B,CRLF0	;1 Finally output CRLF
+2)			SETZ C,		;1
+2)			SOUT%		;1
+2)			ERJMP .+1	;1
+2)		      ENDIF.		;1
+2)	>;IFN NICSW
+2)		    ELSE.
+
+
+LINE 55, PAGE 73
+1)	;;;Maybe some others need adding here?
+LINE 93, PAGE 69
+2)	IFN NICSW,<
+2)	;[NIC373] begin
+2)		CAIE A,IPCFX6		;Send quota exceeded
+2)		 CAIN A,IPCFX7		;Receiver quota exceeded
+2)		   RETSKP
+2)		CAIE A,IPCFX8		;IPCF free space exhausted
+2)		 CAIN A,IPCF13		;PID quota exceeded
+2)		  RETSKP
+2)		CAIN A,IPCF27		;PID is not defined (general purpose in SNDLC$)
+2)		 RETSKP
+2)	;[NIC373] end
+2)	>;IFN NICSW
+2)	;;;Maybe some others need adding here?
+
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 19
+
+
+
+LINE 15, PAGE 81
+1)		CAIE B,"*"		;File address designator?
+LINE 15, PAGE 77
+2)	IFN NICSW,<
+2)		CAIN B,"$"		;[NIC373] $Daemon?
+2)		  JRST SNDLC$		;[NIC373] Yes, do it another way
+2)	>
+2)		CAIE B,"*"		;File address designator?
+
+
+LINE 20, PAGE 81
+1)		    MOVEI A,GJFX33	;Failed, pick a convincing error code
+1)		    RET			;And return
+LINE 24, PAGE 77
+2)	IFE NICSW,< ;[NIC372]
+2)		    MOVEI A,GJFX33	;Failed, pick a convincing error code
+2)	>
+2)		    RET			;And return
+
+
+LINE 49, PAGE 81
+1)		ENDIF.
+1)	;;; The need for two GTJFN% calls is to work around a long-standing monitor
+LINE 55, PAGE 77
+2)	IFE NICSW,< ;[NIC372]
+2)		ENDIF.
+2)	>
+2)	;;; The need for two GTJFN% calls is to work around a long-standing monitor
+
+
+LINE 57, PAGE 81
+1)		IFXN. F,FM%FLO		;OK, output to file?
+LINE 65, PAGE 77
+2)	IFN NICSW,< ;[NIC372]
+2)		ENDIF.
+2)	>
+2)		IFXN. F,FM%FLO		;OK, output to file?
+
+
+LINE 100, PAGE 81
+1)		SKIPN DAEMNP		;Allow enabled wheel to circumvent quota check
+LINE 111, PAGE 77
+2)	REPEAT 0,<	;;;Breaks on CFS systems
+2)		MOVX A,EN%SHR!EN%BLN	;Shared use, no level numbers
+2)		HRR A,LCFJFN		;File JFN
+2)		MOVEM A,ENQBLK+.ENQLV	;Set flags, level, JFN
+2)		DMOVE A,[.ENQAA		;Get the lock, fail if lost
+2)			 ENQBLK]
+2)		ENQ%
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 20
+
+
+2)		IFJER.
+2)		  MOVX A,OPNX9		;Pretend "Invalid simultaneous access"
+2)		  RET
+2)		ENDIF.
+2)	>;REPEAT 0
+2)		SKIPN DAEMNP		;Allow enabled wheel to circumvent quota check
+
+
+LINE 248, PAGE 81
+1)		  MOVE A,LCFJFN		;Get JFN one last time
+LINE 271, PAGE 77
+2)	REPEAT 0,<
+2)		  DMOVE A,[.DEQID	;Get rid of any locks we got
+2)			   REQID]
+2)		  DEQ%
+2)		   ERJMP .+1		;Ignore failure
+2)	>;REPEAT 0
+2)		  MOVE A,LCFJFN		;Get JFN one last time
+
+
+LINE 279, PAGE 81
+1)		MOVE A,LCFJFN		;Get back JFN
+LINE 308, PAGE 77
+2)	REPEAT 0,<
+2)		DMOVE A,[.DEQID		;Get rid of any locks we got
+2)			 REQID]
+2)		DEQ%
+2)		 ERJMP .+1		;Ignore failure
+2)	>;REPEAT 0
+2)		MOVE A,LCFJFN		;Get back JFN
+
+
+LINE 325, PAGE 81
+1)		  HRROI B,[ASCIZ/ on /]	;Tell him where he has new mail
+LINE 360, PAGE 77
+2)	IFE NICSW,<
+2)		  HRROI B,[ASCIZ/ on /]	;Tell him where he has new mail
+
+
+LINE 329, PAGE 81
+1)		  HRROI B,[ASCIZ/]
+LINE 365, PAGE 77
+2)	>;IFE NICSW
+2)		  HRROI B,[ASCIZ/]
+
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 21
+
+
+
+LINE 2, PAGE 82
+1)	; Here to set up for sending mail to a file specification, defaulting the
+LINE 2, PAGE 78
+2)	IFE NICSW,< ;[NIC372]
+2)	; Here to set up for sending mail to a file specification, defaulting the
+
+
+LINE 46, PAGE 82
+1)		    CAIE D,"["		;This is a directory delimiter too
+1)		     CAIN D,"<"		;Found it?
+1)		      SOJA C,ENDLP.	;Yes, no need to default directory
+LINE 47, PAGE 78
+2)		    CAIE D,133		;This is a directory delimiter too 
+2)		     CAIN D,74		;Found it? 
+2)		      SOJA C,ENDLP.	;Yes, no need to default directory
+
+
+LINE 1, PAGE 83
+1)	^L
+LINE 70, PAGE 78
+2)	>;IFE NICSW
+2)	IFN NICSW,< ;[NIC372]
+2)	; Here to set up for sending mail to a file specification, defaulting the
+2)	;  device and directory from the msg file JFN.
+2)	; Entry:   o = adr of recipient buffer
+2)	; Call:    CALL SNLFAD
+2)	; Return:  +1, JSYS failure
+2)	;	   +2, OK, JFN in A, full name in STRBUF
+2)	
+2)	SNLFAD:	STKVAR <<GJTAB,.GJJFN+1>>
+2)		MOVE A,[POINT 7,STRBUF]	;Copy the file name to STRBUF
+2)		DMOVE B,RCPBPT(O)
+2)		IBP B			;Skip the "*"
+2)		DO.
+2)		 SOJLE C,ENDLP.
+2)		 ILDB D,B
+2)		 IDPB D,A
+2)		 LOOP.
+2)		ENDDO.
+2)		SETZ D,
+2)		IDPB D,A
+2)		MOVEM A,.GJDEV+GJTAB	;Set up defaults from queue file
+2)		HRRZ B,MSGJFN(M)
+2)		HRLZI C,100000
+2)		JFNS%
+2)		IBP A
+2)		MOVEM A,.GJDIR+GJTAB
+2)		HRLZI C,010000
+2)		JFNS%
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 22
+
+
+2)		SETZM .GJNAM+GJTAB
+2)		SETZM .GJEXT+GJTAB
+2)		SETZM .GJPRO+GJTAB
+2)		SETZM .GJACT+GJTAB
+2)		MOVE A,[.NULIO,,.NULIO]	;Now try to get the JFN
+2)		MOVEM A,.GJSRC+GJTAB
+2)		MOVX A,GJ%OLD!GJ%DEL!GJ%PHY
+2)		MOVEM A,.GJGEN+GJTAB
+2)		MOVEI A,GJTAB
+2)		HRROI B,STRBUF
+2)		GTJFN%
+2)		IFNSK.
+2)		  HRROI B,STRBUF
+2)		  CAIE A,GJFX18		;No such filename
+2)		  CAIN A,GJFX19		;No such filetype
+2)		  IFSKP.
+2)		    CAIE A,GJFX20	;No such generation number
+2)		    CAIN A,GJFX24	;File not found
+2)		  ANSKP.
+2)		    CAIE A,GJFX32	;No files match this specificatio
+2)		    CAIN A,GJFX38	;File not found because output-only device
+2)		  ANSKP.		;Otherwise random error
+2)		    CIETYP  <  %2W: >	;Log for error msg
+2)		    RET
+2)		  ENDIF.
+2)		  MOVE C,A		;Save error
+2)		  MOVX A,GJ%NEW!GJ%FOU!GJ%DEL!GJ%PHY
+2)		  MOVEM A,.GJGEN+GJTAB
+2)		  MOVEI A,GJTAB
+2)		  GTJFN%
+2)		  IFNSK.
+2)		    HRROI B,STRBUF	;Log name to attach error message to..
+2)		    CIETYP <  %2W: >
+2)		    CAIN A,GJFX27	;Something weird going on?
+2)		     SKIPA A,C		;Yes, then use original error
+2)		      TYPE <Creating...> ;else give indication of when error occured
+2)		    RET
+2)		  ENDIF.
+2)		  MOVE D,A		;Save JFN in case of errors
+2)		  HRLI A,.FBPRT		;Turn on world append access when creating
+2)		  MOVX B,FP%APP		;beats requiring people to have world append
+2)		  MOVX C,FP%APP		;access as default for all their files.
+2)		  CHFDB%
+2)		   ERJMP .+1
+2)		  MOVE A,D		;Get back jfn
+2)		ENDIF.
+2)		MOVE B,A
+2)		HRROI A,STRBUF
+2)		MOVX C,JS%SPC!JS%PRO
+2)		JFNS%
+2)		HRROI A,STRBUF
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 23
+
+
+2)		CIETYP <  %1W: >
+2)		MOVE A,B
+2)		MOVE B,.GJGEN+GJTAB
+2)		TXNE B,GJ%NEW
+2)		  TYPE <Creating...>
+2)		RETSKP
+2)	
+2)		ENDSV.
+2)	>;IFN NICSW
+2)	^L
+
+
+LINE 40, PAGE 84
+1)		MOVE B,A		;Get CHKAC% result in B
+LINE 40, PAGE 79
+2)	IFE NICSW,<  ;[NIC372]
+2)		MOVE B,A		;Get CHKAC% result in B
+
+
+LINE 1, PAGE 85
+1)	^L
+LINE 45, PAGE 79
+2)	>;IFE NICSW
+2)	IFN NICSW,<
+2)		JUMPE A,SNLFC0		;CHKAC% doesn't allow access, check for append
+2)		POP P,A			;Else restore file JFN
+2)		RETSKP			;and won
+2)	>;IFN NICSW
+2)	^L
+2)	IFN NICSW,<
+2)	;[NIC373] begin
+2)	;; SNDLC$: send a wakeup ipcf message to a $daemon receipient.
+2)	;;;!!!!ALWAYS ALWAYS ALWAYS WIN HERE!!!!
+2)	SNDLC$:	SAVEAC <C+1,C+2,C+3>	;Save AC's not clobbered by other SND rtns.
+2)		TMOSET(^D60,SNDL$W)	;Don't let it hang...
+2)		MOVEI A,.IPCIW		;Build packet for INFO in strbuf
+2)		MOVEM A,STRBUF+.IPCI0
+2)		SETZM STRBUF+.IPCI1
+2)		MOVE A,[POINT 7,STRBUF+.IPCI2]	;Copy name of the daemon
+2)		DMOVE B,RCPBPT(O)
+2)		IBP B			;Skip the "$"
+2)		DO.
+2)		  SOJLE C,ENDLP.
+2)		  ILDB D,B
+2)		  IDPB D,A
+2)		  LOOP.
+2)		ENDDO.
+2)		IDPB C,A		;Tie off.
+2)		HRROI B,STRBUF+.IPCI2	;Log it
+2)		CIETYPE <  $%2W: >
+2)		SUBI A,STRBUF-1		;Cons packet pointer
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 24
+
+
+2)		HRLI A,STRBUF
+2)		MOVS C+.IPCFP,A		;Build IPCF block in registers...
+2)		SETZB C+.IPCFL,C+.IPCFR
+2)		SKIPN C+.IPCFS,IP$PID
+2)		  MOVX C+.IPCFL,IP%CPD
+2)		DMOVE A,[.IPCFP+1-.IPCFL
+2)			 C]
+2)		MSEND%
+2)		 JRST SNDL$W
+2)		MOVEM C+.IPCFS,IP$PID	;Save our PID
+2)		MOVE C+.IPCFR,C+.IPCFS
+2)		SETZB C+.IPCFL,C+.IPCFS
+2)		MRECV%
+2)		 JRST SNDL$W
+2)		JXN C+.IPCFL,IP%CFE,SNDL$W	;Win always
+2)		SKIPN C+.IPCFR,STRBUF+.IPCI1
+2)		 JRST SNDL$W
+2)		SETZ C+.IPCFL,
+2)		MOVE C+.IPCFS,IP$PID
+2)		HRLI C+.IPCFP,0		;0 length packet
+2)		DMOVE A,[.IPCFP+1-.IPCFL
+2)			 C]
+2)		MSEND%
+2)		 JRST SNDL$W
+2)	SNDL$W:	AOS (P)			;Won
+2)	SNDL$E:	MOVEI A,IPCF27		;General purpose error code...
+2)	SNDL$X:	TMOCLR
+2)		RET
+2)	;[NIC373] end
+2)	>;IFN NICSW
+2)	^L
+
+
+LINE 35, PAGE 88
+1)	;; A valid forwarding has been found, get it out of the inferior
+LINE 35, PAGE 83
+2)	IFN NICSW,<
+2)	;1 Got a forwarding address. Log it
+2)		SKIPN A,STAJFN		;1
+2)		IFSKP.			;1
+2)		  MOVNI B,1		;1 Write current time
+2)		  MOVEI C,0		;1 Standard format
+2)		  ODTIM%		;1
+2)		  MOVX B," "		;1 And a space
+2)		  BOUT%			;1
+2)		   ERJMP .+1		;1
+2)		  HRROI B,STRBUF	;1 Get back address pointer
+2)		  SETZ C,		;1 Null-terminated
+2)		  SOUT%			;1
+2)		   ERJMP .+1		;1
+2)		  HRROI B,[ASCIZ/,FORWARDED
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 25
+
+
+2)	/]				;1
+2)		  SETZ C,		;1
+2)		  SOUT%			;1
+2)		   ERJMP .+1		;1
+2)		ENDIF.			;1
+2)	>;IFN NICSW
+2)	
+2)	;; A valid forwarding has been found, get it out of the inferior
+
+
+LINE 44, PAGE 88
+1)		MOVEI Y,TMPBUF+300	;Where the expansion was put
+LINE 66, PAGE 83
+2)	IFN NICSW,<
+2)		SKIPN TMPBUF+176	;Is there a -RELAY list for this list
+2)		IFSKP.			;Yes, handle this differently then
+2)		  CALL FWDLST		;Generate a separate queue file
+2)		   SKIPA		;Couldn't, handle here then
+2)		  RET			;Done with this one
+2)		ENDIF.
+2)	>
+2)		MOVEI Y,TMPBUF+300	;Where the expansion was put
+
+
+LINE 1, PAGE 89
+1)	^L
+1)	;;; Skip if this recipient (O) is unique among local recipients
+1)	UNQRCP:	PUSH P,X		;Preserve caller's X
+1)		CALL UNQRCX		;Call worker routine
+1)		 SKIPA			;Non-skip return from worker
+1)		  AOS -1(P)		;Skip return from worker
+1)		POP P,X			;Restore caller's X
+1)		RET
+1)	
+1)	UNQRCX:	MOVEI X,MSGLCL(M)	;Head of local recipient list
+1)		DO.
+1)		  HRRZ X,(X)		;Next local rcpt
+1)		  JUMPE X,RSKP		;It's unique
+1)		  DMOVE A,RCPBPT(O)	;Compare them
+1)		  DMOVE C,RCPBPT(X)
+1)		  CALL STRCLL
+1)		  LOOP.			;Different, try next
+1)		ENDDO.
+1)		RET			;Identical, string not unique
+1)	^L
+1)	;;; Copy a string from the forwarding inferior
+1)	;;; A/ output string
+1)	;;; B/ address in inferior
+1)	FWDCPY:	STKVAR <FWDSTR,FWDADR>
+1)		MOVEM A,FWDSTR		;Save parameters
+1)		MOVEM B,FWDADR
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 26
+
+
+1)		LSH B,-<^D9>		;Get inferior page number
+1)		HRL A,MBXFK
+1)		HRR A,B
+1)		MOVX C,PM%CNT!PM%RD!PM%CPY!2
+1)		CAIN B,777		;Is inferior page page 777?
+1)		 SUBI C,1		;Yes, only map 1 page then
+1)		MOVE B,[.FHSLF,,FWDWIN/1000]
+1)		PMAP%
+1)		MOVE A,FWDSTR
+1)		LDB B,[POINT 9,FWDADR,35]
+1)		ADDI B,FWDWIN
+1)		CALLRET MOVST0
+1)	
+1)		ENDSV.
+1)	^L
+1)	;;; Make a new recipient block from forwarded address
+1)	;;; T/ host,,name
+1)	;;; Returns O/ standard recipient block
+1)	FWDRCP:	PUSH P,T
+1)		MOVEI A,RCPLEN		;Get block for this recipient
+1)		CALL ALCBLK
+1)		 FATAL (Memory exhausted)
+1)		MOVEI O,(B)
+1)		MOVX B,FR%STR
+1)		MOVEM B,RCPFLG(O)	;Initialize flags
+1)		MOVE A,[POINT 7,STRBUF]
+1)		HRRZ B,(P)
+1)		CALL FWDCPY		;Copy string from inferior
+1)		HRROI A,STRBUF
+1)		CIETYP <  %1W>
+1)		CALL CPYSTR		;Get byte pointer and count
+1)		HRLI B,(<POINT 7,0>)
+1)		DMOVEM B,RCPBPT(O)	;Save them
+1)		POP P,T
+1)		HLRZ B,T		;Get host address
+1)		JUMPE B,FWDRC1		;Local
+1)		MOVE A,[POINT 7,HSTBUF]
+1)		CALL FWDCPY		;Copy host name from inferior
+1)		DO.
+1)		  TXNN A,76B4		;Filled to word boundary?
+1)		   EXIT.
+1)		  IDPB D,A		;No, do another null
+1)		  LOOP.
+1)		ENDDO.
+1)		HRROI B,HSTBUF
+1)		ETYPE <@%2W>
+1)		CALL HSTNAM
+1)		 SKIPA
+1)		  RET
+1)		CALL RCPLXH		;Put in error for no such host
+1)	FWDRC1:	MOVEI B,LCLNAM		;And store as local
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 27
+
+
+1)		RET
+1)	^L	SUBTTL Requeue or send failure message for message in M
+1)	
+1)	REMAIL:	JSR SAVACS		;Save all ACs
+1)		STKVAR <RMLJFN>
+1)		TXZ F,FQ%SXX		;Clear flags
+1)		SETZM MSGTMT(M)		;No more timeouts when requeueing
+1)		SKIPE NTDEQF		;Dequeueing file or notifying sender?
+1)		 CALL SERRCP		;Yes, finalize errors
+1)	REMAI0:	SETZM FAIJFN		;Reset output jfn's
+1)		SETZM NTFJFN
+1)		SETZB N,REQJFN		;Do local mail
+1)		TXZ F,FQ%OMF!FQ%MLA!FQ%SDR!FQ%RNM!FQ%XNT!FQ%XER  ;Clear flags
+1)		MOVE A,FILIDX		;a := flags for current queue file type
+1)		MOVE A,%FLFLG(A)
+1)		TXNE A,FF%OML		;Old style?
+1)		 TXO F,FQ%OMF		;Yes
+1)		TXNE A,FF%RNM		;Rename to add RETRANSMIT extension?
+1)		 TXO F,FQ%RNM		;Yes
+1)		TXNE A,FF%XNT		;Suppress non-delivery notifications?
+1)		 TXO F,FQ%XNT		;Yes
+1)		MOVX A,FG%XER		;Discard on error?
+1)		TDNE A,MSGJFN(M)
+1)		 TXO F,FQ%XER		;Yes
+1)	
+1)	;;; I think it's probably all right to allow local mail here, even if not WOPR
+1)		MOVEI O,MSGLCL(M)
+1)		TXZ F,FQ%ALL
+1)		CALL REMALS		;Hack this list
+1)		MOVEI N,MSGRCP(M)
+1)		DO.
+1)		  HRRZ N,(N)
+1)		  JUMPE N,ENDLP.
+1)		  MOVX T,FH%DON		;This host got done?
+1)		  TDNN T,HSTFLG(N)
+1)		   TXOA F,FQ%ALL	;No, output it all
+1)		    TXZ F,FQ%ALL
+1)		  MOVEI O,HSTRCP(N)
+LINE 117, PAGE 83
+2)	
+2)	^L
+2)	IFN NICSW,<
+2)	;;; Create a queue file for a mailing list with a request list
+2)	;;; CALL FWDLST
+2)	;;; Returns +1/ failed
+2)	;;;	    +2/ queue file generated
+2)	FWDLST:	JSR SAVACS		;Save all of the ACs
+2)		MOVE T,M		;Save old message ptr
+2)		MOVEI A,MSGLEN		;Get a new message block
+2)		CALL ALCBLK		;Try to allocate space for it
+2)		 RET			;Forget it then
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 28
+
+
+2)		MOVEI M,(B)		;Ptr to new block
+2)		MOVE A,MSGJFN(T)	;Get original queue file jfn
+2)		MOVEM A,MSGJFN(M)
+2)		MOVEM D,MSGPAG(M)	;Page info
+2)		MOVE A,MSGFHS(T)	;"Net-mail-from-host"
+2)		MOVEM A,MSGFHS(M)
+2)		MOVE A,MSGHDR(T)	;Ptr to start of headers
+2)		MOVEM A,MSGHDR(M)
+2)		MOVE A,MSGHCN(T)	;Count of bytes in headers
+2)		MOVEM A,MSGHCN(M)
+2)		MOVE A,MSGTXT(T)	;Ptr to message text
+2)		MOVEM A,MSGTXT(M)
+2)		MOVE A,MSGTCN(T)	;Count of bytes in text
+2)		MOVEM A,MSGTCN(M)
+2)		SETZM MSGNHD(M)		;Zero local headers
+2)		SETZM MSGRCP(M)		;Zero network recipients
+2)		SETZM MSGLCL(M)		;And local recipients
+2)	;;;Generate message sender string
+2)		MOVEI A,HSTLEN		;Get a new host block
+2)		CALL ALCBLK		;Try to allocate space for it
+2)		 JRST FWDLS1		;Forget it then
+2)		MOVEI N,(B)		;Get just its address
+2)		MOVEM N,MSGSDR(M)	;Save ptr to host block
+2)		HRROI A,LCLNAM		;Add in host name
+2)		CALL CPYSTR		;Make a copy of it
+2)		MOVEM B,HSTHST(N)	;And save it
+2)		MOVEI A,RCPLEN		;Get a recipient block
+2)		CALL ALCBLK		;Try to allocate it
+2)		 JRST FWDLS1		;Bad
+2)		MOVEI O,(B)		;Address again
+2)		MOVEM O,HSTRCP(N)	;Stuff into here
+2)		MOVE A,[POINT 7,STRBF1] ;Copy to here
+2)		MOVE B,[POINT 7,STRBUF] ;From here
+2)		CALL MOVSTR
+2)		HRROI B,[ASCIZ/-RELAY/] ;Make the correct name
+2)		CALL MOVST0		;Copy string
+2)		HRROI A,STRBF1		;Get ptr to full string
+2)		CALL CPYSTR		;Make a new copy
+2)		HRLI B,(<POINT 7,0>)	;Make byte ptr
+2)		DMOVEM B,RCPBPT(O)	;Save bp and count
+2)		SETZM RCPFLG(O)		;Zero flags
+2)		MOVE A,MSGWRT(T)	;Time message was queued
+2)		MOVEM A,MSGWRT(M)
+2)		MOVE A,MSGAFT(T)	;Time to start delivery
+2)		MOVEM A,MSGAFT(M)
+2)		GTAD%
+2)		PUSH P,A
+2)		ADD A,BMNTFY
+2)		MOVEM A,MSGNTF(M)	;Time to mention delivery status
+2)		POP P,A
+2)		ADD A,BMDEQ
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 29
+
+
+2)		MOVEM A,MSGDEQ(M)	;Time to dequeue message
+2)		SETZM MSGTMT(M)		;Zero time limit
+2)		MOVE A,MSGDOP(T)	;Get delivery options
+2)		MOVEM MSGDOP(M)
+2)		SETZM MSGRPT(M)		;Zero return-path
+2)	;;;Process recipients
+2)		PUSH P,T		;Save old message ptr on the stack
+2)		MOVEI X,MSGLCL(M)	;Ptr to local mail
+2)		HRRZ O,(X)		;Current message ptr in O, prev. in X
+2)		MOVEI Y,TMPBUF+300	;Get data of expansion
+2)		DO.
+2)		  SKIPN T,(Y)		;End of the expansion
+2)		   EXIT.		;Leave
+2)		  PUSH P,O		;Save next address
+2)		  CALL FWDRCP		;Make a recipient block
+2)		  CAIN B,LCLNAM		;Local host?
+2)		  IFSKP.
+2)		     CALL ADDRCP	;No, add it in
+2)		  ELSE.
+2)		    CALL UNQRCP		;Is it unique on our current list
+2)		    IFNSK.
+2)		      CALL FREDUP	;No, free it up
+2)		      POP P,O		;Leave O and X the same
+2)		      AOJA Y,TOP.	;Check next entry
+2)		    ENDIF.
+2)		    EXCH M,-1(P)	;Get ptr to original list
+2)		    CALL UNQRCP		;Is it unique on this list
+2)		    IFNSK.
+2)		      CALL FREDUP	;Free it up
+2)		      EXCH M,-1(P)	;Get ptr to current message back
+2)		      POP P,O		;Leave O and X the same
+2)		      AOJA Y,TOP.	;Check next entry
+2)		    ENDIF.
+2)		    EXCH M,-1(P)	;Get this message ptr back
+2)		    HRRM O,(X)		;Yes, link to previous address
+2)		    HRRZ X,O		;Make it previous address
+2)		  ENDIF.
+2)		  POP P,O		;Get back next address
+2)		  HRRM O,(X)		;Set as next on list
+2)		  AOJA Y,TOP.		;Try for rest of recipient
+2)		ENDDO.
+2)		ADJSP P,-1		;Remove old message ptr from stack
+2)	;;;Now output the queue file
+2)		PUSH P,NTDEQF		;Save this
+2)		SETZM NTDEQF		;Zero for now
+2)		SETZM FAIJFN		;No failure file
+2)		SETZM NTFJFN		;No notify file
+2)		SETZB N,REQJFN
+2)		PUSH P,F		;Save the flags
+2)		TXO F,FQ%ALL		;Do everything
+2)		MOVEI O,MSGLCL(M)	;Do locals first
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 30
+
+
+2)		CALL REMALS		;Output them
+2)		MOVEI N,MSGRCP(M)	;Then do network guys
+2)		DO.
+2)		  HRRZ N,(N)
+2)		  JUMPE N,ENDLP.
+2)		  MOVEI O,HSTRCP(N)
+
+
+LINE 41, PAGE 93
+1)		SKIPN NTFJFN		;Sender notification?
+1)		 SKIPE FAIJFN		;Or failure file?
+1)		IFNSK.
+1)		  CALL GENHDL		;Build local headers
+1)		  SKIPN A,FAIJFN	;Failure file?
+1)		  IFSKP.
+1)		    MOVEI B,OUTMSG	;Routine to output headers/text
+1)		    CALL REMHTX		;Do it with punctuation
+1)		    TXNN F,FQ%SXX	;Processing rerouted failure msg?
+1)		     TXNN F,FQ%SDR	;No, fail on sender?
+1)		    IFSKP.
+1)		      IFXE. F,FQ%MLA	;Also fail on mail agent?
+1)			TXO F,FQ%SXX	;Divert failure msg to mail agent
+1)			DELF%		;Delete current reply file
+1)			 JFATAL
+1)			CLOSF%		;Close it
+1)			 JFATAL
+1)			SKIPN A,REQJFN	;Also requeue file?
+1)			IFSKP.
+1)			  CLOSF%	;Yes, close it
+1)			   JFATAL
+1)			  SETZM REQJFN
+1)			ENDIF.
+1)			SKIPN A,NTFJFN	;Also notification file?
+1)			IFSKP.
+1)			  DELF%		;Delete it
+1)			   JFATAL
+1)			  CLOSF%	;And close it
+1)			   JFATAL
+1)			  SETZM NTFJFN
+1)			ENDIF.
+1)			JRST REMAI0
+1)		      ENDIF.
+1)		      TXO A,CO%NRJ	;Close fail msg file and keep JFN
+1)		      CLOSF%
+1)		       JFATAL
+1)		      MOVEI A,0(A)	;Now rename the file to "bad mail"
+1)		      CALL RENBAX
+1)		    ELSE.
+1)		      CLOSF%		;Close out failure file
+1)		       JFATAL
+1)		      SKIPN NTFJFN	;Only set flags once
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 31
+
+
+1)		       SKIPE REQJFN
+1)			SKIPA
+1)			 CALL MAIFLG
+1)		    ENDIF.
+1)		  ENDIF.
+1)		  SKIPN A,NTFJFN	;Notification file pending?
+1)		  IFSKP.
+1)		    MOVEI B,OUTMSH	;Routine to output headers and no text
+1)		    CALL REMHTX		;Do it with punctuation
+1)		    CLOSF%		;Close out notification file
+1)		     JFATAL
+1)		    SKIPN REQJFN	;Only set flags once
+1)		     CALL MAIFLG
+1)		  ENDIF.
+1)		ENDIF.
+1)		SKIPN A,REQJFN		;Have a requeue file?
+1)		 RET			;No, all done
+1)		MOVEI B,.CHFFD		;No, must end addressee specs
+1)		BOUT%
+LINE 123, PAGE 84
+2)		POP P,F			;Restore flags
+2)		POP P,NTDEQF		;And dequeue flag
+2)		MOVE A,REQJFN		;Get output file
+2)		MOVEI B,.CHFFD		;output this
+2)		BOUT%
+
+
+LINE 105, PAGE 93
+1)		DMOVE B,MSGHDR(M)	;Finish off file
+LINE 131, PAGE 84
+2)		CALL GENHDL		;Create the headers and text
+2)		MOVE A,REQJFN
+2)		CALL OUTMSG		;Output them
+2)		 JRST FWDLS1		;Free up space
+2)		MOVE A,REQJFN		;Get output file
+2)		TXO A,CO%NRJ		;Close file, preserve JFN
+2)		CLOSF%
+2)		 JFATAL
+2)		MOVE A,MSGJFN(M)	;Get original queue file jfn
+2)		HRLI A,.GFLWR		;Save last file writer
+2)		HRROI B,STRBUF
+2)		GFUST%
+2)		 ERJMP .+1
+2)		HRROI A,STRBF1		;Create new file name
+2)	IFE BULKSW,<
+2)		MOVE B,MSGJFN(M)	;Original queue file jfn
+2)		MOVX C,JS%DEV!JS%DIR!JS%PAF
+2)		JFNS%
+2)		MOVEI B,[ASCIZ/[--QUEUED-MAIL--].NEW-EXPLODE-/]  
+2)	>
+2)	IFN BULKSW,<
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 32
+
+
+2)		HRLI A,(<POINT 7,0>)
+2)		MOVEI B,[ASCIZ/MAILB:[--QUEUED-BULK-MAIL--].NEW-EXPLODE-/]
+2)	>
+2)		CALL MOVSTR
+2)		PUSH P,A	
+2)		GTAD%		
+2)		MOVE B,A	
+2)		POP P,A		
+2)		MOVEI C,^D8	
+2)		NOUT%		
+2)		  JFCL
+2)		DO.
+2)		  MOVX A,GJ%NEW!GJ%FOU!GJ%ACC!GJ%SHT
+2)		  HRROI B,STRBF1	;Get a new jfn
+2)		  GTJFN%
+2)		  IFJER.
+2)		    CAIE A,GJFX24	;monitor bug
+2)		     JWARN (Cannot get EXPLODE file)
+2)		    MOVEI A,^D5000	;wait 5 seconds
+2)		    DISMS%
+2)		    LOOP.
+2)		  ENDIF.
+2)		ENDDO.
+2)		MOVEI B,MSGWRT(M)	;Set file write date
+2)		MOVEI C,1
+2)		SFTAD%
+2)		 ERJMP .+1
+2)		HRROI B,STRBUF		;Set last writer
+2)		CALL .SFUST
+2)		HRRZ B,A		;JFN of name we wil rename to
+2)		MOVE A,REQJFN		;Get queue file jfn
+2)		CALL RNMFIL		;Rename it
+2)		IFNSK.
+2)		  JWARN (Unable to rename to EXPLODE file)
+2)		  MOVE A,B		;Flush new jfn we just made
+2)		  RLJFN%		;Release it
+2)		    JWARN (Unable to release JFN on EXPLODE file) ;[
+2)		  JRST FWDLS1		;Free up space
+2)		ENDIF.
+2)		MOVE A,B		;[NIC370]
+2)		RLJFN%			;[NIC370]
+2)		  JWARN (Unable to release JFN on EXPLODE file)
+2)		CALL MAIFLG		;Set flags
+2)		AOS (P)			;Make skip return
+2)	FWDLS1:	HRRZ B,MSGNHD(M)	;Are there any headers allocated?
+2)		SKIPE B
+2)		 CALL FREBLK
+2)		SKIPE N,MSGRCP(M)	;Any network recipients?
+2)		 CALL RELQHS		;Yes, release the list buffers
+2)		SKIPE O,MSGLCL(M)	;Local recipients?
+2)		 CALL RELQLS		;Yes, release them
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 33
+
+
+2)		SKIPE N,MSGSDR(M)	;Any "sender" specification?
+2)		 CALL RELQHS		;Yes, release it
+2)		MOVEI B,(M)		;Release the message block itself
+2)		CALL FREBLK
+2)		RET
+2)	>;IFN NICSW
+2)	^L
+2)	;;; Skip if this recipient (O) is unique among local recipients
+2)	UNQRCP:	PUSH P,X		;Preserve caller's X
+2)		CALL UNQRCX		;Call worker routine
+2)		 SKIPA			;Non-skip return from worker
+2)		  AOS -1(P)		;Skip return from worker
+2)		POP P,X			;Restore caller's X
+2)		RET
+2)	
+2)	UNQRCX:	MOVEI X,MSGLCL(M)	;Head of local recipient list
+2)		DO.
+2)		  HRRZ X,(X)		;Next local rcpt
+2)		  JUMPE X,RSKP		;It's unique
+2)		  DMOVE A,RCPBPT(O)	;Compare them
+2)		  DMOVE C,RCPBPT(X)
+2)		  CALL STRCLL
+2)		  LOOP.			;Different, try next
+2)		ENDDO.
+2)		RET			;Identical, string not unique
+2)	^L
+2)	;;; Copy a string from the forwarding inferior
+2)	;;; A/ output string
+2)	;;; B/ address in inferior
+2)	FWDCPY:	STKVAR <FWDSTR,FWDADR>
+2)		MOVEM A,FWDSTR		;Save parameters
+2)		MOVEM B,FWDADR
+2)		LSH B,-<^D9>		;Get inferior page number
+2)		HRL A,MBXFK
+2)		HRR A,B
+2)		MOVX C,PM%CNT!PM%RD!PM%CPY!2
+2)		CAIN B,777		;Is inferior page page 777?
+2)		 SUBI C,1		;Yes, only map 1 page then
+2)		MOVE B,[.FHSLF,,FWDWIN/1000]
+2)		PMAP%
+2)		MOVE A,FWDSTR
+2)		LDB B,[POINT 9,FWDADR,35]
+2)		ADDI B,FWDWIN
+2)		CALLRET MOVST0
+2)	
+2)		ENDSV.
+2)	^L
+2)	;;; Make a new recipient block from forwarded address
+2)	;;; T/ host,,name
+2)	;;; Returns O/ standard recipient block
+2)	FWDRCP:	PUSH P,T
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 34
+
+
+2)		MOVEI A,RCPLEN		;Get block for this recipient
+2)		CALL ALCBLK
+2)		 FATAL (Memory exhausted)
+2)		MOVEI O,(B)
+2)		MOVX B,FR%STR
+2)		MOVEM B,RCPFLG(O)	;Initialize flags
+2)		MOVE A,[POINT 7,STRBUF]
+2)		HRRZ B,(P)
+2)		CALL FWDCPY		;Copy string from inferior
+2)		HRROI A,STRBUF
+2)		CIETYP <  %1W>
+2)		CALL CPYSTR		;Get byte pointer and count
+2)		HRLI B,(<POINT 7,0>)
+2)		DMOVEM B,RCPBPT(O)	;Save them
+2)		POP P,T
+2)		HLRZ B,T		;Get host address
+2)		JUMPE B,FWDRC1		;Local
+2)		MOVE A,[POINT 7,HSTBUF]
+2)		CALL FWDCPY		;Copy host name from inferior
+2)		DO.
+2)		  TXNN A,76B4		;Filled to word boundary?
+2)		   EXIT.
+2)		  IDPB D,A		;No, do another null
+2)		  LOOP.
+2)		ENDDO.
+2)		HRROI B,HSTBUF
+2)		ETYPE <@%2W>
+2)		CALL HSTNAM
+2)		 SKIPA
+2)		  RET
+2)		CALL RCPLXH		;Put in error for no such host
+2)	IFN NICSW,<
+2)	;[NIC371] CALL RCPLXH		;Put in error for no such host
+2)	;[NIC371] begin kludge hack
+2)		CALL SNLERR		;kludge: send off an error message
+2)		HRRZ B,RCPBPT(O)	;get address of recipient 
+2)		CALL FREBLK		;get rid of it
+2)		HRROI A,BITBUK		;new recipient
+2)		CALL CPYSTR		;Get byte pointer and count
+2)		HRLI B,(<POINT 7,0>)
+2)		DMOVEM B,RCPBPT(O)	;Save them
+2)	;[NIC371] end
+2)	>
+2)	FWDRC1:	MOVEI B,LCLNAM		;And store as local
+2)		RET
+2)	IFN NICSW,<
+2)	;[NIC371] begin 
+2)	;Send an error message about a bad host name in a -RELAY type mailing list.
+2)	;Recipient is at RCPBPT(O), bad host name is in HSTBUF.
+2)	;Warning:  This is a hack.
+2)	SNLERR:	PUSH P,1
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 35
+
+
+2)		PUSH P,2
+2)		PUSH P,3
+2)		PUSH P,4
+2)		PUSH P,5
+2)	;GET POINTER TO LIST NAME IN AC5
+2)	
+2)		MOVE 1,MSGSDR(M)	;ADDRESS OF SENDER BLOCK
+2)		MOVE 1,HSTRCP(1)	;ADDRESS OF RECIPIENT BLOCK
+2)		MOVE 5,RCPBPT(1)	;ADDRESS OF SENDER
+2)		HRLI 5,440700
+2)	
+2)	;more gross kludge code here. please don't ask.
+2)		push p,1
+2)		move 2,5
+2)		movei 3,^d80
+2)	frelL:	ildb 1,2
+2)		jumpe 1,frelF
+2)		sojle 3,frelF
+2)		caie 1,"-"
+2)		 jrst frelL
+2)		ildb 1,2
+2)		jumpe 1,frelF
+2)		sojle 3,frelF
+2)		caie 1,"R"
+2)		 cain 1,"r"
+2)		  jrst frelT
+2)		jrst frelL
+2)	
+2)	frelF:	move 5,[440700,,mlagnt]
+2)	frelT:	pop p,1
+2)	
+2)		MOVX 1,GJ%SHT!GJ%NEW!GJ%FOU
+2)		HRROI 2,[ASCIZ /MAILQ:[--QUEUED-MAIL--].NEW-RELAY-ERROR/]
+2)		GTJFN%
+2)		 ERJMP SNLERX		;lose -- forget it
+2)		MOVE 4,1
+2)		MOVE 2,[FLD(7,OF%BSZ)!OF%WR]
+2)		OPENF%
+2)		 ERJMP [MOVE 1,4
+2)			RLJFN%
+2)			 JFCL
+2)			JRST SNLERX]
+2)		HRROI 2,[ASCIZ /^L_/]
+2)		SETZ 3,
+2)		SOUT%
+2)		HRROI 2,LCLNAM
+2)		SOUT%
+2)		HRROI 2,[ASCIZ /
+2)	Mailer
+2)	^L/]
+2)		SOUT%
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 36
+
+
+2)		HRROI 2,LCLNAM
+2)		SOUT%
+2)		HRROI 2,[ASCIZ /
+2)	Mailer
+2)	/]
+2)		SOUT%
+2)		MOVE 2,5		;LIST NAME
+2)		SOUT%
+2)		HRROI 2,[ASCIZ /
+2)	^L
+2)	Date: /]
+2)		SOUT%
+2)		SETO B,			;Now
+2)		MOVX C,OT%DAY!OT%SPA!OT%TMZ!OT%SCL!OT%822 ;RFC 822 standard date/time
+2)		ODTIM%
+2)		HRROI 2,[ASCIZ /
+2)	From: The Mail System <MAILER@/]	
+2)		SETZ 3,
+2)		SOUT%	
+2)		HRROI 2,LCLNAM
+2)		SOUT%
+2)		HRROI 2,[ASCIZ />
+2)	To: List Maintainer </]	
+2)		SOUT%
+2)		MOVE 2,5		;LIST NAME
+2)		SOUT%
+2)		HRROI 2,[ASCIZ /@/]
+2)		SOUT%
+2)		HRROI 2,LCLNAM
+2)		SOUT%
+2)		HRROI 2,[ASCIZ />
+2)	Subject:  Error in mailing list
+2)	
+2)	There is an unknown hostname in the "/]
+2)		SOUT%
+2)		MOVE 2,5		;LIST NAME
+2)		SOUT%
+2)	 	HRROI 2,[ASCIZ /" mailing list.
+2)	The incorrect entry is for:  "/]
+2)		SOUT%
+2)		HRRO B,RCPBPT(O)	;get address of recipient 
+2)		SOUT%
+2)		HRROI 2,[ASCIZ /@/]
+2)		SOUT%
+2)		HRROI 2,HSTBUF		;host name
+2)		SOUT%
+2)		HRROI 2,[ASCIZ /"
+2)	
+2)	Please fix it,
+2)	Thanks.
+2)	-------
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 37
+
+
+2)	/]
+2)		SOUT%
+2)		CLOSF%
+2)		 JFCL
+2)	SNLERX:	POP P,5
+2)		POP P,4
+2)		POP P,3
+2)		POP P,2
+2)		POP P,1
+2)		RET
+2)	;[NIC371] end
+2)	>;IFN NICSW
+2)	
+2)	^L	SUBTTL Requeue or send failure message for message in M
+2)	
+2)	REMAIL:	JSR SAVACS		;Save all ACs
+2)		STKVAR <RMLJFN>
+2)		TXZ F,FQ%SXX		;Clear flags
+2)		SETZM MSGTMT(M)		;No more timeouts when requeueing
+2)		SKIPE NTDEQF		;Dequeueing file or notifying sender?
+2)		 CALL SERRCP		;Yes, finalize errors
+2)	REMAI0:	SETZM FAIJFN		;Reset output jfn's
+2)		SETZM NTFJFN
+2)		SETZB N,REQJFN		;Do local mail
+2)		TXZ F,FQ%OMF!FQ%MLA!FQ%SDR!FQ%RNM!FQ%XNT!FQ%XER  ;Clear flags
+2)		MOVE A,FILIDX		;a := flags for current queue file type
+2)		MOVE A,%FLFLG(A)
+2)		TXNE A,FF%OML		;Old style?
+2)		 TXO F,FQ%OMF		;Yes
+2)		TXNE A,FF%RNM		;Rename to add RETRANSMIT extension?
+2)		 TXO F,FQ%RNM		;Yes
+2)		TXNE A,FF%XNT		;Suppress non-delivery notifications?
+2)		 TXO F,FQ%XNT		;Yes
+2)		MOVX A,FG%XER		;Discard on error?
+2)		TDNE A,MSGJFN(M)
+2)		 TXO F,FQ%XER		;Yes
+2)	
+2)	;;; I think it's probably all right to allow local mail here, even if not WOPR
+2)		MOVEI O,MSGLCL(M)
+2)		TXZ F,FQ%ALL
+2)		CALL REMALS		;Hack this list
+2)		MOVEI N,MSGRCP(M)
+2)		DO.
+2)		  HRRZ N,(N)
+2)		  JUMPE N,ENDLP.
+2)		  MOVX T,FH%DON		;This host got done?
+2)		  TDNN T,HSTFLG(N)
+2)		   TXOA F,FQ%ALL	;No, output it all
+2)		    TXZ F,FQ%ALL
+2)		  MOVEI O,HSTRCP(N)
+2)		  CALL REMALS
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 38
+
+
+2)		  LOOP.
+2)		ENDDO.
+2)		SKIPN NTFJFN		;Sender notification?
+2)		 SKIPE FAIJFN		;Or failure file?
+2)		IFNSK.
+2)		  CALL GENHDL		;Build local headers
+2)		  SKIPN A,FAIJFN	;Failure file?
+2)		  IFSKP.
+2)		    MOVEI B,OUTMSG	;Routine to output headers/text
+2)		    CALL REMHTX		;Do it with punctuation
+2)		    TXNN F,FQ%SXX	;Processing rerouted failure msg?
+2)		     TXNN F,FQ%SDR	;No, fail on sender?
+2)		    IFSKP.
+2)		      IFXE. F,FQ%MLA	;Also fail on mail agent?
+2)			TXO F,FQ%SXX	;Divert failure msg to mail agent
+2)			DELF%		;Delete current reply file
+2)			 JFATAL
+2)			CLOSF%		;Close it
+2)			 JFATAL
+2)			SKIPN A,REQJFN	;Also requeue file?
+2)			IFSKP.
+2)			  CLOSF%	;Yes, close it
+2)			   JFATAL
+2)			  SETZM REQJFN
+2)			ENDIF.
+2)			SKIPN A,NTFJFN	;Also notification file?
+2)			IFSKP.
+2)			  DELF%		;Delete it
+2)			   JFATAL
+2)			  CLOSF%	;And close it
+2)			   JFATAL
+2)			  SETZM NTFJFN
+2)			ENDIF.
+2)			JRST REMAI0
+2)		      ENDIF.
+2)		      TXO A,CO%NRJ	;Close fail msg file and keep JFN
+2)		      CLOSF%
+2)		       JFATAL
+2)		      MOVEI A,0(A)	;Now rename the file to "bad mail"
+2)		      CALL RENBAX
+2)		    ELSE.
+2)		      CLOSF%		;Close out failure file
+2)		       JFATAL
+2)		      SKIPN NTFJFN	;Only set flags once
+2)		       SKIPE REQJFN
+2)			SKIPA
+2)			 CALL MAIFLG
+2)		    ENDIF.
+2)		  ENDIF.
+2)		  SKIPN A,NTFJFN	;Notification file pending?
+2)		  IFSKP.
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 39
+
+
+2)		    MOVEI B,OUTMSH	;Routine to output headers and no text
+2)		    CALL REMHTX		;Do it with punctuation
+2)		    CLOSF%		;Close out notification file
+2)		     JFATAL
+2)		    SKIPN REQJFN	;Only set flags once
+2)		     CALL MAIFLG
+2)		  ENDIF.
+2)		ENDIF.
+2)		SKIPN A,REQJFN		;Have a requeue file?
+2)		 RET			;No, all done
+2)		MOVEI B,.CHFFD		;No, must end addressee specs
+2)		BOUT%
+2)		HRROI B,CRLF0
+2)		SETZ C,
+2)		SOUT%
+2)		DMOVE B,MSGHDR(M)	;Finish off file
+
+
+LINE 128, PAGE 93
+1)		     SKIPA B,[[ASCIZ/[--QUEUED-MAIL--]/]]
+1)		      MOVEI B,[ASCIZ/[--RETURNED-MAIL--]/]
+1)		  CALL MOVSTR
+LINE 128, PAGE 91
+2)	IFN MMLRSW,<
+2)		     SKIPA B,[[ASCIZ/[--QUEUED-MAIL--]/]]
+2)		      MOVEI B,[ASCIZ/[--RETURNED-MAIL--]/]
+2)	>
+2)	IFN BMLRSW,<
+2)		     SKIPA B,[[ASCIZ/[--QUEUED-BULK-MAIL--]/]]
+2)		      MOVEI B,[ASCIZ/[--RETURNED-BULK-MAIL--]/]
+2)	>
+2)	IFN DMLRSW,<
+2)		     SKIPA B,[[ASCIZ/[--QUEUED-DOMAIN-MAIL--]/]]
+2)		      MOVEI B,[ASCIZ/[--RETURNED-DOMAIN-MAIL--]/]
+2)	>
+2)		  CALL MOVSTR
+
+
+LINE 136, PAGE 93
+1)		   SKIPA B,[[ASCIZ/.NETWORK;P770000/]] ;No, use alternate name
+1)		    MOVEI B,[ASCIZ/.RETRANSMIT;P770000/] ;Yes, use standard name
+1)		  CALL MOVST0
+LINE 146, PAGE 91
+2)	IFE NICSW,<
+2)		   SKIPA B,[[ASCIZ/.NETWORK;P770000/]] ;No, use alternate name
+2)		    MOVEI B,[ASCIZ/.RETRANSMIT;P770000/] ;Yes, use standard name
+2)	>
+2)	IFN NICSW,<
+2)		   SKIPA B,[[ASCIZ/.NETWORK/]] ;No, use alternate name
+2)		    MOVEI B,[ASCIZ/.RETRANSMIT/] ;Yes, use standard name
+2)	>
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 40
+
+
+2)		  CALL MOVST0
+
+
+LINE 6, PAGE 102
+1)	INTSND:	CAMN C,$UKHST		;Unknown host address?
+1)		 JRST ADEADH		;Yes, fail right away
+1)		STKVAR <INTDST,INTADR,INTTRY,INTERR,DSTHPT>
+LINE 6, PAGE 100
+2)	INTSND:
+2)	IFN DMLRSW,<
+2)		JUMPE C,R		;temp error if zero host number
+2)	>
+2)		STKVAR <INTDST,INTADR,INTTRY,INTERR,DSTHPT>
+
+
+LINE 68, PAGE 109
+1)		  SKIPN GTDBLK+.GTDRD	;Doing MX?
+1)		  IFSKP.
+1)		    MOVX B,"%"		;Yes, shove in relay poop
+1)		    BOUT%		;Probably this should have been done better
+1)		    HRRO B,FRNHST
+1)		    CALL OUTAHS
+1)		  ENDIF.
+1)		  SETZ B,		;Mark EOS
+LINE 68, PAGE 107
+2)		  SETZ B,		;Mark EOS
+
+
+LINE 60, PAGE 121
+1)		    SKIPN GTDBLK+.GTDRD	;Doing MX?
+1)		    IFSKP.
+1)		      MOVX B,"%"	;Yes, shove in relay poop
+1)		      BOUT%		;Probably this should have been done better
+1)		      HRRO B,FRNHST
+1)		      CALL OUTAHS
+1)		    ENDIF.
+1)		    MOVEI B,":"		;Colon
+LINE 60, PAGE 119
+2)		    MOVEI B,":"		;Colon
+
+
+LINE 204, PAGE 121
+1)		  SKIPN GTDBLK+.GTDRD	;Doing MX?
+1)		  IFSKP.
+1)		    MOVX B,"%"		;Yes, shove in relay poop
+1)		    BOUT%		;Probably this should have been done better
+1)		    HRRO B,FRNHST
+1)		    CALL OUTAHS
+1)		  ENDIF.
+1)		  MOVEI B,[ASCIZ/))/]	;End this property entry
+LINE 197, PAGE 119
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 41
+
+
+2)		  MOVEI B,[ASCIZ/))/]	;End this property entry
+
+
+LINE 110, PAGE 129
+1)		  SKIPN GTDBLK+.GTDRD	;Doing MX?
+1)		  IFSKP.
+1)		    MOVX B,"%"		;Yes, shove in relay poop
+1)		    BOUT%		;Probably this should have been done better
+1)		    HRRO B,FRNHST
+1)		    CALL OUTAHS
+1)		  ENDIF.
+1)		  HRROI B,CRLF0		;Newline
+LINE 110, PAGE 127
+2)		  HRROI B,CRLF0		;Newline
+
+
+LINE 26, PAGE 139
+1)		TMSG <MMailr (>
+1)		MOVE A,FORKX		;Output fork number
+LINE 26, PAGE 137
+2)	IFN MMLRSW,<
+2)		TMSG <MMailr (>
+2)	>
+2)	IFN BMLRSW,<
+2)		TMSG <MMbulk (>
+2)	>
+2)	IFN DMLRSW,<
+2)		TMSG <DMailr (>
+2)	>
+2)		MOVE A,FORKX		;Output fork number
+
+
+LINE 33, PAGE 141
+1)		HRROI B,[ASCIZ/MAIL:MMAILR-CRASH-DUMP.EXE;P770000/]
+1)		GTJFN%
+LINE 33, PAGE 139
+2)	IFN MMLRSW,<
+2)		HRROI B,[ASCIZ/MAIL:MMAILR-CRASH-DUMP.EXE;P770000/]
+2)	>
+2)	IFN BMLRSW,<
+2)		HRROI B,[ASCIZ/MAIL:MMBULK-CRASH-DUMP.EXE;P770000/]
+2)	>
+2)	IFN DMLRSW,<
+2)		HRROI B,[ASCIZ/MAIL:DMAILR-CRASH-DUMP.EXE;P770000/]
+2)	>
+2)		GTJFN%
+
+
+; MMAILR.MAC.1 & <MM-NEW>MMAILR.MAC.444 18-Apr-88 1322	PAGE 42
+
+
+
+LINE 63, PAGE 141
+1)		HRROI B,[ASCIZ/SYS:MMAILR.EXE/]
+1)		GTJFN%
+1)		IFJER.
+1)		  MOVX A,GJ%SHT!GJ%OLD
+1)		  HRROI B,[ASCIZ/SYSTEM:MMAILR.EXE/]
+1)		  GTJFN%
+1)		  IFJER.
+1)		    DO.
+1)		      TMSG <?Can't get MMAILR.EXE
+1)	>
+LINE 71, PAGE 139
+2)	IFN MMLRSW,<
+2)		HRROI B,[ASCIZ/SYS:MMAILR.EXE/]
+2)	>
+2)	IFN BMLRSW,<	
+2)		HRROI B,[ASCIZ/SYS:MMBULK.EXE/]
+2)	>
+2)	IFN DMLRSW,<	
+2)		HRROI B,[ASCIZ/SYS:DMAILR.EXE/]
+2)	>
+2)		GTJFN%
+2)		IFJER.
+2)		  MOVX A,GJ%SHT!GJ%OLD
+2)	IFN MMLRSW,<
+2)		  HRROI B,[ASCIZ/SYSTEM:MMAILR.EXE/]
+2)	>
+2)	IFN BMLRSW,<
+2)		  HRROI B,[ASCIZ/SYSTEM:MMBULK.EXE/]
+2)	>
+2)	IFN DMLRSW,<
+2)		  HRROI B,[ASCIZ/SYSTEM:DMAILR.EXE/]
+2)	>
+2)		  GTJFN%
+2)		  IFJER.
+2)		    DO.
+2)		      TMSG <?Can't get MAILER .exe file
+2)	>
+

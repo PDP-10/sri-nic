@@ -1,0 +1,264 @@
+
+comment Header file for impress file translators, by Jan Stoeckenius, 
+	June 13, 1982;
+
+require "{}<>" delimiters;
+define !={comment};
+
+string junk;	! General burial ground for unwanted strings;
+
+integer temp;	! Utility accumulator, for use in macros;
+
+External integer !skip!; ! Tenex I/O error indicator;
+External procedure bail; External procedure $Recgc;
+
+define nil		=    	    null!record,
+       nothing		=    	    {begin end},
+       loop		= {while TRUE do begin},
+       curfork		=	 	'400000, comment current fork;
+       infinity		=	       '1000000, comment 2**19, a large 
+							     positive number;
+       AddrMask		=	 	'777777; ! to get word address from 
+						    a DEC 10/20 byte pointer;
+
+define ByteCount(pnt) =	
+{((36 div ((pnt lsh - 24) land '77))*(pnt land AddrMask)
+	+ ((36 - ((pnt lsh -30) land '77)) div ((pnt lsh -24) land '77)))};
+	! gives pointer location in number of bytes;
+
+define cr={""&'15}, lf={""&'12}, nl={cr&lf}, ff={""&'14}, tab={""&'11};
+
+
+! The following five definitions are used with identifying strings in
+  Tenex/TOPS20.  Note that CTRL-V ('26) is the quoting character;
+
+define LETTERS	=	{["A"] ["B"] ["C"] ["D"] ["E"] ["F"] ["G"] ["H"]
+			 ["I"] ["J"] ["K"] ["L"] ["M"] ["N"] ["O"] ["P"]
+			 ["Q"] ["R"] ["S"] ["T"] ["U"] ["V"] ["W"] ["X"]
+			 ["Y"] ["Z"] ["a"] ["b"] ["c"] ["d"] ["e"] ["f"]
+			 ["g"] ["h"] ["i"] ["j"] ["k"] ["l"] ["m"] ["n"]
+			 ["o"] ["p"] ["q"] ["r"] ["s"] ["t"] ["u"] ["v"]
+			 ["w"] ["x"] ["y"] ["z"] ["$"] ["-"] ["_"]	};
+
+define NUMBERS 	=	{["0"] ["1"] ["2"] ["3"] ["4"] ["5"] ["6"] ["7"]
+			 ["8"] ["9"] ["*"]				}; 
+	
+define ILLEGALS	=	{['00] ['01] ['02] ['03] ['04] ['05] ['06] ['07] 
+			 ['10] ['13] ['14] ['16] ['17] ['20] ['21] ['22]
+			 ['23] ['24] ['25] ['27] ['30] ['31] ['32] ['33]
+			 ['34] ['35] ['36] ['37] ['42] ["#"] ["%"] ["&"]
+			 ["'"] ["("] [")"] ["+"] ["/"] ["="] ["?"] ["@"] 
+			 ["^"] ["`"] ["{"] ["|"] ["}"] ["~"] ['177]	};
+
+define TERMINATORS =	{['11] ['12] ['15] [" "] [","] ["!"] [";"]	};
+
+define QUOTE	=	{['26]};
+
+
+! Some macros used for conditional compilation.  These should be set
+  as appropriate for the intended host.  "Comment" is used for the comments
+  below because SAIL's macro facility will not expand macros when defining
+  a macro;
+
+define TOPS20		=	{TRUE},  comment for TOPS20 input-output;
+       WAITS		=	{FALSE}, comment for TOPS10 input-output;
+       IFTOPS20		=	{ifc TOPS20 thenc},
+       IFWAITS		=	{ifc WAITS thenc},
+       ENDTOPS20 	=	{endc},
+       ENDWAITS 	=	{endc};
+
+
+! Two macros which select the application for the program using this header;
+
+define HEADER		=	{TRUE}, comment if true, program generates 
+								 header page;
+       RDIMP		=	{TRUE}, comment To allow .IMP files for 
+						      input, for TOPS20 only;
+       DEBUG		=	{FALSE}, comment turns on all sorts of
+					debuging messages.  See bugsrc.sai;
+
+       IFHEADER		= 	{ifc HEADER thenc},
+       IFRDIMP		=	{ifc RDIMP thenc},
+       IFDEBUG		=	{ifc DEBUG thenc},
+       ENDHEADER 	=	{endc},
+       ENDRDIMP		=	{endc},
+       ENDDEBUG		=	{endc};
+
+ifc not DEBUG thenc define safa = {safe},
+			   simp = {simple};
+	      elsec define safa = {},
+		           simp = {}; ! simplicity and safety go away;
+endc
+
+! Default directories in which to search for fonts or the program to send 
+  the impress file off to the Imprint-10;
+
+define FontDir		=	{"FONT:"}, comment default directory 
+-|								   for fonts;
+       ProtDir		=	{"LPT:"}; ! Directory in which to find 
+							     sending program;
+
+define TitFontName1     =  {"font:cmr12"}, comment small title font;
+       TitFontName2     =  {"font:cmtitl"}, comment big title font;
+       HdrFont          =  {"font:cmb10"}, comment listing header font;
+comment defaultfont = default listing font (1), or whatever set to;
+       UserFont		=  {"lisp2"}, comment lisp user fn font (2);
+       UserMag		=  "1.0",
+       CommentFont	=  {"lisp3"}, comment lisp comment font (3);
+       CommentMag	=  "1.0",
+       LambdaFont	=  {"lisp4"}, comment lisp lambda font (4);
+       LambdaMag	=  "1.0",
+       SystemFont	=  {"lisp5"}, comment lisp system fn font (5);
+       SystemMag	=  "1.0",
+       ClispFont	=  {"lisp6"}, comment lisp clisp font (6);
+       ClispMag		=  "1.0",
+       ChangeFont	=  {"lisp7"}, comment lisp mark change font (7);
+       ChangeMag	=  "1.0",
+       PrettycomFont	=  {"lisp8"}, comment lisp file pkg font (8);
+       PrettyComMag	=  "1.0";
+
+
+! The following macro is used to select the size of Imprint-10 the file is
+  being prepared for;
+
+define IP128		=	{TRUE}, comment 128K model;
+       IP256		=	{FALSE}, comment 256K model;
+       IFIP128		=	{ifc IP128 thenc},
+       IFIP256  	=	{ifc IP256 thenc},
+       ENDIP128		=	{endc},
+       ENDIP256		=	{endc};
+
+
+define ImpVer		=	     0;	! Current version of ImPress;
+
+
+! The following macros set up the values for many of the parameters used
+  by the impress handling programs;
+
+define MaxF		=	   127,	comment possible number of fonts, 
+				  			   font0 is reserved;
+       MaxCh		=	   127,	comment maximum number of characters 
+							      in a font file;
+       MaxR		=	  2000;	! size of glyst;
+
+IFIP128	define TotD	=	 45000;	! total data space inside Imprint,
+        was 45000; ENDIP128
+IFIP256	define TotD	=        60000;	! total data space inside ImPrint; ENDIP256
+
+
+define MAXINSIZE 	= 	  2048;  ! Maximum number of pages in input 
+									file;
+
+
+! Some paper dimensions;
+
+define vertrsu          =          300, comment number of rsu per vert inch;
+       horzrsu          =          300, comment number of rsu per horz inch;	
+       abslftmarg 	=	   125,	comment minimum left margin for 
+							      visible output;
+       minlm            =          130, comment left margin for b4 type paper;
+       absrightmarg 	=	  3000,	comment furthest right that printing 
+							 may be accomplished;
+       b4pgwd           =         3000, comment for b4 paper;
+       abstopmarg 	=	     0,	comment minimum top margin;
+       abspageheight 	=	  4200,	comment maximum page length, 2640
+					          for letter, 3360 for legal;
+       Ttmarg		=	   250,	comment default top margin;
+       Llmarg		=	   300,	comment default left margin;
+       PgWd		=	  2438,	comment default page width;
+       SPgHgt		=	  3125,	comment default standard page height;
+       LPgHgt		=	  4025;	! default legal page height;
+
+! a limit on the total number of unique pages which may be produced in
+  one run (to prevent runaway jobs).  Note that all .DVI pages with the
+  the same page number count as one page;
+
+define	pagelimit	=	  1000;
+
+
+! Some defaults for files not containing typsetting information;
+
+define ListFont		=  {"FONT:list"}, comment default font for listings, 
+					  should be in ASCII format for 
+					  Tenex and SU-AI format for WAITS;
+       ListMag		=	 "1.0", comment default magnification;
+       ListPitch 	=	    12, comment default chars/in, if 
+						 reasonable for choosen font;
+       ListLpI		=	     0, comment default lines/in, if 
+						 reasonable for choosen font;
+       ListSpacing 	=	     1; ! single, double, triple, etc.;
+
+
+! The following macros set up the symbols used to change the default
+  parameters;
+
+IFTOPS20
+require "{}[]" delimiters; ! Necessary for the definitions of right and 
+			     left to work;
+
+define Top		=	 {"^"}, comment top margin symbol;
+       Bottom		=	 {"_"}, comment page height symbol;
+       RightSw		=	 {">"}, comment page width symbol;
+       LeftSw		=	 {"<"}; ! left margin symbol;
+
+require unstack!delimiters; ! Go back to old set of delimiters;
+ENDTOPS20
+
+IFWAITS
+define Top		=	 {"^"}, comment top margin symbol;
+       Bottom		=	 {""}, comment page height symbol;
+       RightSw		=	 {""}, comment page width symbol;
+       LeftSw		=	 {"_"}; ! left margin symbol;
+ENDWAITS
+
+
+! Input file type numbers;
+
+define Badfile		=	     0, comment missing or unopenable file;
+       DVIfile		=	     1, comment Device Independent Format 
+						       files, as used by TEX;
+       XGPfile		=	     2, comment Xerox Graphic Printer input 
+									file;
+       RSTfile		=	     3, comment Raster Format file, for 
+								pixel blowup;
+       VNTfile		=	     4, comment Versatile Font Format file, 
+							    for pixel blowup;
+       LPTfile		=	     5, comment Line Printer file, either 
+							      ASCII or SU-AI;
+       DSYfile		=	     6, comment Xerox-Diablo 630 (daisywheel) 
+								 Format file;
+       SCRfile          =            7, comment Scribe file;
+       LISPfile		=	     8; comment INTERLISP file;
+
+! Font file type numbers;
+
+define Badfont		=	     0, comment unknown format or missing 
+								   font file;
+       RSTfont		=	     1, comment Raster Format font file;
+       VNTfont		=	     2; ! Versatile Font Format font file;
+
+! This file sets the memory allocation scheme;
+
+
+! Space Allocation for font files.  Note that directories are stored 
+  separately from raster images, and another separate area is needed
+  to keep the page tables;
+
+define Firstfntpage 	= 	  '500,
+	Lastfntpage 	= 	  '577,
+       Firstdirpage 	= 	  '700,
+	Lastdirpage 	= 	  '727,		
+      Fonttablearea 	=      '340000; ! to '400000, space for page tables;
+
+
+! Space allocation for input file;
+
+define FirstInPage 	= 	  '730,
+       LastInPage  	= 	  '747;
+
+
+! Space allocation for output file;
+
+define FirstImpPage 	= 	  '750,
+        LastImpPage 	= 	  '776;
+

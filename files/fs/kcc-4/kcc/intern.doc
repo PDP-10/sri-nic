@@ -1,0 +1,317 @@
+This file attempts to document the internal workings of KCC.  It is
+still incomplete.
+
+Current holes in documentation:
+	Need to explain what pseudo-code looks like, what types there are,
+and which of them use which parts of a pseudo-code entry.  CCCODE etc.
+	Need to explain KCC's notion of "register" and how these registers
+are allocated and handled.  CCGEN, CCREG etc.
+
+This diagram (based on a msg from David Eppstein) lists each
+KCC module with a summary of what its routines do.
+  
+    CCDATA -- allocation for global variables, tables.  Used in various places
+    CC -- main control -- parses command line and calls parser for each file
+	CCINP -- file input and preprocessor.  Provides input chars.
+	CCLEX -- lexical analysis.  Provides input tokens.
+	CCDECL, CCSTMT -- parsing (recursive descent) and semantic analysis
+data		CCDECL handles declarations; CCSTMT handles statments & exprs.
+flows	    CCSYM -- symbol table manipulation
+this	    CCTYPE -- type checking and automatic coercion
+way	    CCERR -- error messages
+ |	CCEVAL, CCFOLD -- parse tree optimization and constant folding
+ |	CCGEN, CCGEN1, CCGEN2 -- code generation.  Decls, Stmts, Exprs.
+ V	    CCGSWI -- code generation for "switch" statements
+	    CCLAB - label management
+	    CCREG -- register allocation
+	    CCCODE -- subroutines to send pseudo-codes to optimizer
+	CCOPT, CCJSKP, CCCSE -- peephole optimization (some elsewhere too)
+	    CCCREG -- retroactively change registers
+	CCOUT -- emission to assembly file
+	CCASMB -- invoke assembler/linker on output file
+	CCDUMP -- various debugging output routines
+
+--------------------------
+Message from David Eppstein, 4-Dec-85:
+
+As indicated, you can think of the data as moving through successive
+stages of interpretation -- input files get read into chars and munged
+by the preprocesser, turned into tokens by the lexer, turned into
+parse trees by the parser, munged by the parse tree optimizer, turned
+into pseudo-codes by the generator, munged by the peepholer and then
+turned into chars again as assembly language by the emitter.
+
+(this parag modified --KLH) The control structure is a little different
+-- the file argument handler is the main control, and it calls the
+parser which calls the lexer which calls the preprocessor to pull data
+in from the file.  The parser returns a parse tree, which the main loop
+then pushes out in the other direction by calling the code generator
+which calls the peepholer and emitter.
+	The parse tree optimizer is called (for ccopt)
+by the parser and (for cceval, whose sole purpose is to see if a for
+loop test can be moved to the end of the loop) by code generation.
+The symbol table is used and maintained by many different phases.
+Also, the preprocessor can call the parser recursively to handle #if.
+
+General overview: data flow
+
+[NOTE: for clarity the following discussion talks only about "the" input
+file.  KCC can compile multiple files, but each one is compiled
+separately and handled in the same way.]
+
+KCC is a one-pass compiler; it reads its input only once, and does so
+sequentially without ever looking back.  It outputs an intermediate
+assembly-language file which is then processed by the system's
+assembler, in effect adding a second pass.  Each top-level declaration
+statement (a function is a single such declaration statement) is handled
+separately, and each goes through the following complete cycle:
+	(1) The statement is completely parsed into a single "parse tree",
+	which is a linked list of "NODE" structures.  (CCDECL, CCSTMT)
+	(2) Some optimization is done on the parse tree. (CCOPT, CCEVAL)
+	(3) The code generator is called on this parse tree, to fill a
+	"peephole" buffer with what are called "pseudo-code" instructions.
+	The buffer is a linear array of "PSEUDO" structures.  The code
+	generator is subdivided into two general phases:
+		(3a) CCGEN - Determine from parse-tree what pseudo-code to use.
+			This phase knows about BOTH parse trees and
+			pseudo-code, but does not manipulate the buffer.
+		(3b) CCCODE - Put pseudo-code in buffer, applying optimization
+			and forcing out buffer when there is no more need to
+			look back at buffered pseudo-code.  (or when full!)
+			This phase only knows about pseudo-code.
+	(4) Whenever the buffer is forced out, the output processor (CCOUT) is
+	called on each pseudo-code instruction to generate the actual
+	character strings needed for the assembler file.  The output
+	processor never sees the parse tree, only the pseudo-code
+	as it comes from the buffer.
+
+Optimization occurs at various places.  Some optimization can be done
+directly on the parse tree itself, but it looks as if most actual optimization
+comes during (3b) -- as pseudo-code is being added to the peephole buffer,
+various checks are made trying to combine the current op with previous
+ops in more efficient ways.  A few optimizations are done in (4) when
+CCOUT selects the best way to do some minor things.
+This description can use some more details.
+
+Since the entire parse tree for a declaration is kept in memory, it
+may be possible that extremely large functions or data initializations
+could cause problems for KCC.  However, such things are considered
+bad practice and are rarely if ever seen; this is unlikely to ever be
+a problem.  Note this only applies to single declaration statements, not
+to the entire file.
+
+More about input processing:
+	All input is handled by the CCINP module, which provides the
+"nextc" function to read the next character.  CCINP handles all of the
+pre-processor '#' commands as they are encountered; the rest of KCC
+never sees them.  CCINP also provides macro-expansion text just as if
+it was part of the regular input stream.
+	The only thing it cannot do is start macro expansions; this is
+taken care of by the next level of input, CCLEX, which provides the
+"nextoken" function.  This is THE main input function as far as the
+rest of KCC is concerned; nothing else but CCLEX calls CCINP's
+"nextc".  "nextoken" simply reads the next C-language token and
+returns its code (codes defined in CC.H).  Nothing outside of CCLEX
+should be concerned with input characters; only with tokens.
+"nextoken" does set certain globals as a side effect, since values may
+be associated with some types of tokens (notably constants).  CCLEX
+does not know anything about parse trees.  The comments at the start
+of CCLEX pretty much explain what variables nextoken() can set as
+side effects.
+
+CCDECL and CCSTMT perform the actual semantic analysis of the tokens
+that "nextoken" returns, building the parse tree.  Nothing else calls
+"nextoken", except CCERR in order to attempt recovery from some kinds
+of errors.
+
+How a program gets compiled (control flow):
+
+main()	does simple switch inits, and scans all arguments once in order to
+	process all switches furnished by the user.  Then scans the arguments
+	once more, and calls cfile() to process each remaining file argument.
+	After all arguments are processed, the linking loader
+	(LINK) may or may not be invoked.
+
+    cfile()	Hacks an argument filename.  Processing depends on current
+		switch values.  Does necessary per-file initializations,
+		then normally tries to compile the file by first
+		calling entdef() (a special hack, can be ignored) and
+		then (TA DA!) loops calling extdef() to process external
+		definitions as long as input exists, feeding the results
+		into the code generator via gencode().
+		When input is done, postamble() takes care of final output
+		to the assembler file.  An additional "prefix" assembler
+		file may also be generated at this point.  Finally,
+		asmb() is used to invoke the assembler on the file.
+
+So, extdef() and gencode() actually do all the real work; everything
+seen in the file is some kind of top-level declaration, either of data
+or of a function.
+	extdef() initializes a few things (see note below re ENTRY hacking)
+	and then calls declarator() to parse as far as the first identifier
+	(symbol name).
+	If it was anything but a function, datadef() is called to
+		generate a parse tree from not only this definition but
+		all succeeding definitions until the end of the declaration
+		statement is seen.
+	If it was a function, extdef will parses the parameter list
+		itself and then invoke funcdef().  This routine parses the
+		parameter declarations and the function body.
+
+Note on ENTRY and entdef():
+	In order to remain compatible with older source files used with
+	KCC which used the "entry" statement, a special routine called
+	entdef() is invoked at the start of compilation.  This scans
+	ENTRY statements, which must precede any other kind
+	of declaration.  Thereafter ENTRY is ignored.
+	The ENTRY statement is peculiar to KCC.  It was needed
+	only because the PDP10 assembler insists that any library
+	entry points be specified BEFORE any code is produced!
+	This was fixed by having KCC generate an auxiliary "prefix"
+	assembler file and feeding that to the assembler just ahead of
+	the main file.  ENTRY should no longer be used, and KCC should
+	eventually not support it.
+
+In more code-like form:
+
+CC main()			- Main program
+CC	<Initialize compiler switch values>
+CC	Scan all arguments for switches.  For each switch, call
+CC		cswitch() - process a switch.
+CC	Scan all arguments again for filenames.  For each file, call
+CC		cfile() - process one file.
+CC			<initialize all per-file stuff>
+CCDECL			Invoke entdef() for "entry" stmt compatibility
+CC			Until EOF on input, call
+CCDECL				extdef() - process one external def.
+CCGEN				gencode() - generate code for it.
+CCOUT			postamble()	- output assembler-file postamble.
+CCOUT			makprefile()	- Make assembler prefix file if needed.
+CCASMB			asmb()		- Invoke assembler.
+CC	If invoking linking loader, call
+CCASMB		runlnk().
+	
+
+Where the real work happens:
+
+CCDECL extdef()	- Read one external definition, and return parse tree if any.
+CCDECL	Initialize for a declaration statement, then call
+CCDECL		declarator()	- Parse one identifier
+CCDECL	If got non-function, call
+CCDECL		datadef()	- Parse rest of declaration, return it.
+CCDECL			Until semicolon seen, call
+CCSTMT				defnode()	- Make parse-tree node
+CCDECL				declarator()	- parse another identifier
+CCDECL	else got function.
+CCDECL		<parse parameter list>, then call
+CCDECL		funcdef()	- Parse rest of function, return it.
+CCDECL			<Set up various things>
+CCDECL			Parse parameter declarations, by calling
+CCDECL				declarator()
+CCDECL			<Set up parameter (local var) stuff>
+CCDECL			Then parse the function body, by calling
+CCSTMT				statement()	- Parse a statement
+CCDECL			Then finish consing together the resulting parse-tree
+CCSTMT				with defnode().
+
+CCGEN	gencode() is fairly easy to follow.
+
+
+This page describes some of the basic KCC data structures and constant types.
+
+In general, structures are declared in the following way:
+	#define NAME _name
+	struct _name {...};
+and references to the structure tag should use NAME.  Pointers should
+be declared as NAME *.
+
+Important structures:
+	TOKEN	Token definition (entry in table)
+	  T_	  Token identifiers (codes)
+	  TKTY_	  Token types
+	TYPE	Type Definition
+	  TS_	  Type Specifier codes
+	SYMBOL	Symbol Definition
+	  SC_	  Symbol Classes
+	NODE	Parse tree node
+	  N_	  Node identifiers (opcodes)
+	  NF_	  Node flags
+	  CAST_	  Cast (coercion) types
+	PCODE	Pseudo-Code entry (in peephole buffer)
+	  P_	  Opcode values (almost == to PDP10 instructions)
+	  POF_	  Opcode flags
+	  POS_	  Opcode skip values
+	  POSF_	  Opcode skip value bits
+	  PTF_	  Type Flags
+	  PTA_	  Type Addressing modes
+	  PTV_	  Type Values (flag/addr combos)
+
+Minor structures:
+	SMEM	Structure Member
+	RESWD	Reserved Word table entry
+	TYNAME	Built-in Type table entry
+
+NOTE: Currently, for historical reasons the token types, node op-codes, and
+a few other things are all mixed together.  The following prefixes indicate
+symbols which used to all be "token constants":
+	N_	- Only used as a node op-code
+	T_	- Only used as a token value
+	Q_	- Used as BOTH a node op-code and token value!
+		(Why Q?  Well, it's exactly halfway between N and T...
+		 also, think about a Q-ship, which isn't what it seems.)
+
+See CCSYM.H for details on the format of symbol table entries (SYMBOL)
+and type specifiers (TYPE).
+
+---------------------- PARSE TREE STRUCTURE ---------------------
+
+The parse tree generated by KCC's parser (and passed to the code generator)
+is made of NODE structures.  The format and many details are explained
+in CCNODE.H.  Specifics on the way each node-op uses the NODE structure
+are contained in CCTOKS.H.
+
+	Only the parser creates parse trees, and the CCDECL and CCSTMT
+modules contain all of the parser.  The modules which form the code
+generator and which read the parse tree are CCGEN, CCGEN1, CCGEN2 and
+CCGSWI.
+
+
+CODE GENERATOR
+
+Virtual Registers:
+
+	The code generator translates the parse-tree nodes into
+pseudo-code operations on "virtual registers".  A virtual register
+(vreg) is treated as if it was a machine register, but whether its
+contents are actually in a machine register, or on the stack, is
+generally unspecified; the register allocation routines in CCREG are
+responsible for saving virtual registers on the stack as needed.
+	A vreg may consist of one or two words, and this is sufficient
+to hold an object of any type except structures/unions larger than 2 words.
+Not all of the bits in a vreg are actually significant; this depends on
+the type.  For example, types which are smaller than 1 word (such as
+chars and bit-fields) can only treat the rightmost N bits as significant,
+where N is the number of bits in the type.  Cast conversions can change
+the contents of a vreg in two ways:
+	(1) Change the number of significant bits (or # of words)
+	(2) Change the representation (for those bits significant in the
+		new type)
+
+Note that, in general, cast conversion to a smaller type does not result
+in any code being produced.  This is because all that changes is the
+number of bits considered significant, and the representation of the
+significant bits remains the same.  Conversion to a larger type, however,
+will enlarge the number of significant bits, and these new bits have
+to be set to some value, so some code is likely to be generated to
+accomplish this.
+
+For example, in the expression:
+	int a, b;
+	a = (char)b;
+The value of b is first retrieved into a vreg, which amounts to a "MOVE vreg,b"
+instruction, and the cast to (char) is then applied.  However, this does NOT
+generate any code, because all that happens is that only the rightmost 9
+bits of the vreg contents become significant.  It is only when this value
+is implicitly converted back to (int) for the store into "a" that the 
+cast from (char) to (int) takes effect and the non-significant bits are
+zapped.

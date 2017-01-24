@@ -1,0 +1,1427 @@
+;[SRI-NIC]SRC:<LOC.SUBSYS>HOG.MAC.9,  2-May-88 01:42:45, Edit by MKL
+; let continue after report is generated
+;CU:<SY.KEN.MAC>HOG.MAC.10, 18-Sep-83 23:06:53, EMACSed by Ken
+; [10] Fix bugs in Directory command.  Restructure some code.
+;CU:<SY.KEN.MAC>HOG.MAC.7, 14-Mar-83 00:00:00, EMACSed by Ken
+; [7] Fixed NUMFMT so that it outputs asterisks on overflow.  This is really
+; just a kludge fix, since 10 columns of output should be plenty of space for
+; any number this program will output.  Something else is wrong.
+;CU:<SY.KEN.MAC>HOG.MAC.6, 21-Dec-82 00:00:00, EMACSed by Ken
+; [6] Added counter for user directories (i.e. non-files-only).
+;CU:<SY.KEN.MAC>HOG.MAC.5, 5-Dec-82 00:00:00, EMACSed by Ken
+; [5] Added counters for zero and one page files, and added output code for
+; these values in the DunRep routine.  Also added pages used and pages free on
+; structure output code in DunRep.
+;CU:<SY.KEN.MAC>HOG.MAC.4, 6-May-82 00:00:00, EMACSed by Ken
+; [4] De-CUsym-ized the code, and copied the external QSort routine into this
+; code.  Also modified QSort to sort in decending order rather than in
+; ascending order.
+;CU:<SY.KEN.MAC>HOG.MAC.3, 22-Jan-82 00:00:00, EMACSed by Ken
+; [3] Added terse report option.  Only reports directory name and actual disk
+; usage.  Should be a lot faster, because it doesn't have to count all of the
+; file pages in all of the files in all of the directories.
+;CU:<SY.KEN.MAC>HOG.MAC.2, 11-Jul-81 00:00:00, EMACSed by Ken
+; [2] Numerous bug fixes.
+
+
+	Title Hog
+
+$VERNO=2
+$EDNO=10
+
+; Most recent update: 6:56pm  Monday, 14 March 1983
+;
+; Goes through all of the directories in a particular directory specification
+; and lists off the disk usage for each directory.  Also lists any special
+; capabilities the directory might have.
+;
+; Original code by Tom Chow, CUCCA
+;
+; Modified by Lincoln Hu, CUCCA, September 1980
+;
+;					Ken Rossman
+;					Columbia University
+;					Center for Computing Activities
+
+	Search Monsym, Macsym, CMD ; Search the usual symbol tables
+	.require sys:Macrel, sys:CMD	; Get accompanying code too
+
+
+	Subttl	Symbol Definitions
+
+; Local register definitions.
+t1=1
+t2=2
+t3=3
+t4=4
+q1=5
+q2=6
+q3=7
+p1=10
+p2=11
+p3=12
+p4=13
+p5=14
+p6=15
+
+; Miscellaneous symbol definitions.
+STKLEN=200			; Length of the system stack
+LNLEN=1000			; Length of a line (in characters)
+PGLEN=^d60			; Number of lines per report page
+HDRLEN=^d4			; Number of lines in the report page header
+MAXDIR=^d10000			; Maximum number of directories in sort table
+INF=377777			; Mask for checking if disk quota is +INF
+NODLEN=64			; Length of ARPAnet/DECnet nodename string
+GJLN=.GJATR+1			; Length of long form GTJFN block
+NUMFMT=<no%lfl!no%oov!no%ast!fld(^d10,no%col)!^d10> ; Number output format
+				; [7] Fixed to output asterisks on overflow
+
+
+	Subttl	Macro Definitions
+
+; Tcrlf macro.  Same as Macsym Tmsg, but with a trailing CRLF added.
+define	tcrlf (msg) <
+	tmsg <msg
+>
+>
+
+; %version macro.  This macro builds a standard DEC version word.
+define	%version(ver<0>, edit<0>, minor<0>, cust<0>) <
+	exp  byte (3) cust  (9) ver  (6) minor  (18) edit
+>
+
+; %herald macro.  Prints startup message, including current version number as
+; supplied to the macro.
+define	%herald(ver,edt) <
+	tcrlf < HOG disk hog catcher, version ver(edt)>
+>
+
+; %ptr macro.  Build a standard ASCIZ pointer to a literal string.
+define %ptr(str) <<point 7, [asciz\str\]>>
+
+; %jserr macro.  Handle Jsys errors.  This macro will only work in a Jsys
+; return context, since it is called via ERJMP.
+define	%jserr (msg,lab) <
+	erjmp [	hrroi t1, [asciz \msg\]
+		ESOUT
+		movx t1, .PRIOU
+		hrloi t2, .FHSLF
+		setz t3,
+		ERSTR
+		 jfcl
+		 jfcl
+ifb  <lab>, <	HALTF
+		jrst .+1
+>
+ifnb <lab>, <	jrst lab>]
+>
+
+; %ermsg macro.  Outputs either the last monitor error, or a user supplied
+; error, and optionally dispatches to an error address.
+define	%ermsg (msg,lab) <
+	jrst [	hrroi t1, [asciz \msg\]
+		ESOUT
+ifb <msg>, <	movx t1, .PRIOU
+		hrloi t2, .FHSLF
+		setz t3,
+		ERSTR
+		 jfcl
+		 jfcl
+>
+		tcrlf
+ifb  <lab>, <	HALTF
+		jrst .+1
+>
+ifnb <lab>, <	jrst lab>]
+>
+
+; %table macro.  This macro is used to start a keyword table definition.
+define	%table <
+	%%tbst== .		;; Plant start of table
+	exp 0			;;  and leave a hole for %tbend to fill
+>
+
+; %tbEnd macro.  This macro ends a keyword table.
+define	%tbEnd <
+	%%tbnd==.-1		;; Get address of last entry in table
+	.org %%tbst		;; Move back to start
+	xwd %%tbnd-%%tbst, %%tbnd-%%tbst;;  and build table header
+	.org			;; Finally, get back to the way we were
+>
+
+; %key macro.  This macro takes three arguments: an (alphanumerics only!) name,
+; the data to be associated with the name, and an (optional) flag value.  It
+; creates either a flag-less keyword (the normal case), or, if flags are given,
+; a keyword with flags in the first word (and cm%fw set).  Thus, the result is
+; a TBLUK table entry, suitable for use by the .CMkey COMND Jsys function.
+; Note that all %Key words in a table must be bracketted by %Table and %TbEnd
+; macros (see above).
+define	%key (name, data, flags) < ;; Flags are optional
+   ifb <flags>, <
+	xwd [asciz\name\],data	;; No-flags case
+   >
+   ifnb<flags>, <
+	xwd [<flags>!cm%fw	;; Flags: first word holds them,
+	     asciz\name\], data	;;  second is start of name
+   >
+>
+
+
+	Subttl	Main Program Entry Point.
+
+; Standard entry vector.
+Entvec:	jrst Start		; Start address.
+	jrst Start		; Reenter address
+	%version ($VERNO,$EDNO)	; Standard version number.
+Entlen=	.-Entvec		; Entry vector length.
+
+; Start address is here.
+Start:	RESET%			; Put us in a known state
+	array %%pdl [STKLEN]	; Make us a system stack
+	move p, [iowd STKLEN, %%pdl] ; Load ptr to our stack
+	%herald(\$VERNO,\$EDNO)	; Print our startup banner
+	Call Init		; Initialize some things
+	Call Main		; Do the main work
+	HALTF%			; Back to EXEC when done.
+	jrst Start		; Restart if continued
+
+
+Init:	Remark - Initialize some things for one program run.
+
+	Call CmdIni		; Initialize CMD package
+	setzm TopN		; Zero top N users counter
+	setzm xitFlg		; Turn off all flags
+	setzm numFlg
+	setzm prvFlg
+	setzm shtFlg
+	setzm DirNum
+	movei t1, .CDDFE	; Get the size of DirBlk
+	movem t1, DirBlk	; Save it in the first word of DirBlk
+
+; Get the local nodename string.
+	movx t1,.gthns		;get ARPA host name
+	move t2,[point 7,NodeNm] ; in here
+	seto t3,		; for me!
+	gthst%
+	 erjmp [movx t1, .NDGLN	; Get local nodename code
+		movx t2, [point 7, NodeNm] ; Ptr to nodename string storage
+		NODE%			; Get the nodename string
+		 %jserr <Couldn't get local ARPAnet hostname/DECnet nodename: >
+		jrst .+1]	; continue
+	Ret			; Return to caller
+
+
+Main:	Remark - The Main Command Parsing Loop.
+
+	prompt(Hog>)		; Initialize CMD
+	movei t1, [flddb.(.CMKEY,,cmdTab)]
+	Call RField		; Parse top level keyword
+	hrrz t2, (t2)		; Pick up parse dispatch address
+	Call (t2)		; Go there
+	skipe xitFlg		; Are we ready to leave?
+	 Ret			;  Yes, so just return
+	jrst Main		; Otherwise, go back for another command
+
+; Parse table for top-level commands
+cmdTab:	%table
+	%key <All>, .all
+	%key <Alphanumeric>, .alph
+	%key <Directory>, .dir
+	%key <Exit>, .exit
+	%key <Help>, .help
+	%key <Numeric>, .num
+	%key <Priv>, .priv
+	%key <Report>, .rep
+	%key <Show>, .show
+	%key <Terse>, .ters
+	%key <Top>, .top
+	%key <Verbose>, .vrbs
+	%tbEnd
+
+
+	Subttl	Secondary Parse and Action Routines
+
+.all:	Remark - The All (directories) Command.
+
+	noise (directories included) ; Noise word
+	confrm			; Confirm the command
+	setzm prvFlg		; Turn off the privved users only flag
+	tcrlf < Report will include all directories specified>
+	Ret			; Return to caller
+
+
+.alph:	Remark - The Alphanumeric Command.
+
+; Indicate the report is to be sorted alphanumerically.
+
+	noise (by)		; Issue noise word
+	movei t1, [flddb.(.CMKEY,,AlphTb)]
+	Call RField		; Parse the next keyword
+	hrrz q1, (t2)		; Get the address to jump to
+	confrm			; Confirm the command
+	Call (q1)		; Go there
+	Ret			; Return successfully
+
+; Parse table for alphanumeric command
+AlphTb:	%table
+	%key <Account>, $AlphA
+	%key <Directory>, $AlphD
+	%tbEnd
+
+; Now define the actual commands
+$AlphA: setzm numFlg		; Turn off numeric sort flag
+	setom accFlg		; Turn on account sort flag
+	tcrlf < Report will be sorted alphanumerically by account name>
+	Ret			; Return to caller
+$AlphD: setzm numFlg		; Turn off numeric sort flag
+	setzm accFlg		; Turn off account sort flag
+	tcrlf < Report will be sorted alphanumerically by directory name>
+	Ret			; Return to caller
+
+
+.dir:	Remark - The Directory Command.
+
+; Specify what group of directories is to be reported on.
+
+	skipn DirNum		; Have we previously parsed a directory?
+	 setzm DirStr		;  No, so clear directory string initially
+	noise (specification)	; Issue noise word
+	movei t1, [flddb.(.CMDIR,cm%sdh,cm%dwc,<directory group>,<PS:<*>>)]
+	Call RField		; Parse directory name
+	movem t2, q1		; Save the directory number temporarily
+	movx t1, <point 7, AtmBuf> ; Get ptr to the atom buffer
+	movx t2, <point 7, DirStr> ; Get pointer to directory string storage
+	do.
+	  ildb t4, t1		; Pick up a byte from the atom buffer
+	  cail t4, "a"		; [10] Lowercase alphabetic?
+	   caile t4, "z"	; [10]
+	   skipa		; [10]
+	   subi t4, "a"-"A"	; [10] Yes, uppercaseify
+	  idpb t4, t2		; Drop this character into our buffer
+	  jumpn t4, top.	; If not null, go back for more
+	enddo.
+	confrm			; Confirm the command
+	hrroi t1, DirStr	; [5] Get ptr to our directory string
+	STDEV%			; [5] Make device designator
+	 %jserr <Must include structure in directory spec: >, r ; [5] [10]
+	movem t2, DirDes	; [5] Save device designator for later
+	tmsg < Reporting on directory: > ; [10]
+	hrroi t1, DirStr	; [10] Get ptr to directory string
+	PSOUT%			; [10] Print it
+	tcrlf			; [10] Make it neat
+	movem q1, DirNum	; [10] Save the directory number permanently
+	Ret			; Just return
+
+
+.exit:	Remark - The Exit Command.
+
+	noise (from Hog)	; Issue noise word
+	confrm			; Confirm the command
+	setom xitFlg		; Just set the exit flag
+	Ret			; Return successfully
+
+
+.help:	Remark - The Help Command.
+
+	noise (with command)	; Issue noise word
+	movei t1, [flddb.(.CMKEY,,hlpTab,,<help>)]
+	Call RField		; Parse help command keyword
+	hrrz q1, (t2)		; Get the address of help text
+	confrm			; Confirm the command
+	hrroi t1, (q1)		; Get ptr to help string
+	PSOUT%			; Print it
+	Ret			; Return successfully
+
+; Help command keyword table.
+hlpTab: %table
+	%key <all>, $$all
+	%key <alphanumeric>, $$alph
+	%key <directory>, $$dir
+	%key <exit>, $$exit
+	%key <help>, $$help
+	%key <numeric>, $$num
+	%key <priv>, $$priv
+	%key <report>, $$rep
+	%key <show>, $$show
+	%key <terse>, $$terse
+	%key <top>, $$top
+	%key <verbose>, $$vrbs
+	%tbEnd
+
+
+; The help messages.
+
+$$all:	asciz |
+The All command specifies that all of the directories in the given
+directory group are to be reported on, and not just priviledged
+directories.  The alternative of this command is the Priv command.
+All is the default.
+
+|
+
+$$alph:	asciz |
+The Alphanumeric command specifies whether a report is to be sorted
+alphanumerically by account or directory.  The alternative is to have 
+the report sorted numerically by disk usage (the Numeric command).  
+Alphanumeric sorting by directory is the default.
+
+|
+
+$$dir:	asciz |
+The Directory command specifies the group of directories that the report is
+to cover.
+
+|
+
+$$exit:	asciz |
+The Exit command halts HOG and returns to the EXEC.
+
+|
+
+$$help:	asciz |
+The Help command prints a short help message on each HOG command.
+Type "help ?" to see the available options.
+
+|
+
+$$num:	asciz |
+The Numeric command specifies that the report is to be sorted numerically
+in decending order by disk usage.  The alternative is to have the report
+sorted alphanumerically by directory or account (the Alphanumeric command).
+
+|
+
+$$priv:	asciz |
+The Priv command specifies that only priviledged IDs are to appear in the
+report file.  The alternative is to include all of the directories that
+were specified in the Directory command (the All command).
+
+|
+
+$$rep:	asciz |
+The Report command starts the reporting process.  The output filename is
+specified as an argument to this command.
+
+|
+
+$$show:	asciz |
+The Show command lists the current settings of all program parameters.
+
+|
+
+$$ters:	asciz |
+The Terse command specifies that only a terse format report is desired.
+File counts (total number of files, and number of deleted files) are
+omitted from the listing.  The alternative is the Verbose command, which
+lists all report information in the output report.
+
+|
+
+$$top:	asciz |
+The Top command specifies that only the top N users are to be listed in the
+report listing.  The number of users to list is supplied to this command as
+an argument.  Specifying zero turns the feature off.  This feature is most
+useful in conjuncture with the Numeric command (numeric sorting by disk
+usage), although it can also be used when sorting alphanumerically.
+
+|
+
+$$vrbs:	asciz |
+The Verbose command specifies that the report format is to be verbose.  All
+report information is included in the output file.  The alternative is the
+Terse command, which specifies that file counts (total number of files, and
+number of deleted files) are to be omitted from the report.
+
+|
+
+
+.num:	Remark - The Numeric Command.
+
+; Specifies the report is to be sorted numerically by disk usage.
+
+	noise (order by disk usage) ; Issue noise word
+	confrm			; Confirm the command
+	setom numFlg		; Turn on the numeric flag
+	tcrlf < Report will be sorted numerically by disk usage>
+	Ret			; Return successfully
+
+
+.priv:	Remark - The Priv Command.
+
+; Indicate that we want only priviledged IDs in the report.
+
+	noise (directories only) ; Noise
+	confrm			; Confirm it
+	setom prvFlg		; Turn on the Priv-dir-only flag
+	tcrlf < Report will include only privileged IDs>
+	Ret			; Return to caller
+
+
+.rep:	Remark - The Report Command.
+
+; Begins the actual report generation.
+
+	movx t1, <cz%ncl!.FHSLF> ; Get rid of leftover JFNs first
+	CLZFF%			; ...
+	noise (to file)		; Noise
+	movei t1, [flddb.(.CMOFI,cm%sdh,,<output file for report>)]
+	Call RField		; Parse output filename
+	movem t2, OJFN		; Save the JFN
+	confrm			; Confirm the command
+	skipn DirNum		; Did we get a directory number yet?
+	 %ermsg <Please issue the Directory command first>, r
+	tmsg < Writing report to > ; Say what we're up to
+	movx t1, .PRIOU		; Print name of output file
+	move t2, OJFN
+	setz t3,
+	JFNS%
+	 %jserr <Output file JFNS failed: >, r
+	move t1, OJFN		; Get output JFN
+	movx t2, <fld(7,of%bsz)!of%wr> ; 7 bit, write access
+	OPENF%			; Open output file for writing
+	 %jserr <Couldn't open output file: >
+	Call RepIni		; Initialize for one report
+	Call MakLst		; Build the directory number list
+	Call Bubble
+	Call WrtRep		; Finally, write the report
+	skipe accFlg		; Write a last partial report?
+	Call ParRep		
+	Call DunRep		; Print final report totals
+	move t1, OJFN		; Get the output file JFN back
+	CLOSF%			; Close the output file
+	 %jserr <Couldn't close output file: >
+;	HALTF
+;	 jrst .-1
+	setzm OJFN		; Zero the output file JFN after releasing
+	tcrlf < [OK]>		; 
+	Ret			; Return successfully
+
+
+.show:	Remark - The Show Command.
+
+	noise (report parameters) ; Noise
+	confrm			; Confirm the command
+	tmsg < Currently selected directory: >
+	hrroi t1, DirStr	; Get ptr to directory string
+	PSOUT%			; Print it
+	tcrlf
+	skipe shtFlg		; Are we generating a short report?
+	ifnsk.
+	  tcrlf < Report will be in terse format>
+	else.
+	  tcrlf < Report will be in verbose format>
+	endif.
+	skipe prvFlg		; Are we reporting on privved IDs only?
+	ifnsk.
+	  tcrlf < Reporting on privileged directories only>
+	else.
+	  tcrlf < Reporting on all selected directories>
+	endif.
+	skipe numFlg		; Are we sorting numerically?
+	ifnsk.
+	  tcrlf < Report will be sorted numerically by disk usage>
+	else.
+	  skipe accFlg		; Sorting by account?
+	  ifnsk.
+	    tcrlf < Report will be sorted alphabetically by account name>
+	  else.
+	    tcrlf < Report will be sorted alphabetically by directory name>
+	  endif.
+	endif.
+	skipe TopN		; List top N users?
+	ifnsk.
+	  tmsg < List only top > ; Yes
+	  movx t1, .PRIOU
+	  move t2, TopN
+	  movx t3, ^d10
+	  NOUT%
+	   %jserr
+	  tcrlf < directories>
+	endif.
+	Ret			; Return successfully
+
+
+.ters:	Remark - The Terse (report) Command.
+
+	noise (report)		; Noise
+	confrm			; Confirm the command
+
+; If we got here, then parsing went OK.  Finish the command.
+	setom shtFlg		; Turn on short report flag
+	tcrlf < Using terse report format>
+	Ret			; Return successfully
+
+
+.top:	Remark - The Top Command
+
+	noise (N users)		; Noise
+	movei t1, [flddb.(.CMNUM,cm%sdh,^d10,<top number of users to list>)]
+	Call RField		; Parse top number of users to list
+	movem t2, q1		; Save temporarily
+	confrm			; Confirm the command
+
+; If we got here, then parsing went OK.  Finish the command.
+	skipge q1		; Is the value parsed OK?
+	 %ermsg <Value must be positive>, r
+	movem q1, TopN		; Save top number of users permanently
+	tmsg < Reporting on top > ; Tell us what's happening
+	movx t1, .PRIOU
+	move t2, q1
+	movx t3, ^d10
+	NOUT%
+	 %jserr
+	tcrlf < directories only>
+	Ret			; Return to caller
+
+
+.vrbs:	Remark - The Verbose (report) Command.
+
+	noise (report)		; Noise
+	confrm			; Confirm the command
+
+; If we got here, then parsing went OK.  Finish the command.
+	setzm shtFlg		; Turn off short report flag
+	tcrlf < Using verbose report format>
+	Ret			; Return successfully
+
+
+	Subttl	Report Writing Routines.
+
+RepIni:	Remark - Initialize things for one report.
+
+	setzm TotDir		; Zero out the directory count
+	setzm DirCnt		; Zero number of directories output
+	setzm UsrCnt		; [6] Zero number of users found
+	setzm UseCnt		; Zero pages used count
+	setzm DelCnt		; Zero deleted pages count
+	setzm FilCnt		; Zero file count
+	setzm P0Cnt		; [5] Zero the 0 page file counter
+	setzm P1Cnt		; [5] Zero the 1 page file counter
+	Ret			; Return to caller
+
+
+MakLst:	Remark - Generate the directory number/disk usage/account string list.
+
+; Generates three parallel tables containing the directory numbers, disk 
+; usage quotas, and account strings for each directory specified for reporting.
+;
+; Returns	+1:	Always.
+
+	saveAC <q1,q2>		; Save some work regs
+	movsi q1, -MAXDIR	; Set up AOBJN counter for directory table
+	movei q2, AccStr	; Init the permanent account string storage
+	move t4, DirNum		; Get the directory number
+LstLup:	move t1, t4		; Get current directory number
+	GTDAL%			; Get it's disk allocation
+	 %jserr <Couldn't GTDAL current directory: >
+
+; Save the info in the three tables
+	movem t4, DirTab(q1)	; Save current directory number in our table
+	movem t2, DskTab(q1)	; Save the disk usage for this directory
+	movem q2, AccTab(q1)	; Save the account string location
+
+; Init DirBlk
+	hrroi t1, AccBuf	; Set up the account string pointer
+	movem t1, DirBlk+.CDDAC	; Move it into DirBlk
+
+; Clear AccBuf
+	setzm AccBuf		; Clear out the first word of AccBuf
+	move t1, [AccBuf,,AccBuf+1]
+	blt t1, AccBuf+LNLEN/5	; blt out AccBuf
+
+; Get the account string
+	move t1, t4		; Copy the directory number
+	movei t2, DirBlk	; Point to the argument block
+	setz t3,		; Don't care about the password
+	GTDIR			; Get directory information
+
+; Save the account string in AccStr
+	move t1,[point 7,AccBuf] ; Point at the account string
+	move t2,[point 7,(q2)]	; ...And the main storage
+LstLp2:	  ildb t3, t1		; Get a character
+	  idpb t3, t2		; Deposit the character
+	  caie t3,0		; Got a null? (terminator)
+	  jrst LstLp2		; Nope. Go for more
+
+; Calculate the location of the next free AccStr word
+	addi t2,1		; Go to the next available word
+	hrrzm t2,t1		; Save the right half in AC1
+	add q2,t1		; Now we have the address for the next word
+
+;Move on the the next directory
+	movx t1, <rc%stp!rc%awl> ; Step to new directory #, allow wildcards
+	movx t2, <point 7, DirStr> ; Get ptr to directory string
+	move t3, t4		; Get current directory number back
+	RCDIR%			; Get new directory number
+	txne t1, rc%nmd		; Are we done?
+	 jrst DunLst		;  Yes, so get out of this loop
+	movem t3, t4		; Save the new directory number
+	aobjn q1, LstLup	; Go back for another directory
+	%ermsg <Disk allocation table space exhausted> ; Oops.  Out of space!!!
+
+; Drop down here when the directory numbers have all been stored in the table.
+; Terminate the table with a zero entry, save the count of the number of
+; directories found, and return.
+DunLst:	aos q1			; Bump counter past last entry
+	setzm DirTab(q1)	; Zero out last entry indicating end-of-table
+	setzm AccTab(q1)
+	hrrzm q1, TotDir	; Save the total number of directories found
+	Ret			; Return to caller
+
+
+WrtRep:	Remark - Do the actual report writing.
+
+; Returns	+1:	Always.
+
+	saveAC <q1,q2,p1,p2,p3>	; Save some work regs
+	setzm NLines		; Zero out Lines Output count
+	setzm PgNum		; Zero out the page number counter
+	setz q1,		; Zero a loop index (array index)
+	setz q2,		; Zero top N users loop index too
+	Call NewPag		; Print initial page header
+
+; Loop and write the report file a line at a time.
+WrtLup:	skipn t1, DirTab(q1)	; Have we reached the end of the table?
+	 Ret			; Yes, so just return
+	skipe accFlg		; New page because of new account?
+	ifnsk.
+	  movem t1,tstore	; Save the directory number
+	  movsi t1,(point 7,)	; Make the check
+	  hrr t1, OldAcc
+	  movsi t2,(point 7,)
+	  hrr t2,AccTab(q1)
+	  STCMP
+	  cain t1,0		; Same account string?
+	  jrst .+3		; Yeah
+	  Call ParRep		; Print partial report
+	  Call NewPag		; No
+	  move t1,tstore	; restore the directory number
+	endif.
+	movx t2, DirBlk		; Address of block for storing directory info
+	setz t3,		; Don't care about password
+	GTDIR%			; Get some info about this directory
+	 %jserr <Couldn't GTDIR current directory: >
+	skipe prvFlg		; Do we want only the privved users?
+	ifnsk.
+	  skipn dirBlk+.CDPRV	; Yes, so is this guy privved?
+	   aoja q1, WrtLup	; No, so go back for next guy
+	endif.			; Otherwise, go on and print the info
+	skipe TopN		; Do we want to list only top N users?
+	ifnsk.
+	  caml q2, TopN		; Yes, so check if we've output enough
+	   Ret			; Yes, we've output top N.  Return
+	  aos q2		; Else, bump our counter
+	endif.			; Back to where we were
+	move t1, q1		; Get current array index value
+	Call PrRec		; Output one record
+	aos NLines		; Decrement lines printed count
+	move t1, NLines		; Get # of lines output so far
+	cail t1, PGLEN-HDRLEN	; Ready for a new page?
+	 Call NewPag		;  Yes, so do it
+	aoja q1, WrtLup		; Go back for next line
+
+
+PrRec:	Remark - Prints a single directory stats record to the output file.
+
+; Prints a single directory statistics record to the output file.
+;
+; Accepts in	AC1:	Index into DirTab and DskTab.
+;
+; Returns	+1:	Always.
+
+	saveAC <q1>		; Save some work regs
+	movem t1, q1		; Save array index for later
+	move t1, DirTab(q1)	; Get current directory number in AC1
+	Call PrDir		; Print the directory string
+	aos DirCnt		; Bump total directories output count
+	move t1, OJFN		; Get the output file JFN back
+	move t2, DskTab(q1)	; Pick up disk usage for this dir
+	addm t2, UseCnt		; Add to total pages used count
+	movx t3, NUMFMT		; Get the output number format
+	NOUT%			; Print disk usage 
+;	 %jserr <Assigned quota NOUT failed: >
+	jfcl
+	skipe shtFlg		; Are we doing a short report?
+	 jrst ShtRep		;  Yes, so skip file counts, etc
+	move t1, DirTab(q1)	; Else, get the current directory number back
+	Call GtStat		; Get the rest of the stats for this directory
+	move t1, OJFN		; Get the output file JFN back
+	move t2, DP		; Get deleted page count
+	addm t2, DelCnt		; Add to total deleted pages count
+	movx t3, NUMFMT		; Get the number format bits
+	NOUT%			; Print deleted pages count
+	 %jserr <Couldn't NOUT deleted pages: >
+	move t2, TF		; Get total files count back
+	addm t2, FilCnt		; Add to total file count
+	NOUT%			; Print it to the output file
+	 %jserr <Couldn't NOUT file count: >
+	move t1, OJFN		; Get the output file JFN back
+	move t2, WQ		; Get the working quota
+	tlne t2, INF		; Is the working quota +INF?
+	ifnsk.			; Yes
+	  movx t2, %ptr<  Infinite>
+	  setz t3,		; Terminate on null
+	  SOUT%			; Send this string
+	   %jserr <Couldn't SOUT working quota: >
+	else.
+	  movx t3, NUMFMT	; Else, get number format back
+	  NOUT%			;  and output quota
+	   %jserr <Couldn't NOUT working quota: >
+	endif.
+	move t2, PQ		; Get permanent quota back
+	tlne t2, INF		; Is the permanent quota +INF?
+	ifnsk.
+	  movx t2, %ptr<  Infinite> ; Yes, so load this string
+	  setz t3,		; Terminate on null
+	  SOUT%			; Send this string
+	   %jserr <Couldn't SOUT permanent quota: >
+	else.
+	  movx t3, NUMFMT	; Else, get number format back
+	  NOUT%			;  and output quota
+	   %jserr <Couldn't NOUT permanent quota: >
+	endif.
+ShtRep:	move t4, DirBlk+.CDMOD	; Get the mode word for this directory
+	txne t4, cd%dir		; Is this a "files-only" directory?
+	ifnsk.
+	  movx t2, %ptr<       Files-only> ; Yes
+	  setz t3,		; Terminate on null
+	  SOUT%
+	else.
+	  aos UsrCnt		; [6] Else, it's a user.  First, bump counter
+	  skipn DirBlk+.CDLLD	; Has anyone logged into this directory?
+	  ifnsk.
+	    movx t2, %ptr<            Never> ; No
+	    setz t3,
+	    SOUT%
+	  else.
+	    movx t2, %ptr<  >	; Get some spaces
+	    setz t3,		; Terminate on null
+	    SOUT%		; Send 'em
+	    move t2, DirBlk+.CDLLD ; Else, pick up date last logged in
+	    movx t3, <ot%nsc>	; No seconds, please
+	    ODTIM%		; Print date last logged in
+	     %jserr <Couldn't output last login: >
+	  endif.
+	endif.
+	movx t2, %ptr<  >	; Get some spaces
+	setz t3,		; Terminate on null
+	SOUT%			; Send 'em
+	Call PrCap		; Print the directory's capabilities
+	hrroi t2, CRLF		; Get a CRLF
+	setz t3,		; Terminate on null
+	SOUT%			; Print EOL to output file
+	Ret			; Return to caller
+
+
+PrDir:	Remark - Print current directory string, padded on the right.
+
+; Prints the current directory string to the output file, padded on the right
+; out to 40 spaces.
+;
+; Accepts in	AC1:	Directory number.
+;
+; Returns	+1:	Always.
+
+	move t2, t1		; Move directory number to AC2
+	movx t1, <ascii "     "> ; Get a word's worth of spaces
+	movem t1, TmpStr	; Save in first word of temp string space
+	movx t1, <TmpStr,,TmpStr+1> ; Get source,,destination
+	blt t1, TmpStr+7	; Clear out our string buffer with spaces
+	hrroi t1, TmpStr	; Get ptr to temp string storage
+	DIRST%			; Print directory string
+	 %jserr <Couldn't DIRST current directory name: >
+	movx t4, " "		; Get a space
+	idpb t4, t1		; Drop it in overwriting trailing null
+	move t1, OJFN		; Get the output file JFN back
+	hrroi t2, TmpStr	; Get ptr to our string
+	movx t3, -^d40		; Output 40 characters of the buffer
+	SOUT%			; Print padded directory string
+	Ret			; Return to caller
+
+
+GtStat:	Remark - Get some usage statistics on a given directory.
+
+; Returns various disk usage and directory statistics on the given directory.
+;
+; Accepts in	AC1:	Directory number.
+;
+; Returns	+1:	Always, with:
+;
+;				Working quota in WQ
+;				Permanent quota in PQ
+;				Total number of files in TF
+;				Number of deleted pages in DP
+; [5]				P0Cnt and P1Cnt incremented as necessary
+
+	saveAC <q1,q2>		; Save some work regs
+	move t2, t1		; Get directory number into AC2.
+	movx t1, <point 7, TmpStr> ; Get pointer to a temp string buffer
+	DIRST%			; Make a directory string
+	 %jserr <Couldn't DIRST current directory name: >
+	movx t4, "*"		; Drop in wildcards after the directory name
+	idpb t4, t1
+	movx t4, "."
+	idpb t4, t1
+	movx t4, "*"
+	idpb t4, t1
+	movx t4, "."
+	idpb t4, t1
+	movx t4, "*"
+	movx t4, .CHNUL		; Get a null
+	idpb t4, t1		; Drop it in at the end to terminate
+
+; Get working and permanent quotas, and save them away.
+	move t1, t2		; Get the directory number back in AC1
+	GTDAL%			; Get disk allocations
+	 %jserr <Couldn't get disk allocations: >
+	movem t1, WQ		; Save working quota
+	movem t3, PQ		; Save permanent quota
+
+; Now, loop thru all the files in the directory, adding up the deleted pages.
+	setzb q1, q2		; Zero out our temp counters
+	movx t1, <gj%old!gj%del!gj%ifg!gj%sht> ; Allow deleted files, wildcards
+	hrroi t2, TmpStr	; Get pointer to filespec we just created
+	GTJFN%			; Get a JFN on that guy
+	ifjer.
+	  caie t1, GJFX32	; On error, check if no files
+	   %ermsg <Couldn't GTJFN wildcard filespec: %e>
+	  setzm TF		; No files found, so zero file count
+	  setzm DP		; No deleted pages either
+	  Ret
+	endif.			; Return to caller
+	movem t1, JFN		; Save this JFN for later
+
+; Loop and count number of files and number of deleted pages.
+StatLp:	aos q1			; Bump file count by one
+	hrrz t1, JFN		; Get the current JFN without flags
+	movx t2, <.FBBYV+1,,.FBHDR> ; Read some of this file's FDB
+	movx t3, FDB		;  into our address space.
+	GTFDB%			; Get that info
+	 %jserr <Couldn't get FDB of current file: >
+	hrrz t3, FDB+.FBBYV	; Get the page count for this file
+	cain t3, 0		; [5] Is this a zero page file?
+	 aos P0Cnt		; [5] Yes, so count it
+	cain t3, 1		; [5] Is this a one page file?
+	 aos P1Cnt		; [5] Yes, so count it
+	move t4, FDB+.FBCTL	; Get the flag word
+	txne t4, fb%del		; Is the file deleted?
+	 addm t3, q2		; Yes, so add the page count to our total
+	move t1, JFN		; Get the current JFN
+	GNJFN%			; Get the next JFN in line
+	ifjer.
+	  caie t1, GNJFX1	; On error, check if "no more files"
+	   %ermsg <GNJFN failed: %e> ; No, something else
+	  movem q1, TF		; Else, save total number of files
+	  movem q2, DP		; Save deleted page count
+	  Ret			; Return to caller
+	endif.
+	jrst StatLp		; Else, go back for more files
+
+
+PrCap:	Remark - Print the directory capabilities to the output file.
+
+; Prints a string of short codes indicating the capabilities of the directory.
+;
+; Returns	+1:	Always.
+
+	saveAC <q1>		; Save some work regs
+	skipn q1, DirBlk+.CDPRV	; Does this guy have any special capabilities?
+	 Ret			; Nope, so just return
+	movx t1, <point 7, TmpStr> ; Get ptr to temp string buffer
+	txne q1, sc%whl		; Is he a Wheel?
+	ifnsk.
+	  movx t2, %ptr<Wheel > ; Yes, so get ptr to Wheel string
+	  Call MovStr		; Drop it in
+	endif.
+	txne q1, sc%opr		; Is he an Operator?
+	ifnsk.
+	  movx t2, %ptr<Oper >	; Yes, so get ptr to Operator string
+	  Call MovStr		; Drop it in
+	endif.
+	txne q1, sc%cnf		; Is he CIA?
+	ifnsk.
+	  movx t2, %ptr<CIA >	; Yes, so get ptr to CIA string
+	  Call MovStr		; Drop it in
+	endif.
+	txne q1, sc%mnt		; Maintenance?
+	ifnsk.
+	  movx t2, %ptr<Maint > ; Yes, so get ptr to Maintenance string
+	  Call MovStr		; Drop it in
+	endif.
+	txne q1, sc%ipc		; IPCF?
+	ifnsk.
+	  movx t2, %ptr<IPCF >	; Yes, so get ptr to IPCF string
+	  Call MovStr		; Drop it in
+	endif.
+	txne q1, sc%enq		; ENQ/DEQ?
+	ifnsk.
+	  movx t2, %ptr<ENQ >	; Yes, so get ptr to ENQ/DEQ string
+	  Call MovStr		; Drop it in
+	endif.
+	txne q1, sc%nwz		; ARPANET wizard?
+	ifnsk.
+	  movx t2, %ptr<ARPA >	; Yes, so get ptr to ARPAnet wizard string
+	  Call MovStr		; Drop it in
+	endif.
+	txne q1, sc%nas		; Absolute ARPANET socket?
+	ifnsk.
+	  movx t2, %ptr<Abs >	; Yes, so get ptr to Abs. ARPA. sockets
+	  Call MovStr		; Drop it in
+	endif.
+	movx t4, .CHNUL		; Get a null
+	idpb t4, t1		; Drop it in at the end to terminate
+	move t1, OJFN		; Get the output file JFN back
+	hrroi t2, TmpStr	; Get ptr to temp string buffer
+	setz t3,		; Terminate on null
+	SOUT%			; Print capas string
+	 %jserr <SOUT failed: >
+	andi q1, 1777		; Mask out the rest of the capabilities
+	skipn q1		; Any leftover capas?
+	 Ret			;  No, so return early
+	move t2, q1		; Else, get the capas into AC2
+	movx t3, ^d8		; Output base 8
+	NOUT%			; Print remaining capas as octal # into OutBuf
+	 %jserr <Local capabilities NOUT failed: >
+	Ret			; Return to caller
+
+
+ParRep:	Remark - Print partial report totals
+;
+; Returns	+1	Always.
+	move t1, OJFN		; Get the output file JFN back
+	hrroi t2, CRLF		; Get ptr to a CRLF
+	setz t3,		; Terminate on null
+	SOUT%			; Print it to the output file
+	 %jserr <EOL SOUT failed: >
+	hrroi t2, [asciz "Number of directories:"]
+	setz t3,		; Terminate on null
+	SOUT%			; Print this string
+	 %jserr <SOUT failed: >
+	move t2, DirCnt		; Get the directory sub count
+	sub t2, PDCnt
+	movx t3, <no%lfl!fld(^d10,no%col)!^d10>	; Output in base 10
+	NOUT%			; Print directory count
+	 %jserr <NOUT failed: >
+	move t2, DirCnt		; Save the partial directory count
+	movem t2, PDCnt
+	hrroi t2, CRLF		; Get ptr to a CRLF
+	setz t3,		; Terminate on null
+	SOUT%			; Print it to the output file
+	 %jserr <EOL SOUT failed: >
+	hrroi t2, [asciz "Number of users:      "] ; [6]
+	setz t3,		; [6] Terminate on null
+	SOUT%			; [6] Print this string
+	 %jserr <SOUT failed: >	;  [6]
+	move t2, UsrCnt		; [6] Get the user directory count back
+	sub t2, PUCnt
+	movx t3, <no%lfl!fld(^d10,no%col)!^d10>	; [6] Output in base 10
+	NOUT%			; [6] Print to output file
+	 %jserr <NOUT failed: >	;  [6]
+	move t2, UsrCnt
+	movem t2, PUCnt
+	hrroi t2, CRLF		; [6] Get ptr to a CRLF
+	setz t3,		; [6] Terminate on null
+	SOUT%			; [6] Print it to the output file
+	 %jserr <EOL SOUT failed: > ;  [6]
+
+	hrroi t2, [asciz "Pages used:           "]
+	setz t3,
+	SOUT%
+	 %jserr <SOUT failed: >
+	move t2, UseCnt
+	sub t2, PPUse
+	movx t3, <no%lfl!fld(^d10,no%col)!^d10>	; [6] Output in base 10
+	NOUT%			; Print to output file
+	 %jserr <NOUT failed: >
+	move t2, UseCnt		; Update old page use
+	movem t2, PPUse
+	hrroi t2, CRLF		; Get ptr to a CRLF
+	setz t3,		; Terminate on null
+	SOUT%			; Print it to the output file
+	 %jserr <EOL SOUT failed: >
+	hrroi t2, [asciz "Deleted pages:        "]
+	setz t3,		; Terminate on null
+	SOUT%			; Print this string
+	 %jserr <SOUT failed: >
+	move t2, DelCnt		; Get the directory count
+	sub t2, PDlCnt
+	movx t3, <no%lfl!fld(^d10,no%col)!^d10>	; Output in base 10
+	NOUT%			; Print directory count
+	 %jserr <NOUT failed: >
+	move t2, DelCnt
+	movem t2, PDlCnt
+	hrroi t2, CRLF		; Get ptr to a CRLF
+	setz t3,		; Terminate on null
+	SOUT%			; Print it to the output file
+	 %jserr <EOL SOUT failed: >
+	hrroi t2, [asciz "Number of files:      "]
+	setz t3,
+	SOUT%
+	 %jserr <SOUT failed: >
+	move t2, FilCnt
+	sub t2, PFCnt
+	movx t3, <no%lfl!fld(^d10,no%col)!^d10>	; [6] Output in base 10
+	NOUT%			; Print to output file
+	 %jserr <NOUT failed: >
+	move t2, FilCnt		; Update number of files
+	movem t2, PFCnt
+	hrroi t2, CRLF		; Get ptr to a CRLF
+	setz t3,		; Terminate on null
+	SOUT%			; Print it to the output file
+	 %jserr <EOL SOUT failed: >
+	Ret
+
+DunRep:	Remark - Print final report totals
+
+; [5] Added zero and one page file count records, and structure free and used
+; pages records.
+;
+; Accepts in	AC1:	Count of directories found.
+;
+; Returns	+1:	Always.
+
+	saveAC <q1,q2,3>	; Save some work regs
+	move t1, OJFN		; Get the output file JFN back
+	hrroi t2, [asciz "Total number of directories:"]
+	setz t3,		; Terminate on null
+	SOUT%			; Print this string
+	 %jserr <SOUT failed: >
+	move t2, DirCnt		; Get the directory count
+	movx t3, <no%lfl!fld(^d10,no%col)!^d10>	; Output in base 10
+	NOUT%			; Print directory count
+	 %jserr <NOUT failed: >
+	hrroi t2, CRLF		; Get ptr to a CRLF
+	setz t3,		; Terminate on null
+	SOUT%			; Print it to the output file
+	 %jserr <EOL SOUT failed: >
+	hrroi t2, [asciz "Total number of users:      "] ; [6]
+	setz t3,		; [6] Terminate on null
+	SOUT%			; [6] Print this string
+	 %jserr <SOUT failed: >	;  [6]
+	move t2, UsrCnt		; [6] Get the user directory count back
+	movx t3, <no%lfl!fld(^d10,no%col)!^d10>	; [6] Output in base 10
+	NOUT%			; [6] Print to output file
+	 %jserr <NOUT failed: >	;  [6]
+	hrroi t2, CRLF		; [6] Get ptr to a CRLF
+	setz t3,		; [6] Terminate on null
+	SOUT%			; [6] Print it to the output file
+	 %jserr <EOL SOUT failed: > ;  [6]
+	hrroi t2, [asciz "Total pages used:           "]
+	setz t3,		; Terminate on null
+	SOUT%			; Print this string
+	 %jserr <SOUT failed: >
+	move t2, UseCnt		; Get the paged used count
+	movx t3, <no%lfl!fld(^d10,no%col)!^d10>	; Output in base 10
+	NOUT%			; Print directory count
+	 %jserr <NOUT failed: >
+	hrroi t2, CRLF		; Get ptr to a CRLF
+	setz t3,		; Terminate on null
+	SOUT%			; Print it to the output file
+	 %jserr <EOL SOUT failed: >
+	skipe shtFlg		; Are we doing a short report?
+	 Ret			;  Yes, so return early
+
+; Continue down here if we requested a long form report.
+	hrroi t2, [asciz "Total deleted pages:        "]
+	setz t3,		; Terminate on null
+	SOUT%			; Print this string
+	 %jserr <SOUT failed: >
+	move t2, DelCnt		; Get the directory count
+	movx t3, <no%lfl!fld(^d10,no%col)!^d10>	; Output in base 10
+	NOUT%			; Print directory count
+	 %jserr <NOUT failed: >
+	hrroi t2, CRLF		; Get ptr to a CRLF
+	setz t3,		; Terminate on null
+	SOUT%			; Print it to the output file
+	 %jserr <EOL SOUT failed: >
+	hrroi t2, [asciz "Number of 0 page files:     "] ; [5]
+	setz t3,		; [5] Terminate on null
+	SOUT%			; [5] Print this string
+	 %jserr <SOUT failed: > ;  [5]
+	move t2, P0Cnt		; [5] Get zero page file count back
+	movx t3, <no%lfl!fld(^d10,no%col)!^d10>	; [5] Output in base 10
+	NOUT%			; [5] Print directory count
+	 %jserr <NOUT failed: > ;  [5]
+	hrroi t2, CRLF		; [5] Get ptr to a CRLF
+	setz t3,		; [5] Terminate on null
+	SOUT%			; [5] Print it to the output file
+	 %jserr <EOL SOUT failed: > ;  [5]
+	hrroi t2, [asciz "Number of 1 page files:     "] ; [5]
+	setz t3,		; [5] Terminate on null
+	SOUT%			; [5] Print this string
+	 %jserr <SOUT failed: > ;  [5]
+	move t2, P1Cnt		; [5] Get count of one page files back
+	movx t3, <no%lfl!fld(^d10,no%col)!^d10>	; [5] Output in base 10
+	NOUT%			; [5] Print directory count
+	 %jserr <NOUT failed: > ;  [5]
+	hrroi t2, CRLF		; [5] Get ptr to a CRLF
+	setz t3,		; [5] Terminate on null
+	SOUT%			; [5] Print it to the output file
+	 %jserr <EOL SOUT failed: > ;  [5]
+	hrroi t2, [asciz "Total number of files:      "]
+	setz t3,		; Terminate on null
+	SOUT%			; Print this string
+	 %jserr <SOUT failed: >
+	move t2, FilCnt		; Get the directory count
+	movx t3, <no%lfl!fld(^d10,no%col)!^d10>	; Output in base 10
+	NOUT%			; Print directory count
+	 %jserr <NOUT failed: >
+	hrroi t2, CRLF		; Get ptr to a CRLF
+	setz t3,		; Terminate on null
+	SOUT%			; Print it to the output file
+	 %jserr <EOL SOUT failed: >
+
+; [5] Do some stats on the disk structure, and output them.
+	move t1, DirDes		; [5] Get directory device designator back
+	GDSKC%			; [5] Get page counts for this structure
+	 %jserr <Couldn't get structure stats: > ;  [5]
+	movem t1, q1		; [5] Save pages used
+	movem t2, q2		; [5] Save pages free
+	move t1, OJFN		; [5] Get output file JFN back
+	hrroi t2, [asciz "Pages in use on structure:  "] ; [5]
+	setz t3,		; [5] Terminate on null
+	SOUT%			; [5] Print this string
+	 %jserr <SOUT failed: > ;  [5]
+	move t2, q1		; [5] Get pages used count
+	movx t3, <no%lfl!fld(^d10,no%col)!^d10>	; [5] Output in base 10
+	NOUT%			; [5] Print directory count
+	 %jserr <NOUT failed: > ;  [5]
+	hrroi t2, CRLF		; [5] Get ptr to a CRLF
+	setz t3,		; [5] Terminate on null
+	SOUT%			; [5] Print it to the output file
+	 %jserr <EOL SOUT failed: > ;  [5]
+	hrroi t2, [asciz "Pages free on structure:    "] ; [5]
+	setz t3,		; [5] Terminate on null
+	SOUT%			; [5] Print this string
+	 %jserr <SOUT failed: > ;  [5]
+	move t2, q2		; [5] Get free page count
+	movx t3, <no%lfl!fld(^d10,no%col)!^d10>	; [5] Output in base 10
+	NOUT%			; [5] Print directory count
+	 %jserr <NOUT failed: > ;  [5]
+	hrroi t2, CRLF		; [5] Get ptr to a CRLF
+	setz t3,		; [5] Terminate on null
+	SOUT%			; [5] Print it to the output file
+	 %jserr <EOL SOUT failed: > ;  [5]
+	Ret			; Return to caller
+
+
+	Subttl	Sorting Subroutines.
+
+Bubble: Remark - Really stupid bubble sort
+
+	skipe numFlg		; Do we want to sort numerically?
+	ifnsk.
+	  movei q1,1
+	  move p3, totdir
+	  subi p3, 1
+Inser1:	  camle q1,p3
+	  Ret
+	  move q2,p3
+Inser2:	  camge q2,q1
+	  jrst Inser4
+	  move q3,q2
+	  subi q3,1
+	  move p1,DskTab(q3)
+	  move p2,DskTab(q2)
+	  caml p1,p2
+	  jrst Inser3
+	  movem p1,DskTab(q2)
+	  movem p2,DskTab(q3)
+
+	  move p1,DirTab(q3)
+	  move p2,DirTab(q2)
+	  movem p1,DirTab(q2)
+	  movem p2,DirTab(q3)
+
+	  move p1,AccTab(q3)
+	  move p2,AccTab(q2)
+	  movem p1,AccTab(q2)
+	  movem p2,AccTab(q3)
+Inser3:	  subi q2,1
+	  jrst Inser2
+Inser4:	  addi q1,1
+	  jrst Inser1
+	else.
+	  skipe accFlg		; Sorting by account?
+	  ifnsk.
+	  movei q1,1
+	  move p3, totdir
+	  subi p3, 1
+Inser5:	  camle q1,p3
+	  Ret
+	  move q2,p3
+Inser6:	  camge q2,q1
+	  jrst Inser8
+	  move q3,q2
+	  subi q3,1
+	  movsi t1,(point 7,)
+	  hrr t1,acctab(q3)
+	  movsi t2,(point 7,)
+	  hrr t2,acctab(q2)
+	  STCMP
+	  tlnn t1,(sc%gtr)
+	  jrst inser7	  
+
+	  move p1,DskTab(q3)
+	  move p2,DskTab(q2)
+	  movem p1,DskTab(q2)
+	  movem p2,DskTab(q3)
+
+	  move p1,DirTab(q3)
+	  move p2,DirTab(q2)
+	  movem p1,DirTab(q2)
+	  movem p2,DirTab(q3)
+
+	  move p1,AccTab(q3)
+	  move p2,AccTab(q2)
+	  movem p1,AccTab(q2)
+	  movem p2,AccTab(q3)
+Inser7:	  subi q2,1
+	  jrst Inser6
+Inser8:	  addi q1,1
+	  jrst Inser5
+	  endif.
+	  Ret
+	endif.
+
+
+	Subttl	Record Output and Buffer Operation Routines.
+
+MovStr:	Remark - Move an ASCIZ string from one place to another.
+
+; Moves an ASCIZ string from one string buffer to another.
+;
+; Accepts in	AC1:	Pointer to destination string buffer.
+;		AC2:	Pointer to ASCIZ string to be moved.
+;
+; Returns	+1:	Always, updated string  pointers in AC1 and AC2.
+
+	ildb t4, t2		; Get a byte from the input string
+	jumpe t4, r		; If it's a null, then return
+	idpb t4, t1		; Else, drop it into the destination string
+	jrst MovStr		; Go back for more
+
+
+NewPag:	Remark - Output a formfeed and new page heading to the report file
+
+; Returns	+1:	Always.
+
+	move t1, OJFN		; Get the output file JFN back
+	movx t2, .CHFFD		; Get a formfeed
+	BOUT%			; Go to new page
+	hrroi t2, NodeNm	; Get ptr to local node name string
+	setz t3,		; Terminate on null
+	SOUT%			; Print this string to output file
+	movx t2, %ptr< DECsystem-20, > ; Get ptr to start of header
+	setz t3,		; Terminate on null
+	SOUT%			; Print this string to the output file
+	hrroi t2, DirStr	; Get ptr to directory string
+	SOUT%			; Print to the output file
+	movx t2, %ptr< on >	; Get ptr to this string
+	SOUT%			; Print to output file
+	seto t2,		; Get current date/time
+	movx t3, <ot%day!ot%fdy!ot%fmn!ot%4yr!ot%dam!ot%spa!ot%12h!ot%nsc>
+	ODTIM%			; Output current date/time to buffer
+	 %jserr <Couldn't output date/time to header: >
+	move t2,Acctab(q1)	; Grab current account string location
+	movem t2,OldAcc		; Save it
+	skipe numFlg		; Are we sorting or not?
+	ifnsk.
+	 move t2, [point 7, [asciz ", sorted numerically"]]
+	else.
+	 skipe accFlg
+	 ifnsk.
+	  move t2, [point 7, [asciz ", sorted for account "]]
+	  setz t3,		; Terminate on null
+	  SOUT%			; Print this string	
+	  movsi t2,(point 7,)	; Point to the account string
+	  hrr t2,oldacc
+	 else.
+	  move t2, [point 7, [asciz ", sorted alphabetically by directory"]]
+	 endif.
+	endif.
+	setz t3,
+	SOUT%
+	hrroi t2, LngHdr	; Assume we want the long report header
+	skipe shtFlg		; Did we really want the short report header?
+	 hrroi t2, ShtHdr	;  Yes, so get a ptr to it instead
+	SOUT%			; Send this to the output file too
+	setzm NLines		; Zero out the Lines Output counter
+	Ret			; Return to caller
+
+
+	Subttl	Report Page Heading Strings.
+
+LngHdr:	asciz |
+
+ Directory                                    Used   Deleted     Files   Working Permanent       Last Login  Capabilities
+====================================================================================================================================
+|
+
+ShtHdr:	asciz |
+
+ Directory                                    Used       Last Login  Capabilities
+============================================================================================
+|
+
+
+	Subttl	Data Area
+
+; Flags.
+xitFlg:	z			; Exit flag
+numFlg:	z			; Numerical sort by disk usage flag
+accFlg: z			; Alphanumeric sort by account flag
+prvFlg:	z			; Priviledged directories only flag
+shtFlg:	z			; Short format report flag
+
+; Scalar variables.
+JFN:	z			; Storage for JFN while stepping
+OJFN:	z			; Space for report file JFN
+DirNum:	z			; Directory number storage
+DirDes:	z			; [5] Directory device designator
+TotDir:	z			; Count of total number of directories found
+DirCnt:	z			; Total number of directories output
+UsrCnt:	z			; [6] Number of user directories
+FilCnt:	z			; Storage for total number of files found
+UseCnt:	z			; Storage for total number of pages used
+DelCnt:	z			; Storage for total number of deleted pages
+P0Cnt:	z			; [5] Total number of zero page files
+P1Cnt:	z			; [5] Total number of one page files
+NLines:	z			; Counter for lines-per-page
+PgNum:	z			; Storage for current page number
+WQ:	z			; Working quota returned by GtStat
+PQ:	z			; Permanent quota returned by GtStat
+TF:	z			; Total number of files returned by GtStat
+DP:	z			; Number of deleted pages returned by GtStat
+TopN:	z			; Top number of users to list
+OldAcc:	z			; Last printed account
+PDCnt:	z			; Partial directory count
+PPUse:	z			; Partial page use
+PFCnt:	z			; Partial file count
+PUCnt:	z			; Partial user count
+PdlCnt:	z			; Partial deleted pages count
+TStore:	z			; Temporary storage
+
+; String buffers.
+CRLF:	byte(7) .CHCRT, .CHLFD, .CHNUL ; A carriage return/linefeed pair
+DirStr:	block LNLEN/5+1		; Directory string storage.
+TmpStr:	block LNLEN/5+1		; Spare string buffer
+OutBuf:	block LNLEN/5+1		; Output record string buffer
+NodeNm:	block NODLEN/5+1	; Storage for local nodename string
+AccBuf: block LNLEN/5+1		; Temporary account string storage
+
+; CMD storage.
+	cmdstg
+
+
+; Tables.
+DirBlk:	block .CDDFE+1		; Directory info block
+FDB:	block .FBLEN		; Storage for file FDB
+gjfBlk:	block GJLN		; GTJFN info block
+DskTab:	block MAXDIR		; Table of disk usage (by directory)
+DirTab:	block MAXDIR		; Table of corresponding directory numbers
+AccTab: block MAXDIR		; Table of corresponding account strings
+AccStr:	block MAXDIR		; Permanent account string storage
+
+
+	End <Entlen,,Entvec>

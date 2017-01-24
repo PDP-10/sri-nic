@@ -1,0 +1,204 @@
+Here out the outtakes of my edits.  Sorry I can't send something
+cleaner since we have a bunch of other irrelevant edits.
+
+OK.  Here's the change to MMAILBOX.  string MYNAME is set to be
+the official local host name (code not included).  All changes
+in NICSW
+
+;;; Canonicalize address
+;;; Entry: STRBUF/ address from file
+;;; Call: CALL CANADR
+;;; Returns: +1
+;;;	    E/ host name,,user name
+;;; host name of FILHST is special, means destination is indirect file
+FILHST==777777
+CANADR:	SAVEAC <A,B,C>
+	STKVAR <HSTPTR>
+	HRRZ E,N		;Save start of name (will be copied here)
+	MOVE A,[POINT 7,STRBUF]
+	SETZ B,			;Where host pointer will be if any
+	DO.
+	  ILDB C,A
+	  IFN. C
+	    CAIN C,"@"
+	     MOVE B,A		;Save pointer to last @
+	    LOOP.
+	  ENDIF.
+	ENDDO.
+	IFE. B			;If no host name, copy string and return
+	  SAVEAC <T,TT>
+	  MOVEI T,STRBUF	;Is this name in hash table?
+	  CALL HSHLUK		;Well?
+	   JRST CPYSTR		;No, just copy it then
+	  HRRZ E,(I)		;Yes, use that value
+	  RET
+	ENDIF.
+	CAME B,[POINT 7,STRBUF,6] ;Was the @ the first character?
+	IFSKP.
+	  HRLI E,FILHST		;Yes, local address indirect file
+	  CALL CPYSTR
+	ELSE.
+	  SETZ C,		;Foreign address
+	  DPB C,B		;Replace @ with null
+	  CALL CPYSTR		;Copy the name
+	  MOVEM B,HSTPTR
+IFE NICSW,<
+	  MOVE A,HSTPTR		;Get pointer to host
+	  SETO C,		;Try all protocols
+	  CALL GETPRO		;Look up host name
+	  IFSKP.
+	    MOVEM B,HSTADR	;Save host address returned
+	    HRROI A,HSTTMP	;Store local name in scratch area
+	    SETO B,		;Local host address for this protocol
+	    CALL MYADDR		;Get local host address for this protocol
+	    IFSKP.
+	      CAMN B,HSTADR	;Is this our local host?
+	       RET		;Yes, don't need host name
+	    ENDIF.
+	  ENDIF.
+>;IFE NICSW
+IFN NICSW,<
+	  HRROI A,MYNAME
+	  STCMP%	 
+	  SKIPE A		;us, don't need host name
+	   TXNE A,SC%SUB	;.#domain stuff? (this might not be needed???)
+	    RET			;yep, us again
+>;IFN NICSW
+	  HRL E,N
+	  MOVE A,HSTPTR		;Start of host name
+	  HRLI N,(<POINT 7,0>)
+	  DO.
+	    ILDB B,A
+	    IDPB B,N
+	    JUMPN B,TOP.
+	  ENDDO.
+	  MOVEI N,1(N)		;Update free pointer
+	ENDIF.
+	RET
+
+----------------------------------------------------------------------
+Here's the change to MMAILR:  Just the FWDRCP routine.
+
+
+;;; Make a new recipient block from forwarded address
+;;; T/ host,,name
+;;; Returns O/ standard recipient block
+FWDRCP:	PUSH P,T
+	MOVEI A,RCPLEN		;Get block for this recipient
+	CALL ALCBLK
+	 FATAL (Memory exhausted)
+	MOVEI O,(B)
+	MOVX B,FR%STR
+	MOVEM B,RCPFLG(O)	;Initialize flags
+	MOVE A,[POINT 7,STRBUF]
+	HRRZ B,(P)
+	CALL FWDCPY		;Copy string from inferior
+	HRROI A,STRBUF
+	CIETYP <  %1W>
+	CALL CPYSTR		;Get byte pointer and count
+	HRLI B,(<POINT 7,0>)
+	DMOVEM B,RCPBPT(O)	;Save them
+	POP P,T
+	HLRZ B,T		;Get host address
+	JUMPE B,FWDRC1		;Local
+	MOVE A,[POINT 7,HSTBUF]
+	CALL FWDCPY		;Copy host name from inferior
+	DO.
+	  TXNN A,76B4		;Filled to word boundary?
+	   EXIT.
+	  IDPB D,A		;No, do another null
+	  LOOP.
+	ENDDO.
+	HRROI B,HSTBUF
+	ETYPE <@%2W>
+IFN NICSW,<
+	MOVEI A,HSTTBL		;Cache header
+	TBLUK%			;Look it up in the cache
+	IFXN. B,TL%EXM		;Found it?
+	  HLRZ B,(A)		;Great, get the string address
+	  RET			;Return success
+	ENDIF.
+	HRROI A,HSTBUF
+	CALL CPYSTR		;Copy the string
+	HRLZS B			;RH 0 means temporary table entry
+	MOVEI A,HSTTBL		;Point to the table
+	TBADD%			;Add it to table
+	HLRZ B,(A)		;Get the string address
+	RET			;Return success
+>;IFN NICSW
+IFE NICSW,<
+	CALL HSTNAM
+	 SKIPA
+	  RET
+	CALL RCPLXH		;Put in error for no such host
+>;IFE NICSW
+
+FWDRC1:	MOVEI B,LCLNAM		;And store as local
+	RET
+----------------------------------------------------------------------
+Here's the changes to MM.   I added this flag called F%VRFY.
+SEND and REPLY set the flag off.  Two new commands (VSEND/VREPLY)
+set the flag on for people who have important mail or whatever.
+This might be better done with an MM set variable or something.
+
+
+;;;Look up a host name with byte pointer A and return the address of its
+;;; canonical name string in A.  Skips if name found
+
+HSTNAM:	SAVEAC <B,C,D>
+	STKVAR <HSTPTR>
+	MOVEM A,HSTPTR
+	MOVEI A,HSTTAB		;See if in cache already
+	MOVE B,HSTPTR
+	TBLUK%
+	IFXN. B,TL%EXM		;Already in the table?
+	  HLRZ A,(A)		;Great, get the string address
+	  RETSKP		;Return success
+	ENDIF.
+	MOVE A,HSTPTR
+	HRRO B,HCSHFF		;Store name in free area in host cache
+	SETZ C,			;Use any protocol, don't care about address
+IFN NICSW,<
+	IFXN. F,F%VRFY
+	 CALL $GTCAN		;Canonicalize the name
+	ELSE.
+	 EXCH A,B
+	 HRLI A,440700
+	 CALL MOVST0		;canonical name is same as given us
+	 SETZ B,		;unknown host address
+	 SKIPA			;and success!
+	ENDIF.
+>;IFN NICSW
+	IFNSK.
+	  SKIPE DOMTBL		;Failed, see if pseudo-domains are initialized
+	  IFSKP.
+	    MOVEI A,ALCBLK	;No, do so.  Routine to assign memory
+	    SETZ B,		;Say don't bother making relay lists
+	    CALL $INRLY
+	    MOVEM A,DOMTBL	;Save fact that we are initialized
+	  ENDIF.
+	  MOVE A,HSTPTR		;Get back A
+	  CALL $GTRLY		;Try relays
+	   RET
+	  MOVE B,A		;Canonical name
+	  HRR A,HCSHFF		;To free area
+	  HRLI A,(<POINT 7,>)
+	  CALL MOVST2		;Copy it
+	ENDIF.
+	IBP A			;Make sure we include at least one null
+	MOVEI D,1(A)		;Pointer to next word after name returned
+	CAIL D,HSTSTR+<NHSPGS*1000>
+	 FATAL <Host name cache overflowed>
+	MOVEI A,HSTTAB		;See if in cache already
+	HRRO B,HCSHFF
+	TBLUK%
+	IFXE. B,TL%EXM		;Already in the table?
+	  MOVEI A,HSTTAB	;Point to the table
+	  HRLZ B,HCSHFF
+	  TBADD%		;Add it to table
+	  MOVEM D,HCSHFF	;Update current host cache free pointer
+	ENDIF.
+	HLRZ A,(A)		;Get the string address
+	RETSKP			;Return success	  	
+
+	ENDSV.

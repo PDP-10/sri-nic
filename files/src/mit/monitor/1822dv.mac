@@ -1,0 +1,738 @@
+;<5.ISI.MONITOR>1822DV.MAC.5700, 10-Feb-83 16:49:27, Edit by CHASE
+;#570 In IMPHDR, set up T4 before using it.
+;<5.ISI.MONITOR>1822DV.MAC.5350	 6-Jan-83 17:30:54	Edit by JGOLDBERGER
+;#535   Clear NBQUE in packets returned by RFNOUT, in case...
+;       Restart input after calling INTFBF in IMPEI3
+;<5.ISI.MONITOR>1822DV.MAC.5220, 21-Dec-82 13:32:22, Edit by BILKIS
+;#522	Fix test at RFNOU2+1 to be JUMPG not JUMPL to make RFNTOTs go away
+;<5.ISI.MONITOR>1822DV.MAC.5010	19-Nov-82 13:35:31	Edit by JGOLDBERGER
+;#501 Version 5 MultiNet without MLC code
+;<134>1822DV.MAC;5    10-DEC-82 15:59:13    EDIT BY TAFT
+; Fix trouble at IMPEI3 which resulted in NTIB never being zeroed and input
+; never being restarted.
+;<134>1822DV.MAC;4     7-DEC-82 10:34:11    EDIT BY TAFT
+; Remove search of MONSYM
+; Remove defs of NCPF and MLCF
+; Change MLCF to MLCN
+; Fix unterminated conditional at IMPEI3
+;[BBNF]<TAPPAN.NEW>1822DV.MAC.48,  2-Sep-82 11:18:50, Edit by: TAPPAN
+; Send NOP's if the IMP starts sending us short leader messages
+;[BBNF]<TAPPAN.NEW>1822DV.MAC.44, 23-Jul-82 08:48:41, Edit by: TAPPAN
+; Add RFN8TO table maintainance, to protect against pathological case
+; where RFNM's get lost and buffers gets locked on the output queues
+;<TAPPAN.NEW>1822DV.MAC.29, 12-Jun-82 16:21:16, Edit by TAPPAN
+; Added RFNM counting code (based on ISI's)
+; Added NCPUNQ -- routine for deciding which buffer from 
+; which queue should go next
+;
+
+	SEARCH PROLOG,MNTPAR,IMPPAR
+ND MLCN,0
+ND INETN,1
+ND NCPF,0
+ND ISIQ,0
+IFG INETN,<SEARCH INPAR>
+
+	TTITLE 1822DV
+	ASCIZ	/
+	1822DV
+	COPYRIGHT (C) 1982,1983 BOLT BERANEK and NEWMAN INC.
+	/
+	
+;;;
+;;; Multinet interface routines common to 1822 networks
+;;; These are the "Protocal" dependent routines (i.e. those
+;;; that are hardware independent), Hardware dependent routines
+;;; are in the driver module (IMPPHY, ANXPHY etc.).
+;;;
+;;; All routines expect an NCT pointer in P1
+;;;
+
+
+DEFSTR ADR23,0,35,23		; 23 bit address
+
+	RESCD
+;;;
+;;; Protocal dispatch vector
+;;;
+NCPVEC::
+	NCTVEC(NCPVEC,NCPKIL,NTPKIL)	; Protocal specific interface kill
+	NCTVEC(NCPVEC,NCPERR,NTPERR)	; protocal specific error handler
+	NCTVEC(NCPVEC,IMPEIN,NTIDUN)	; Input done
+	NCTVEC(NCPVEC,IMODUN,NTODUN)	; Output done
+	NCTVEC(NCPVEC,NCPRBF,NTRBUF)	; Flush buffer chain
+	NCTVEC(NCPVEC,NCPOTT,NTOTOK)	; Output allowed check
+	NCTVEC(NCPVEC,IMPHDR,NTLLDR)	; Create local leader
+	NCTVEC(NCPVEC,NCPINI,NTPINI)	; Network up function
+
+	SWAPCD
+;;;
+;;; NCPINI -- Network up function
+;;;
+NCPINI:	MOVEI T1,.NBHHL		; Local leader size
+	MOVEM T1,NTHDRL(P1)	; set it
+	RET			; and done
+
+;;;
+;;; NCPERR -- Protocal dependent function when an interface
+;;; error occurs
+;;;
+NCPERR:
+IFN NCPF,<
+	MOVEI T3,NHOSTS		; Size of host hash table
+	PUTSEC T4,MNTSEC	; right section
+NCPER0:	PUSH P,T3		; Save
+	PUSH P,T4		; ..
+	SKIPN T1,HSTHSH(T4)	; Slot empty?
+	 JRST NCPER1		; Yes
+	CALL NETCMP		; Same net?
+	 JRST NCPER1		; no
+	CALL CHKNWP		; "New NCP" host?
+	 TRNA			; no
+	  JRST NCPER1		; Yes, can recover
+	SKIPGE HSTSTS(T4)	; Is it up?
+	 CALL HSTDED		; Not any more
+NCPER1:	POP P,T4		; Restore
+	POP P,T3		; ...
+	AOS T4			; increment
+	SOJG T3,NCPER0		; Loop
+>
+	RET
+
+;;;
+;;; NCPKIL -- Protocal dependent functions in taking down an interface
+;;; returns +2 when function is complete
+;;;
+NCPKIL:	MOVE T1,NTRDY(P1)	; Get status word
+	TRZN T1,1B18		; First time through?
+	 JRST NCPKL5		; No
+	MOVEM T1,NTRDY(P1)	; Save modified flag
+IFN NCPF,<
+	PUTSEC T1,MNTSEC
+	MOVEM T1,IMPCCH(P1)	; Send RST's to everyone
+	SETZM IMPTIM		;  Now
+
+	CALL NETDWN		; Kill all connections
+
+	CALL NVTDWN		; And all NVT's
+>
+
+;;; Create a "Host going down" message
+;;; Assumes "Unknown reason"
+;;; HSYST4 contains time back up
+REPEAT 0,<
+	CALL LGTAD		; Get time
+	CAMLE T1,HSYST4		; IS TIME BACK UP LATER THAN NOW?
+	 JRST [	MOVEI T1,177776	; NO
+		JRST NCPKL3]	; TIME BACK UP NOT KNOWN
+	ADD T1,[6,,0]
+	CAMG T1,HSYST4		; MORE THAN 6 DAYS AWAY?
+	 JRST [	MOVEI T1,177777	; YES
+		JRST NCPKL3]
+	MOVX T4,<IC%DSA!IC%UTZ>	; USE GMT STANDARD TIME
+	ODCNV			; SEPARATE INTO DAY, SECOND ETC
+	HRRZ T1,T3		; DAY OF WEEK
+	HRRZ T2,T4		; SECONDS SINCE MIDNIGHT
+	IDIVI T2,^D300		; CONVERT SECONDS TO 5 MIN
+	IDIVI T2,^D12		; SEPARATE INTO HOUR AND 5 MIN
+	LSH T1,5
+	IORI T1,(T2)		; INSERT HOUR OF DAY
+	LSH T1,4
+	IORI T1,(T3)		; AND 5 MIN PART OF HOUR
+
+NCPKL3:
+	LSH T1,4		; Room for REASON
+				; (Assume "reason unknown")
+>
+	MOVX T1,177776B31	; Assume "unknown reason", "unknown time up".
+	MOVEM T1,HSTGDM(P1)	; Save message
+
+	MOVEI T1,^D10000	; When to give up
+	ADD T1,TODCLK		; ..
+	MOVEM T1,NTDCLK(P1)	; Save timer
+
+NCPKL5:	MOVE T1,NTDCLK(P1)	; Get timeout value
+	CAMLE T1,TODCLK		; Timeout happened?
+	 SKIPG HSTGDM(P1)	; Wait for "Going down" message to go out
+	  RETSKP		; Skip return when done
+	RET			; Not done yet
+
+
+;;;
+;;; NCPRBF -- Release a buffer (chain). Called when 
+;;; flushing the NCT's queues.
+;;; T2 -- Buffer list
+;;; (Buffers are NOT internet buffers)
+;;;
+NCPRBF:
+NCPRB0:
+	TRNN T2,-1		; Anything there?
+	 RET			; No
+IFE NCPF,<
+	MNTBUG(HLT,RBNNCP,<Releasing buffer but no NCP>)
+>
+IFN NCPF,<
+	MOVE T1,T2		; get this buffer
+	LOAD T2,NBQUE,(T1)	; Get next in list
+	SETSEC T2,ANBSEC	; Point in the right section
+	PUSH P,T2		; Save next
+	CALL NCPRB6		; Clear RFNM count if appropriate
+	POP P,T2		; ...
+	JRST NCPRB0		; loop through the chain
+
+;;; NCPRB6 - Clear RFNM count, re-xmit flag and buffer, then unlock.
+;;; Buffer in T1
+NCPRB6:
+	PUSH P,T2		; Save some registers
+	PUSH P,T3
+	PUSH P,T1
+	CALL IMPGHL		; Get a LNKLUK arg
+	 JRST NCPRB7		; Non-NCP buffer
+	CALL LNKLUK		; Look up the connection
+	 JRST NCPRB7		; Not found. May be deleted.
+	PIOFF			; Grab machine for a moment
+	MOVX T2,RFNMCM!RXMTF	; Clear IMPLT knowledge of this buffer
+	ANDCAM T2,IMPLT2(T1)	; Both status bits,
+	HLLZS IMPLT3(T1)	;  and address of buffer
+	PION			; done
+NCPRB7:	MOVE T2,0(P)		; Get address back
+	CALL IMPRBF		; Release the buffer
+	POP P,T1
+	POP P,T3		; Restore the AC's
+	POP P,T2
+	RET
+>
+
+	RESCD
+;;;
+;;; IMPEIN -- "End of input" processing for a buffer
+;;; Here from device driver after device specific 
+;;; operations done, when a packet has been recieved.
+;;; called  with  P1 pointing to NCT for device
+;;;
+IMPEIN::SKIPG T1,NTIB(P1)	; Bfr address
+	 JRST IMPEI2		; Wasn't one
+	MNTCALL NTSCHK		; Check status
+	 JRST IMPEI3		; error occured, drop it
+	AOSG NTFLS(P1)		; Flushing msgs?
+	 JRST IMPEI3		; Yes, return to free list
+	HRRZ T2,NTINP(P1)	; How much was read?
+	CAIGE T2,.NBLD2(T1)	; A full leader?
+	 JRST IMPEI3		; No, Discard it as useless
+	MOVE T2,NTNET(P1)	; get network number from NCT
+	STOR T2,IHNET,(T1)	; Stick it into buffer header
+	LOAD T3,IHFTY,(T1)	; Is this a long leader msg?
+	CAIE T3,ITY%LL		; ..
+	 JRST IMPE3A		; No. Just throw it away. (But correct IMP)
+
+	LOAD T3,IHMTY,(T1)	; Get message type.
+	CAIGE T3,NRFNXS		; Possible RFNM counting ?
+	 XCT RFNXCT(T3)		; Yes, act according to type.
+
+	CALL INTBCK		; Internet buffer?
+	 JRST IMPE01		; No
+	CAIE T3,.IHREG		; Regular?
+	 CAIN T3,.IHUNC		; Uncontrolled?
+	  CAIA			; One of the above
+	   JRST IMPEI3		; Not valid data
+	LOAD T3,NBBSZ,(T1)	; Get size of buffer
+	CAMLE T3,MAXWPM		; Check size field
+	 MNTBUG(HLT,IMPIWW,<IMPEIN: Internet bfr word size wrong>)
+IFN MAXLDR-.NBHHL,<
+	MOVE T2,T1
+	MOVNI T3,.NBHHL		; Ammount to correct leader by
+	CALL FIXLDR
+>
+	MOVE T3,INTIBI		; Queue for Internet gateway
+	JUMPN T3,IMPE00
+	MOVEM T1,INTIBO
+	SKIPA
+IMPE00:	 STOR T1,NBQUE,(T3)
+	MOVEM T1,INTIBI
+	AOS INTFLG		; Cause Internet process to notice it
+	JRST IMPE11		; Avoid running NCP -- Internet buf used
+
+IMPE01:
+IFN NCPF,<
+	CAIE T3,.IHIGD		; One of the ones that has no msg ID?
+	 CAIN T3,.IHDHS		; ..
+	  JRST IMPEI4		; Yes. Give it to NCP
+	CAIN T3,.IHNOP		; You also can't believe link on NOPs
+	 JRST IMPEI4		; Give them to NCP anyhow
+	LOAD T2,IHHST,(T1)	; See whether it's an NCP irreg msg
+	LOAD T4,IHLNK,(T1)	; Get host and link
+	CAIGE T2,FKHOST		; From IMP fake hosts?
+	 CAILE T4,LLINK		; Or non-NCP Link?
+	  TRNA			; Yes, not for NCP
+	   JUMPN T3,IMPEI4	; Give irreg msg to NCP
+
+	 CAIN T4,INTLNK		; Internet?
+	  JRST IMPEI3		; Yes, just drop it on the floor
+>
+IFN MLCN,<
+	LSH T4,-1		; Link field for MLC traffic?
+	CAMN T4,MLCHLF		; Is it the MLC link field?
+	 JRST IMPEIP		; Yes do MLC queue
+>
+IFN NCPF,<
+	MOVE T3,IMPIBI		; Add to NCP fork's queue
+	JUMPN T3,IMPEIA		; Anything on it already?
+	MOVEM T1,IMPIBO		; No. This is it, then.
+	SKIPA			; Don't chain it
+IMPEIA:	STOR T1,NBQUE,(T3)	; Add buffer to input queue for NCPFRK
+	MOVEM T1,IMPIBI		; This is the last guy on queue
+	AOS IMPFLG		; Request job 0 service
+IMPEI1:	LOAD T3,NBBSZ,(T1)	; Make sure not a released buffer
+	CAMLE T3,MAXWPM		; by checking size field for a PC
+	 JSP CX,IMPAFB		; Bughlt if so
+>
+IMPE11: LOAD T3,ADR23,+NTINP(P1)	; Get last loc with data +1
+	SUB T3,NTIB(P1)		; Less base of the buffer
+	STOR T3,NBBSZ,(T1)	; RECORD ACTUAL COUNT IN BUFFER HEADER
+IMPEI2:	SETZM NTIB(P1)
+	MNTCALL NTISRT		; Start new input
+	RET			; And done
+
+
+IFN MLCN,<
+
+IMPEIP:	MOVE T3,MLCIBI		;ANYTHING ON PTIP INPUT QUEUE YET?
+	JUMPN T3,IMPEP2		;JUMP IF SO
+	MOVEM T1,MLCIBO		;NO, SO THIS IS THE FIRST ONE OUT
+	SKIPA			;DON'T TRY TO LINK IT
+IMPEP2:	STOR T1,NBQUE,(T3)	;LINK TO PREVIOUS LAST-IN
+	MOVEM T1,MLCIBI		;THIS IS NEW LAST-IN
+	MOVE T3,IMPNIB		; GET INPUT BUFFER THRESHOLD
+	LSH T3,-1		; HALVE
+	CAML T3,IMPNFI		; DO WE HAVE MORE THAN THAT ON TAP?
+	AOS IMPFLG		; NO, GOOSE THE NCP SO IT WILL NOTICE
+	JRST IMPEI1		; THAT MLC STOLE AN INPUT BUFFER
+>
+
+
+IFN NCPF,<
+IMPEI4:	CALL IMP8XQ		; Put on irreg msg Q for NCP
+	AOS IMPFLG		; Awaken NCP
+	JRST IMPEI3		; join below
+>
+
+;;; Here if we get a short leader message
+;;; Message type in T3
+;;; packet in T1
+;;;
+IMPE3A:	CAIN T3,.IHNOP		; NOP?
+	 JRST IMPEI3		; ignore it (avoid resonance)
+	PUSH P,T1		; save the packet
+	MOVEI T1,10		; send some NOP's so the IMP knows what we want
+	MOVEM T1,NTNOP(P1)
+	MNTCALL NTOSRT		; Make sure output is going
+	POP P,T1		; restore packet pointer
+
+IMPEI3:	MOVE T2,T1		; Copy for indexing below
+IFN NCPF,<
+	CALL INTBCK ;(T1)	; Internet buffer?
+	 JRST .+3		; No
+> ;**** beware .+3 above
+	  CALL INTFBF ;(T2,P1)	; Free an internet buffer
+	  JRST IMPEI2
+IFN NCPF,<
+	CALL IMPRBF ;(T2)	; Release buffer
+	JRST IMPEI2
+>
+
+; RFNXCT- Table of XCTs, do Rfnm counting if proper msg type
+
+RFNXCT:	JFCL			; not for normal msgs
+	CALL RFNIN		; count err in ldr as rfnm
+REPEAT 3,<JFCL>			; Not for types 2-4
+	CALL RFNIN		; Of course for Rfnms
+	JFCL			; not for dead host status
+	CALL RFNIN		; but yes for dead host msgs
+	CALL RFNIN		; yes for err in data
+	CALL RFNIN		; yes for inc trx
+	JFCL			; and not for interface reset
+NRFNXS==.-RFNXCT		;
+
+IFN NCPF,<
+
+;;; IMPGHL - Get Host-Link arg for LNKLUK from buffer in T1
+;;; Puts host in T1, 32 bit form, and link in T2, with L1%SND on
+;;; Skip if succeed, non-skip if non-NCP Host or link
+
+IMPGHL::
+	LOAD T2,IHHST,(T1)	; Is this for a fake host?
+	CAIL T2,FKHOST		; ..
+	 RET			; Yes. Won't be found by LNKLUK
+	LOAD T2,IHLNK,(T1)	; Is it for a non-NCP link?
+	CAILE T2,LLINK		; ..
+	 RET			; Yes. Can't find this one either
+	TXO T2,L1%SND		; This is a send connection
+	PUSH P,T2		; Save 
+	LOAD T2,IHADR,(T1)	; Get 24 bit address
+	LOAD T1,IHNET,(T1)	; And 8 bit net
+	ASH T1,^D24		; Shift to right position
+	IOR T1,T2		; Stick in low part
+	POP P,T2		; And restore Link arg
+	RETSKP			; Return LNKLUK args in T1,T2
+
+>
+
+;;;
+;;; IMPODN -- End of output handler for 1822 nets.
+;;;
+
+;;; HERE ON PI LEVEL FROM DEVICE ROUTINE AFTER SENDING OUT
+;;; LAST WORD OF A BUFFER. PUT IT ON RETRANSMISSION QUEUE IF
+;;; REGULAR LINK, AND RFNM STILL OUTSTANDING. ELSE PUT IT
+;;; ON FREE LIST.
+;;;
+;;; P1 - Contains pointer to NCT
+;;;
+IMODUN::
+	MNTCALL NTSCHK		; Keep ready line status up to date
+	 JFCL			; ignore return
+	MOVE T1,NTOB(P1)	; Get buffer location
+	HRRZS (T1)		; Clear link field
+IFN NCPF,<
+	CALL INTBCK		; Internet buffer?
+	 CAIA			; No
+	  JRST IMODN3		; Yes
+	CALL IMPGHL		; Get Host-Link pair for LNKLUK in T1,T2
+	 JRST IMODN4		; Fake host or something non-NCP
+	CALL IMPPIL		; Get lt index for this
+	 JRST IMODN6		; Not there
+	MOVX T2,RFNMCM		; Be sure RFNM has not returned already
+	TDNN T2,IMPLT2(T1)	;  which would be pretty fast service
+	 JRST IMODN4		; Well what do you know! It did!
+	HRRZ T2,IMPLT3(T1)	; Be sure nothing is on re-xmit Q already
+	JUMPN T2,IMODN6		; Anomalous, but what can you do?
+	MOVE T2,NTOB(P1)	; Get buffer address
+	HRRM T2,IMPLT3(T1)	; Save for rexmission if RFNM times out
+	MOVE T1,T2		; Put buffer address in right register 
+	CALLRET MULKSP		; Unlock bfr
+
+IMODN6:	MOVE T4,NTOB(P1)	; Pick up buffer addr again
+	DMOVE T1,1(T4)		; Get most of leader for printing
+	DMOVE T3,3(T4)
+	MNTBUG(INF,IMPLEO,<Can't find LT entry for output message>,<<T1,D>,<T2,D>,<T3,D>,<T4,D>>)
+IMODN4:	MOVE T2,NTOB(P1)	; GET BUFFER ADDRESS
+	JRST IMPRBF		; RELEASE OR PUT ON FREE LIST
+
+IMODN3:
+>
+;;; Here with an Internet buffer
+	MOVE T2,T1		; Place in the right register
+	CALLRET INTFBF		; Free it
+
+
+;;;
+;;; IMPHDR - routine for creating an arpanet type local leader
+;;; from an Internet V4 leader
+;;;
+;;; called with - T1 - Local address to send to
+;;;		 T2 -  Pointing MAXLDR (defined in INPAR) words above
+;;;			an Internet buffer, 
+;;; (Future mod -- T3 type of buffer (Internet, Chaos etc.)
+;;;			returns with T2 pointing to the local leader
+;;;			(actually the link,,size word just before it)
+;;; Should be modified to allow Class B "Arpanet"'s
+IMPHDR:
+IFL MAXLDR-.NBHHL,<
+PRINTX ?ERROR MAXLDR is less than the IMP header
+>
+IFN MAXLDR-.NBHHL,<		; If we aren't the maximimum leader
+	MOVEI T3,.NBHHL		; Amount to correct by
+	CALL FIXLDR		; Fix header size
+>
+
+	SETZM .NBLD0(T2)	; Clear 1st word of leader
+	SETZM .NBLD1(T2)	; Clear other words
+	SETZM .NBLD2(T2)	; ..
+
+	TDZ T1,NTNLHM(P1)	; Clear logical host bits from destination
+	STOR T1,IHADR,(T2)	; Store address
+	LSH T1,-30		; get the network number
+	STOR T1,IHNET,(T2)	; set it into the packet (used by RFNOUT)
+;;; T1 now free
+
+
+	MOVX T3,INTLNK		; Get link
+	STOR T3,IHLNK,(T2)	; Set it in leader
+	MOVX T3,ITY%LL		; New format flag
+	STOR T3,IHFTY,(T2)	; Set it in leader
+
+IFN <PIPRC-7B10>,<PRINTX ? Fix PIPRC mask>
+	MOVE T4,MAXLDR+.IPKVR(T2) ;#570 Get word with type of service
+	MOVX T3,<HTY%HP_<-4>>	; Bit in split word
+	TXNE T4,<4B10>		; High priority?
+	  STOR T3,IHHT2,(T2)	; Yes, set bit
+	
+	TXNE T4,<PILDY>		; Unless request "low delay"
+	 TXNE T4,<PIHRL>	; and "low reliability"
+	  TDZA T1,T1		; Message sub-type 0
+	   MOVX T1,3		; If both, message sub-type 3
+
+	LOAD T3,NBBSZ,(T2)	; Get size, bytes
+	ASH T3,2+3		; Make into bits
+	CAILE T3,^D991		; Sub-type 3 must be <991 data bits
+	  SETZ T1,
+	IDIVI T3,^D1008		; Number of packets
+	STOR T3,IHHTY,(T2)	; Store it
+	STOR T1,IHSTY,(T2)	; Message sub-type
+	RET			; And return
+
+
+;;;
+;;; NCPOTT (OuTput Test)
+;;; Test if can send an Internet buffer
+;;;
+NCPOTT==RSKP			; Return good always for now.
+
+
+;;;
+;;; RFNM counting code.
+;;; These routines make sure that we do not flood the IMP
+;;; with messages for a single host.
+;;;
+RFNCNT:	-1			; Non-zero to enable RFNM counting
+
+;;;
+;;; RFNIN -- Handle a received RFNM (or equivalent)
+;;;	T1/	Received Buffer address
+;;;
+
+RFNIN:
+	SAVEAC	<T1,T2,T3>	; Save temp AC's
+	
+	LOAD T2,IHADR,(T1)	; Get 24 bit address
+	LOAD T1,IHNET,(T1)	; And 8 bit net
+	LSH T1,^D24		; Shift to right position
+	IOR T2,T1		; Stick in low part
+
+	CALL RFNHSH		; Find entry for this host
+	 JRST RFNIDN		; If not found we're done early
+	CAML T1,RFNMAX		; Were we at max?
+	 AOS MNTFLG		; Make sure output is going
+	SKIPN T1		; Were there any outstanding?
+	 JRST RFNIDN		; no (?) then done
+	MOVX T1,-1B3		; Decrementing value
+	ADDM T1,RFNTAB(T3)	; count down
+RFNIDN:	RET
+
+
+;;;
+;;; RFNOUT -- Count up outgoing packets to a host.
+;;; Called
+;;;	T2/	Queue pointer
+;;;	0(T2) -- Head, 1(T2) tail
+;;; Returns
+;;;	+1	No packets on this queue can go out
+;;;	+2	Packet to send in T1, already dequeued.
+;;;		clobbers T2
+;;;
+RFNOUT:	SKIPN 0(T2)		; if nothing on the queue
+	 RET			; do nothing
+
+	SAVEAC <T3,T4,Q1>
+
+	MOVE Q1,T2		; Save queue pointer
+	PIOFF			; protect Queues and RFNM tables
+	MOVE T1,0(Q1)		; Get first buffer
+	MOVE T4,T1		; save as "previous" also
+
+RFNOU1:
+IFN MLCN,<			; Kludge for MLC traffic
+	LOAD T2,IHLNK,(T1)	; get link number
+	LSH T2,-1		; over 2
+	CAMN T2,MLCHLF		; PTIP?
+	 JRST RFNIC5		; Yes, send it regardless
+>				; end of PTIP kludge
+	LOAD T2,IHADR,(T1)	; Get host part
+	LOAD T3,IHNET,(T1)	; and net
+	LSH T3,^D24		; CLass A
+	IOR T2,T3		; merge it in
+
+	PUSH P,T1		; Save buffer pointer
+	CALL RFNHSH		; 
+	 JRST RFNNEW		; not in table
+	SKIPE RFNCNT		; is counting enabled?
+	 CAMGE T1,RFNMAX	; too many for this host?
+	  JRST RFNINC		; no, use this buffer
+
+;;; Check if packet has been on the queue too long
+	SKIPE T1,RFN8TO(T3)	; Has timeout been set?
+	 JRST RFNOU2		; yes
+
+	MOVE T1,TODCLK		; no
+	ADDI T1,^D30000		; Wait 30 seconds max
+	MOVEM T1,RFN8TO(T3)	; save
+
+RFNOU2:	SUB T1,TODCLK		; Compare with current time
+	JUMPG T1,RFNOU3		;#522 Timeout hasn't occured
+
+Ife ISIQ,MNTBUG(INF,RFNTOT,<RFNM Table timeout>,<<T2,HOST>>)
+Ifn ISIQ,AOS	RFNTC		;#522 conditionally count instead of buginf
+	MOVX T1,-1B3		; timeout!
+	ANDCAM T1,RFNTAB(T3)	; clear count
+	JRST RFNINC		; and output the packet
+
+;;; Must try the next in the list
+RFNOU3:	POP P,T4		; Save buffer as "previous"
+	LOAD T1,NBQUE,(T4)	; get next
+	JUMPE T1,RFNMEX		; End of list
+	HLL T1,T4		; same section
+	JRST RFNOU1		; onward to the next packet
+
+;;; Here to increment packet count for this host, and 
+;;; D-Q the buffer
+RFNINC:	MOVX T1,1B3		; Incrementor
+	ADDM T1,RFNTAB(T3)	; increment the count
+	SETZM RFN8TO(T3)	; Clear timeout
+
+RFNIC0:	POP P,T1		; restore this buffer
+;;; T1 contains this buffer
+;;; T4 contains previous buffer
+;;; Q1 contains queue pointer
+RFNIC5:	LOAD T2,NBQUE,(T1)	; Get next
+	STOR T2,NBQUE,(T4)	; remove from list
+
+	SKIPE T2		; If nothing there, skip
+	 HLL T2,T1		; else place in same section
+
+	CAMN T1,0(Q1)		; Was this the queue head?
+	 MOVEM T2,0(Q1)		; yes, set new head
+
+	CAME T1,1(Q1)		; was this the queue tail?
+	 JRST RFNIC1		; no
+
+	MOVEM T4,1(Q1)		; yes, set new tail
+	CAMN T1,T4		; was it the head also?
+	 SETZM 1(Q1)		; then empty the queue
+	
+RFNIC1:	PION			; everything is safe now
+	SETZRO NBQUE,(T1)	; Not in a queue
+	RETSKP
+		
+;;; Here when no entry for this address
+RFNNEW:	JUMPL T3,[ 
+;;;		 MNTBUG(INF,RFNFUL,<RFNM Table full>,<<T2,D>>)
+				; This is probably caused by
+				; the NCP sending RESETs to all
+				; all hosts at startup.
+				; rather than suffer along with
+				; a full hash table, the best alternative
+				; is to flush everything, and at worst
+				; suffer a short blockage.
+		   SETZM RFNTAB
+		   MOVE T1,[XWD RFNTAB,RFNTAB+1]
+		   BLT T1,RFNTAB+RFNTSZ
+		   POP P,T1
+		   JRST RFNOU1]	; Try again with this buffer
+	MOVEM T2,RFNTAB(T3)	; set new entry in table
+	JRST RFNINC		; and increment the count
+
+RFNMEX:	PION			; Things are safe
+	RET			; return
+
+;;;
+;;; RFNHSH -- Look up an entry in the RFNM hash table
+;;; Called 
+;;;	T2/	host address
+;;; Returns
+;;;	+1 No entry for this host
+;;;		T3/	index of free slot or -1 of table full
+;;;	+2 entry found
+;;;		T1/	RFNM count
+;;;		T3/	index
+
+;;; Hash table format
+;;; 0-3	Count of outstanding RFNM's for a host
+;;; 4-35 Host address
+
+RFNHSH:	SAVEAC <T4>		; Save some ACs
+	LDB T3,[POINT 16,T2,19]	; Get high half of address
+	LDB T4,[POINT 16,T2,35]	; and low
+	XORB T3,T4		; Mix them together
+	LSH T3,-^D8		; and
+	XOR T3,T4		; grind down to 8 bits
+	ANDI T3,RFNTSZ-1	; fit within table size
+	MOVE T4,T3		; save start
+
+RFNHLP:	SKIPN T1,RFNTAB(T3)	; Entry here?
+	 RET			; No, free slot
+	
+	XOR T1,T2		; Compare with search object
+	TXNN T1,-1^!-1B3	; But only the host bits
+	 JRST [	LSH T1,-^D32	; Got a match, return count
+		RETSKP]		; return success
+
+	CAIL T3,RFNTSZ-1	; At end of table?
+	 TDZA T3,T3		; Yes, wraparound
+	  AOS T3		; Otherwise just bump index
+
+	CAME T3,T4		; Are we back where we started?
+	 JRST RFNHLP		; No, keep looking
+
+	SETO T3,		; Yes, indicate by T3=-1
+	RET			; and return bad
+
+RFNMAX:	EXP 7			; maximum outstanding messages
+
+
+;;;
+;;; NCPUNQ -- Get next buffer to send on a NCP net.
+;;; Called
+;;;	P1 -- NCT
+;;; Returns
+;;;	+1 if no buffer can be sent
+;;;	+2 buffer to send in T1
+;;;
+NCPUNQ::
+	MOVEI T2,NTHOBO		; Point to
+	ADD T2,P1		; queue head
+	CALL RFNOUT		; Get a buffer
+	 CAIA			; Failed
+	JRST NCPUNX		; exit with buffer
+
+	SETZ T4,		; Assume no priority changes
+	SKIPN NTLOBO(P1)	; Anything on low priority Queue
+	 JRST NCPUN2		; no, Internet or nothing
+	SKIPN NTIOBO(P1)	; Anything on internet?
+	 JRST NCPUN4		; no, low or nothing
+
+	SKIPG T4,NTPRIO(P1)	; Who should we try first?
+	 JRST NCPUN4		; Low priority
+
+;;; Here to try from Internet
+NCPUN2:	MOVEI T2,NTIOBO		; try from the internet queue
+	ADD T2,P1		; ...
+	CALL RFNOUT		; try to get one
+	 JRST [ SKIPG T4	; Was there something on low?
+		 RET		; no, total failure
+		JRST NCPUN4]	; get from low
+	HRRZ T2,TNPRIO		; Get NCP credit
+	SKIPE T4		; was there anything on NCP?
+	 SUB T4,T2		; yes, give it credit
+	JRST NCPUN7		; join below
+
+;;; Here to try from low priority
+NCPUN4:	MOVEI T2,NTLOBO		; try the low priority queue
+	ADD T2,P1		; ...
+	CALL RFNOUT		; get a buffer
+	 JRST [	SKIPL T4	; failed, anything on internet?
+		 RET		; no, nothing anywhere
+		JRST NCPUN2]	; join above
+	HLRZ T2,TNPRIO		; get Internet credit
+	SKIPE T4		; conflict?
+	 ADD T4,T2		; give internet credit
+NCPUN7:	MOVEM T4,NTPRIO(P1)	; set back new priority word
+NCPUNX:	MOVEI T2,377777		; Flag that buffer passed to net
+	STOR T2,NBQUE,(T1)	; ...
+	RETSKP			; return success, buffer in T1
+
+TNPRIO:	1,,1			; constant for NCP/Internet favoritism
+
+	TNXEND			; End of module
+	END			; ...
+
+

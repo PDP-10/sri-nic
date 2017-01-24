@@ -1,0 +1,3238 @@
+	TITLE STS - TOPS20-AN Status Report Printer
+	SUBTTL  Params and Linkage
+
+	SEARCH ANAUNV,MACSYM,MONSYM
+;	.REQUIRE SYS:MACREL	; Also load with STSDAT.REL file
+
+IFNDEF VRSN,<VRSN==7>
+
+DEFINE TELL(V)<IF1 <PRINTX  Assembling for version V>>
+	TELL(\VRSN)
+
+VWHO==7		; C Lynn, BBN
+VMAJOR==5
+VMINOR==VRSN
+VEDIT==20	; 12-Nov-84 CLynn default version 7
+;74	; 23-Aug-84 CLynn Report writer subroutines, etc.
+;38	; 23-Jan-84 CLynn Add SCAN and report writer support
+;36	;  6-Jan-84 CLynn Change title structure
+;35	; 20-Dec-83 CLynn A few more changes
+
+VEDIT==VRSN*1000+VEDIT
+
+EXTERN $VER,AAAST,AASDT,AAVER,MNMAA,NITEM,NCT0Q1
+
+$PGMV==<VWHO>B2+<VMAJOR>B5+<VMINOR>B8+<VEDIT>B23	; Program version #
+
+
+$DATV.==7B14+7B17+77B29					; Database mask
+$RPTV.==7B11+77B35					; Report mask
+
+.JBSA==120
+.JBSYM==116
+.JBUSY==117
+
+	SUBTTL	Information Common to STS.MAC and STSDAT.MAC
+
+; Version coding
+
+;VWHO	     7B2	  Author
+;VMAJOR	    777B11
+;	     7B5	  Major version number
+;	     7B8	  Minor version number
+;	     7B11	  Report number
+;VMINOR	    77B17
+;            7B14	; Monitoring level
+;	     7B17	; Number of NCTs
+;VEDIT	777777B35
+;	    77B23	; Edit number of program
+;	    77B29	; Edit number of database
+;	    77B35	; Edit number of report
+
+$OVER==702				; Communications vector
+OANITEM==703				; - # items in database,,0
+ONCTQ1==704				; Item number of NCT,,same
+
+
+$TRVEC==1000				; Transfer vector
+$SCANTL==0				; Print input file identification
+$SAMPID==1				; Print sample identification
+$FINDSY==2 ;T1/RADIX50 Symbol, T2/<-len,,symbols>, None, skip T3 has value
+$GETDAT==3 ;Q2/Address in DATA, Q3/Format, zero & FMT%SZ, skip T2/Datum
+
+F=0					; Flags in F
+ F.ABS==1B15				; Absolute scan mode
+ F.SCAN==1B16				; Scanning mode
+ F.DIFF==1B17				; Difference mode
+;Right half has flags which control reports
+
+; Format of IFMT words
+FMT%MT==777700,,000000	; Mask bits for Octal=0/Decimal=1 in a mask
+FMT%CO==NO%COL&77B17 ;(77,,0) ; Columns
+FMT%SS==000000,,010000	; Suppress "sum" in histograms
+FMT%SV==000000,,004000	; Suppress "value"
+FMT%SZ==000000,,002000	; Suppress if zero
+FMT%DV==000000,,001000	; Decimal histogram values
+FMT%SD==000000,,000400	; Data not differencable
+FMT%FR==000000,,000200	; Fraction this with last value
+FMT%TL==000000,,000100	; Have special title
+FMT%CD==000000,,000077	; Code
+
+; Structures for above
+MSKSTR(FMTMT,,FMT%MT)
+MSKSTR(FMTCO,,FMT%CO)
+MSKSTR(FMTSS,,FMT%SS)
+MSKSTR(FMTSV,,FMT%SV)
+MSKSTR(FMTSZ,,FMT%SZ)
+MSKSTR(FMTDV,,FMT%DV)
+MSKSTR(FMTSD,,FMT%SD)
+MSKSTR(FMTFR,,FMT%FR)
+MSKSTR(FMTTL,,FMT%TL)
+MSKSTR(FMTCD,,FMT%CD)
+
+DEFINE SAVEP<SAVEAC <P1,P2,P3,P4,P5,P6>>
+
+DEFINE XNOUT(fmt)<
+	MOVX T3,<fmt>
+	NOUT
+	  JFCL
+>
+
+
+DEFINE SSOUT(string)<
+	HRROI T2,[ASCIZ \string\]
+	SETZ T3,
+	SOUT
+>
+
+
+
+DATA=100000				; Data sample
+SDATA=200000				; Saved data sample for differences
+DDATA=300000				; Difference data??
+
+SMPSYM=400000				; Most recent Symbols (STSTAB)
+SMPCNT=420000				; Most recent Counts (STATCT)
+SMPPTR=440000				; Most recent Pointers (STATPT)
+
+ISYM=460000				; Symbol table
+IFMT=500000				; Format table
+IFMTM=520000				; Format table for mask code
+IRPT=540000				; Customized report writer table
+ RPT.C==0				; AOBJN counter for items to report
+ RPT.H==1				; Byte pointer for collumn headings
+ RPT.B==2				; Begin routine/byte pointer
+ RPT.M==3				; Processing routine(/byte pointer?)
+ RPT.E==4				; End routine/byte pointer
+ RPT.F==5				; COMND flag keywords
+INAME=560000				; Title table
+IOFF=600000				; Offset table
+IPTR=620000				; Default count/pointer table
+ILINK=640000				; Acutal count/pointer table
+ITEXT=660000				; Title text storage
+STSYMB=700000				; Original symbol table
+
+	SUBTTL	ACs
+
+T1=1
+T2=2
+T3=3
+T4=4
+T5=5	; HNO2NA only, preserved
+Q1=5
+Q2=6
+Q3=7
+P1=10
+P2=11
+P3=12
+P4=13
+P5=14
+P6=15
+
+ST0=TCB-1 ;P3				; Pointer used in datum pointers
+;TCB=P4					; Points to TCB information
+;P5					; Stack frame pointer
+CX=16
+P=17					; Stack
+
+DECRAD==^D10
+OCTRAD==^D8
+PDLL==40				; Stack size
+
+; ASCII characters by name
+
+CH.TAB==11				; Horiz tab
+CH.LF==12				; Line feed
+CH.CR==15				; Carriage return
+CH.SPC==40				; Space
+CH.CLN==":"				; Colon
+CH.SMI==73				; Semicolon
+CH.DOT=="."				; Dot/period
+CH.CMA==","				; Comma
+
+DEFINE TMSG(MSG)<
+	HRROI T1,[ASCIZ /MSG/]
+	PSOUT
+> ; End of TMSG
+
+DEFINE ERRMAC (ADDR,MSG)<
+	JRST [HRROI T1,[ASCIZ /
+? MSG
+/]
+		PSOUT
+		JRST ADDR]> ; End of ERRMAC
+repeat 0,<
+DEFINE SSOUT(MSG)<
+	HRROI T2,[ASCIZ \MSG\]
+	CALL DOSOUT
+> ; End of DEFINE SSOUT
+>
+	SUBTTL  Transfer Vector, Entry Vector, Start of code, Top loop
+
+	LOC $TRVEC
+
+$TRVEC==1000				;Transfer vector
+IFN <.-$TRVEC-$SCANTL>,<PRINTX Fix $SCANTL entry in transfer vector>
+	IFIW SCANTL			; Scan Title
+IFN <.-$TRVEC-$SAMPID>,<PRINTX Fix $SAMPID entry in transfer vector>
+	IFIW SAMPID			; Sample id
+IFN <.-$TRVEC-$FINDSY>,<PRINTX Fix $FINDSY entry in transfer vector>
+	IFIW FINDSY			; DDT RADIX50 symbol to value
+IFN <.-$TRVEC-$GETDAT>,<PRINTX Fix $GETDAT entry in transfer vector>
+	IFIW GETDAT
+	BLOCK 6		; for expansion ...
+
+
+START:	RESET
+	MOVE P,[IOWD PDLL,PDL]		; Initialize the stack
+	MOVEI T1,STSYMB			; Free table area
+	MOVEM T1,FRSYMB
+	MOVE T1,.JBSA			; Save start address and
+	MOVE T2,.JBSYM			; Program symbol table
+	DMOVEM T1,..JBSA
+
+	MOVE T1,[RADIX50 0,PAT..]	; Desired table
+	CALL FINDMD			; Find module, move it
+	MOVEM T2,STSSYM			; Its -len,,start
+	MOVE T1,FRSYMB
+	MOVEM T1,STSSYM+1
+
+	MOVE T1,[RADIX50 0,JOBDAT]	; Desired table
+	CALL FINDMD			; Find module, move it
+	HLLZS T2			; -len,,0
+	ADDM T2,STSSYM			; Its -len-len,,start
+	MOVM T1,FRSYMB
+	MOVEM T1,STSSYM+1
+
+	MOVE T1,[RADIX50 0,STS]		; Desired table
+	CALL FINDMD			; Find module, move it
+	HLLZS T2			; -len,,0
+	ADDM T2,STSSYM			; Its -len-len-len,,start
+	MOVE T1,FRSYMB
+	MOVEM T1,STSSYM+1
+
+	MOVE T1,[RADIX50 0,STSDAT]	; Desired table
+	CALL FINDMD			; Find module, move it
+	MOVEM T2,DATSYM			; Its -len,,start
+	MOVE T1,FRSYMB
+	MOVEM T1,DATSYM+1
+
+	SETZM RPTSYM
+
+	HLLZ T1,RPTSYM			; -len,,0
+	ADD T1,DATSYM			; -len-len,,xxx
+	HLLZS T1			; -len-len,,0
+	ADD T1,STSSYM			; -len-len-len,,start
+	MOVEM T1,.JBSYM
+
+	SETZ F,				; No flags
+	SETOM OJFN			; No output command
+	SETOM IJFN			; No input command
+	SETZM IFNSTR			; No input file name
+	SETZM OFFSET			; No input offset
+	SETZM SIFNST			; No saved file name
+	SETZM SOFFSE			; No saved offset
+	SETZM STAT0
+	SETZM SSTAT0
+
+REENT:	MOVE P,[IOWD PDLL,PDL]		; Initialize the stack
+
+PROMPT:	CALL TCRLF
+	MOVEI T2,CMDBLK			; Point to command state block
+	MOVEI T1,PARSE2			; Where to go on re-parse needed
+	MOVEM T1,.CMFLG(T2)
+	MOVE T1,[.PRIIN,,.PRIOU]
+	MOVEM T1,.CMIOJ(T2)		; JFNs for I/O in COMND
+	HRROI T1,PCHAR			; Prompt
+	MOVEM T1,.CMRTY(T2)
+	HRROI T1,LNNBUF			; Line buffer
+	MOVEM T1,.CMBFP(T2)
+	MOVEM T1,.CMPTR(T2)		; Pointer to next field
+	MOVEI T1,5*LBUFSZ
+	MOVEM T1,.CMCNT(T2)		; Space remaining in buffer
+	SETZM .CMINC(T2)		; Number of unparsed characters
+	HRROI T1,RBUF			; Separate atom buffer
+	MOVEM T1,.CMABP(T2)
+	MOVEI T1,5*SEBUF		; Size of atom buffer
+	MOVEM T1,.CMABC(T2)
+	MOVEI T1,GTJBLK			; Address of long GTJFN block
+	MOVEM T1,.CMGJB(T2)
+
+; Here when an error occurs and need to start over. Reinit the COMND JSYS
+
+PARSE1:	MOVE P,[IOWD PDLL,PDL]		; Re-initialize the stack on error
+
+	MOVEI T1,CMDBLK			; Addr of command state block
+	MOVEI T2,[FLDDB. (.CMINI)] 	; Addr of funct descriptor block
+	COMND				; Do the init of COMND
+
+
+; Here when the user rubouts into the previously gotten text
+
+PARSE2:	SETOM T1			; Release any JFNs
+	RLJFN
+	ERJMP PROMPT
+	MOVEI T1,CMDBLK
+	MOVEI T2,[FLDDB. (.CMKEY,,CMDTAB)]
+	COMND				; Get top-level command
+	TXNE T1,CM%NOP			; Was there a command?
+	  ERRMAC PARSE1,<No such command>
+	HRRZ T1,(T2)			; Go do the command
+	CALL (T1)
+PARSE3:	JRST PARSE1
+
+CMDERR:	HRROI T1,[ASCIZ / /]
+	ESOUT
+	JRST PROMPT
+
+; Confirm a command
+
+CONF:	PUSH P,T1
+	PUSH P,T2
+	MOVEI T1,CMDBLK			; Addr of command state block
+	MOVEI T2,[FLDDB.(.CMCFM)] 	; Addr of funct desc blk
+	COMND				; Look for a confirm
+	TXNE T1,CM%NOP			; Did we find one?
+	  ERRMAC CONFX,< >		; No, start over
+	POP P,T2
+	POP P,T1
+	RET
+
+CONFX:	POP P,T2
+	POP P,T1
+	JRST PARSE1
+
+CPOPJ1:	AOS 0(P)
+CPOPJ:	RET
+
+	SUBTTL  Command Table
+
+DEFINE TB (TXT,DAT)<	XWD [ASCIZ /TXT/],DAT>
+CMDTAB:	CMDSIZ,,CMDMAX			; Number of commands, max table size
+	TB (DIFFERENCES,.DIFFE)		; List differences between DATA - SDATA
+	TB (EXIT,.EXIT)
+	TB (FORMAT,.FORMA)		; Load a format file
+	TB (GET,.GET)			; Get data from sample file
+	TB (LOAD,.LOAD)			; Load symbols from sample file
+	TB (OFFSET,.OFFSE)		; Offset into file
+	TB (QUIT,.QUIT)
+	TB (REPORT,.REPOR)		; Report prototype
+	TB (SAVE,.SAVE)			; Save DATA in SDATA
+	TB (SCAN,.SCAN)			; Scan binary file
+	TB (WRITE,.WRITE)		; Write status sample
+CMDSIZ==.-CMDTAB-1
+CMDMAX==CMDSIZ
+
+	SUBTTL	SAVE, OFFSET, EXIT/QUIT Commands
+
+; Save current DATA in SDATA
+
+.SAVE:	CALL CONF			; Confirm
+
+SAVDA0:	MOVE T1,[DATA,,SDATA]
+	BLT T1,SDATA+SDATA-DATA-1	; Make copy
+
+	MOVE T1,OFFSET
+	MOVEM T1,SOFFSE			; Copy offset
+
+	MOVE T1,STAT0
+	ADDI T1,SDATA-DATA		; Relocate
+	MOVEM T1,SSTAT0			; Beginning of data
+
+	HRROI T1,IFNSTR
+	HRROI T2,SIFNST
+	SETZ T3,
+	SIN				; Copy file name
+
+	RET
+
+
+
+; OFFSET Command
+
+.OFFSE:	MOVEI T1,CMDBLK
+	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /into input file/]>)]
+	COMND
+
+	MOVEI T2,[FLDDB.(.CMNUM,,DECRAD)]
+	COMND
+	TXNE T1,CM%NOP
+ZOFS1:	  ERRMAC PARSE1,<Bad number>
+	JUMPL T2,ZOFS1			; No negative offsets
+
+	PUSH P,T2
+	CALL CONF
+	POP P,T2
+
+	MOVEM T2,OFFSET
+	RET
+
+
+; QUIT/EXIT Command
+
+.EXIT:
+.QUIT:	CALL CONF
+	HALTF
+	RET
+
+	SUBTTL	FORMAT Command
+
+.FORMA:	MOVEI T1,CMDBLK
+	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /from file/]>)]
+	COMND
+	MOVEI T2,[FLDDB.(.CMIFI)]
+	HRROI T3,[ASCIZ /OVL/]
+	MOVEM T3,.GJEXT+GTJBLK
+	COMND
+	TXNE T1,CM%NOP
+	  ERRMAC PARSE1,<Bad file name>
+	MOVEM T2,FJFN
+	CALL CONF
+
+	MOVE T1,FJFN			; JFN of format file
+	HRLI T1,.FHSLF
+	GET%				; Overlay current format
+
+	SKIPL T1,OANITEM		; Get number of items in db
+	IFSKP.				; Database overlay
+	  MOVEM T1,ANITEM
+	  MOVE T1,ONCTQ1
+	  MOVEM T1,NCTQ1
+
+	  MOVE T1,STSSYM+1
+	  MOVEM T1,FRSYMB
+	  MOVE T1,[RADIX50 0,STSDAT]	; Desired table
+	  CALL FINDMD			; Find module, move it
+	  IFL. T3			; Found it
+	    MOVEM T2,DATSYM		; Its -len,,start
+	    MOVE T1,FRSYMB
+	    MOVEM T1,DATSYM+1
+	    SETZM RPTSYM		; Flush any report
+	    SETZM RPTSYM+1
+	    SETZM IRPT			; Remove special report info
+	    MOVX T1,<IRPT,,IRPT+1>
+	    BLT T1,IRPT+5
+	  ENDIF.
+
+	  MOVX T1,$DATV.		; Database definition overlay
+	ELSE.				; Report overlay
+	  MOVE T1,DATSYM+1
+	  MOVEM T1,FRSYMB
+	  MOVE T1,[RADIX50 0,STSRPT]	; Desired table
+	  CALL FINDMD			; Find module, move it
+	  IFL. T3			; Found it
+	    MOVEM T2,RPTSYM		; Its -len,,start
+	    MOVE T1,FRSYMB
+	    MOVEM T1,RPTSYM+1
+	  ENDIF.
+
+	  MOVX T1,$RPTV.		
+	ENDIF.
+	ANDCAM T1,ENTVEC+2		; Wipe out previous
+	MOVE T1,$OVER			; Get version number
+	IORM T1,ENTVEC+2		; Insert new
+
+	MOVE T1,..JBSA
+	MOVEM T1,.JBSA			; Restore start address
+
+	HLLZ T1,RPTSYM			; -len,,0
+	ADD T1,DATSYM			; -len-len,,xxx
+	HLLZS T1			; -len-len,,0
+	ADD T1,STSSYM			; -len-len-len,,start
+	MOVEM T1,.JBSYM
+
+	RET
+
+	SUBTTL	LOAD Command
+
+; Load a status file
+
+.GET:	TDZA T1,T1			; GET is 0
+.LOAD:	  SETO T1,			; LOAD is -1
+	MOVEM T1,LDORGT			; Save flag
+	MOVEI T1,CMDBLK
+	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /from file/]>)]
+	COMND
+	MOVEI T2,INFFDB
+	HRROI T3,[ASCIZ /BIN/]
+	MOVEM T3,.GJEXT+GTJBLK
+	COMND
+	TXNE T1,CM%NOP
+	  ERRMAC PARSE1,<Bad file name>
+	MOVEM T2,IJFN
+	CALL CONF
+
+	CALL OPENIF			; Open input file, etc
+	CALL RDFILE			; Load the file into memory
+	  JFCL
+	MOVE T1,IJFN
+	CLOSF				; Forget the input file
+	 JFCL
+	SETOM IJFN
+	SETZM LDORGT
+	RET
+
+INFFDB:	FLDDB.(.CMIFI,CM%DPP)
+		  0			; No help pointer
+		  POINT 7,DFNSTR	; Default is same file as last time
+
+OPENIF:	MOVE T1,IJFN
+	MOVE T2,[400000,,200000]	; 32-bit data file
+	OPENF
+	 JRST [MOVE T1,IJFN
+		RLJFN
+		 JFCL
+		SETOM IJFN
+		JRST CMDERR]
+	MOVE T1,[440700,,IFNSTR]
+	MOVE T2,IJFN			; Keep a copy of the name
+	MOVX T3,<111110,,004011>
+	JFNS				; For listing file
+	ERJMP .+1
+	HRROI T1,IFNSTR			; Drop trash after file name
+	HRROI T2,DFNSTR
+	MOVX T3,40*5-2
+	MOVX T4,","
+	SIN
+	SETZ T1,
+	DPB T1,T2			; End the string
+	RET
+	SUBTTL	Read Sample
+
+;IJFN/	JFN of BIN file
+;OFFSET/Offset into BIN file
+;	CALL RDFILE
+;Ret+1:	  Error
+;Ret+2:	Ok
+
+RDFILE:	MOVE T1,IJFN
+	MOVE T2,[1,,.FBSIZ]
+	MOVX T3,T4
+	GTFDB				; Find current size
+	MOVE T2,OFFSET			; At given offset
+	HRROI CX,[ASCIZ /EOF/]
+	CAML T2,T4			; At end?
+	  JRST RDLERR			; Yes
+
+	HRROI CX,[ASCIZ /? Unable to set file pointer - /]
+	SFPTR
+	  JRST RDFERR
+
+	MOVE T1,IJFN
+	MOVE T2,[444000,,DATA]		; Read left 32 bits to left 32 bits
+	MOVNI T3,1+5+1			; User Queue Header+Minimal IP+Ports
+	HRROI CX,[ASCIZ /? Unable to read packet header - /]
+	SIN
+	ERJMP RDFERR
+
+	HLRZ T4,DATA			; Words used from User Queue Header
+	HRROI CX,[ASCIZ /? Sample length too large for program./]
+	CAILE T4,SDATA-DATA-12		; Fit? (-IP option fill)
+	  JRST RDLERR			; No
+
+	SUBI T4,1+5+1			; Words left in sample
+	LOAD T3,PIDO,+DATA+1-PKTELI	; Length of IP header
+	SUBI T3,5			; Words already read
+	IFG. T3
+	  SUB T4,T3			; Words after options
+	  MOVNS T3
+	  HRROI CX,[ASCIZ /? Error reading IP header options - /]
+	  SIN				; Read IP options!
+	  ERJMP RDFERR
+	ENDIF.
+	MOVEI ST0,DATA+1+17+1+1		; Pseudo STAT0
+	MOVEM ST0,STAT0
+	MOVE T3,(T2)			; Last word read has ports
+	MOVEM T3,-2(ST0)		; Put it in fixed place
+
+	HRRI T2,-1(ST0)			; Length word before STAT0
+	HRLI T2,444400			; Read left 32 bits to right 32 bits
+	MOVNI T3,1			; To read data length
+	HRROI CX,[ASCIZ /? Error reading STAT0 data - /]
+	SIN
+	ERJMP RDFERR
+	SUBI T4,1
+
+	MOVE T3,-1(ST0)			; Length
+	ADDI T3,1+4-1			; Guard, offsets to tables, less size
+	CAILE T3,(T4)			; Sample have all that?
+	  MOVE T3,T4			; No, truncated??
+	SUB T4,T3			; Words left after read
+
+	MOVNS T3
+	HRROI CX,[ASCIZ /% Error reading trace or symbol header - /]
+	SIN
+	ERJMP RDFERR
+
+; Fix truncated GTADs in AASDT
+
+	MOVX T3,<100000,,0>		; Top 4 bits are lost
+	IORM T3,AASDT-AAAST(ST0)	; TAD of report
+	IORM T3,AASDT+2-AAAST(ST0)	; TAD cleared
+
+	IFG. T4				; More to be read
+
+	  HRLI T2,004000		; Read left 32 bits to left 32 bits
+ 	  MOVN T3,T4			; Packet trace info, tables
+;	  SUB T4,T3			; Words left after read
+	  HRROI CX,[ASCIZ /% Error reading trace or symbol data - /]
+	  SIN
+	  ERJMP RDFERR
+
+	  SKIPL LDORGT			; LOAD or GET?
+	  ANSKP.			; Load symbols
+
+	    MOVE T1,AAAST-AAAST(ST0)	; Sample length
+	    ADDI T1,-1(ST0)		; End address sampled data (STATZZ)
+	    HRRZS T2			; End address read
+	    HRROI CX,[ASCIZ /? Sample doesn't contain symbol headers./]
+	    CAIGE T2,1+3(T1)		; Get offsets to symbol info?
+	      JRST RDFERR		; No, cannot process symbol info
+
+; Process symbol table from sample
+
+	    MOVE Q1,1+1(T1)		; STSTAB
+	    ADDI Q1,1+1(T1)
+	    MOVE Q2,1+2(T1)		; STATCT
+	    ADDI Q2,1+2(T1)
+	    MOVE Q3,1+3(T1)		; STATPT
+	    ADDI Q3,1+3(T1)
+
+	    MOVE T4,Q3
+	    CAIL T4,(Q2)		; Min (STATCT,STATPT)
+	      MOVE T4,Q2
+	    SUB T4,Q1			; Length of each table
+	    MOVE T3,T4
+	    IMULI T3,3			; Length of all 3 tables
+	    ADD T3,Q1			; Address beyond third table
+	    HRROI CX,[ASCIZ /? Sample doesn't contain symbol information./]
+	    CAMG T2,Q1			; Get any symbol info?
+	      JRST RDSERR		; No, all done
+	    HRROI CX,[ASCIZ /? Symbol tables truncated./]
+	    CAIGE T2,-1(T3)		; Get all tables?
+	      JRST RDSERR		; No
+	    MOVEM T4,SMPSYL		; Length of symbol table
+
+	    TMSG <% Loading symbol information from sample...
+>
+	    MOVE T1,T4			; Must compute
+	    HRROI CX,[ASCIZ /? Bad symbol table length./]
+	    JFFO T1,.+2			; # leading zeros
+	      JRST RDSERR		; ??
+	    MOVNI T2,-1(T2)
+	    MOVSI T3,400000
+	    LSH T3,(T2)			; Next 2**N larger than SMPSYL
+	    MOVEM T3,SMPSOF
+
+; Fill in dropped bits in names and pointers
+
+	    MOVNS T4
+	    HRLZS T4			; AOBJN pointer
+	    DO. (PRCSL)
+	      MOVE T1,(Q3)		; Pointer
+	      ADDI Q3,1
+	      HRRE T2,T1		; Extend to fill missing B18-21
+	      ASH T2,-4
+	      HRR T1,T2			; Pointer
+	      MOVEM T1,SMPPTR(T4)	; Save it
+
+	      MOVE T3,(Q1)		; Truncated name
+	      ADDI Q1,1
+
+	      CAIL T2,0			; Before STAT0, or
+	       CAMLE T2,AAAST-AAAST(ST0) ; Beyond STATZZ?
+	        TRO T3,1		; Yes, clobber name so doesn't match
+	      LDB T2,[POINT 4,T1,17]	; Index field from pointer
+	      CAIE T2,ST0		; Datum in STAT0 area ?
+	        TRO T3,1		; No, clobber name so doesn't match
+
+	      MOVE T2,(Q2)		; STATCT
+	      ADDI Q2,1
+	      HLRZM T2,SMPCNT(T4)	; Positive length
+
+	      HRRZS T2			; Missing name bits
+	      LSH T2,-6			; Fudge factor
+	      IOR T3,T2			; Complete name, odd if not in STAT0
+	      MOVEM T3,SMPSYM(T4)	; Save it
+
+	      AOBJN T4,TOP.		; Back for next
+	    ENDDO.
+
+; Update ILINK from symbol information
+
+	    MOVE Q1,ANITEM		; AOBJN for items to be listed
+	    DO. (TRANSL)
+	      SETZM ILINK(Q1)		; Assume failure
+	      MOVE T4,ISYM(Q1)		; Name
+	      CALL SRCH
+	      IFSKP.			; Found item
+	        HRRE Q2,SMPPTR(T1)	; Offset from AAAST
+	        ADD Q2,ST0		; Address
+	        HRLZ Q3,SMPCNT(T1)	; Negative item length
+	        MOVNS Q3		; AOBJN for item
+	        DO.
+	          HLLZ T2,IPTR(Q1)	; -Length for line item,,0
+	          CAMGE T2,Q3		; Sample item have it all?
+	            MOVE T2,Q3		; No, truncate (Less than expected)
+	          SUB Q3,T2		; Elements left after this line
+	          HRR T2,Q2		; Base address
+	          ADD T2,IOFF(Q1)	; AOBJN pointer for line item
+	          MOVEM T2,ILINK(Q1)	; Save it
+
+	          CAMN T4,ISYM+1(Q1)	; Next line item same as this?
+	          AOBJN Q1,TOP.		; Yes, back for next line item
+	        ENDDO.
+;	        ANDN. Q3		; Exactly what expected
+	          ADD T2,Q3		; More data than expected
+	          MOVEM T2,ILINK(Q1)	; Save larger AOBJN for excess data
+	      ENDIF.
+	      AOBJN Q1,TOP.		; Back for next item
+	    ENDDO.
+	ENDIF.				; Have data & symbols ...
+RDSDEF:	
+
+; Find number of NCTs in sample
+
+	MOVE T4,[ASCII /AAVER/]		; Find # NCTs
+	SKIPLE SMPSOF			; Read any symbols?
+	 CALL SRCH			; Yes, look it up
+;cwl fix for overlays
+	  SKIPA T1,[POINT 36,AAVER,35]	; No, or not found
+	   MOVE T1,SMPPTR(T1)		; Yes, found it so get pointer to AAVER
+;	ADDI T1,0			; NCTs = LH of offset 0
+	LDB T1,T1
+	HLRZS T1
+	CAIGE T1,1
+	  MOVEI T1,1			; Assume just one NCT
+	MOVNI T1,1(T1)			; Count loopback NCT
+	HRLZS T1
+	MOVEM T1,AOBNCT			; AOBJN for NCTs
+
+
+; Find NCT mappings
+
+	MOVX T1,<-NNCTTR,,0>		; Count names MNM-AA -XR -XS -XX
+	MOVE T4,ANITEM			; Count of items plus count of NCT0 is
+	ADD T4,NCTQ1			; Where to start searching ISYM
+	DO. (TRANNL)
+	  MOVE T3,T4			; Save copy
+	  MOVE T2,NCTTR(T1)		; Name
+	  DO.
+	    CAME T2,ISYM(T4)		; Find it?
+	      AOBJN T4,TOP.		; No, keep looking
+	  ENDDO.
+	  HLLZ T2,T4			; Number remaining
+	  SUB T3,T2			; AOBJN pointer for name
+	  MOVEM T3,NCTQ1S(T1)
+	  AOBJN T1,TOP.
+	ENDDO.
+IFL VRSN-6,<ADD T4,[1,,0]>		; Forget STATZZ
+	MOVEM T4,NCTQ1S(T1)		; Last is what is left
+
+	AOS (P)				; Ok return
+	RET
+
+
+
+RDSERR:	SETZM SMPSYL			; Flush symbol info
+	TMSG <? Ignoring symbol information,>
+
+RDLERR:	PUSH P,[0]			; No error code
+
+	SKIPA
+RDFERR:	  PUSH P,T1			; Error code
+	TMSG <
+>
+	HRRO T1,CX			; Error message
+	PSOUT
+
+	MOVX T1,.PRIOU
+	POP P,T2			; Error code
+	HRLI T2,.FHSLF
+	SETZ T3,
+	TRNE T2,-1			; Code?
+	 ERSTR%				; Yes, output it
+	  JFCL
+	  JFCL
+
+	TMSG <
+>
+	RET				; Error return
+
+	SUBTTL SRCH - Exact Match Binary Search Routine
+
+; T4/	Symbol
+;	CALL SRCH
+;Ret+1:	  Not found
+;Ret+2:	Found, T1/ offset to entry
+
+PRB==1
+XXX==2
+OFS==3
+KEY==4
+
+SRCH:	MOVE OFS,SMPSOF			; Next 2**N larger than SMPSYL
+	SETZB PRB,T2			; Offset into table & Assume missing
+	DO.
+	  ADD PRB,OFS			; Move forward (double)
+	  DO.
+	    LSH OFS,-1			; Next time
+	    SUB PRB,OFS			; Move reverse or forward (single)
+	    JUMPLE OFS,SRCHK		; Stop if no move
+	    CAIG PRB,SMPSYL		; Point too far? or
+	     CAMGE KEY,SMPSYM(PRB)	; Value too big?
+	      LOOP.			; Yes, move back
+	  ENDDO.
+	  CAML KEY,SMPSYM+1(PRB)	; As far as next?
+            LOOP.			; Yes, move forward
+	ENDDO.
+SRCHK:	CAMN KEY,SMPSYM(PRB)		; Exact match?
+	  AOS (P)			; Yes, skip return
+	RET
+
+	PURGE PRB,XXX,OFS,KEY
+
+	SUBTTL	Compose a Special Report
+
+; Accept symbol+offset lines, adding each to special report
+
+REPFD0:	FLDDB.(.CMKEY,,REPKEY,,<begin>,)
+REPKEY:	NREP,,NREP
+	[ASCIZ /BEGIN/],,1
+	[ASCIZ /FLAGS/],,2
+	[ASCIZ /OFF/],,0
+NREP==.-REPKEY-1
+
+REPFD1:	FLDBK.(.CMFLD,,,<symbol(+offset)>,,REPBK1,REPXIT)
+REPXIT:	FLDDB.(.CMCFM,CM%SDH,,<return to leave report mode>)
+REPBK1:	BRMSK.(FLDB0.,FLDB1.,FLDB2.,FLDB3.,<.$->)
+REPFD2:	FLDDB.(.CMTOK,,<POINT 7,[ASCIZ /+/]>,,,REPCFM)
+REPFD3:	FLDDB.(.CMDAT,CM%SDH,DECRAD,<decimal offset>,,)
+REPCFM:	FLDDB.(.CMCFM)
+
+	SUBTTL	Setup for Dummy Report
+
+
+;A special report is in effect if  IRPT  is  lt 0
+
+;IRPT+0	-<# items>,,<start address>, or	-1
+;IRPT+1	B-ptr to pre-title, or		<0,,address of pre-routine>
+;IRPT+2	B-ptr for more pre-title, or	<0,,address of per-sample routine>
+;IRPT+3	B-ptr to post-title, or		<0,,address of post-routine>
+
+IRPT0:
+	PHASE IRPT
+
+	0				; Zapped by -n,,RPTDAT table
+	XWD -1,RPTITL
+
+	0
+	0
+	0
+
+	0				; No flags
+
+RPTITL:	ASCIZ /
+DateTime HHHMM 
+/
+	BLOCK 71			; Room for variable names in title
+RPTDAT:	0
+
+	DEPHASE
+IRPTL==.-IRPT0
+
+RPTIT0==<POINT 7,RPTITL+3,6>		; Pointer to position for variable name
+
+
+
+.REPOR:	MOVEI T1,CMDBLK
+	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /mode/]>)]
+	COMND
+
+	SETZ Q1,			; Assume OFF
+	MOVEI T1,CMDBLK
+	MOVEI T2,REPFD0			; BEGIN, FLAGS, or OFF?
+	COMND
+	TXNE T1,CM%NOP
+	  ERRMAC PARSE1,<Invalid REPORT mode>
+	HRRZ Q1,(T2)			; 1-begin, 2-flags, or 0-off?
+
+	CAIE Q1,2			; FLAGS?
+	IFSKP.
+	  SKIPN IRPT			; Have report for
+	    ERRMAC PARSE1,<Need a report for there to be flags>
+
+	  SETZ Q1,			; Haven't seen NO
+
+	  SKIPG T3,IRPT+RPT.F		; Report have any flags?
+	    MOVEI T3,[FLDDB.(.CMKEY,,[0],,,)] ; Dummy, no flags
+
+	  MOVEI T2,NOFDB		; "No", or
+	  HRRM T3,.CMFNP(T2)		; Flags
+
+	  MOVEI T1,CMDBLK
+	  COMND
+	  TXNE T1,CM%NOP
+	    ERRMAC PARSE1,<Invalid REPORT FLAG>
+
+	  HRRZS T3			; Actual
+	  CAIE T3,NOFDB			; "NO" or "ARE"?
+	  IFSKP.			; True
+	    HRRZ T2,(T2)		; Which
+
+	    CAIE T2,1			; ARE
+	    IFSKP.
+	      CALL CONF			; Confirm ARE
+
+	      HRRZ T3,NOFDB		; Get flags FDB
+	      HRRZ T3,.CMDAT(T3)	; Locate keyword table
+	      HLLZ T4,(T3)		; # flags
+	      MOVNS T4			; -# flags
+	      HRRI T4,1(T3)		; -# flags,,First
+	      DO.
+	        HRROI T1,TXNOSP
+	        HRRZ T3,(T4)		; Get flag bit
+	        TDNN F,T3		; Need a NO?
+	          PSOUT			; Yes
+	        HLRO T1,(T4)		; Text
+	        MOVE T2,(T1)		; Text?
+	        TXNN T2,-1B6
+	          ADDI T1,1		; No, next must be
+	        PSOUT
+	        HRROI T1,TXCRLF
+	        PSOUT
+	        AOBJN T4,TOP.		; Back if another
+	      ENDDO.
+	      RET			; All done
+	    ENDIF.			; REPORT FLAGS ARE
+
+	    TXO Q1,1B0			; Remember had a NO
+	    HRRZ T2,NOFDB		; Get flags back
+	    MOVEI T1,CMDBLK
+	    COMND
+	    TXNE T1,CM%NOP
+	      ERRMAC PARSE1,<Invalid REPORT FLAG>
+	  ENDIF.
+	  HRR Q1,(T2)			; Get flag bit
+
+	  CALL CONF			; Confirm
+
+	  TLZN Q1,-1			; Have a NO?
+	   TDOA F,Q1			; Positive, set bit
+	    TDZ F,Q1			; No, clear bit
+	  RET
+	ENDIF.
+
+
+	CALL CONF			; Confirm
+	JUMPE Q1,REPORX			; OFF confirmed
+
+					; Must be BEGIN
+	MOVEI T2,CMDBLK			; Point to command state block
+	MOVEI T1,REPORQ			; Where to go on re-parse needed
+	MOVEM T1,.CMFLG(T2)
+	HRROI T1,[ASCIZ /Report>/]	; Prompt
+	MOVEM T1,.CMRTY(T2)
+
+	MOVE T1,[IRPT0,,IRPT]		; Initialize report
+	BLT T1,IRPT+IRPTL-1
+
+	MOVEI Q1,RPTDAT			; Point to slot for first item
+	MOVE Q2,[RPTIT0]		; Save initial pointer into title
+	MOVEM Q2,TTLPTI			; It is last confirmed
+
+	DO. (REPLUP)			; Get next variable name
+
+	  SETZB Q3,P1			; Name and address
+	  MOVE Q2,PTTLMP		; Pointer after justification spaces
+
+; Here when an error occurs and need to start over. Reinit the COMND JSYS
+
+	  MOVEI T1,CMDBLK		; Addr of command state block
+	  MOVEI T2,[FLDDB. (.CMINI)]	; Addr of funct descriptor block
+	  COMND				; Do the init of COMND
+
+; Here when the user rubouts into the previously gotten text
+
+REPORQ:
+
+	  MOVEI T1,CMDBLK
+	  MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /symbol/]>)]
+	  COMND
+
+	  MOVEI T1,CMDBLK
+	  MOVEI T2,REPFD1		; Look for symbol
+	  COMND
+	  TXNE T1,CM%NOP
+	    ERRMAC TOP.,<Invalid symbol name>
+	  HRRZS T3			; Actual FDB parsed
+	  CAIN T3,REPXIT		; Special message?
+	    MOVEI T3,REPCFM		; Yes, use common for testing
+
+	  CAIE T3,REPFD1		; Symbol?
+	    JRST REPORR			; Maybe done
+
+	  MOVE T1,CMDBLK+.CMABP		; Pointer to atom buffer
+	  MOVE T2,[POINT 7,Q3]		; Copy of 5-character symbol
+	  SETZ Q3,			; Initialize it
+	  MOVSI T4,-5			; Use at most the first 5
+	  DO. (REPCPY)
+	    ILDB T3,T1
+	    CAIL T3,"a"
+	     CAILE T3,"z"
+	      TRNA
+	       TRZ T3,40
+	    IDPB T3,T2			; Into symbol variable
+	    JUMPE T3,ENDLP.		; NUL ends typein
+	    IDPB T3,Q2			; No NULs in title
+	    AOBJN T4,TOP.		; Back for more
+	  ENDDO.
+
+	  MOVE T1,Q3
+	  MOVE T4,ANITEM		; # symbols
+	  CAME T1,ISYM(T4)		; Find symbol?
+	    AOBJN T4,.-1		; Not yet
+
+	  IFL. T4			; Symbol is in ISYM table
+	    SKIPN T2,ILINK(T4)		; Special symbol table?
+	      MOVE T2,IPTR(T4)		; No, regular?
+	  ELSE.				; Synbol is defined
+	    MOVE T4,Q3
+	    CALL SRCH
+	    IFSKP.
+	      HRRZ T2,SMPPTR(T1)	; Found in symbol table
+	      ADD T2,STAT0
+	      MOVN T3,SMPCNT(T1)
+	      HRL T2,T3
+	    ELSE.
+	      SETZ T2,			; Not in symbol table
+	    ENDIF.
+	  ENDIF.
+
+	  IFE. T2			; Find symbol?
+	    HRROI T1,[ASCIZ /
+Symbol undefined
+/]					; No
+	    PSOUT
+	    LOOP.			; Back for next
+	  ENDIF.
+
+	  MOVEM T2,P1			; Save address of datum
+
+	  MOVEI T1,CMDBLK
+	  MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /+offset/]>)]
+	  COMND
+
+	  MOVEI T1,CMDBLK
+	  MOVEI T2,REPFD2		; Look for sign
+	  COMND
+	  TXNE T1,CM%NOP
+	    ERRMAC TOP.,<Want + for offset or return to confirm>
+	  HRRZS T3			; Actual FDB parsed
+	  CAIE T3,REPFD2
+	    JRST REPORR			; Wasnn't a +, must be confirm
+
+	  MOVEI T1,CMDBLK
+	  MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /offset/]>)]
+	  COMND
+
+	  MOVEI T1,CMDBLK
+	  MOVEI T2,REPFD3		; Look for offset
+	  COMND
+	  TXNE T1,CM%NOP
+	    ERRMAC TOP.,<Invalid offset>
+	  HRRZS T2			; Number parsed
+	  ADDM T2,P1			; Add offset to address of datum
+	  MOVEI T1,"+"
+	  IDPB T1,Q2			; + into title
+	  MOVE T1,Q2
+	  MOVEI T3,DECRAD
+	  NOUT				; Offset into title
+	    JFCL
+	  MOVE Q2,T1
+
+	  MOVEI T1,CMDBLK
+	  MOVEI T2,REPCFM		; Look for confirmation
+	  COMND
+	  HRRZS T3			; Actual FDB parsed
+	  TXNN T1,CM%NOP
+REPORR:	   CAIE T3,REPCFM		; Get confirmation?
+	    ERRMAC TOP.,<Not confirmed>	
+
+	  HRRZ T2,P1			; Address of datum
+	  JUMPE T2,ENDLP.		; Empty line ends report mode
+	  HRLI T2,(FLD(^D15,FMT%CO))	; Columns
+	  MOVEM T2,(Q1)			; Add to report list
+
+	  MOVE T2,Q2			; Byte pointer to end of column heading
+	  SUBI T2,<<^D15+4>/5>		; Back up for leading blank filler
+	  SETZ T3,
+	  IDPB T3,Q2			; End string
+	  MOVE T1,TTLPTI		; Byte pointer to current end of title
+	  SOUT				; Add this item
+	  MOVEM T1,TTLPTI		; Update byte pointer to end of title
+	  AOBJP Q1,TOP.			; Always back for another item
+
+	ENDDO. ;REPLUP
+
+
+REPORX:	HLLZS Q1			; # items specified
+	IFG. Q1				; Make sure something to report
+	  MOVNS Q1			; -# items,,0
+	  HRRI Q1,RPTDAT		; <-# items,,First table entry>
+	  MOVEM Q1,IRPT			; Enable special report
+	  MOVE T1,TTLPTI		; Byte pointer to current end of title
+	  MOVEI T2,15			; End title
+	  IDPB T2,T1
+	  MOVEI T2,12
+	  IDPB T2,T1
+	  SETZ T2,
+	  IDPB T2,T1			; End title
+	ELSE.
+	  SETZM IRPT			; Remove special report info
+	  MOVX T1,<IRPT,,IRPT+1>
+	  BLT T1,IRPT+5
+	ENDIF.
+
+	MOVEI T2,CMDBLK			; Point to command state block
+	MOVEI T1,PARSE2			; Where to go on re-parse needed
+	MOVEM T1,.CMFLG(T2)
+	HRROI T1,PCHAR			; Prompt
+	MOVEM T1,.CMRTY(T2)
+	RET
+
+	SUBTTL	SCAN Commands
+
+; Scan binary file writing differences
+
+SSWKEY:	NSWK,,NSWK
+	[ASCIZ /ABSOLUTE/],,1
+	[ASCIZ /DIFFERENCE/],,0
+NSWK==.-SSWKEY-1
+
+
+.SCAN:	TXZ F,F.DIFF+F.SCAN+F.ABS	; Not difference mode & not yet in scan
+	SETZM LDORGT
+
+	MOVEI T1,CMDBLK
+	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /binary input file/]>)]
+	COMND
+
+	MOVEI T2,INFFDB
+	HRROI T3,[ASCIZ /BIN/]
+	MOVEM T3,.GJEXT+GTJBLK
+	COMND
+	TXNE T1,CM%NOP
+	  ERRMAC PARSE1,<Bad binary input file name>
+	MOVEM T2,IJFN
+
+	MOVEI T1,CMDBLK
+	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /writing to file/]>)]
+	COMND
+
+	MOVEI T2,[FLDDB.(.CMOFI,,,,<TTY:>)]
+	HRROI T3,[ASCIZ /LST/]
+	MOVEM T3,.GJEXT+GTJBLK
+	COMND
+	TXNE T1,CM%NOP
+	  ERRMAC PARSE1,<Bad output file name>
+	MOVEM T2,OJFN
+
+	MOVEI T1,CMDBLK
+	MOVEI T2,[FLDDB.(.CMSWI,,SSWKEY,,</DIFFERENCE>,[FLDDB.(.CMCFM)])]
+	COMND
+	TXNE T1,CM%NOP
+	  ERRMAC PARSE1,<Bad switch>
+
+	HLRZ T4,T3
+	HRRZS T3
+	CAIE T3,(T4)			; Have switch or confirmation?
+	IFSKP.				; Switch
+	  HRRZ T2,(T2)			; ABS or DIF
+	  SKIPE T2
+	   TXOA F,F.ABS			; Only switch is absolute
+	    TXZ F,F.ABS
+	  CALL CONF			; Get confirmation after switch
+	ENDIF.
+
+	CALL OPENIF			; Open input file, etc
+
+	MOVE T1,OJFN
+	MOVE T2,[070000,,100000]	; File is straight text
+	OPENF
+	 JRST [MOVE T1,OJFN
+		RLJFN
+		 JFCL
+		SETOM OJFN
+		JRST CMDERR]
+
+	CALL RDFILE			; Get first sample
+	  JFCL
+
+	MOVX T3,<RPT.B>			; Scan pre index
+	CALL DOIT			; Begin
+
+; Check for restart, no differences if so
+
+	DO. (SCANLP)
+	  MOVE T2,STAT0			; Current msec up
+	  MOVE T2,AASDT+1-AAAST(T2)	; Msec up
+	  MOVE T4,SSTAT0		; Last msec up
+	  MOVE T3,AASDT+1-AAAST(T4)	; Msec up
+	  SKIPLE T4			; Beware first time
+	   CAMG T2,T3
+	    TXZ F,F.DIFF		; No differences if restart
+	  TXNE F,F.ABS			; No differences if /absolute
+	    TXZ F,F.DIFF
+
+	  MOVX T3,<RPT.M>		; Scan mid index
+	  CALL DOIT			; Extract from this sample
+
+	  CALL SAVDA0			; Save current sample
+	  TXO F,F.DIFF+F.SCAN		; Difference mode and scanning
+	  HLRZ T2,DATA			; Length of current sample
+	  ADDM T2,OFFSET		; Beginning of next
+	  CALL RDFILE			; Get it
+	   CAIA				; Stop on error
+	    LOOP.			; Loop back if another
+	ENDDO. ;SCANLP
+
+	MOVX T3,<RPT.E>			; Scan post index
+	CALL DOIT			; Finish up
+
+	MOVE T1,IJFN
+	CLOSF				; Forget the input file
+	 JFCL
+	SETOM IJFN
+	SETZM OFFSET
+
+	CALL CLOSEO			; Close the output file
+	RET
+
+	SUBTTL	Output Commands: DIFFERENCE, WRITE
+
+; Format and write a sample
+
+.DIFFE:	TXOA F,F.DIFF			; Difference mode
+.WRITE:	  TXZ F,F.DIFF			; Not difference mode
+	TXZ F,F.SCAN			; Not scanning mode
+
+	MOVEI T1,CMDBLK
+	MOVEI T2,[FLDDB.(.CMNOI,,<POINT 7,[ASCIZ /to file/]>)]
+	COMND
+
+	MOVEI T2,[FLDDB.(.CMOFI,,,,<STS.LST>)]
+	HRROI T3,[ASCIZ /LST/]
+	MOVEM T3,.GJEXT+GTJBLK
+	COMND
+	TXNE T1,CM%NOP
+	  ERRMAC PARSE1,<Bad file name>
+	MOVEM T2,OJFN
+
+	CALL CONF			; Get confirmation
+
+	MOVE T1,OJFN
+	MOVE T2,[070000,,100000]	; File is straight text
+	OPENF
+	 JRST [MOVE T1,OJFN
+		RLJFN
+		 JFCL
+		SETOM OJFN
+		JRST CMDERR]
+
+	MOVX T3,RPT.B			; Write pre index
+	CALL DOIT
+
+	MOVX T3,RPT.M			; Write mid index
+	CALL DOIT			; Write report for this sample
+
+	MOVX T3,RPT.E			; Write post index
+	CALL DOIT
+
+	CALL CLOSEO			; Close the output file
+	RET
+
+	SUBTTL	Routine to Dispatch for Default Routine, String pointer, or Sub
+
+;OJFN (& IJFN)	Opened
+;DATA (& SDATA)	Contains current sample (and last, if F.DIFF)
+;T3/	RPT.B/M/E
+
+DOIT:	MOVE T1,OJFN
+	SKIPL IRPT			; Special report?
+	IFSKP.
+	  ADDI T3,4			; Yes, Switch from normal to special
+	  SKIPN T2,IRPT-4(T3)		; 0 (default), <0,,sub>, or Point ...
+	  ANSKP.			; (0-Go do default for special report)
+	    TLNE T2,-1			; Sub or BP?
+	    IFSKP.			; Subroutine
+	      CALL (T2)			; Call it
+	    ELSE.			; Byte pointer
+	      SETZ T3,
+	      SOUT			; Write it
+	    ENDIF.
+	ELSE.				; Normal report, or special w/default
+	  SUBI T3,RPT.B			; Adjust range for literal
+	  CAIL T3,0			; Check both low and
+	   CAIL T3,7			; High limits
+	    TRNA			; Bad, ignore it
+	     CALL @[IFIW WRITTL		; Default normal report routines
+		    IFIW OUTBDY
+		    IFIW CRLF
+		    IFIW TORET		; Bad arg
+		    IFIW SCANTL		; Default special report routines
+		    IFIW OUTRPT
+		    IFIW CRLF](T3)
+	ENDIF.
+	RET
+
+	SUBTTL	Routines to Print Input File Identification
+
+SCANTL:	HRROI T2,[ASCIZ \
+ TCP/IP Scan of file
+ [\]					; Scan mode
+	CALL FILETL			; Standard part
+	MOVE T1,OJFN
+	SETZ T3,
+	SKIPGE T2,IRPT+RPT.H		; Extra report title
+	  SOUT
+	RET
+
+
+WRITTL:	HRROI T2,[ASCIZ \
+ TCP/IP Status from file
+ [\]					; Write/Difference mode
+	TXNE F,F.DIFF			; If difference, different
+	  HRROI T2,[ASCIZ \
+ TCP/IP Differences between file
+ [\]
+
+
+FILETL:	HRROI T1,IFNSTR
+	MOVEI T3,DATA
+	MOVE T4,OFFSET
+	CALL OUTHED			; Put heading on file
+
+	TXNN F,F.DIFF
+	IFSKP.				; In difference mode, also list base id
+	  HRROI T2,[ASCIZ \
+and file
+[\]
+	  HRROI T1,SIFNST
+	  MOVEI T3,SDATA
+	  MOVE T4,SOFFSET
+	  CALL OUTHED
+	ENDIF.
+	RET
+
+
+NOUTER:	PUSH P,T2
+	MOVE T3,-2(P)
+	ANDX T3,<FMT%CO>
+	HLRZS T3
+	MOVNS T3
+	AOS T3
+	HRROI T2,[ASCIZ /                                             /]
+	SOUT
+	MOVX T2,"?"
+	BOUT
+	MOVE T3,-2(P)
+	POP P,T2
+	RET
+
+	SUBTTL	Routine to Print Data from Current Sample
+
+
+OUTRPT:	CALL SAMPID			; One line per sample - give id
+
+	MOVE Q1,IRPT			; Report generator
+	DO. (SCANRL)
+	  HRRO Q2,(Q1)			; Get address, one element
+;cwl borken...
+	  MOVE Q3,(Q1)			; Format
+	  TXZ Q3,FMT%CD			; Zero code
+;temp
+	  MOVX Q3,<FLD(^D15,FMT%CO)>
+
+	  CALL GETDAT			; Pick up an item
+	    JFCL			; List zeros
+	  CAMN T2,[037777,,777777]	; 32-bits of "-1"?
+	    SETO T2,0			; Yes, make a full -1
+	  TLNE T2,020000
+	   TLO T2,740000		; Extend "sign"
+	  MOVEM T2,CURDAT		; Save extended datum
+	  MOVE T1,OJFN
+	  MOVE T3,Q3
+	  ANDX T3,FMT%CO
+	  SKIPE T3
+	    TXO T3,NO%LFL
+	  TXO T3,DECRAD
+	  PUSH P,T3
+	  NOUT
+	    CALL NOUTER
+
+	  TXZN Q3,FMT%FR		; Want fraction?
+	  IFSKP.			; Yes
+	    MOVE T2,LSTDAT		; Last datum
+	    CAMG T2,CURDAT		; Multiple or percent?
+	      IMULI T2,^D100		; Percent
+	    IDIV T2,CURDAT
+	    MOVE T3,(P)			; Format
+	    NOUT
+	      JFCL
+	  ENDIF.
+	  POP P,T3
+
+	  AOBJN Q1,TOP.			; Back for another
+	ENDDO.
+	CALL CRLF
+	RET
+
+
+; List sample's date & time, up time as "MMDDHHMM HHHMM" in Scan mode
+
+SAMPID:	MOVE T1,OJFN			; Common header identifying sample
+	MOVE T2,STAT0
+	MOVE T2,AASDT+0-AAAST(T2)	;IDAT
+	MOVX T4,0
+	ODCNV
+	PUSH P,T3			; Save day
+	MOVX T3,<NO%LFL+NO%ZRO+FLD(2,NO%COL)+DECRAD>
+	HRRZI T2,1(T2)			; Month as MM
+	NOUT
+	  JFCL
+	HLRZ T2,(P)
+	ADDI T2,1			; Day as DD
+	MOVX T3,<NO%LFL+NO%ZRO+FLD(2,NO%COL)+DECRAD>
+	NOUT
+	  JFCL
+	HRRZ T2,T4			; Sec since midnight
+	IDIVI T2,^D60
+	IDIVI T2,^D60			; Get hours as HH
+	MOVEM T3,(P)			; Save min
+	MOVX T3,<NO%LFL+NO%ZRO+FLD(2,NO%COL)+DECRAD>
+	NOUT
+	  JFCL
+	POP P,T2			; Minutes as MM
+	NOUT
+	  JFCL
+
+	MOVX T2,CH.SPC
+	BOUT
+
+	MOVE T2,STAT0
+	MOVE T2,AASDT+1-AAAST(T2)	; Msec up
+	IDIVI T2,^D60000		; Minutes
+	IDIVI T2,^D60			; Hours as HHH
+	PUSH P,T3			; Save minutes
+	MOVX T3,<NO%LFL+NO%ZRO+FLD(3,NO%COL)+DECRAD>
+	NOUT
+	  JFCL
+	POP P,T2			; Minutes as MM
+	MOVX T3,<NO%LFL+NO%ZRO+FLD(2,NO%COL)+DECRAD>
+	NOUT
+	  JFCL
+	RET
+
+; Subroutine to print header
+
+; T1/	-1,,[ASCIZ /file name/]
+; T2/	-1,,[ASCIZ /title/]
+; T3/	Pointer to (S)DATA
+; T4/	(S)OFFSET value
+
+OUTHED:	PUSH P,T4			; Save value of offset
+	PUSH P,T3			; Save pointer to data
+	PUSH P,T1			; Save pointer to file name
+
+	CALL DOSOUT			; List title
+
+	MOVX T1,.GTHSZ			; Find my local host name
+	GTHST
+	  ERRMAC OUTHER,<Can't get local host number from system>
+	MOVE T3,T4			; For output routine
+	MOVE T2,[POINT 7,HTEMP]		; Temp for host string
+	CALL H2STR			; Put it in string temp
+	HRROI T2,HTEMP			; Then into file
+	CALL DOSOUT			; (Arg from T2)
+
+	MOVEI T2,"]"			; Tack on host closer
+	BOUT
+
+	POP P,T2			; And file name (Arg from T1)
+	CALL DOSOUT
+
+	SSOUT <
+ Data from host >
+
+	MOVE T4,(P)			; DATA/SDATA pointer (Arg from T3)
+
+	LOAD T3,PISH,+1-PKTELI(T4)	; Host which sent the report
+	MOVE T2,[POINT 7,HTEMP]		; Temp for host string
+	CALL H2STR			; Convert host to string
+	HRROI T2,HTEMP			; Put that name in file
+	CALL DOSOUT
+
+	POP P,T4			; DATA/SDATA pointer (Arg from T3)
+
+	SSOUT < sample >
+	LOAD T2,PISID,+1-PKTELI(T4)
+	CALL DOUTD			; Sample number in decimal
+
+	SSOUT < (length >
+	HLRZ T2,(T4)
+	CALL DOUTD			; Length in decimal
+
+	SSOUT <) at position >
+	POP P,T2			; (Arg from T4)
+	CALL DOUTD			; Offset into file
+
+	SSOUT <,
+ For >
+	MOVE T3,STAT0			; Assume sample
+	CAIE T4,DATA			; Correct?
+	  MOVE T3,SSTAT0		; No, saved sample
+	MOVE T2,AASDT+2-AAAST(T3)
+	MOVE T3,AASDT+3-AAAST(T3)
+	CALL OHDATE
+
+	SSOUT < to >
+	MOVE T3,STAT0			; Assume sample
+	CAIE T4,DATA			; Correct?
+	  MOVE T3,SSTAT0		; No, saved sample
+	MOVE T2,AASDT+0-AAAST(T3)
+	MOVE T3,AASDT+1-AAAST(T3)
+	CALL OHDATE
+
+	LOAD Q1,PIDO,+1-PKTELI(T4)	; Words in header
+	MOVNI Q1,1+0+1(Q1)		; Datagram size & ports
+	HRLZS Q1
+	HRROI T2,[ASCIZ /
+ Data header: /]
+
+	DO.
+	  SETZ T3,
+	  TRNN Q1,3			; New line needed?
+	    SOUT			; Yes
+	  MOVE T2,0(T4)			; (S)DATA
+	  CALL OOUTXT
+	  CALL SPACE2
+
+	  HRROI T2,[ASCIZ /
+              /]
+	  AOS T4
+	  AOBJN Q1,TOP.
+	ENDDO.
+	SETZ T3,
+	TRNN Q1,3			; New line needed?
+	  SOUT				; Yes
+	MOVE T3,STAT0			; Assume sample
+	CAILE T4,SDATA			; Correct?
+	  MOVE T3,SSTAT0		; No, saved sample
+	MOVE T2,-1(T3)			; Monitoring size
+	CALL OOUTXT
+
+
+	SSOUT <
+Date & Time  vs.  TODCLK  skew = >
+
+	MOVE T2,STAT0			; Assume sample
+	CAILE T4,SDATA			; Correct?
+	  MOVE T2,SSTAT0		; No, saved sample
+
+	MOVE T3,AASDT+0-AAAST(T2)
+	SUB T3,AASDT+2-AAAST(T2)	; Days,,Fraction
+	MUL T3,[^D<24*60*60*1000>]
+	LSH T4,1			; Duplicate sign
+	LSHC T3,^D17			; Equivalent msec
+	MOVE T4,AASDT+1-AAAST(T2)
+	SUB T4,AASDT+3-AAAST(T2)	; TODCLK msec
+	MOVE T2,T3
+	SUB T2,T4
+	MOVMS T2
+	IMULI T2,^D200			; Difference * 2 * 100
+	ADD T4,T3			; Sum
+	IDIV T2,T4			; % difference
+
+	CALL DOUTD
+
+	SSOUT < %
+
+>
+	RET
+
+
+OUTHER:	POP P,(P)			; Clear stack
+	POP P,(P)
+	POP P,(P)
+	RET
+
+
+; Subroutine for OUTHED to output date/time and uptime
+; T2/ GTAD, T3/ UPTIME, each masked to 32 bits by net
+
+OHDATE:	PUSH P,T3			; Save uptime
+
+	TLO T2,100000			; Add in lost bit of GTAD
+	SETZ T3,0			; Standard date/time form
+	MOVE T1,OJFN			; Output to file
+	ODTIM
+
+	SSOUT < (up >
+	POP P,T2			; Now do uptime
+	IDIVI T2,^D<60*1000>		; Discard msecs and secs
+	IDIVI T2,^D60			; Split minutes off
+	PUSH P,T3			; Save minutes
+
+	CALL DOUT			; Output hours
+
+	MOVEI T2,":"			; Colon after hours
+	BOUT
+
+	POP P,T2
+	CALL DOUT2			; Output minutes
+
+	MOVEI T2,")"
+	BOUT
+
+	RET
+
+	SUBTTL	Subroutine to Format the Data Sample
+
+; SMPSYM+soff/ E.g. PZ
+; SYMCNT+soff/ E.g. PROCSZ
+; SMPPTR+soff/ E.g. POINT 36,PZ(ST0)
+
+; Q1/        -# left,,idx
+; ISYM+idx/  E.g. PZ'
+; IOFF+idx/  E.g. offset
+; IPTR+idx/  E.g. -PROCSZ,,PZ'
+; IFMT+idx/  E.g. 0,,.PRC.
+; ILINK+idx/ E.g. -PROCSZ,,adr	; Built from SYMxxx data
+
+
+OUTBDY:	SETZM RELOCC			; No relocation
+	HLLZ Q1,NCTQ1			; # items before first NCT
+	MOVNS Q1			; AOBJN pointer
+IFE VRSN-5,<MOVE Q1,ANITEM>
+	DO.
+	  CALL DOITM0			; Do next item
+	  AOBJN Q1,TOP.			; Done another item
+	ENDDO.
+	CALL CRLF
+
+IFE VRSN-5,<RET>
+
+; NCTs
+
+	MOVEI T3,MNMAA			; Default location of first NCT
+	MOVEM T3,NCTADR
+	SETZM RELOCC			; Default relocation for the first NCT
+
+	MOVE T1,AOBNCT			; AOBJN for NCTs
+	DO.
+	  PUSH P,T1			; Current NCT
+	  MOVX T2,<-NNCTTR,,0>		; For each NCTi-A, -C, -E, -G block
+	  DO.
+	    MOVE Q1,NCTAA(T2)		; AOBJN for items in block
+
+	    MOVE T3,@NCTADR		; Length of NCTi
+	    ADD T3,NCTADR		; Beyond end
+	    HRRZ T4,IPTR(Q1)		; Start of this block
+	    CAMG T3,T4			; Block exist?
+	      EXIT.			; No
+	    PUSH P,T2			; Save NCTi-A, -C, -E, -G counter
+	    
+	    HRRZ T4,-1(P)		; NCT number
+	    LSH T4,0+^D7+1		; Once for 4th character
+	    ADD T4,[ASCII /NCT0A/]
+	    LSH T2,1+0+1		; Twice for 5th character
+	    ADDI T4,(T2)		; Symbol for block
+	    CALL SRCH			; Look it up in data
+	    IFSKP.			; Have symbols
+	      HRRZ T3,SMPPTR(T1)	; ST0 offset
+	      ADD T3,ST0		; Memory address
+	      HRRZ T2,IPTR(Q1)		; For relocation
+	      SUB T3,T2			; Relocation factor
+	      MOVEM T3,RELOCC		; Dynamic relocation
+	    ENDIF.
+
+	    DO.
+	      CALL DOITM1		; Do (assembled) item
+	      AOBJN Q1,TOP.		; Done another item
+	    ENDDO.
+	    POP P,T2			; Block counter
+	    AOBJN T2,TOP.		; Back for next block in this NCT
+	  ENDDO.
+
+	  MOVE T3,@NCTADR		; Length of this NCT
+	  ADDM T3,NCTADR		; Point to next
+	  ADDM T3,RELOCC		; Default relocation for the next NCT
+	  POP P,T1			; NCT counter
+	  SKIPE T3			; Stop if end of NCTs
+	    AOBJN T1,TOP.		; Back for next NCT
+	ENDDO.
+	SETZM RELOCC			; Drop relocation factor
+	CALLRET CRLF
+
+; Routine to process Q1 th item from Ixxx
+
+DOITM0:	SKIPE SMPSYL			; Have SYMxxx info?
+	 SKIPA Q2,ILINK(Q1)		; Yes, get custom info (0 is missing)
+DOITM1:	  MOVE Q2,IPTR(Q1)		; No, use assembled default
+	JUMPGE Q2,TORET			; Item missing, skip it
+	ADD Q2,RELOCC			; Relocation
+
+	MOVE Q3,IFMT(Q1)		; Formatting information
+	LOAD P1,FMTCD,Q3		; Just routine id
+	CAIL P1,NOBHTB			; Range check format type
+	  TXZ Q3,FMT%CD			; Make error zero
+
+	SKIPN T2,INAME(Q1)		; Title information
+	 TROA T2,DMYTTL			; None, use dummy (T2 was 0)
+	  TXO Q3,FMT%TL			; Remember have a real title
+	IFGE. T2			; Have a table?
+	  MOVEM T2,DMYTBL		; No, put single title into dummy table
+	  MOVX T2,<-1,,DMYTBL>		; Use dummy table
+	ENDIF.
+	MOVEM T2,AOBTTL			; AOBJN counter for titles
+
+	CALL OBTITL			; Output item's title & see if another
+
+; Q1/     -# left,,current offset into Ixxxx
+; Q2/     -# elements left in item,,address of next element
+; Q3/     Format flags + id
+; AOBTTL/ -# titles,,address in table
+
+	LOAD T4,FMTCD,Q3		; Get the code
+	HRRZ T4,OBHTAB(T4)		; Pick up routine (or error) address
+	CALL 0(T4)			; Process the item
+	CALLRET CRLF			; End it all
+
+
+; Format id to routine translation table
+
+OBHTAB:	EXP OBHERR			; No item zero - error
+	EXP OBDEC			; Decimal
+	EXP OBOCT			; Octal
+	EXP OBOMG			; Octal magnitude
+	EXP OBPKT			; Packet trace
+	EXP OBHST			; Host address
+	EXP OBBH1			; 1-dimenasional histogram
+	EXP OBBH2			; 2-dimenasional histogram
+	EXP OBPRC			; Process stats block
+	EXP OBQUE			; Queue vector
+	EXP OBLCK			; Lock block
+	EXP OBTOD			; TOD from TODCLK
+	EXP OBCMS			; Cumulative msec (add AASDT+1 til >0)
+	EXP OBDOH			; LH dec (use FMR%SD), RH oct (abs)
+	EXP OBDHW			; LH dec, RH dec (both use FMT%SD)
+	EXP OBTAD			; Time and Date
+	EXP OBDMG			; Decimal magnitude
+	EXP OBOGM			; Forwarding table
+	EXP OBOHW			; Octal half words
+	EXP OBQUH			; Queue header
+	EXP OBMSK			; Mask value formatted word
+	EXP OBHAD			; Host address only
+	EXP OBEXP			; Exponential histogram
+ NOBHTB==.-OBHTAB
+
+;Q2/	Address of datum in DATA
+;Q3/	Format
+;	CALL GETDAT
+;Ret+1:	  Datum zero & suppressing zeros
+;Ret+2:	T2/ Datum to be listed
+
+GETDAT:	MOVE T2,CURDAT			; Push current data item
+	MOVEM T2,LSTDAT
+	MOVE T2,(Q2)			; Datum
+	TXNE F,F.DIFF			; Difference mode and
+	 TXNE Q3,FMT%SD			; Datum is differenceable?
+	  CAIA				; No
+	   SUB T2,SDATA-DATA(Q2)	; Yes, get difference
+	MOVEM T2,CURDAT			; Save current item
+	SKIPN T2			; Zero and
+	 TXNN Q3,FMT%SZ			; Suppress zeros?
+TORETS:	  AOS (P)			; No, skip return
+TORET:	RET				; Yes, non-skip
+
+
+
+LOOPP2:	DO.
+	  CALL SPACE2
+	  AOBJP Q2,ENDLP.		; Any more? No
+	  TXNN Q3,FMT%TL		; Have individual title?
+	    RET				; No, several per line, continue
+	  CALL CRLF			; Yes, begin new line
+	  CALLRET OBTITL		; Special title & continue
+	  LOOP.
+	ENDDO.
+	POP P,(P)			; Drop return
+	RET
+
+; Routine to print either special title for a bucket, or bucket #
+; Q3/	Has FMT%TL flag
+; P1/	Has # in RH
+
+BKTITL:	CALL CRLF			; Begin new line
+	TXNE Q3,FMT%TL			; Special titles?
+	  CALLRET OBTITL		; Yes, print it & remember if another
+					; No, use buckets
+BKTNUM:	HRROI T2,[ASCIZ /  Bkt # /]
+	HRROI T1,TEXTB
+	SETZ T3,
+	SOUT
+	HRRZ T2,P1			; Bucket #
+	MOVX T3,DECRAD
+	NOUT
+	  JFCL
+	MOVX T2,"."			; Is decimal
+	BOUT
+	SETZ T2,
+	BOUT
+	HRROI T3,TEXTB
+	CALLRET OBTIT3			; Perform padding
+
+
+; Routine to print a title and padding
+; Q3/	Flags, optional column width
+; AOBTTL/ Title pointer
+
+OBTITL:	CALL NXTITL			; Locate title
+	  RET
+OBTIT3:	HRLI T3,440700			; Entry if address of ASCIZ is in T3
+OBTITM:	LOAD T4,FMTCO,Q3		; Desired # columns
+	SKIPN T4			; Anything?
+	  MOVE T4,DEFTAB		; No, use default
+
+	DO.
+	  ILDB T2,T3			; Copy (all) characters
+	  JUMPE T2,ENDLP.		; Reached end
+	  CALL CHOUT
+	  CAIN T2,CH.LF			; New line?
+	    JRST OBTITM			; Yes, reset count
+	  SOJA T4,TOP.
+	ENDDO.
+
+	DO.
+	  JUMPLE T4,ENDLP.
+	  CALL SPACE			; Optional spaces to line up numbers
+	  SOJG T4,TOP.
+	ENDDO.
+
+	SSOUT <  >			; Two spaces minimum
+	RET
+
+
+NXTITL:	TXZ Q3,FMT%TL			; Assume no more titles
+	SKIPL T4,AOBTTL			; AOBJN pointer into title table
+	  RET				; No title?
+	HRR T3,(T4)			; Form asciz pointer
+	AOBJP T4,.+2			; More left?
+	  TXO Q3,FMT%TL			; Yes, have another title
+	MOVEM T4,AOBTTL			; Pointer for next time
+	AOS (P)
+	RET
+
+	SUBTTL	Format subroutines
+
+; 0 Error
+
+OBHERR:	SSOUT <? Bad format id in data sample.
+>
+	RET
+
+; .DEC. - Decimal, .DMG. - Decimal Magnitude
+
+OBDEC:	SKIPA T3,[DECRAD]
+OBDMG:	  MOVE T3,[NO%MAG+DECRAD]
+	SKIPA
+
+; .OCT. - Octal, .OMG. - Octal Magnitude
+
+OBOCT:	  MOVEI T3,OCTRAD
+	SKIPA
+OBOMG:	  MOVE T3,[NO%MAG+OCTRAD]
+	SETZ P2,			; Count elements per line
+	PUSH P,T3			; Save format
+	JRST OBOL3			; Into loop ...
+
+	DO.
+	  CALL SPACE2			; Assume another will fit on line
+	  AOS P2			; Count elements on line
+	  TXNN Q3,FMT%TL		; Have individual title?
+	  IFSKP.
+	    CALL CRLF			; Yes, begin new line
+	    CALL OBTITL			; Special title
+	    SETZ P2,			; New line has no elements
+	  ELSE.
+	    HRROI T3,[ASCIZ /
+ /]
+	    TRNN P2,7			; Line "full"?
+	      CALL OBTIT3		; Yes, new line & move to data column
+	  ENDIF.
+OBOL3:
+	  MOVE T3,(P)			; Restore format
+	  CALL GETDAT			; Pick up an item
+	    JFCL			; List zeros
+	  CAMN T2,[037777,,777777]	; 32-bits of "-1"?
+	    SETO T2,0			; Yes, make a full -1
+	  TLNE T2,020000
+	   TLO T2,740000		; Extend "sign"
+	  MOVEM T2,CURDAT		; Save extended datum
+	  MOVE T1,OJFN
+	  NOUT
+	   JFCL
+	  MOVEI T2," "
+	  CAIE T3,[NO%MAG+DECRAD]
+	   CAIN T3,DECRAD		; Show decimal numbers with dot
+	    MOVEI T2,"."
+	  BOUT
+	  AOBJN Q2,TOP.			; Back for another
+	ENDDO.
+
+	TXZN F,FMT%FR			; Want fraction?
+	IFSKP.
+	  CALL SPACE2
+	  MOVE T2,LSTDAT		; Last datum
+	  CAMG T2,CURDAT		; Multiple or percent?
+	    IMULI T2,^D100		; Percent
+	  IDIV T2,CURDAT
+	  MOVE T3,(P)			; Format
+	  NOUT
+	    JFCL
+	ENDIF.
+	POP P,(P)			; Drop format
+	RET
+
+; .DOH. - Print decimal LH and octal RH
+; Left half used FMT%SD, while right half always sets it
+
+OBDOH:	DO.
+	  HLRZ T2,(Q2)			; Get datum
+	  CAIL T2,030000		; Extend hw?
+	    IOR T2,[-1,,740000]
+
+	  HLRZ T3,SDATA-DATA(Q2)	; Get datum
+	  CAIL T3,030000		; Extend hw?
+	    IOR T3,[-1,,740000]
+	  TXNE F,F.DIFF			; Difference mode and
+	   TXNE Q3,FMT%SD		; Differencable?
+	    CAIA			; No
+	     SUB T2,T3			; Yes, difference
+
+	  MOVX T3,<DECRAD>
+	  NOUT
+	    JFCL
+	  SSOUT <.,,>
+
+	  HRRZ T2,(Q2)			; Get datum
+jrst .+6				; RH always absolute
+	  HRRZ T3,SDATA-DATA(Q2)
+	  TXNE F,F.DIFF			; Difference mode and
+	   TXNE Q3,FMT%SD		; Differencable?
+	    CAIA			; No
+	     SUB T2,T3			; Yes, difference
+
+	  MOVX T3,<OCTRAD>
+	  NOUT
+	    JFCL
+
+	  CALL LOOPP2			; Exit if done, space/title otherwise
+	  LOOP.
+	ENDDO.				; Forever
+
+; .OHW. - Print half-words in octal
+; Both halves use FMT%SD
+
+OBOHW:	SKIPA P2,[OCTRAD]		; Use octal radix
+
+; .DHW. - Print half-words in decimal
+; Both halves use FMT%SD
+
+OBDHW:	  MOVX P2,DECRAD		; Use decimal radix
+
+	DO.
+	  HLRZ T2,(Q2)			; Get datum
+	  CAIL T2,030000		; Extend hw?
+	    IOR T2,[-1,,740000]
+
+	  HLRZ T3,SDATA-DATA(Q2)	; Get datum
+	  CAIL T3,030000		; Extend hw?
+	    IOR T3,[-1,,740000]
+	  TXNE F,F.DIFF			; Difference mode and
+	   TXNE Q3,FMT%SD		; Differencable?
+	    CAIA			; No
+	     SUB T2,T3			; Yes, difference
+
+	  MOVEI T3,(P2)			; Get radix
+	  NOUT
+	    JFCL
+
+	  MOVX T2,"."			; "." for decimals
+	  CAIN P2,DECRAD		; Decimal?
+	    CALL CHOUT			; Yes, print "."
+	    
+	  SSOUT <,,>
+
+	  HRRZ T2,(Q2)			; Get datum
+	  HRRZ T3,SDATA-DATA(Q2)
+	  TXNE F,F.DIFF			; Difference mode and
+	   TXNE Q3,FMT%SD		; Differencable?
+	    CAIA			; No
+	     SUB T2,T3			; Yes, difference
+
+	  MOVEI T3,(P2)			; Get radix
+	  NOUT
+	    JFCL
+
+	  MOVX T2,"."			; "." for decimals
+	  CAIN P2,DECRAD		; Decimal?
+	    CALL CHOUT			; Yes, print "."
+
+	  CALL LOOPP2			; Exit if done, space/title otherwise
+	  LOOP.
+	ENDDO.				; Forever
+
+
+; .PKT. - Dump a packet header from ring buffer
+
+OBPKT:	TXNE F,F.DIFF			; If difference mode,
+	  RET				; Don't print trace info
+
+	HRROI T2,[ASCIZ /Packet trace ring:
+ring	todclk		(difference)	type    sec,,addr
+/]
+	CALL DOSOUT
+	HRRZ T2,Q2			; Start of first packet
+	PUSH P,T2			; To compute offset into ring
+	PUSH P,[IPDVNT]			; Assume # entries is more constant
+	HLRE T2,Q2			; -Words in ring
+	MOVNS T2			; +Words in ring
+	MOVE T3,T2			; Find IPDVSZ
+	IDIVI T3,IPDVNT
+	SUBI T2,(T3)			; Offset to last entry
+	ADDI T2,IPDVTM(Q2)		; Time in last entry
+	SKIPN T2,(T2)			; Get last time
+	  MOVE T2,IPDVTM(Q2)		; Time of first entry to give zero
+	MOVEM T2,PKTIME
+	SUBI T3,IPDVLL			; Header words per entry
+	MOVNS T3
+	HRLZS T3
+	HRRI T3,6			; Entries per line
+	PUSH P,T3			; Counter base
+
+;-2(P)/	Address of first word in ring
+;-1(P)/	Count of entries to go
+; 0(P)/	AOBJN for leader words per entry
+
+	DO.
+	  SSOUT < +>
+	  HRRZ T2,Q2			; Count offset into ring
+	  SUB T2,-2(P)
+	  CALL OOUTXT			; Show it
+
+	  SSOUT <:	t=>
+	  MOVE T2,IPDVTM(Q2)		; Timestamp
+	  CALL DOUT11			; Output full word
+	  SSOUT <.	>
+
+	  MOVE T2,IPDVTM(Q2)		; Timestamp
+	  SUB T2,PKTIME			; Difference
+	  CALL DOUT11			; Output full word
+	  SSOUT <.	>
+
+	  MOVE T2,IPDVTM(Q2)		; Timestamp
+	  MOVEM T2,PKTIME
+
+	  MOVE T2,IPDVBF(Q2)		; Address and type
+	  LSH T2,-^D30			; Just type
+	  CALL OOUT2			; Output 2 digits
+	  CALL SPACE
+
+	  MOVE T3,IPDVBF(Q2)		; Flags
+	  MOVX T2," "
+	  TXNE T3,IPDV%D		; Dropped
+	    MOVX T2,"D"
+	  BOUT
+	  MOVX T2," "
+	  TXNE T3,IPDV%R		; Special/canned
+	    MOVX T2,"S"
+	  BOUT
+	  MOVX T2,"I"
+	  TXNE T3,IPDV%O		; Input/Output
+	    MOVX T2,"O"
+	  BOUT
+	  MOVX T2,"B"
+	  TXNE T3,IPDV%E		; Begin/End
+	    MOVX T2,"E"
+	  BOUT
+	  CALL SPACE2
+
+	  MOVE T2,IPDVBF(Q2)		; Address
+	  TLZ T2,770000
+	  HLRZS T2			; Section
+	  CALL OOUT2
+	  SSOUT <,,>
+	  HRRZ T2,IPDVBF(Q2)		; Addr in section
+	  CALL OOUT6			; Output 6 digits
+	  ADD Q2,[IPDVLL,,IPDVLL]
+	  MOVE P1,(P)			; AOBJN for leader words
+	  DO.
+	    MOVX T2,6			; Per line
+	    CAILE T2,(P1)		; Line full?
+	    IFSKP.			; Yes
+	      CALL CRLF			; Begin new line
+	      CALL TAB
+	      HLLZS P1			; New line
+	    ENDIF.
+	    MOVE T2,(Q2)
+	    CALL HSTLFT			; Output as decimal bytes
+	    CALL SPACE2
+	    AOBJN Q2,.+1		; Advance leader pointer
+	    AOBJN P1,TOP.		; Back if another leader word
+	  ENDDO.
+	  CALL CRLF			; End last line of entry
+	  SOSLE -1(P)			; Another entry?
+	    LOOP.			; Yes
+	ENDDO.
+	ADJSP P,-3			; Clean stack
+	RET
+
+; .HST. Host Name
+
+OBHST:	DO.
+	  MOVE T2,(Q2)			; Pick up host address
+	  MOVX T3,HNO%NP+HNO%NA+HNO%AD+HNO%SP
+	  CALL HNO2NA			; Output name and address
+	  CALL LOOPP2			; Exit if done, space/title otherwise
+	  LOOP.
+	ENDDO.				; Forever
+
+
+; .HAD. Host address/mask
+
+OBHAD:	DO.
+	  MOVE T2,(Q2)			; Pick up host address
+	  MOVX T3,HNO%NP+HNO%AD+HNO%SP
+	  CALL HNO2NA			; Output name and address
+	  CALL LOOPP2			; Exit if done, space/title otherwise
+	  LOOP.
+	ENDDO.				; Forever
+
+
+; .EXP. Exponential histogram
+
+OBEXP:	DO.
+IFLE VRSN-6,<
+	  PUSH P,[0]			; Shift factor 0
+	  MOVX T2,NHBINS+1		; Number of bins is fixed
+	  CALL BHXHDS			; Print sum and count
+	  MOVX P1,<-<NHBINS+1>,,0>	; Counter
+>
+IFGE VRSN-7,<
+	  CALL GETDAT			; Get shift factor
+	  AOBJN Q1,.+1			; Adjust for word just read
+	  HLRES T2			; Negative shift factor
+	  MOVNS T2			; Positive shift factor
+	  PUSH P,T2			; Save it
+	  MOVX T2,1			; 1 element per bucket
+	  CALL BHXHDR			; Print # buckets, sum, count
+>
+	  DO.
+	    CALL GETDAT			; Pick up bin count
+	    IFSKP.			; Not to be suppressed
+	      PUSH P,T2			; Save non-zero count
+	      PUSH P,T1			; Save output designator
+	      MOVX T1,<POINT 7,TEXTB>	; Internal area
+	      SSOUT <
+  .le. >
+	      HRRZ T3,P1		; Bucket #
+	      LSH T3,@-2(P)		; Exponextial factor
+	      MOVX T2,-1
+	      LSH T2,-^D36(T3) 		; Get right # lead zeros
+	      XNOUT DECRAD		; Print top of bucket
+	      SSOUT <.                                            >
+	      POP P,T1			; Restore output designator
+	      MOVX T2,<POINT 7,TEXTB>	; Internal area
+	      CAML P1,[-1,,0]		; If last bucket, don't list range
+	        MOVE T2,[POINT 7,[ASCIZ /                                   /]]
+	      LOAD T3,FMTCO,Q3		; Desired # columns
+	      SKIPN T3			; Anything?
+	        MOVE T3,DEFTAB		; No, use default
+	      MOVNI T3,2(T3)		; Actual count, including CR LF
+	      SOUT%			; Title
+	      POP P,T2			; Count to be printed
+	      CALL DOUTD		; Print it
+	    ENDIF.
+	    AOBJN Q2,.+1		; Move to next bucket
+	    AOBJN P1,TOP.		; Back for next bucket
+	  ENDDO.
+	  ADJSP P,-1			; Drop shift count
+	  CALL LOOPP2			; Exit if done, space/title otherwise
+	  LOOP.
+	ENDDO.				; Forever
+
+; Print the header for the histogram values in .BH1. and .BH2.
+; <0,,N>,SUM,COUNT, ...
+; T2/ Number of elements, 1 or 2, in a bucket
+
+BHXHDR:	SKIPLE T2
+	 CAILE T2,2
+	IFNSK.
+	  TMSG <?Error calling BHXHDR, elements per bucket must be 1 or 2
+>
+	  MOVEI T2,1			; Assume 1
+	ENDIF.
+	HLRE T3,Q2			; Prototype - # elements
+	MOVNS T3			; Prototype # elements
+	SUBI T3,1			; Prototype # singles/doubles
+	IDIVI T3,(T2)			; Prototype # of buckets
+
+	HRRE T2,0(Q2)			; Actual bucket count
+	SKIPLE T2
+	 CAIL T2,^D40			; Reasonable limit
+	  MOVE T2,T4			; Bad data, take prototype
+	MOVNI P1,(T2)
+	HRLZS P1			; -# buckets left,,bucket #
+
+	AOBJN Q2,.+1			; Count element
+BHXHDS:	CALL DOUTD
+	SSOUT < Bkts  >
+
+	CALL GETDAT			; Get the sum
+	  JFCL
+	AOBJN Q2,.+1			; Count element
+	TXNE Q3,FMT%SS			; Skip sum?
+	IFSKP.				; No
+	  CALL DOUTD
+	  SSOUT < Sum  >
+	ENDIF.
+
+	CALL GETDAT			; Get the count
+	  JFCL
+	AOBJN Q2,.+1			; Count element
+	CALL DOUTD
+	SSOUT < Cnt  >
+
+	TXNE Q3,FMT%SS			; Print average if printing sum
+	IFSKP.				; Print the average.
+	  MOVE T2,CURDAT		; Get divisor
+	  ASH T2,-1			; Divide by 2
+	  ADD T2,LSTDAT			; Add to dividend
+	  IDIV T2,CURDAT		; Compute rounded average
+	  CALL DOUTD
+	  SSOUT < Avg>
+	ENDIF.
+
+	RET
+
+
+; .BH1. - One dimensional histogram
+; <0,,# N entries>,SUM,COUNT, cnt0, cnt1, ... , cnt(n-1)
+; Q1/ -#left,,current offset into Ixxxx
+; Q2/ # elements left in item,,address of next element
+; Q3/ Format flags + id
+
+
+OBBH1:	MOVX T2,1			; Number of elements per bucket
+	CALL BHXHDR			; Output the header
+
+; Output counts from buckets
+
+	DO.
+	  CALL GETDAT			; Pick up an item
+	  IFSKP.			; Non-zero
+	    PUSH P,T2			; Save datum
+
+	    CALL BKTITL			; Bucket # title
+
+	    POP P,T2
+	    CALL DOUTD
+	  ELSE.				; Suppress zero
+
+	    CALL NXTITL			; Skip unused title
+	      JFCL
+	  ENDIF.
+	  AOBJN Q2,.+1			; Count element
+	  AOBJN P1,TOP.
+	ENDDO.
+	RET
+
+; .BH2. - Two dimensional histogram
+; <0,,# N pair entries>,SUM,COUNT, <count,value>N
+; Q1/ -#left,,current offset into Ixxxx
+; Q2/ # elements left in item,,address of next element
+; Q3/ Format flags + id
+
+OBBH2:	MOVX T2,2			; Number of elements per bucket
+	CALL BHXHDR
+
+	SETZ P2,			; Used to count elements per line
+	TXNN Q3,FMT%SV+FMT%SZ		; Suppress zeros or values?
+	  JRST OBH2L6			; No, print as single line
+
+
+; Output one pair per line
+
+	DO. (OBH2L1)
+	  CALL GETDAT			; Pick up an item
+	  IFSKP.				; Non-zero
+	    PUSH P,T2			; Save datum
+
+	    CALL BKTITL			; Bucket # title
+
+	    POP P,T2
+	    CALL DOUTD
+
+	    TXNE Q3,FMT%SV		; Suppress value?
+	    IFSKP.
+	      SSOUT < Value = >
+	      MOVE T2,1(Q2)
+	      CALL OOUTXT
+	    ENDIF.
+	  ELSE.
+	    CALL NXTITL			; Skip unused title
+	      JFCL
+	  ENDIF.
+	  AOBJN Q2,.+1			; Count count
+	  AOBJN Q2,.+1			; Count value
+	  AOBJN P1,TOP.			; Back if another bucket
+	ENDDO.
+	RET
+
+
+; Single line format
+; c < limit <= c < limit <= c < limit
+
+OBH2L6:	CALL CRLF			; Begin first line
+	DO.
+	  CALL GETDAT			; Get datum
+	    JFCL			; List zeros
+	  MOVX T3,DECRAD
+	  NOUT
+	    JFCL
+	  HRROI T2,[ASCIZ /. <=/]
+	  SETZ T3,
+	  SOUT
+	  MOVE T2,1(Q2)			; Get upper limit
+	  MOVX T3,DECRAD
+	  TXNN Q3,FMT%DV		; Decimal?
+	    MOVX T3,OCTRAD		; No, octal
+	  NOUT
+	    JFCL
+
+	AOBJP Q2,.+1			; Count value
+	AOBJP Q2,.+1			; Count limit
+	AOBJP P1,ENDLP.			; Back for next bucket
+
+	  AOS P2
+	  TRNN P2,3			; Done 4?
+	    CALL CRLF			; Yes, begin new line
+	  HRROI T2,[ASCIZ /.< /]
+	  TXNN Q3,FMT%DV		; Decimal values?
+	    HRROI T2,[ASCIZ /< /]	; No, octal
+	  SETZ T3,
+	  SOUT
+	  LOOP.
+	ENDDO.
+
+	HRROI T2,[ASCIZ /./]
+	SETZ T3,
+	TXNE Q3,FMT%DV			; Decimal?
+	  SOUT				; Yes
+	CALL CRLF
+	RET
+
+; .PRC. - Process Statistics
+
+OBPRC:	SSOUT <Process statistics:>
+	SETZ P1,			; Our own titles
+	DO.
+	  CALL CRLF			; Begin new line
+	  HRRO T3,PRCT1(P1)		; Get the title
+	  CALL OBTIT3			; Print it w/padding
+	  TXZ Q3,FMT%SD
+	  TDO Q3,PRCT3(P1)		; Is datum differencable
+	  CALL GETDAT			; Get datum
+	    JFCL			; List zeros
+	  CAMN T2,[037777,,777777]
+	    SETO T2,			; Fix minus ones
+	  CALL @PRCT2(P1)		; Print the element
+	  AOS P1			; Next item
+	  AOBJN Q2,TOP.
+	ENDDO.
+	RET
+
+PRCT1:	[ASCIZ /  Queue ptr/]		;0
+	[ASCIZ /  Process lock/]	;1-5
+	[ASCIZ /  Rtn Address/]		;6
+	[ASCIZ /  Next run/]		;7
+	[ASCIZ /  Ptr to queue/]	;8
+	[ASCIZ /  Ptr to wakeup/]	;9
+	[ASCIZ /  Last signal/]		;10
+	[ASCIZ /  Queue head/]		;11-13
+	[ASCIZ /  Run counter/]		;14
+	[ASCIZ /  Run time(msec)/]	;15
+	[ASCIZ /  Sigs received/]	;16
+	[ASCIZ /   TCBs examined/]	;17
+	[ASCIZ /  TCBs processed/]	;18
+
+;	    0     1-5   6      7      8      9      10      11-13
+PRCT2:	EXP OOUT, O1LCK,OOUT,  O1TOD, OOUT,  OOUT,  O1TOD,  OBQUH1
+;	    14    15    16    17    18
+	EXP DOUTD,DOUTD,DOUTD,DOUTD,DOUTD
+
+PRCT3:	EXP FMT%SD,0,   FMT%SD,FMT%SD,FMT%SD,FMT%SD,FMT%SD, 0
+	EXP 0,    0,    0,    0,    0
+
+
+; .QUE. - Queue vector (count,xx,max,when,processed)
+
+OBQUE:	PUSH P,Q2			; Save count
+	TXO Q3,FMT%SD			; Not differencable
+
+	HRLI Q2,-2
+	CALL OBDEC			; Decimal current length
+
+	SSOUT < >
+
+	TXO Q3,FMT%SD			; Not differencable
+	HRLI Q2,-1
+	CALL OBDEC
+
+	SSOUT <@>
+
+	HRLI Q2,-1
+	CALL O1TOD			; Single time (doesn't bump Q2)
+
+	TXZ Q3,FMT%SD			; Differencable
+	POP P,Q2
+	ADD Q2,[4,,4]
+	CALLRET OBDEC
+
+
+; .LCK. - Print Lock block
+
+O1LCK:	CALL OBLCK
+	SUB Q2,[1,,1]
+	RET
+
+OBLCK:	PUSH P,Q2			; Save pointer
+	SSOUT <Lock Index,,Locker Msecs Wait.gt.0,,Old Conflicts,,New
+>
+	HRROI T3,[ASCIZ / /]
+	CALL OBTIT3			; Justify
+
+	TXO Q3,FMT%SD			; Not differencable
+	HRLI Q2,-1
+	CALL OBDEC			; Lock count
+
+	CALL SPACE
+
+	TXO Q3,FMT%SD			; Not differencable
+	HRLI Q2,-1
+	CALL OBDOH			; Index,,locker
+
+	TXZ Q3,FMT%SD			; Differencable
+	HRLI Q2,-1
+	CALL OBCMS			; Time waiting for lock	df*
+
+	TXZ Q3,FMT%SD			; LH differencable
+	HRLI Q2,-1
+	CALL OBDOH			; Waits,,old locker
+
+	TXZ Q3,FMT%SD			; LH differencable
+	HRLI Q2,-1
+	CALL OBDOH			; Conflicts,,new locker
+
+	POP P,Q2
+	ADD Q2,[5,,5]
+	RET
+
+; .TAD. - Date and Time
+
+OBTAD:	DO.
+	  SKIPE T2,(Q2)			; Get datum
+	  IFSKP.
+	    SSOUT <Never >		; Zero is Never
+	  ELSE.
+	    TLO T2,100000		; Truncated bit
+	    MOVX T3,OT%SCL
+	    ODTIM
+	  ENDIF.
+	  CALL LOOPP2			; Exit if done, space/title otherwise
+	  LOOP.
+	ENDDO.				; Forever
+
+
+; .TOD. - Date & Time from TODCLK
+
+OBTOD:	DO.
+	  CALL O1TOD
+	  CALL LOOPP2			; Exit if done, space/title otherwise
+	  LOOP.
+	ENDDO.				; Forever
+
+
+O1TOD:	CALL GETDAT			; Get datum
+	  JFCL				; List zero
+	IFN. T2				; Something
+	  CAMN T2,[037777,,777777]	; Truncated +infinity?
+	  IFSKP.
+	    CALL DOUTD
+	    TXNE F,F.DIFF		; Difference mode and
+	     TXNE Q3,FMT%SD		; Datum is differenceable?
+	      CAIA			; No
+	       CALLRET SPACE		; Yes, no date for differences
+	    MOVX T2,"("
+	    BOUT
+
+	    PUSH P,5
+	    MOVE T1,AASDT+3-AAAST(ST0)	; TODCLK cleared
+	    ADD T1,AASDT+1-AAAST(ST0)	; TODCLK sampled
+	    LSH T1,-1			; Average
+	    DMOVE T2,AASDT+0-AAAST(ST0)	; Assume sampled pair is base
+	    CAMLE T1,(Q2)		; It closer?
+	      DMOVE T2,AASDT+2-AAAST(ST0) ; No, use init pair for base
+	    TLO T2,100000		; Truncated bit
+
+	    MOVE T1,(Q2)		; TODCLK being converted
+	    SUB T1,T3			; Msec later than base
+	    IFL. T4			; Still accumulating
+	      DO.
+	        ADD T1,[^D<24*60*60*1000>] ; 1 day later
+	        SUB T2,[1,,0]		; 1 day earlier
+	        JUMPL T1,TOP.		; Need another
+	      ENDDO.
+	    ENDIF.
+
+; T2/Tad, T1/Msec later than Tad
+
+	    DO.
+	      PUSH P,T2			; Save base TAD
+	      MOVX T4,<IC%JUD>		; Julian is easier
+	      ODCNV
+	      HRRZS T4			; Sec since midnight
+	      IMULI T4,^D1000		; Msec
+	      ADD T4,T1			; Target msec since midnight
+	      POP P,T3			; Base TAD
+	      CAMGE T4,[^D<24*60*60*1000>] ; Next day?
+	      IFSKP.			; Yes
+	        ADD T3,[1,,0]
+	        SUB T1,[^D<24*60*60*1000>]
+	        MOVE T2,T3
+	        LOOP.			; Try again
+	      ENDIF.
+	    ENDDO.
+
+; T2/ Yr,,day	; T3/ TAD	; T4/ Msec since midnight within day
+
+	    PUSH P,T2			; Save year,,day
+	    MOVE T1,T4
+	    IDIVI T1,^D1000		; T1/ Sec since 00:00, T2/ thousandths
+	    PUSH P,T2			; Save thousandths
+	    HRRZ T4,T1			; Sec since midnight
+	    TXO T4,IC%JUD		; Julian
+	    SETZ T3,
+	    MOVE T2,-1(P)		; Yr,,day
+	    IDCNV			; Back to internal
+	      JFCL			; ?
+				; T2/ Target TAD less thoushadths of seconds
+	    MOVE T1,OJFN
+	    MOVX T3,OT%SCL		; No columns
+	    ODTIM			; Print arg da-mon-yr hh:mm:ss
+	    MOVX T2,"."
+	    BOUT
+	    POP P,T2			; Msec (or zero)
+	    POP P,(P)			; Drop Yr,,day
+	    POP P,5			; Restore reg
+
+	    MOVX T3,<NO%LFL+NO%ZRO+FLD(3,NO%COL)+DECRAD>
+	    NOUT
+	      JFCL
+	    HRROI T2,[ASCIZ /) /]
+	  ELSE.				; Truncated +Infinity
+	    HRROI T2,[ASCIZ /+Infinity /]
+	  ENDIF.
+	ELSE.				; Zero is NEVER
+	  HRROI T2,[ASCIZ /Never /]
+	ENDIF.
+	SETZ T3,
+	SOUT
+	RET
+
+; .CMS. - Print cumulative msec, if negative, add in AASDT+1 til positive
+
+OBCMS:	DO.
+	  MOVE T2,(Q2)			; Get datum
+	  TXNE T2,1B4			; Look negative (truncated)?
+	   TXO T2,17B3			; Yes, extend
+	  IFL. T2			; Still accumulating
+	    DO.
+	      ADD T2,AASDT+1-AAAST(ST0)	; If negative, add in sample time
+	      JUMPL T2,TOP.		; Until positive
+	    ENDDO.
+	  ENDIF.
+
+	  TXNE F,F.DIFF			; Difference mode and
+	   TXNE Q3,FMT%SD		; Not differenceable?
+	  IFSKP.			; Yes
+	    MOVE T4,SSTAT0
+	    MOVE T3,SDATA-DATA(Q2)	; Get datum
+	    TXNE T3,1B4			; Look negative (truncated)?
+	     TXO T3,17B3		; Yes, extend
+	    IFL. T3			; Still accumulating
+	      DO.
+	        ADD T3,AASDT+1-AAAST(T4) ; If negative, add in sample time
+	        JUMPL T3,TOP.		; Until positive
+	      ENDDO.
+	    ENDIF.
+	    SUB T2,T3			; Difference
+	  ENDIF.
+
+	  MOVX T3,DECRAD
+	  NOUT
+	    JFCL
+	  SSOUT <. msec >
+
+	  CALL LOOPP2			; Exit if done, space/title otherwise
+	  LOOP.
+	ENDDO.				; Forever
+
+
+;.OGM. Forwarding table
+; Nothing special yet
+OBOGM:	CALLRET OBOMG			; Dump as octal magnitute
+
+
+;.QUH. Queue header, more than one possible
+OBQUH:	DO.
+	  CALL OBQUH1			; Print a queue head
+	  AOBJP Q2,ENDLP.		; Quit if we are done
+	  TXNE Q3,FMT%TL		; Have individual title?
+	    CALL OBTITL			; Special title & continue
+	  LOOP.
+	ENDDO.
+	RET
+
+; Print a Queue head, exactly 1, updates Q2 by QSZ-1
+OBQUH1: SAVEAC <P1,P2>
+	MOVSI P1,-QSZ			; Get -QSZ,,0
+	MOVE P2,Q2			; Save the datum start address
+	DO.
+	  CALL CRLF			; New line
+	  HRRO T3,QUHT1(P1)		; Get the title
+	  CALL OBTIT3			; Print it with padding
+	  XCT QUHT2L(P1)		; Load the first field
+	  XCT QUHT2P(P1)		; Print it
+	  SSOUT < / >
+	  XCT QUHT3L(P1)		; Load the second field
+	  XCT QUHT3P(P1)		; Print it
+	  AOBJN P1,TOP.			; Next item
+	ENDDO.
+	ADD Q2,[XWD QSZ-1,QSZ-1]
+	RET
+
+; Parallel tables
+
+; Titles
+QUHT1:	[ASCIZ "    Count/Next"]
+	[ASCIZ "    Max  /Prev"]
+	[ASCIZ "    When /Head"]
+QUHT1S==.-QUHT1				; Number of queue elements
+IFN QSZ-QUHT1S,<PRINTX ?QSZ has changed, fix .QUH. output routine>
+
+; Load table for the first field in the queue structure
+QUHT2L:	LOAD T2,QCNT,(P2)		; Word 0, Count
+	LOAD T2,QMAX,(P2)		; Word 1, Maximum
+	CALL [	LOAD T2,QMWHN,(P2)	; Word 2, Maximum When
+		LSH T2,^D9		;         Back to TODCLK units
+		RET]
+; Print table for the first field in the queue structure
+QUHT2P:	CALL DOUTD			; Count as decimal
+	CALL DOUTD			; Maximum as decimal
+	CALL DOUTD			; Maximum when as decimal
+
+; Load table for the second field in the queue structure
+QUHT3L:	LOAD T2,QNEXT,(P2)		; Word 0, Address of next
+	LOAD T2,QPREV,(P2)		; Word 1, Address of previous
+	LOAD T2,QHDR,(P2)		; Word 2, Address of header
+; Print table for the second field in the queue structure
+QUHT3P:	CALL OOUT			; Next as octal
+	CALL OOUT			; Prev as octal
+	CALL OOUT			; Head as octal
+
+; .MSK. Mask value formatted word
+; Q1/ -#left,,current offset into Ixxxx
+; Q2/ # elements left in item,,address of next element
+; Q3/ In bits FMT%MT, the mask radix bits. 0=Octal, 1=Decimal.  Each
+;     bit in the FMT%MT corresponds to a byte to be printed as
+;     specified by the IFMTM word for the valued to be output.
+; IFMTM(Q1)/ Each 1 bit is the low order bit for the byte to be
+;            output.
+; Example:
+;   FMT%MT/ Radix Mask = 4670 means Dec,Oct,Oct,Dec,Dec,Oct,
+;				    Dec,Dec,Dec,Oct,Oct,Oct
+;   IFMTM / Byte position Mask = 112200,,445400 means bytes containing
+;		3,3,2,3,8,3,3,2,3,6 bits in the value word
+;   value / 123456701234 would produce output of
+;		1.,2,1,6.,93.,6,0.,1.,0.,234
+;
+OBMSK:	SAVEP				; Save P1-P6
+	SETZ P6,			; Elements per line
+	JRST MSKB0			; Jump into loop
+
+	DO.
+	  CALL SPACE2			; Assume another will fit on line
+	  AOS P6			; Count elements
+	  TXNN Q3,FMT%TL		; Have individual title?
+	  IFSKP.
+	    CALL CRLF			; Yes, start new line
+	    CALL OBTITL			; Special title
+	    SETZ P6,
+	  ELSE.
+	    HRROI T3,CRLFM
+	    TRNN P6,3			; Line full?
+	      CALL OBTIT3		; Yes, new line and move to data column
+	  ENDIF.
+;Fall thru...
+;...Fell thru
+MSKB0:	  MOVE P4,IFMTM(Q1)		; Get the format mask word
+	  IORI P4,1B35			; Always print the last byte
+	  MOVE P1,Q3			; Get Mask Decimal/Octal bits
+	  ANDX P1,FMT%MT		; Save only the Mask bits
+IFN <^L<FMT%MT>>,<			; If not already left justified...
+	  LSH P1,<^L<FMT%MT>>		; Left justify
+> ; End IFN
+
+	  CALL GETDAT			; Get an item
+	    JFCL			; List zeros
+	  CAMN T2,[037777,,777777]	; 32-bits of "-1"?
+	    SETO T2,0			; Yes, make a full -1
+	  TLNE T2,020000
+	   TLO T2,740000		; Extend "sign"
+	  PUSH P,T2			; Save value to type out
+	  JRST MSKB1			; Jump into loop
+
+	  DO.
+	    MOVEI T2,","		; Separate byte with a comma
+	    CALL CHOUT			; Output it
+MSKB1:	    POP P,T2			; Remains of value to output
+	    JFFO P4,.+2			; Get next count of bits
+	      EXIT.			; None, exit loop
+	    LSH P4,1(P5)		; Update mask
+	    LSHC T2,-^D36+1(P5)		; Get next byte to be output
+	    PUSH P,T3			; Save remaining bytes
+	    TXNE P1,1B0			; Decimal?
+	      CALL DOUTD		; Yes
+	    TXNN P1,1B0			; Octal?
+	      CALL OOUT			; Yes
+	    LSH P1,1			; Position for next time
+	    JUMPE P4,MSKB1		; If no more to output, exit
+	    LOOP.
+	  ENDDO.
+	  AOBJN Q2,TOP.			; Back for another
+	ENDDO.
+	RET
+	SUBTTL  UTILITIES
+
+DOLLAR:	MOVEI T2,"$"
+	JRST CHOUT
+
+SPACE2:	CALL SPACE
+SPACE:	MOVEI T2,40
+	JRST CHOUT
+TAB:	MOVEI T2,11
+CHOUT:	MOVE T1,OJFN
+	BOUT
+	RET
+
+TCRLF:	PUSH P,T1
+	MOVEI T1,15
+	PBOUT
+	MOVEI T1,12
+	PBOUT
+	POP P,T1
+	RET
+
+CRLF:	HRROI T2,CRLFM
+DOSOUT:	MOVE T1,OJFN
+	MOVEI T3,0
+	SOUT
+	RET
+
+CRLFM:	BYTE (7)15,12,0
+
+
+CLOSEO:	SKIPLE T1,OJFN
+	 CLOSF
+	  JFCL
+	SETOM OJFN
+	RET
+
+; Convert host [Internet address in T3 (rj)] to string [pointer in T2]
+
+H2STR:	MOVX T1,.GTHNS			; See if monitor will do it
+	GTHST
+	IFNSK.				; Not known
+	  MOVE T1,T2			; Have to build it numerically
+	  PUSH P,T3			; Put address on stack
+	  MOVEI T2,0(P)			; Point at stacked address
+	  HRLI T2,401000		; As a byte pointer
+	  PUSH P,T2			; Stack the byte pointer
+	  DO.
+	    ILDB T2,0(P)		; Get a byte of address
+	    MOVEI T3,12			; Convert it to decimal
+	    NOUT
+	     JFCL
+	    POP P,T2			; Get the byte pointer
+	    TLNN T2,770000		; Any more bytes?
+	    IFSKP.			; No, done
+	      PUSH P,T2			; Yes, save pointer again
+	      MOVEI T2,"."		; Dot between fields
+	      IDPB T2,T1
+	      LOOP.			; On through bytes
+	    ENDIF.
+	  ENDDO.
+	  POP P,T3			; Restore host address from stack
+	ENDIF.
+	RET
+
+	SUBTTL	Subroutine to print host number/port
+
+; T1/	Destination string pointer
+; T2/	32-bit Internet address
+; T3/	Port number, and flags
+;	CALL HNO2NA
+; T1/	Updated pointer
+HNO%NP==1B0	; No port
+HNO%NA==1B1	; Print name
+HNO%AD==1B2	; Print address
+HNO%SP==1B3	; Print trailing space
+HNO%PT==1B4	; Inverted HNO%NP
+HNO%ER==1B5	; GTHST% error
+.byt23==177777B23
+
+HNO2NA:	PUSH P,T5+1
+	PUSH P,T5
+	PUSH P,T4		; Save temp reg
+	PUSH P,T3		; Save Port
+	PUSH P,T2		; Save Host address & setup bytes
+
+	STOR T3,.byt23,+T3	; Shift port left
+	TRO T3,<377B31>		; Stop after ports
+	TXZN T3,HNO%NP		; Flip bit
+	  TXO T3,HNO%PT
+	  
+	MOVX T5,<POINT 8,T5,3>	; First 8 bits
+	PUSH P,T5		; Initial address pointer
+
+	DMOVE T5,T2		; Address & flags, port, stop
+	TXNN T5+1,HNO%NA	; Want name?
+	IFSKP.			; Yes
+
+; Translate address to name
+
+	  MOVE T3,T2		; Address
+	  TLZ T3,740000		; Just 32 bit address
+	  MOVE T2,T1		; Destination pointer
+	  MOVX T1,.GTHNS	; Address to name
+	  SKIPE T3		; Don't use local host if zero
+	   GTHST%
+	    TXO T5+1,HNO%AD+HNO%ER ; Error, force address
+	  MOVE T1,T2		; Restore destination pointer
+
+	  MOVX T2," "
+	  TXNN T5+1,HNO%ER	; No space if error
+	   TXNN T5+1,HNO%AD+HNO%PT ; Space if anything will follow
+	    TRNA
+	     BOUT%
+	ENDIF.
+
+	TXNN T5+1,HNO%AD	; Want address?
+	IFSKP.			; Yes
+	  MOVX T2,"["		; Delimiter and
+	  MOVX T4,<-4,,0>	; 4 bytes of host
+	ELSE.
+	  MOVX T4,<77B5>	; Position field
+	  ANDCAB T4,(P)		; Skip over address
+	  ILDB T3,0(P)		; Skip flag bits
+	  SETZ T2,
+	  TXNN T5+1,HNO%PT	; Inverted want ports?
+	  ANSKP.		; Yes
+	    MOVX T4,<-2,,0>	; Doing ports
+	ENDIF.
+
+; 4 address bytes, or 2 port bytes
+
+	IFL. T4			; Any bytes?
+	  DO.
+	    SKIPE T2
+	      BOUT%
+	    ILDB T2,0(P)	; Next byte
+	    XNOUT DECRAD	; Network virtual radix
+	    MOVX T2,"."		; Bytes separated by dot
+	    AOBJN T4,TOP.
+	    MOVX T2,"]"
+	    TRNE T4,4		; End of address?
+	      BOUT%		; Yes
+
+; See if have port, back if so, with space separating address & port
+
+	    ILDB T2,0(P)	; Control bits or stop flag bytes
+	    TRNN T2,200		; No stop bit and
+	     TXNN T5+1,HNO%PT	; Want port?
+	    IFSKP.		; No
+	      MOVX T2," "	; Space before port
+	      MOVX T4,<-2,,0>	; If doing port
+	      LOOP.		; Go for port
+	    ENDIF.
+	  ENDDO. 
+	ENDIF.
+	MOVX T2," "
+	TXNE T5+1,HNO%SP	; Want space?
+	  BOUT%			; Yes
+
+	POP P,0(P)		; Drop pointer
+	POP P,T2		; Restore Host address,
+	POP P,T3		; Port, and
+	POP P,T4		; Temp register
+	POP P,T5
+	POP P,T5+1
+	RET
+
+HSTLFT:	HRLI T3,441000			; High 32 bits as 8-bit bytes
+	PUSH P,T2			; Save the 4-byte addr to output
+	HRRI T3,0(P)			; Make a pointer to it
+	PUSH P,T3			; Save pointer on stack
+	TRNA
+	DO.
+	    BOUT
+	  ILDB T2,0(P)			; Get a byte
+	  CALL DOUT			; Output it
+	  MOVEI T2,"."			; Dot between bytes
+	  MOVE T3,0(P)
+	  TLNE T3,700000		; Any more?
+	    LOOP.			; Back for more
+	ENDDO.
+	POP P,T3			; Drop pointer
+	POP P,T2			; Restore argument and stack level
+	RET				; Done outputting host address
+
+
+HOUT4D:	PUSH P,T2
+	CALL DOLLAR
+	POP P,T2
+	JRST HOUT4
+
+
+HOUT2D:	PUSH P,T2
+	CALL DOLLAR
+	POP P,T2
+	JRST HOUT2
+
+
+HOUT1:	MOVSI T3,540001
+	JRST HOUT
+HOUT2:	SKIPA T3,[540002,,]
+HOUT4:	  MOVSI T3,540004
+HOUT:	MOVE T1,OJFN
+	HRRI T3,20
+	NOUT
+	 JFCL
+	RET
+
+
+
+DOUT:	TDZA T3,T3			; Free decimal
+DOUT2:	  MOVSI T3,540002		; Two field decimal
+	JRST DOUTNN
+DOUT11:	MOVSI T3,540014			; 11 decimal digits
+	JRST DOUTNN
+
+OOUT6:	MOVSI T3,540006
+	JRST OOUTNN
+
+OOUT12:	MOVSI T3,540014
+	CAMN T2,[037777,,777777]	; Was it a -1 before truncation?
+	  SETO T2,0			; Yes, restore it
+	JRST OOUTNN
+
+OOUTXT:	CAMN T2,[037777,,777777]	; Was it a -1 before truncation?
+	  SETO T2,0			; Yes, restore it
+OOUT:	TDZA T3,T3			; Free octal
+OOUT2:	  MOVSI T3,540002
+OOUTNN:	HRRI T3,10
+	JRST DOUTXX
+
+DOUTNN:	HRRI T3,12
+DOUTXX:	MOVE T1,OJFN
+	NOUT
+	 JFCL
+	RET
+
+DOUTD:	CALL DOUT
+DOT:	MOVEI T2,"."
+	MOVE T1,OJFN
+	BOUT
+	RET
+
+	SUBTTL	Symbol Table Routines
+
+;T1/	RADIX50 Module name
+;	CALL FINDMD
+;Ret+1:	Always.  IF module found, it's symbols were moved to end of relocated
+;	symbol table (@ FRSYMB and updated), T3/ .lt. zero, T2/ -len,,start
+
+FINDMD:	MOVE T2,.JBSYM			; Program symbol table
+	HLRE T3,T2			; Negative length symbols, words
+	MOVNS T3			; Positive length
+	ADD T3,T2			; -Len,,end+1
+	DO.
+	  HLLZ T4,-1(T3)		; -<mod len>,,<mod adr> to -len,,0
+	  TLC T4,-1			; <len-1>,,0 (for carry from rh)
+	  HLR T4,-1(T3)			; Len-1,,-len
+	  CAMN T1,-2(T3)		; This it?
+	    EXIT.			; Yes, found it
+	  ADD T3,T4			; Back up over this module
+	  JUMPL T3,TOP.			; Go check it out
+	ENDDO.
+	IFL. T3				; Find it?
+	  MOVE T2,-1(T3)		; -len,,xxx
+	  HRR T2,FRSYMB			; -len,,first
+	  HLRZ T1,T4			; 0,,len-1
+	  ADD T1,FRSYMB			; New end address
+	  ADD T3,T4			; Start of module's symbols in rh
+	  HRLS T3
+	  HRR T3,FRSYMB			; Module start,,Free
+	  BLT T3,(T1)			; Move STS
+	  HRRM T3,FRSYMB		; Next free area
+	  SETO T3,			; OK return
+	ELSE.
+	  HRRZ T2,FRSYMB		; 0,,start address
+	ENDIF.
+	RET
+
+
+;T1/	RADIX50 Symbol
+;T2/	<-len,,first> pointer to table(s) to be searched
+;	CALL FINDSY
+;Ret+1:	  Not found
+;Ret+2:	Found, T3 has value
+
+FINDAS:	MOVE T1,T4			; Move 1-word ASCII to T1
+
+FINDSY:	SKIPN T2			; If symbol table not specified,
+	  MOVE T2,DATSYM		; Use database table
+	DO.
+	  MOVE T3,0(T2)			; Get RADIX50 code,symbol
+	  TLZ T3,740000			; Just symbol
+	  CAMN T3,T1			; Find it?
+	  IFSKP.			; Not yet
+	    AOBJP T2,ENDLP.
+	    AOBJN T2,TOP.		; Back for next
+	  ENDIF.
+	ENDDO.
+	IFL. T2				; Found it
+	  MOVE T3,1(T2)			; Get value
+	  AOS (P)			; Skip return
+	ENDIF.
+	RET
+
+
+;T1/	RADIX50 code,symbol
+;	CALL R502AS
+;Ret+1:	Always, T1+2/ ASCIZ
+
+R502AS:	PUSH P,[0]
+	PUSH P,[0]
+	PUSH P,T3
+	PUSH P,T4
+	SETZ T3,
+	TLZ T1,740000			; Drop code
+	DO.
+	  IDIVI T1,50
+	  ADJBP T2,[POINT 7,R2A]
+	  ILDB T4,T2			; Get ASCII equivalent
+	  PUSH P,T4			; Save next ASCII code
+	  AOS T3			; Count characters
+	  JUMPG T1,TOP.
+	ENDDO.
+	MOVX T4,<POINT 7,-3(P)>
+	DO.
+	  POP P,T2			; Get ASCII
+	  IDPB T2,T4			; Into string
+	  SOJG T3,TOP.	  		; Back if more
+	ENDDO.
+	POP P,T4
+	POP P,T3
+	POP P,T2
+	POP P,T1
+	RET
+
+R2A:	ASCII / 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ/
+
+
+;T1+2/	ASCIZ symbol
+;	CALL ASC250
+;Ret+1:	Always, T1/ RADIX50 0,symbol
+
+ASC250:	PUSH P,T1
+	PUSH P,T2
+	PUSH P,T3
+	PUSH P,T4
+	SETZ T1,			; RADIX50
+	MOVX T2,<POINT 7,-3(P)>		; Point to ASCII
+	MOVX T3,<-6,,0>
+	DO.
+	  ILDB T4,T2			; Get ASCII
+	  ANDI T4,177			; Drop parity
+	  IFN. T4
+	    ADJBP T4,[POINT 6,A2R]	; Locate translation
+	    ILDB T4,T4			; Get translation
+	    IMULI T1,50
+	    ADDI T1,(T4)
+	    AOBJN T3,TOP.		; Do next character
+	  ENDIF.
+	ENDDO.
+	POP P,T4
+	POP P,T3
+	POP P,T2
+	POP P,(P)
+	RET
+
+A2R:	BYTE (6)0,0,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0		; 0-21
+	BYTE (6)0,0,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0		; 22-43
+	BYTE (6)46,47,0,0,0,0, 0,0,0,0,45,0, 1,2,3,4,5,6	; 44-65
+	BYTE (6)7,10,11,12,0,0, 0,0,0,0,0,13, 14,15,16,17,20,21	; 66-107
+	BYTE (6)22,23,24,25,26,27, 30,31,32,33,34,35, 36,37,40,41,42,43 ; 110-
+	BYTE (6)44,0,0,0,0,0, 0,13,14,15,16,17, 20,21,22,23,24,25 ; 132-153
+	BYTE (6)26,27,30,31,32,33, 34,35,36,37,40,41, 42,43,44,0,0,0 ; 154-
+	BYTE (6)0,0						; 176-177
+
+	SUBTTL	Storage and Constants
+
+DMYTTL:	ASCIZ / /
+DMYTBL:	-1,,DMYTTL
+
+NCTTR:	ASCII /MNMAA/	;AKA NCTiA
+	ASCII /MNMXR/	;AKA NCTiC
+	ASCII /MNMXS/	;AKA NCTiE
+	ASCII /MNMXX/	;AKA NCTiG
+NNCTTR==.-NCTTR
+
+PCHAR:	ASCIZ /Status>/
+
+XLIST			;Literals
+LIT
+LIST
+
+
+ENTVEC:	JRST START	; Start entry address
+	JRST REENT	; Restart entry address
+	$PGMV+$VER	; Version to be printed
+
+TXARE:	ASCIZ /ARE/
+TXCRLF:	BYTE (7)12,15
+TXNO:	ASCIZ /NO/
+TXNOSP:	ASCIZ /NO /
+NOKEY:	NNO,,NNO
+	TXARE,,1
+	TXNO,,0
+NNO==.-NOKEY-1
+
+; Variables ...
+
+NOFDB:	FLDDB.(.CMKEY,,NOKEY,,,0-0)	; Another FDB gets inserted
+
+
+ANITEM:	-NITEM,,0	; Database item counter
+NCTQ1:	NCT0Q1,,NCT0Q1	; Position of NCT info
+
+; DDT symbol table info
+
+..JBSA:	BLOCK 2		; Initial .JBSA
+STDTSY:	BLOCK 1		; <-len,,first> pointer to STS+STSDAT symbols in STSYMB
+STSSYM:	BLOCK 1		; <-len,,first> pointer to STS symbols in STSYMB
+	BLOCK 1		; Start address
+DATSYM:	BLOCK 1		; <-len,,first> pointer to STSDAT symbols in STSYMB
+	BLOCK 1		; Start address
+RPTSYM:	BLOCK 1		; <-len,,first> pointer to RPT symbols in STSYMB
+	BLOCK 1		; Start address
+FRSYMB:	BLOCK 1		; Free slot in STSYMB
+
+PAT:	BLOCK 100	; Patching
+DEBUG:	EXP 1		; Debug switch
+
+
+
+DEFTAB:	EXP ^D18	; Column for data
+
+AOBNCT:	BLOCK 1		; AOBJN pointer for # NCTs in data
+AOBTTL:	BLOCK 1		; AOBJN pointer to next title table entry
+CURDAT:	BLOCK 1		; Current datum
+LSTDAT:	BLOCK 1		; Last datum
+FJFN:	BLOCK 1		; To GET format file
+IJFN:	BLOCK 1		; For loading files
+LDORGT:	BLOCK 1		; LOAD (-1) or GET (0)
+OFFSET:	BLOCK 1		; Offset into input file
+SOFFSE:	BLOCK 1		; Offset of SDATA
+OJFN:	BLOCK 1		; For writing files
+PKTIME:	BLOCK 1		; Time  of (last) packet sample
+TTLPTI:	BLOCK 1		; Pointer to end of special report title (confirmed)
+PTTLMP:	POINT 7,HTEMP-1,34
+	ASCII /               / ; 15 spaces before HTEMP (REPORT:)
+HTEMP:	BLOCK 20	; Name string of a host
+
+NCTQ1S:	BLOCK 1		; Trashed
+NCTAA:	BLOCK 1		; AOBJN pointer into ISYM, etc for MNMaa
+NCTXR:	BLOCK 1
+NCTXS:	BLOCK 1
+NCTXX:	BLOCK 1
+
+NCTADR:	BLOCK 1		; Address of current NCT
+RELOCC:	BLOCK 1		; Relocation constant
+
+DFNSTR:	BLOCK 40	; Default name of last input file
+IFNSTR:	BLOCK 40	; Name of last file loaded
+SIFNST:	BLOCK 40	; Name of Saved file
+STAT0:	BLOCK 1		; Address of "STAT0" within DATA
+SSTAT0:	BLOCK 1		; Address of "STAT0" within SDATA
+SMPSYL:	BLOCK 1		; Length of SMPSYM
+SMPSOF:	BLOCK 1 	; Next 2**N larger than SMPSYL
+
+PDL:	BLOCK PDLL+1	;STACK FOR TOP FORM
+
+SEBUF=100
+RBUF:	BLOCK SEBUF	; Atom buffer
+
+LBUFSZ==50
+LNNBUF:	BLOCK LBUFSZ	; Command lines
+
+TEXTB:	BLOCK 200
+
+CMDBLK:	BLOCK .CMGJB+5	; For top level commands
+GTJBLK:	BLOCK 20
+
+	END <3,,ENTVEC>

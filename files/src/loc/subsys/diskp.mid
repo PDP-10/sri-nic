@@ -1,0 +1,84 @@
+;;usage:   diskp pages directory
+;checks working quota and free space on structure
+
+	Title diskp
+.DECSAV
+
+strlen==40
+num:	0
+dirnum:	-1			;default to connected if none
+prompt: asciz *enter minimum desired disk pages: *	; mimi's being cute
+struct: asciz "DSK:"		;default structure
+	block 10
+string:	block strlen
+
+begin:	RESET
+	movei 1,.rsini		;defined RSCAN function, makes data available
+	RSCAN			;reads text string from the rescan buffer
+	  JFCL			;no-op
+	movei 1,.priin		;primary input designator
+	hrroi 2,string		;set up AC's for SIN
+	movei 3,strlen*5-1	;ditto
+	movei 4,^J		;ditto - terminate input
+	SIN			;JSYS reads string
+	move 10,[440700,,string]
+
+loop:	ildb 1,10		;load byte
+	cain 1,40		;space?
+	  Jrst here		;yep leave
+	caie 1,^J		;^J?
+	  Jrst loop		
+ask:	move 1,[440700,,prompt]	;move prompt bp into AC 1
+	PSOUT			;prompt
+	move 1,[440700,,string]	;set up AC's for RDTTY
+	move 2,[rd%bel\rd%crf+strlen*5-1]
+	move 3,[440700,,prompt]	
+        RDTTY			;JSYS reads input from the primary input de
+	  jrst spasm		;on failure
+	move 10,[440700,,string]
+
+;get here with 2/ being a BP to user input
+
+here:	move 1,10		;move BP to input into AC1
+	movei 3,10.		;radix
+	NIN			;JSYS - string to number
+	  Jrst spasm		;on failure
+	movem 2,num		;save in num
+
+;now see if there's a directory specified
+	move 2,1		;source bp
+	movsi 1,(rc%emo)	;exact match please
+	RCDIR			;look up directory
+	 erjmp compare		;  something really bogus
+	tlne 1,(rc%nom\rc%amb)	;no match?
+	  jrst compare		;  uh huh, so use default structure
+	movem 3,dirnum		;save dir num
+	hrroi 1,struct
+	move 2,3		;dir# in ac2
+	DIRST			;output it to struct
+	  jfcl			;  shouldn't fail
+
+compare:
+	move 1,dirnum
+	GTDAL%			;get quotas
+	sub 1,2			;figure space left to use (working quota-used)
+	camg 1,num		;enough room?
+	 jrst sorry
+
+	move 1,[440700,,struct]	;"PS:" into AC 1
+	STDEV			;JSYS - translate structure string to design.
+	  Jrst psasm		;on failure
+	move 1,2
+	GDSKC			;JSYS - get free disk space
+	caml 2,num		;compare number free to number specified
+	  Jrst die		;if free disk space >= numb specified then bye
+sorry:	move 1,[440700,,[asciz "not enough free disk space"]]
+	jrst whine
+
+psasm:	skipa 1,[440700,,[asciz "couldn't get device designator for PS:"]]	
+spasm:	  move 1,[440700,,[asciz "no good"]]
+whine:	ESOUT			;error out
+die:	HALTF
+	Jrst ask		;on continue, prompt again
+
+end begin			;tells Midas start address

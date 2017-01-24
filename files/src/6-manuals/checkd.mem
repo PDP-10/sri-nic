@@ -1,0 +1,1566 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                            CHECKD Specification
+
+
+
+
+
+|                    VERSION 6.0 INTERIM RELEASE DRAFT
+|  
+|  
+|  
+|                              December 1984
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                     1
+
+
+
+                                      CONTENTS
+
+           1       INTRODUCTION . . . . . . . . . . . . . . . . . . . . 4
+           2       DISK CONCEPTS  . . . . . . . . . . . . . . . . . . . 4
+           3       CHECKD PROCESSING  . . . . . . . . . . . . . . . . . 5
+           3.1       Error Reports for Individual Disk Addresses  . . . 6
+           3.1.1       Error Field  . . . . . . . . . . . . . . . . . . 6
+           3.1.2       Address Field  . . . . . . . . . . . . . . . . . 7
+           3.1.3       Page Type Field  . . . . . . . . . . . . . . . . 7
+           3.2       Summaries for Individual files . . . . . . . . . . 8
+           3.3       Final Count of Used Pages  . . . . . . . . . . . . 9
+           3.4       Comparison of Bit Tables . . . . . . . . . . . .  10
+           3.5       Checking Directory Consistency . . . . . . . . .  11
+           3.6       Correcting File Page Counts  . . . . . . . . . .  12
+           4       CHECKD COMMANDS  . . . . . . . . . . . . . . . . .  12
+           5       RUNNING CHECKD . . . . . . . . . . . . . . . . . .  16
+           6       USING CHECKD . . . . . . . . . . . . . . . . . . .  16
+           6.1       Recovering Lost Pages  . . . . . . . . . . . . .  17
+           6.2       Eliminating Multiply Assigned Pages  . . . . . .  18
+           6.3       Checking Directory Consistency . . . . . . . . .  20
+           6.4       Rebuilding the Bit Table . . . . . . . . . . . .  20
+           6.5       Reconstructing the ROOT-DIRECTORY (not For PS:)   22
+           6.6       Creating a Structure . . . . . . . . . . . . . .  22
+           7       ADDITIONAL CHECKD ERROR MESSAGES AND RECOVERY 
+                   PROCEDURES . . . . . . . . . . . . . . . . . . . .  25
+
+
+   TABLES
+
+           1       Pages Per Cylinder . . . . . . . . . . . . . . . . . 4
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                     2
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                  PREFACE
+
+
+
+   This document describes the various uses of the  CHECKD  program.   In
+   addition,  it  describes  all  the available CHECKD commands and error
+   messages.
+
+   This document is written for the user who is familiar with the TOPS-20
+   file  system  and  must  use  CHECKD  periodically  to correct various
+   programs in the file system.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                     3
+
+
+
+   1  INTRODUCTION   1  INTRODUCTION
+
+   CHECKD is a program that is used to check the TOPS-20 file system  and
+   bit  table  for  consistent data.  In the process of checking the file
+   system, CHECKD finds all disk space that is in use; this allows CHECKD
+   to  compute  the  disk pages lost.  CHECKD can optionally release this
+   lost space.  CHECKD can also be used to completely  rebuild  the  disk
+   bit  table  or  to  scan the file system for a specified disk address.
+   Finally, CHECKD can be used to create new file structures.
+
+
+
+   2  DISK CONCEPTS   2  DISK CONCEPTS
+
+   Before continuing with the description  of  the  CHECKD  program,  you
+   should  understand  several  disk  concepts.  The following paragraphs
+   describe these concepts.
+
+   Each file and directory in the file system reside on  a  disk  pack(s)
+   called  a  structure.  A structure consists of one or more units, each
+   of the same disk type, which are numbered sequentially starting at  0.
+   A  disk  address is specified as a sector number relative to the start
+   of a structure.  For example, for a multi pack structure with units of
+   m sectors each, unit 0 contains sectors 0 through m-1; unit 1 contains
+   sectors m through 2m-1, and so forth.  When a page is  assigned  to  a
+   structure, it is sector number based.
+
+   Each structure contains a table which records the usage of  the  pages
+   on the structure.  This table, called the bit table, appears as a file
+   called DSKTTBL..1 in the directory <ROOT-DIRECTORY> on each structure.
+
+   The bit table consists of two parts.
+
+         o  The "top half" contains one word for  each  cylinder  on  the
+            structure.   Each  word  contains the number of free pages in
+            that cylinder.
+
+         o  The "bottom half" contains one bit per page and  is  arranged
+            as  follows:   for each cylinder there are as many full words
+            as are needed for all of its pages.
+
+   Table 1-1 shows the number  of  pages  per  cylinder,  the  number  of
+   sectors per cylinder, and number of bits per cylinder for each type of
+   disk pack.
+
+
+   Table 1:  Pages Per Cylinder   Table 1:  Pages Per Cylinder
+
+
+     Disk Type     Number of Pages     Number of Sectors      Number of Bits
+                   per Cylinder        per Cylinder           per Cylinder
+
+
+
+                                     4
+
+
+
+     RP04          95                  380                    108
+
+     RP06          95                  380                    108
+
+     RP07          344                 1376                   360
+
+     RP20          180                 180                    180
+
+|    RA60          38                  38                     72
+|  
+|    RA80          161                 161                    180
+
+
+   Free pages have their bits set to 1, unless the  page  is  damaged  or
+   lost.   When  a  page  is assigned, its bit is changed to a 0; and the
+   count of free pages for the cylinder is decremented.
+
+   Each time the TOPS-20 monitor assigns pages to a file, it  checks  the
+   bit  table  to  determine  which  pages are free, and then assigns the
+   pages.  The bit table must then be  updated  to  reflect  the  current
+   status  of  pages, whether the pages are free or in use.  As pages are
+   deassigned when files  are  deleted,  the  bit  table  must  again  be
+   updated.  Because of certain conditions, the bit table may not reflect
+   the real usage of the pages on the disk.  In addition, the entire  bit
+   table  may  become  damaged and have to be rebuilt.  (Refer to Section
+   6.4.)
+
+   For each file on the disk there  is  an  entry  in  a  directory  that
+   describes  the  file.  This entry is called the File Description Block
+   (FDB).  It contains the disk address of the page table  of  the  file.
+   If  the file is long, that is, it contains more than 1000 octal pages,
+   the FDB contains the address of the page-table table.  The  page-table
+   table  contains  an  address  for each page table, and each page table
+   contains the address of file pages.
+
+   Each directory has a table containing, in an ordered list,  the  first
+   five  characters  of  the  name  of each file in a specific directory.
+   This table is called the symbol table.  When the system is looking  up
+   a  file,  the  symbol  table  is  searched  first for a match on these
+   characters.  This feature helps speed up the  process  of  looking  up
+   files.   Sometimes  the  symbol table entries do not correctly reflect
+   the actual files belonging to the  directory.   In  such  a  case  the
+   symbol table must be rebuilt using the information provided in the FDB
+   for the files in the directory.  CHECKD can be used to detect the need
+   for rebuilding a symbol table and will rebuild the table if possible.
+
+
+
+   3  CHECKD PROCESSING   3  CHECKD PROCESSING
+
+   The function of CHECKD is to look for disk inconsistencies and correct
+   them  if  possible.   Although  CHECKD  has  many  commands, its CHECK
+
+
+                                     5
+
+
+
+   BITTABLE function is the most commonly used.  (It is the default  when
+   CHECKD  is  run  at  system startup.) When this function is specified,
+   CHECKD creates its  own  private  copy  of  the  disk  bit  table  and
+   initializes  it  as  though  there  were  no  pages assigned.  It then
+   assigns the special blocks and swapping space exactly  as  the  system
+   did  it  when the structure was created.  CHECKD then proceeds through
+   all the directories in the system, reading the disk addresses from the
+   FDB's,  page-table  tables,  and  page  tables, and assigns those disk
+   addresses in its local bit table.  If  the  disk  is  consistent,  the
+   local  bit  table will match the system bit table when this processing
+   is complete.
+
+
+
+   3.1  Error Reports for Individual Disk Addresses   3.1  Error Reports for Individual Disk Addresses
+
+   As CHECKD proceeds through a directory, assigning each  page  in  each
+   file,  it  checks  for  certain  conditions mentioned in the following
+   section.  When one of these conditions occurs, it prints a message  of
+   the form:
+
+        <error> <address>:<page type>
+
+   where <error> is the type  of  error  found,  <address>  is  the  disk
+   address  (sector  number) that CHECKD was assigning when the error was
+   detected, and <page type> indicates how the page that caused the error
+   is used.  An example of this type of message is:
+
+        Illegal disk address 140:  page table
+
+   The following sections describe each field of the message.
+
+
+
+   3.1.1  Error Field   3.1.1  Error Field -
+
+   Message:
+              Disk address n not in bit table   Meaning:   Disk address n not in bit table
+              A page on the disk is pointed to by the file system (or  is
+              part of the swapping space or special blocks) and therefore
+              should be assigned in the system bit  table;  but  is  not.
+              CHECKD  (using  the  DSKAS  JSYS)  assigns this page in the
+              system bit table  as  well  as  in  its  local  copy,  thus
+              correcting the problem.
+
+   Message:
+              Illegal disk address n   Meaning:   Illegal disk address n
+              CHECKD attempted to assign in its local bit table a  sector
+              number  that  was  not  within the limits of the structure.
+              Since CHECKD obtains the  addresses  from  FDB's  and  page
+              tables,  this  indicates  an  error  in  an FDB, page-table
+              table, or page table.
+
+
+                                     6
+
+
+
+   Message:
+              Multiply assigned disk address n   Meaning:   Multiply assigned disk address n
+              CHECKD attempted to assign in its local bit  table  a  page
+              that  was  already  assigned.   This means that two or more
+              files are pointing to the same disk address, or a  file  is
+              pointing  to  a page previously assigned to a special block
+              or the swapping space.   This  message  reflects  only  the
+              second  (or later) attempt to assign the page.  However, by
+              using the SCAN (refer to  Section  4.0)  command,  you  can
+              determine all the uses of the page.
+
+   Message:
+              Disk address n marked in BAT blocks   Meaning:   Disk address n marked in BAT blocks
+              A page on the disk is pointed to by the file system (or  is
+              in  the  special  blocks  or  swapping  space), and is also
+              marked in the BAT blocks.  This  means  that  a  hard  disk
+              error  was previously detected for this page.  CHECKD takes
+              no special action in this case; CHECKD assigns the page  in
+              its  local  bit table as usual.  this "error" is actually a
+              warning that the data in this page may have errors.
+
+
+
+   3.1.2  Address Field   3.1.2  Address Field - As  noted  earlier,  this  field  contains  the
+   sector number relative to the start of the structure.
+
+
+
+   3.1.3  Page Type Field   3.1.3  Page Type Field -
+
+   Message:
+              Special system blocks   Meaning:   Special system blocks
+              The error occurred when assigning a page contained  in  the
+              special system blocks that are reserved at the beginning of
+              each pack in a structure.  Commonly called the home blocks,
+              they  actually  include  the  boot strap block, primary and
+              secondary home block, primary and secondary bat block,  and
+              some unused but reserved blocks.
+
+   Message:
+              Swapping space   Meaning:   Swapping space
+              The error occurred when assigning a page  in  the  swapping
+              space.  Since CHECKD reads the home blocks to determine the
+              size and location of the swapping space, this may  indicate
+              a clobbered home block.
+
+   Message:
+              Long file page table   Meaning:   Long file page table
+              The error occurred when assigning  the  page  used  by  the
+              page-table  table.   Thus there is probably an error in the
+              FDB that points to this file's page-table table.
+
+
+
+                                     7
+
+
+
+   Message:
+              Page table   Meaning:   Page table
+              The error occurred when assigning the page used by the page
+              table.  Thus, if the file short, there is probably an error
+              in the FDB that points to this file's page table.   If  the
+              file  is long, there is probably an error in the page-table
+              table that points to this page table.
+
+   Message:
+              File page n   Meaning:   File page n
+              The error occurred when assigning the page used by  page  n
+              of  the file.  There is probably an error in the page table
+              for the file.
+
+
+
+   3.2  Summaries for Individual files   3.2  Summaries for Individual files
+
+   When CHECKD finishes processing a file, CHECKD checks to  see  if  any
+   errors  have  been  detected  for  that  file.  If so, CHECKD prints a
+   message of the form:
+
+        Summary for file filespec
+
+        followed by error counts of the form:
+
+        n error type
+
+   It is possible to receive two summary lines for one error.  If illegal
+   or  multiply assigned addresses have been reported, one or more of the
+   following messages are printed.
+
+        n Illegal addresses
+        n Multiply assigned addresses
+
+   In addition if these errors occurred when assigning file system  pages
+   (file  pages,  page-table  tables,  or page tables) one or more of the
+   following messages are printed:
+
+        n Faulty page table addresses in FDB
+        n Faulty long file page table addresses in FDB
+        n Faulty addresses in page table
+        n Faulty addresses in long file page table
+
+   If a disk error has occurred while reading a page-table table or  page
+   table, the following message is printed:
+
+        n disk read errors
+
+   Also, one or more of the following is printed:
+
+        n Page tables unreadable
+
+
+                                     8
+
+
+
+        n Long file page tables unreadable
+
+   If pages that should have been assigned were found  to  be  free,  the
+   following message is printed:
+
+        n File addresses not in bit table
+
+   If pages that were assigned were found to be marked in the BAT blocks,
+   the following message is printed:
+
+        n Assigned pages marked in BAT blocks
+
+   The last summary message for a file is  followed  by  a  dashed  line.
+   Note  that error messages for a file precede the filename, and summary
+   messages follow it.
+
+
+
+   3.3  Final Count of Used Pages   3.3  Final Count of Used Pages
+
+   When CHECKD has finished processing all the files, it prints  a  final
+   summary of the page counts as follows:
+
+        Local count of file pages: i
+        Local count of overhead pages: 1
+        Local count of used pages: 1
+        System count before CHECKD: m
+        System count after CHECKD: n
+
+   As CHECKD processes each file, CHECKD counts the number of pages  used
+   for  data and adds this count to a total for the structure.  The first
+   message (i) reports this total.
+
+   The second message (i) reports all  page-table  tables,  page  tables,
+   special  system  blocks,  and swapping pages.  In addition, the second
+   message includes any pages that are marked in the bat blocks and  thus
+   not available for use.
+
+   the counts of total pages used are obtained by adding  the  counts  of
+   used  pages  per  cylinder  in  the  top  half  of  the  bit table and
+   subtracting them from the total pages on the structure.
+
+   The third message (l) reports the number  of  pages  assigned  in  the
+   local copy of the bit table.
+
+   The fourth message (m) reports the  number  of  used  pages  that  the
+   system bit table indicated before this run of CHECKD.
+
+   If the number of pages in this message is greater than the  number  of
+   pages in the fifth message, CHECKD has found lost pages.
+
+   The fifth message (n) reports the number of pages that the system  bit
+
+
+                                     9
+
+
+
+   table  indicated after this run of CHECKD.  If the number in the fifth
+   message is greater than the number in the fourth message,  CHECKD  has
+   found  one  or more pages that should have been assigned in the system
+   bit table, but were not; and it has assigned them.
+
+
+
+   3.4  Comparison of Bit Tables   3.4  Comparison of Bit Tables
+
+   Next CHECKD compares the top half of the system bit table against  the
+   top  half  of the local copy bit table.  If a pair of words disagrees,
+   it compares the corresponding words in the bottom halves  of  the  two
+   tables.  There are three possible results:
+
+        1.  If a bit is off in the system bit table and on in  the  local
+            copy  bit  table,  the  page  represented  by that bit is not
+            pointed to by a file (and is not in  the  special  blocks  or
+            swapping  space),  but  is  assigned in the system bit table.
+            this is a "lost page".
+
+        2.  If a bit is on in the system bit table and off in  the  local
+            copy  bit  table,  the page is pointed to by a file (or is in
+            the special blocks or swapping space), but is not assigned in
+            the  system  bit  table.   This  condition  should  have been
+            detected and corrected by  CHECKD  earlier.   If  this  error
+            occurs, CHECKD prints:
+
+                 ?Bit tables inconsistent at cylinder n
+
+        3.  If the bit words agree even though the page counts  disagree,
+            CHECKD prints the same message as in the second case.
+
+   When the bit tables have been compared, if there are any  lost  pages,
+   CHECKD  creates  a  file  "str-name"-LOST-PAGES.BIN,  in the connected
+   directory (PS:<OPERATOR> if running under job 0).  Then CHECKD  writes
+   the disk addresses into the file.  (If a disk address is marked in the
+   BAT blocks, it is not written into the file.)  CHECKD  then  prints  a
+   message in the form:
+
+        There are n lost pages
+        Addresses are in file <filespec>
+
+   If there are no lost pages, CHECKD prints:
+
+        There are no lost pages.
+
+   If there are any errors in the  form  of  "Illegal  disk  address"  or
+   "Multiple  allocation",  then  the  writing  of the lost pages file is
+   suppressed with the message:
+
+        %Suppressed writing of lost pages file - too many errors.
+
+
+
+                                     10
+
+
+
+   3.5  Checking Directory Consistency   3.5  Checking Directory Consistency
+
+   When the CHECKD DIRECTORY command is given, CHECKD executes, for  each
+   directory  on  the  structure,  the DELDF JSYS with DD%CHK set in AC1.
+   This JSYS checks the consistency  of  the  specified  directory.   the
+   DD%CHK  function  also  checks  the  validity of certain fields in the
+   FDB's, traces string pointers  to  confirm  that  they  point  to  the
+   expected  block  types, and checks the directory's count of file pages
+   against the sum of the individual file's page counts.
+
+   If the monitor encounters a serious error, it generates a BUGCHK.   If
+   errors  are  encountered, the JSYS fails; and CHECKD executes the JSYS
+   again with DD%RST  set.   This  causes  the  monitor  to  rebuild  the
+   directory  file's  symbol table and perform the check again.  If after
+   the monitor checks the symbol table again,  and  the  problem  is  not
+   fixed, the BUGCHKs will be repeated.  When this action is done, CHECKD
+   issues the message:
+
+        %Rebuilding symbol table for <directory name>
+
+   After performing the rebuild function, CHECKD either prints [OK] if no
+   errors were encountered or [FAILED] if the damage was repaired by this
+   procedure.
+
+   The CHECK BITTABLE command causes this same function to be  performed.
+   In  addition,  CHECKD performs its own check of each directory that is
+   similar to the monitor's check.  If a directory fails  CHECKD's  test,
+   its  files  are ignored during the assigning of pages in the local bit
+   table.  Therefore, the pages used by  this  directory  and  its  files
+   erroneously  appear  in  the lost pages file.  the follow messages may
+   occur:
+
+   Message:
+              RCDIR failed on directory <directory name> - Skipped   Meaning:   RCDIR failed on directory <directory name> - Skipped
+              While converting  the  directory  name  to  a  number,  the
+              monitor found a serious error in the directory.
+
+   Message:
+              OPENF failed on directory <directory name> - Skipped   Meaning:   OPENF failed on directory <directory name> - Skipped
+              CHECKD was unable to open the directory file.
+
+   Message:
+              DROCHK:  Illegal format for page 0 in directory  <directory   Meaning:   DROCHK:  Illegal format for page 0 in directory  <directory
+              name>              name>
+              The header for the directory file is bad.
+
+   Message:
+              FDBBAD:  Illegal format FDB   Meaning:   FDBBAD:  Illegal format FDB
+              An FDB for a file in the directory is bad.
+
+   Message:
+              NAMBAD:  Illegal format for name block   Meaning:   NAMBAD:  Illegal format for name block
+
+
+                                     11
+
+
+
+              There is an error in a name block, which  may  contain  the
+              name  of  the directory, the password (if any), or the name
+              of a file in the directory.
+
+   Message:
+              EXTBAD:  Illegal format for extension block   Meaning:   EXTBAD:  Illegal format for extension block
+              There is an error in a block containing the extension for a
+              file in the directory.
+
+   Message:
+              ACTBAD:  Illegal format for account block   Meaning:   ACTBAD:  Illegal format for account block
+              There is an error in a block containing the account string.
+
+
+
+   3.6  Correcting File Page Counts   3.6  Correcting File Page Counts
+
+   For each file on the structure there is a count (in the file's FDB) of
+   its  data pages.  This count is reported by the EXEC as the page count
+   of the file.  Normally, this count is the number of pages  pointed  by
+   the  file's page table.  However, after a system crash, the page table
+   may point to more pages than this count  indicates.   When  CHECKD  is
+   processing  a file, it checks the file's page count in the FDB against
+   the total number of data pages pointed to by the page table.   If  the
+   two disagree, CHECKD changes the count in the FDB.
+
+
+
+   4  CHECKD COMMANDS   4  CHECKD COMMANDS
+
+   When you run CHECKD under timesharing, you may give specific  commands
+   to  CHECKD  to perform specific functions.  This section describes the
+   various CHECKD commands.  All commands to CHECKD are in the  following
+   general form:
+
+   Command [optional arg] structure-name
+
+   Command                 Description
+
+   CHECK BITTABLE   CHECK BITTABLE          Checks the consistency of  the  bit  table  by
+                           comparing the pages marked as assigned against
+                           those pointed to by the  file  system.   CHECK
+                           BITTABLE  also writes lost page addresses in a
+                           file.
+
+   CHECK DIRECTORY   CHECK DIRECTORY         Checks directory information on the  specified
+                           structure.
+
+   CREATE   CREATE                  Accepts configuration information for  a  file
+                           structure  and  then creates a new file system
+                           on the specified units.
+
+
+
+                                     12
+
+
+
+   DISABLE   DISABLE
+   ENABLE   ENABLE                  Selects or  deselects  one  of  the  following
+                           features.
+
+                           AUTOMATIC-STARTUP
+                           Marks the  structure  as  the  primary  public
+                           structure  at  system  start-up  time.  CHECKD
+                           then prompts for the serial number of the  CPU
+                           for   which   this   is   the  primary  public
+                           structure.
+
+                           BAT-BLOCK-DELETE
+                           Allows a verification  pass  of  the  disk  to
+                           delete  entries  from the BAT BLOCKS.  If this
+                           feature is  disabled,  entries  will  only  be
+                           added.
+
+                           ECC-ERROR-MARKING
+                           Controls whether ECC errors will be  added  to
+                           the  BAT  blocks during a verification pass on
+                           the disk.  This includes pages for  which  the
+                           first  attempt  to  read  the  page with error
+                           correction enabled  failed,  but  one  of  the
+                           following seven retries was successful.  It is
+                           strongly  suggested  that   this   switch   be
+                           ENABLED.
+
+                           LARGE-DIRECTORIES
+                           Controls whether directories can contain large
+                           amounts  of  files  or  not.   Use  DISABLE to
+                           guarantee that a particular structure  can  be
+                           used  on  small and large systems.  Use ENABLE
+                           to  allow  directories  to  grow  large  on  a
+                           structure.   Note  that,  if a directory grows
+                           large, the structure will no longer be  usable
+                           on a small system.
+
+                           SOFT-ERROR-MARKING
+                           Controls whether soft errors will be added  to
+                           the  BAT  blocks during a verification pass on
+                           the  disk.   Soft  errors  are  defined  as  a
+                           failure   to   read   the   disk  without  ECC
+                           correction or system error  recovery  (reading
+                           with offset).
+
+                           WRITE-VERIFICATION (OF) DATA
+                           Controls  read-after-write   verification   of
+                           pages  written  to  the  data space on a disk.
+                           Note that using this feature may cause about a
+                           25%     degradation     in    write-throughput
+                           performance.
+
+
+
+                                     13
+
+
+
+                           WRITE-VERIFICATION (OF) SWAPPING
+                           Controls  read-after-write   verification   of
+                           pages written to the swapping space on a disk.
+                           Note that using this feature may cause about a
+                           25%     degradation     in    write-throughput
+                           performance.
+
+|                          PASSWORD-ENCRYPTION (ON  STRUCTURE)  STRUCTURE
+|                          NAME
+|                          Controls whether password encryption is  being
+|                          used  or  not.   If  enabled all passwords are
+|                          encrypted.  If the user forgets his  password,
+|                          he  must  go  to  the  system  manager  and be
+|                          assigned  a  new   password.    If   disabled,
+|                          passwords are treated exactly as in the past.
+
+   EDIT   EDIT                    Selects   a   structure   and    allows    the
+                           modification   of  the  BAT  blocks  for  that
+                           structure.  BAT BLOCK DELETE must  be  enabled
+                           to allow entries to be removed.
+
+                           ADD    Adds a page to the BAT  blocks  of  the
+                                  specified structure.
+
+                           DELETE Deletes a page from the BAT  blocks  of
+                                  the specified structure.
+
+                           QUIT   Returns to CHECKD command  level.   The
+                                  BAT blocks are not updated.
+
+                           EXIT   Returns to CHECKD command  level.   The
+                                  BAT   blocks   are  updated.   If  this
+                                  command is not given,  the  BAT  blocks
+                                  will  not be changed.  If any BAT block
+                                  overflows occur due to  ADD  or  DELETE
+                                  commands that have been given, an error
+                                  message is given;  the  disks  are  not
+                                  updated;  and  the  program  remains in
+                                  BAT-EDIT mode.
+
+                           FILE-DDT  Runs  the  FILDDT  program   as   an
+                                  inferior  program.  Use the FILDDT EXIT
+                                  command or ^Z to return to CHECKD.
+
+                           LIST   List the information we have about  the
+                                  BAT blocks.
+
+                           PUSH   Runs the EXEC as an  inferior  program.
+                                  Use   the  POP  command  to  return  to
+                                  CHECKD.
+
+   EXIT   EXIT                    Exits from CHECKD.
+
+
+                                     14
+
+
+
+   REBUILD   REBUILD                 Rebuilds  the   bit   table   from   directory
+                           information on the specified structure.
+
+   RECONSTRUCT   RECONSTRUCT             Reconstructs  the  <ROOT-DIRECTORY>   on   the
+                           specified  structure and then rebuilds the bit
+                           table.
+
+   RELEASE   RELEASE                 Deassigns  the  pages  whose   addresses   are
+                           contained  in  the  specified file.  The input
+                           file is normally  created  by  CHECKD's  CHECK
+                           BITTABLE command.
+
+   SCAN   SCAN                    Reads a file of disk addresses and then  scans
+                           the  directories  for the specified addresses.
+                           When each address is found, CHECKD prints  the
+                           name  of  the file that uses the address.  the
+                           input file is in  ASCII  format  and  contains
+                           logical  block numbers.  DIGITAL Field Service
+                           Representatives have programs that create  the
+                           input file.
+
+   SET DRIVE-SERIAL-NUMBER|  SET DRIVE-SERIAL-NUMBER
+|                          Allows you to  set  a  unique  decimal  serial
+|                          number  for an RP20 disk which is connected to
+|                          the CI. CHECKD will prompt you for the  serial
+|                          number, channel, controller, and unit numbers.
+
+   STATUS   STATUS                  Types the setting of various CHECKD switches.
+
+   VERIFY   VERIFY                  Scans the entire disk  or  just  the  swapping
+                           space  looking  for both hard and soft errors.
+                           Depending  upon  the  setting  of  BAT   BLOCK
+                           DELETE,  this option may allow the addition or
+                           deletion of entries in the  BAT  blocks  as  a
+                           result  of  the scan.  After the scan, the bat
+                           block editor will automatically be called.
+
+                                    NOTE
+
+           When CHECKD is run during timesharing, you should make
+           sure  the  structure  is  loaded and spinning, but not
+           recognized  as  a  mounted  structure  by  the  system
+           because  of  a  MOUNT  command.   If  a  structure  is
+           recognized by the system as  being  mounted,  commands
+           such as CHECK BITTABLE cause CHECKD to ask if you want
+           to forcibly dismount the structure and proceed.   When
+           CHECKD   is  working  on  a  structure  which  is  not
+           recognized as being  mounted  by  the  system,  CHECKD
+           mounts   the  structure  temporarily  with  the  alias
+           structure name CHECKD:, then dismounts  the  structure
+           when it is done.  This situation does not apply to the
+           system's public structure.  If you run CHECKD  on  the
+
+
+                                     15
+
+
+
+           public  structure  during  timesharing,  make  sure no
+           other  users  are  accessing  the  public   structure,
+           because  the results are unpredictable.  The best time
+           to run CHECKD on  the  system's  public  structure  is
+           during  system  start-up  time when the CHECK BITTABLE
+           function is executed automatically.
+
+
+
+   5  RUNNING CHECKD   5  RUNNING CHECKD
+
+   CHECKD can be executed either manually or  automatically.   There  are
+   two manual methods of running the CHECKD program.  The first method is
+   when the system is initially started.  when the system is started,  it
+   asks  the  question "RUN CHECKD?  Y OR N".  If you type "Y", CHECKD is
+   executed and checks the integrity of the file  system  on  the  public
+   structure.   IF  lost  pages  or  multiply assigned disk addresses are
+   found, this information is  printed  on  the  CTY.   In  the  case  of
+   multiply  assigned  disk  addresses,  the SYSJOB program, which is the
+   next step in system start-up, is not executed; and the condition  must
+   be corrected before the system can be used for timesharing.
+
+   The second method of manually  running  CHECKD  is  by  enabling  your
+   privileges  and  typing CHECKD.  Using this method allows you to check
+   the integrity of file systems on  structures  other  than  the  public
+   structure.   A  structure  whose  ID is PS:  can also be checked under
+   timesharing, provided it is loaded and spinning on a  drive,  but  not
+   recognized  by  the  system  as  being  mounted  by means of the MOUNT
+   command.  CHECKD should never be run on the system's public  structure
+   unless  there  are no other users on the system, and there is no other
+   pack with the ID of PS:.  If another  PS:   is  mounted,  CHECKD  will
+   choose that PS:  rather than the system's PS:.
+
+   The monitor will  automatically  run  CHECKD  if  the  bit  table  has
+   internal  inconsistencies.  An example of an inconsistency is when the
+   count of free pages in the top half of the bit  table  disagrees  with
+   the number of bits containing a 1 in the bottom half of the bit table.
+
+
+
+   6  USING CHECKD   6  USING CHECKD
+
+   This section describes the various uses of CHECKD.  These uses are:
+
+         o  To detect and recover lost pages.
+
+         o  To detect multiply assigned disk pages  and  the  files  that
+            point to those pages.
+
+         o  To check the consistency of directories on  a  structure  and
+            rebuild any invalid symbol tables when possible.
+
+
+
+                                     16
+
+
+
+         o  To rebuild the bit table of a structure.
+
+         o  To reconstruct <ROOT-DIRECTORY> on structures other than  the
+            public structure.
+
+         o  To create other structures.
+
+
+
+   6.1  Recovering Lost Pages   6.1  Recovering Lost Pages
+
+   A page is referred to as a lost page when the page is  free,  but  the
+   bit  table  indicates  the  page  is  in  use.   You should run CHECKD
+   periodically to recover the lost disk space due to the lost pages.
+
+   To recover lost pages, run CHECKD and give the CHECK BITTABLE  command
+   for  the  structure.  CHECKD will detect lost pages, if any exist, and
+   allocate them to a file whose name will be printed  on  the  terminal.
+   If there are any lost pages, CHECKD prints the following message:
+
+        THERE ARE nn LOST PAGES
+        ADDRESSES ARE IN FILE file
+
+   (where nn is the number of lost pages found and file is  the  name  of
+   the file containing the addresses of those pages.)
+
+   If CHECKD does not find  any  lost  pages,  it  prints  the  following
+   message:
+
+        THERE ARE NO LOST PAGES
+
+   Note that, if CHECKD detects any multiply assigned  addresses,  CHECKD
+   will  not  create  the lost pages file.  In this case, you must try to
+   copy the files with the lost pages to another  file,  delete  the  old
+   file, and then run CHECKD again using the CHECK BITTABLE command.
+
+   After the lost page file is  created,  you  should  give  the  RELEASE
+   command  using  the  filename  given  in the lost pages error message.
+   This procedure will recover the lost pages.
+
+   The following example shows running CHECKD after system start-up.   If
+   you  are  running  CHECKD on the public structure, you should give the
+   following command prior to running CHECKD:
+
+        $^ESET NO LOGINS-ALLOWED (ON) ANY-TERMINAL
+
+   EXAMPLE   EXAMPLE
+
+        @ENABLE <RET>
+        $CHECKD <RET>
+        CHECKD>CHECK BITTABLE (CONSISTENCY OF) str: <RET>
+
+
+
+                                     17
+
+
+
+        [Working on structure - str:]
+
+        % Rebuilding symbol table for str:<ROOT-DIRECTORY> [OK]
+
+        Local count of file pages: 55393
+        Local count of overhead pages: 10657
+        Local count of used pages: 66050
+
+        system count before CHECKD: 66057
+        System count after CHECKD: 66057
+
+        There are 7 lost pages
+
+        Addresses are in file str:<OPERATOR>str-LOST-PAGES.Bin.n
+
+        CHECKD>RELEASE str:<OPERATOR>str-LOST-PAGES.BIN.n (FOR) str:<RET>
+
+        [Working on structure - str:]
+        File written on: 20-Oct-84 21:33:00, contains 7 entries.
+
+        CHECKD>EXIT <RET>
+        $DISABLE <RET>
+
+
+
+   6.2  Eliminating Multiply Assigned Pages   6.2  Eliminating Multiply Assigned Pages
+
+   CHECKD discovers multiply assigned pages (addresses)  when  performing
+   the  CHECK BITTABLE function.  CHECKD prints a message giving the disk
+   address and the name of the file which points to this address.   There
+   may  or  may not be other files pointing to this address.  CHECKD also
+   indicates the number of lost pages, but does NOT write the  lost  page
+   file.  Instead, CHECKD returns an error message.  You must now use the
+   SCAN function of CHECKD to locate all files (if more than  one)  which
+   point  to  the  multiply assigned page(s).  You should try to copy the
+   contents of each affected file to some other  file,  then  delete  the
+   affected  files  using  the DELETE command with the FORGET subcommand.
+   You must be enabled to  do  this - the  FORGET  subcommand  to  DELETE
+   causes  the  system to "forget" the file without changing the assigned
+   bits in the bit table.  You should then inform the owners of each file
+   you  copied,  so that they can determine whether their file is good or
+   bad.  then run CHECKD again, using the CHECK BITTABLE function.   this
+   time  you  should  create a lost pages file which you can then release
+   using the RELEASE command.
+
+   In the following example, CHECKD is  run  during  system  startup  and
+   detects a multiply assigned address.
+
+   EXAMPLE   EXAMPLE
+
+        WHY RELOAD? SCH <RET>
+        RUN CHECKD? Y <RET>
+
+
+                                     18
+
+
+
+        [CHECKING FILE CONSISTENCY]
+        [WORKING ON STRUCTURE - PS:]
+
+        MULTIPLY ASSIGNED DISK ADDRESS 424030: FILE PAGE 701
+        SUMMARY FOR FILE PS:<SYSTEM-ERROR>ERROR.SYS.2
+        1 FAULTY ADDRESSES IN PAGE TABLE
+        1 MULTIPLY ASSIGNED ADDRESSES
+        - - - - - - -
+
+        LOCAL COUNT OF FILE PAGES: 29487
+        LOCAL COUNT OF OVERHEAD PAGES: 6204
+        LOCAL COUNT OF USED PAGES: 35690
+
+        SYSTEM COUNT BEFORE CHECKD: 35706
+        SYSTEM COUNT AFTER CHECKD: 35706
+
+        THERE ARE 15 LOST PAGES
+        %SUPPRESSED WRITING OF LOST PAGES FILE, TOO MANY ERRORS
+
+        [System not in operation - file structure needs repair]
+
+        RUNNING DDMP
+
+        SYSJOB 6(6) STARTED AT 20-OCT-84 1138
+        SYSJOB STARTUP DEFERRED DUE TO FILE SYSTEM ERRORS.
+
+        RELEASE 6 Timesharing System, TOPS-20 Monitor 6(450)
+        @LOG OPERATOR 1 <RET>
+        Job 1 on TTY141 20-OCT-84 11:39
+        @ENABLE <RET>
+        $CHECKD <RET>
+        CHECKD> SCAN (FOR DISK ADDRESSES IN) TTY: (FOR) PS: <RET>
+
+        [Working on structure - PS:]
+        424030
+        ^Z
+        Found disk address 424030: File page 336
+        Found disk address 424030: File page 701
+        Summary for file PS:<SYSTEM-ERROR>ERROR.SYS.2
+        2 Search addresses found
+        - - - - - - -
+
+        CHECKD>EXIT <RET>
+        $CONNECT PS:<SYSTEM-ERROR> <RET>
+        $COPY ERROR.SYS ERROR.BAD <RET>
+        ERROR.SYS.2 => ERROR.BAD.1 [OK]
+        $DELETE ERROR.SYS, <RET>
+        $$FORGET <RET>
+        $$ <RET>
+        ERROR.SYS.2 [OK]
+        $
+
+
+
+                                     19
+
+
+
+   At this point the disk is free of the  file  which  had  the  multiply
+   assigned  page.  Now CHECKD must be run again using the CHECK BITTABLE
+   command to create a lost pages file.  The lost pages file can then  be
+   released as shown in the previous section.
+
+
+
+   6.3  Checking Directory Consistency   6.3  Checking Directory Consistency
+
+   The CHECK DIRECTORY command to CHECKD will check each directory  on  a
+   specified   structure  and  rebuild  a  directory  symbol  table  when
+   necessary and possible.  If the attempt  to  rebuild  a  symbol  table
+   fails,  save  the  contents  of  the  directory using DUMPER, list the
+   directory parameters with the ^ECREATE  command,  and  give  the  KILL
+   subcommand to ^ECREATE.  After you have deleted the directory, rebuild
+   it with the ^ECREATE command.
+
+   EXAMPLE   EXAMPLE
+
+        @ENABLE <RET>
+        $CHECKD <RET>
+        CHECKD>CHECK DIRECTORY (CONSISTENCY OF) OP6A: <RET>
+
+        [OP6A: MOUNTED AS CHECKD:]
+
+        [WORKING ON STRUCTURE - OP6A:]
+        % REBUILDING SYMBOL TABLE FOR CHECKD:<ED-SYS> [OK]
+
+        [DISMOUNT STRUCTURE - OP6A]
+
+        CHECKD>EXIT <RET>
+        $DISABLE <RET>
+
+
+
+   6.4  Rebuilding the Bit Table   6.4  Rebuilding the Bit Table
+
+   The bit table is  contained  in  <ROOT-DIRECTORY>DSKBTTBL..1  on  each
+   structure.   If  the  bit  table cannot be used (for example, it has a
+   page containing a hard disk error), it must be rebuilt.   The  REBUILD
+   command  to  CHECKD  is  used to do this.  Use this command only after
+   consulting with your software specialist.  It is a good idea  to  save
+   the  contents  of your structure on magnetic tape before attempting to
+   rebuild.
+
+   In the following example, DSKBTTBL..1  contained  a  disk  page  which
+   experienced  a  hard  (unrecoverable)  error.   The  problem was first
+   noticed when  users  found  they  could  not  create  any  files.   In
+   addition, the following BUGCHK appeared on the console:
+
+        ********************
+        *BUGCHK "DSKBT1" AT 20-OCT-84 10:59:29
+
+
+                                     20
+
+
+
+        *DSK BIT TABLE FOULED, CAN'T FIND FREE PAGE ON TRACK WITH NON-0
+        COUNT
+        *JOB 23, USER: GRANT
+        *ADDITIONAL DATA: 540000, 1223
+        ********************
+
+   The BUGCHK  message  indicated  a  problem  with  the  bit  table,  so
+   timesharing  was  ended  with a ^ECEASE in order to run CHECKD.  After
+   you give the CHECK BITTABLE command for PS:, the following information
+   is returned by CHECKD:
+
+        Disk address 120 marked in BAT blocks: File page 5
+        Summary for file PS:<ROOT-DIRECTORY>DSKBTTBL..1
+        1 Assigned pages marked in BAT blocks
+        - - - - - - -
+        .
+        .
+        .
+        ?Bit tables inconsistent at cylinder 1223
+        There are 1159 lost pages
+
+        ? CHECKD: Failed to open lost pages file
+        ? JSYS ERROR: Entire file structure full
+        ?File was not written
+        .
+        .
+
+   The above output from CHECKD shows that the bit table contained a  bad
+   region  on  disk,  which the monitor had marked in the BAT blocks.  An
+   attempt to copy DSKBTTBL..1 to another file failed.   At  this  point,
+   the  bit  table  on  PS:   should  be  rebuilt  using  CHECKD.   As  a
+   precaution, you should save all files on PS:  on magnetic  tape  using
+   the  DUMPER  program.  The following is the output generated by CHECKD
+   during the rebuild operation.
+
+   EXAMPLE   EXAMPLE
+
+        @ENABLE <RET>
+        $CHECKD <RET>
+        CHECKD>REBUILD (BIT TABLE OF) PS: <RET>
+
+        [Working on structure - ps:]
+
+        %Rebuilding symbol table for PS:<ROOT-DIRECTORY> [OK]
+        Disk address 120 marked in BAT blocks: File page 5
+        Summary for file PS:<ROOT-DIRECTORY>DSKBTTBL..1
+        1 Assigned pages marked in BAT blocks
+        - - - - - - -
+
+        %Rebuilding symbol table for PS:<SPOOL> [OK]
+
+        Local count of file pages: 55392
+
+
+                                     21
+
+
+
+        Local count of overhead pages: 10655
+        Local count of used pages: 66047
+
+        System count after CHECKD: 66047
+
+        CHECKD>EXIT <RET>
+        $
+
+   At this point, the bit table was rebuilt,  and  the  file  system  was
+   recovered.
+
+
+
+   6.5  Reconstructing the ROOT-DIRECTORY (not For PS:)   6.5  Reconstructing the ROOT-DIRECTORY (not For PS:)
+
+   CHECKD can be used to reconstruct <ROOT-DIRECTORY>  and  then  rebuild
+   the  bit  table.   The  RECONSTRUCT  command  is used to perform these
+   functions.   To  reconstruct  <ROOT-DIRECTORY>  on  structure   OP6A:,
+   perform the following procedure.
+
+        @ENABLE <RET>
+        $CHECKD <RET>
+        CHECKD>RECONSTRUCT (ROOT-DIRECTORY OF) OP6A: <RET>
+
+        [OP6A: MOUNTED AS CHECKD:]
+        [RECONSTRUCTION PHASE 1 COMPLETE]
+
+        [WORKING ON STRUCTURE - OP6A:]
+
+        % REBUILDING SYMBOL TABLE FOR CHECKD:<ROOT-DIRECTORY> [OK]
+
+        LOCAL COUNT OF FILE PAGES: 962
+        LOCAL COUNT OF OVERHEAD PAGES: 3151
+        LOCAL COUNT OF USED PAGES: 4113
+
+        SYSTEM COUNT AFTER CHECKD: 4113
+
+        [DISMOUNTING STRUCTURE - OP6A:]
+
+        CHECKD>EXIT <RET>
+        $DISABLE <RET>
+
+
+
+   6.6  Creating a Structure   6.6  Creating a Structure
+
+   The CREATE command to CHECKD allows you to create a new  TOPS-20  file
+   structure.   When  you create a structure with CHECKD, you destroy any
+   information that was previously on the disk packs.  If  the  pack  you
+   are using was once a structure and you want to save the information on
+   the disk pack, you should run the DUMPER program to save all the  disk
+   files on the pack.
+
+
+                                     22
+
+
+
+   To create a structure  using  CHECKD,  type  CREATE  followed  by  the
+   structure  name  you  are  assigning  to  the structure.  The name you
+   specify is written into the home blocks of the structure and  is  used
+   as the physical identification for the structure.
+
+   After you give the name of the structure,  CHECKD  asks  a  series  of
+   questions  regarding  the physical configuration of the structure.  If
+   you are not sure what to enter, type a ?  (question mark) to receive a
+   help message.  The questions CHECKD asks are:
+
+        ENTER ALIAS:
+
+   Type a 1- to 6-alphanumeric name for the alias name of the  structure.
+   IF the name of the structure you are creating is unique, type the same
+   name you entered with the CREATE command.  However, if  the  structure
+   you  are  creating  has  the  same  name as an existing structure, you
+   should given an alias name, that is unique or press the RETURN key for
+   the default alias name, which is CHECKD.  Note that, if a structure is
+   already mounted with the alias name CHECKD, you must  enter  a  unique
+   alias name.
+
+   The alias name is used when another structure is already mounted  with
+   the  same name as your structure.  To mount a structure with the alias
+   name, you would give the following command.
+
+        MOUNT STRUCTURE (NAME) OP6A:/STRUCTURE-ID alias name<RET>
+
+   The system uses the alias name as the temporary name of the structure.
+   If  the system crashes when a structure is mounted with an alias name,
+   remember to mount the structure again with the alias name.
+
+        HOW MANY UNITS IN THIS STRUCTURE?
+
+   Type a decimal number in the range  of  1  through  8  specifying  the
+   number of disk packs that will be part of the structure.
+
+        CHANNEL, CONTROLLER AND UNIT NUMBER FOR LOCAL UNIT 0 ?
+
+   Type the decimal channel number(s),  controller  number(s),  and  unit
+   number(s), separated by commas, for each disk pack that is part of the
+   structure.  You should use disk drives that are not  being  used.   If
+   you  are  not  sure, type a ?  (question mark).  The system prints all
+   available off-line disk drives.
+
+        NUMBER OF PAGES TO ALLOCATE FOR SWAPPING?
+
+   Type a decimal number in the range of  2000  through  40000.   If  the
+   structure is never going to be used as the system structure, type 0.
+
+        NUMBER OF PAGES TO ALLOCATE FOR THE FRONT END FILE SYSTEM?
+
+   Type a decimal number in the range  of  250  through  10000.   If  the
+
+
+                                     23
+
+
+
+   structure is never going to be used as the system structure, type 0.
+
+        OWNER NAME?
+
+   Type a 1- to 12-character alphanumeric name specifying  the  owner  of
+   the structure.
+
+        IS THIS A SYSTEM STRUCTURE FOR STARTUP?
+
+   Type YES  if  this  structure  will  be  used  to  start  the  system.
+   Otherwise,  type NO to the question.  If you type YES, CHECKD asks one
+   more question.  If you type NO, CHECKD  dismounts  the  structure  and
+   prints the CHECKD prompt.
+
+        SERIAL NUMBER OF CPU STARTED FROM THIS STRUCTURE?
+
+   Type the serial number of the system this structure will  be  used  to
+   start.   If  the  system you are using to create this structure is the
+   system this structure will  start,  you  can  press  the  RETURN  key.
+   CHECKD  prints  information  regarding the mounting and dismounting of
+   the structure and then prints the CHECKD prompt.
+
+   If this structure is going to be used on a system other than  a  2040S
+   or  2060,  you  should  give  the  CHECKD  command LIMIT.  The DISABLE
+   LARGE-DIRECTORIES command limits the number of directories  and  files
+   that  a structure can contain.  If later you decide that the structure
+   will only be used on a 2040S or 2060, you can run CHECKD and give  the
+   ENABLE  LARGE-DIRECTORIES  command.  This command allows the structure
+   to contain as many directories as TOPS-20 can support.
+
+   After you are finished running CHECKD, type EXIT to return to  TOPS-20
+   system level.
+
+                                    NOTE
+
+           If  you  are  planning  to  enable  or   disable   the
+           read-after-write  features  of  CHECKD, after you have
+           created the structure you must remount the  structure,
+           run CHECKD, and then give one or both of the following
+           commands.
+
+        CHECKD>ENABLE WRITE-VERIFICATION (OF) DATA<RET>
+        DISABLE
+
+        CHECKD>ENABLE WRITE-VERIFICATION (OF) SWAPPING<RET>
+        DISABLE
+
+   In the following example, the structure OP6A is created  as  a  1-pack
+   structure that will be used as the system structure.
+
+        @ENABLE<RET>
+        $CHECKD<RET>
+
+
+                                     24
+
+
+
+        CHECK>CREATE (NEW FILE SYSTEM FOR) OP6A<RET>
+        ENTER ALIAS: OP6A<RET>
+        HOW MANY UNITS IN THIS STRUCTURE? 1<RET>
+        DECIMAL CHANNEL, CONTROLLER, AND UNIT NUMBERS FOR LOGICAL UNIT 0,-1,2,3<RET>
+        NUMBER OF PAGES TO ALLOCATE FOR SWAPPING? 3050<RET>
+        NUMBER OF PAGES TO ALLOCATE FOR THE FRONT END FILE SYSTEM? 950<RET>
+
+        OWNER NAME? PORADA<RET>
+        IS THIS A SYSTEM STRUCTURE FOR STARTUP? YES<RET>
+
+        SERIAL NUMBER OF CPU STARTED FROM THIS STRUCTURE? 2102<RET>
+
+
+        [OP6A: MOUNTED AS OP6A:]
+
+        [DISMOUNTING STRUCTURE - OP6A]
+
+        CHECKD>EXIT<RET>
+        $DISABLE<RET>
+        @
+
+
+
+   7  ADDITIONAL CHECKD ERROR MESSAGES AND RECOVERY PROCEDURES   7  ADDITIONAL CHECKD ERROR MESSAGES AND RECOVERY PROCEDURES
+
+                     Not a CHECKD command        ERROR:       Not a CHECKD command
+
+        Reason:      You issued an invalid command to the CHECKD program.
+
+        Recovery:    Issue a valid command.
+
+                     Invalid structure name        ERROR:       Invalid structure name
+
+        Reason:      You issued a command with an invalid structure name.
+
+        Recovery:    Reissue the command with a valid structure name.
+
+                     Invalid decimal number        ERROR:       Invalid decimal number
+
+        Reason:      You entered an invalid decimal number for one of the
+                     following:
+
+                      o  Number of units in the structure.   Must  be  in
+                         the range of 1 through 8 units per structure.
+
+                      o  Swapping Pages allocated.  Must be in the  range
+                         of 2000 to 40000 pages.
+
+                      o  Front-end file system pages allocated.  Must  be
+                         in the range of 250 to 10000 pages.
+
+
+
+
+                                     25
+
+
+
+                      o  Serial number  of  CPU.   Serial  number  cannot
+                         exceed 10 characters.
+
+        Recovery:    Reissue the command with a number within  the  valid
+                     range.
+
+                     Invalid owner name string        ERROR:       Invalid owner name string
+
+        Reason:      You specified  an  owner's  name  that  exceeded  12
+                     characters.
+
+        Recovery:    Specify an owner's name with  the  valid  number  of
+                     characters.
+
+                     Channel number not in range 0-7        ERROR:       Channel number not in range 0-7
+
+        Reason:      You gave a channel number that was invalid.
+
+        Recovery:    Reissue the command with a valid channel number.
+
+                     Controller number not in range -1 to 7        ERROR:       Controller number not in range -1 to 7
+
+        Reason:      You gave a controller number that was invalid.
+
+        Recovery:    Reissue the command with a valid controller number.
+
+                     Comma expected between "component" and "component"        ERROR:       Comma expected between "component" and "component"
+
+        Reason:      CHECKD expected a comma between two components,  and
+                     there was none.
+
+        Recovery:    Reissue  the  command  with   the   comma   in   the
+                     appropriate place.
+
+                     Invalid octal number        ERROR:       Invalid octal number
+
+        Reason:      You issued a command with an invalid octal number.
+
+        Recovery:    Reissue the command with a valid octal number.
+
+                     Invalid command confirmation        ERROR:       Invalid command confirmation
+
+        Reason:      You ended a command string with something other than
+                     a carriage return.
+
+        Recovery:    Reissue the command  and  end  it  with  a  carriage
+                     return.
+
+                     Not a valid RECONSTRUCT option        ERROR:       Not a valid RECONSTRUCT option
+
+        Reason:      You issued an  invalid  option  to  the  RECONSTRUCT
+                     command.
+
+
+                                     26
+
+
+
+        Recovery:    You issued the CHECKD RECONSTRUCT  command  with  an
+                     option other than the INDEX-TABLE or ROOT-DIRECTORY.
+
+                     Cannot reconstruct PS:  during timesharing        ERROR:       Cannot reconstruct PS:  during timesharing
+
+        Reason:      You  tried  to  reconstruct   the   primary   system
+                     structure while it was being accessed by users.
+
+        Recovery:    Reconstruct PS:  under stand-alone time.
+
+                     Cannot reconstruct mounted structure        ERROR:       Cannot reconstruct mounted structure
+
+        Reason:      You are trying to reconstruct a  structure  that  is
+                     mounted and on-line.
+
+        Recovery:    Dismount  the  structure  with  the  DISMOUNT   STR:
+                     command,  then  run  CHECKD  giving  the RECONSTRUCT
+                     command.
+
+                     Failed to get next directory        ERROR:       Failed to get next directory
+
+        Reason:      CHECKD could not find the next directory because  of
+                     bad data in the superior directory.
+
+        Recovery:    Restore superior directory files from back-up tape.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                     27

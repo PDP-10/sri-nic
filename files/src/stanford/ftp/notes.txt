@@ -1,0 +1,1938 @@
+Things to do:
+
+Fix RSCAN% handling to check the first field of the command line to
+make sure it is FTP and not something like START or CONTINUE etc.
+
+Test the following if I ever find a TCP server that handles them:
+    Block mode
+    Compressed mode
+    Logical byte sizes that don't go evenly into 32 or 36
+    EBCDIC transfers
+
+Improve account string handling:
+    Need to give to server even if it doesn't ask for it
+    Prompt for it without username if server asks for it later
+    MRC suggests *not* parsing it in the LOGIN command
+
+Fix OPEN command so can type socket without first typing protocol
+
+Find a better justification for not doing third-party transfers
+
+Think about Chaos, DECnet
+
+Advantages over other TCP FTP programs:
+
+- COMND% JSYS interface including abortable subcommands and every
+  command synonym you're likely to use.
+
+- Extensive internal self-documentation with HELP command.
+  Printed (Scribe format) version of this also exists.
+
+- Highly customizable including default login usernames for hosts.
+
+- Intelligent wildcard filling for destination filespecs.
+
+- INSTALL and UPDATE commands for conditional file transfers.  Due to
+  deficiencies in the TCP protocol this can only work to other TOPS-20s.
+  (Similarly with UPDATE for Pup, but INSTALL works with everything).
+  Same code is used to provide nicely formatted directory listings
+  using the STAT command (and thus not needing a data connection).
+
+- Error conditions often handled without aborting command, e.g.
+  if login necessary will run login command and then retry command
+  that needed login instead of throwing to top level.
+  Similarly all commands are available when no connection has been
+  opened - if a command needs a connection it will prompt to open one.
+
+- Multi-protocol (currently only Stanford Pup and TCP, but would
+  probably be possible to extend to Chaos, DECnet, or your favorite
+  local network protocol, given enough programmer time)
+  so users only need to know about one FTP program.
+
+- Full TELNET protocol on the TELNET connection.  This is part of the
+  official TCP FTP protocol of course, but some programs don't handle
+  IACs and therefore take a long time to close down connections.
+
+- Multiple logical byte sizes and modes available.  All modes, and all
+  byte sizes from 1 to 36.  Even EBCDIC.  And you can set the remote
+  type independantly of the local type if you can think of a reason why.
+
+- Efficient PMAP output to disk files even for non-paged transfers.
+  Transfers to non-disk files are still possible (except paged type).
+
+- Modular well-commented coding style (in assembler, sigh).
+
+- Single synchronous fork rather than unpredictable PSI or multi-forking
+  (but timeouts in critical points for extra robustness).
+
+- Use of TCP: device rather than crufty BBN JSYSes
+
+Naming conventions:
+
+Files:
+    FTPxxx.MAC are protocol-independant modules
+    PUPxxx.MAC are Pup FTP user and server modules
+    TCPxxx.MAC  "  TCP  "   " ....
+
+    The Internet FTP server should probably still be called FTPSRT.EXE
+    because other programs expect that.  The sources should nevertheless
+    abide by the above conventions.
+
+Labels:
+    H.xxxx are help for commands and SET commands
+    C.xxxx are top-level commands
+    S.xxxx are SET commands
+    x%xxxx are various flags (K%... keep, F%... main, D%... dir format)
+    OS.xxx are operating systems
+    EC.xxx are end-of-line conventions
+    TT.xxx are transfer types
+
+    In PUPFTP module:
+    PUPxxx are main labels (entries in vector)
+    Px.yyy are labels within main routines (e.g. PG.xxx for PUPGET)
+
+PUPFTP MEIS data mode synchronization
+
+(1) The data mode has to be switched at a time when the other side is
+    waiting for you to send data.  If it is sending data itself, then
+    some of that data may come in in different modes than others.
+
+(2) You should always send 36-bit mode data if the other side is
+    expecting to read it in that mode and cares about the text.  If
+    non-36-bit data is read in 36-bit mode, the last byte or so may be
+    lost if it does not come up to a word boundary.
+
+For Store and New-Store commands:
+    Server changes data mode before sending [Plist] or [Yes]
+    User changes data mode before sending [Here-is-file]
+    User changes back (usually) before sending [No] or [Yes]
+    Server changes back after reading [No] or [Yes]
+
+For Retrieve command:
+    Server changes before sending [Plist]
+    User changes before sending [Yes]
+    Server changes before sending [EOC]
+    User changes after reading [EOC]
+(user can't change back any other time since it doesn't have control, and
+ so server must stick with 36-bit mode to not drop final bytes of text)
+
+PUPFTP old edit history:
+
+;<PUP.FTP>PUPFTP.MAC.462,  9-Oct-83 00:56:30, Edit by LOUGHEED
+; TIMEIN forces output buffer to speed up data mode switching
+;<PUP.FTP>PUPFTP.MAC.461,  1-Oct-83 15:43:09, Edit by KRONJ
+; Fix DIRECTORY when filename contains no dir terminators
+;<PUP.FTP>PUPFTP.MAC.460, 26-Sep-83 14:30:25, Edit by KRONJ
+; Confirmation for UPDATE and INSTALL
+;<PUP.FTP>PUPFTP.MAC.459, 12-Sep-83 09:52:18, Edit by KRONJ
+; CONFRM reparses on error rather than starting at the top
+; Fix "MEIS modes not in effect" message in DISPLAY for Kirk
+;<PUP.FTP>PUPFTP.MAC.458,  6-Sep-83 10:56:39, Edit by KRONJ
+; Don't abort command file for unknown host in SET USER
+; C is an abbreviation for CONNECT (and CD and CHDIR)
+; CREATE-INIT command
+;<PUP.FTP>PUPFTP.MAC.457,  5-Sep-83 12:05:46, Edit by KRONJ
+; Make aborts robust in the face of nesting
+;<PUP.FTP>PUPFTP.MAC.456, 26-Aug-83 15:25:53, Edit by KRONJ
+; Clean up various set commands
+; OPEN only calls NOHALT if top-level command
+; Top-level LOGIN command calls NOHALT
+; Delete types server's response
+; Remove STKVAR in OPNSUB
+;<PUP.FTP>PUPFTP.MAC.455, 25-Aug-83 14:48:10, Edit by KRONJ
+; ^G aborts losing connection attempt, command file input
+; Flag cataclysm
+; More careful about pulling JFNS out from under .COMND in ABTINT
+; Flush SOKDEB control of debugging sockets
+; Remove unnecessary pushes etc around CONFRM and NOHALT
+;<PUP.FTP>PUPFTP.MAC.454, 17-Aug-83 21:00:57, Edit by KRONJ
+; Don't change FILPRP+P.TYPE in CHKMTT unless it was MEIS-Paged
+;<PUP.FTP>PUPFTP.MAC.453, 16-Aug-83 21:46:19, Edit by KRONJ
+;<PUP.FTP>PUPFTP.MAC.452, 16-Aug-83 17:28:54, Edit by KRONJ
+; GYESNO doesn't type "No" response so less verbiage in INSTALL
+;<PUP.FTP>PUPFTP.MAC.451, 16-Aug-83 11:23:32, Edit by KRONJ
+; Add PUPPAR storage cell for PUPXFR
+;<PUP.FTP>PUPFTP.MAC.450, 16-Aug-83 10:10:30, Edit by KRONJ
+; Handle automagic switch from MEIS-Paged to Tenex-Paged
+; (both for server and for our PUPXFR unable to handle)
+; Forget differences between Tenex and TOPS-20
+; Bump minor version
+;<PUP.FTP>PUPFTP.MAC.449, 12-Aug-83 09:45:06, Edit by KRONJ
+; MEIS-Paged transfer type
+; Distinguish between TOPS-20 and TENEX operating systems
+; Include file size in verbose directory options
+;<PUP.FTP>PUPFTP.MAC.448,  9-Aug-83 13:06:49, Edit by KRONJ
+; Rename some flags to avoid conflict with new MONSYM
+; EVERYTHING in dir subcommand prompt must not include L%NO
+;<PUP.FTP>PUPFTP.MAC.447,  1-Aug-83 16:53:53, Edit by KRONJ
+; Quote parens and quotes in filenames
+;<PUP.FTP>PUPFTP.MAC.446,  1-Aug-83 11:27:16, Edit by KRONJ
+;<PUP.FTP>PUPFTP.MAC.445,  1-Aug-83 10:45:01, Edit by KRONJ
+;<PUP.FTP>PUPFTP.MAC.444,  1-Aug-83 10:38:22, Edit by KRONJ
+; Set binary 36-bit transfers for SAIL (it won't tell you to do so itself).
+; This is safe even for text files, since both WAITS and TOPS-20 use
+; the same format for packing ASCII.
+;<PUP.FTP>PUPFTP.MAC.443, 28-Jul-83 23:01:56, Edit by KRONJ
+; Flush EOC in STOABT (except when called after PROCNO)
+;<PUP.FTP>PUPFTP.MAC.442, 23-Jul-83 21:30:04, Edit by KRONJ
+; Alphabetize SET KEEP commands
+;<PUP.FTP>PUPFTP.MAC.441, 22-Jul-83 17:18:42, Edit by KRONJ
+; SET [NO] FANCY-QUIT for Andy
+;<PUP.FTP>PUPFTP.MAC.440, 20-Jul-83 21:53:31, Edit by KRONJ
+; Pass on server's text when it aborts a file retrieval
+; instead of simply saying "Transfer aborted by server"
+;<PUP.FTP>PUPFTP.MAC.437, 29-Jun-83 11:05:09, Edit by KRONJ
+; Add SET KEEP (on) RENAME, make keep flags easier to handle
+; Fix generation defaulting in FRNFIL
+; Convert to MACSYM character names
+;<PUP.FTP>PUPFTP.MAC.436, 26-Jun-83 17:45:32, Edit by LOUGHEED
+; Rename SCKSUM to BSPSTS, have it always set high volume flag
+;<PUP.FTP>PUPFTP.MAC.435, 24-Jun-83 15:59:08, Edit by KRONJ
+;<PUP.FTP>PUPFTP.MAC.433, 23-Jun-83 16:56:00, Edit by KRONJ
+; Fix typeout of statistics switch in Display command
+; Merged from LOTS:
+;   File-Author properties for files to the lineprinter
+;   Type text regardless if LPT: destination.
+;   FRNFIL defaults wildcard version if given default JFN says so.
+;<PUP.FTP>PUPFTP.MAC.432, 12-Jun-83 19:22:05, Edit by LOUGHEED
+; Add "TOPS20" to OPSTAB.  Network directory no longer has "TOPS-20"
+;<PUP.FTP>PUPFTP.MAC.431, 10-Jun-83 18:02:32, Edit by LOUGHEED
+; Move AC F flag definitions to PUPDEF 
+;<PUP.FTP>PUPFTP.MAC.430,  4-Jun-83 21:53:49, Edit by KRONJ
+; Fix TERSEF display in SHOW, add noise to SET VERBOSE
+;<PUP.FTP>PUPFTP.MAC.429, 17-May-83 21:38:04, Edit by KRONJ
+; Save registers in CONFRM
+; Allow blank lines in forced OPEN command
+;<PUP.FTP>PUPFTP.MAC.428, 10-May-83 22:58:44, Edit by KRONJ
+; Make sure pointer given to MKPTR is real
+;<PUP.FTP>PUPFTP.MAC.427,  7-May-83 12:47:41, Edit by KRONJ
+; Fudge dates in UPDATE and INSTALL
+;<PUP.FTP>PUPFTP.MAC.426,  5-May-83 21:29:06, Edit by KRONJ
+; Fix GET with no confirmation - need JFNs in GTJFN block
+; Install MV. and MVI. macros from MACSYM
+;<PUP.FTP>PUPFTP.MAC.425,  4-May-83 14:57:49, Edit by KRONJ
+; Fix wildcard SEND with SET NO CONFIRM
+; Fix lowercasing in same circumstance
+;<PUP.FTP>PUPFTP.MAC.424, 26-Apr-83 12:45:58, Edit by KRONJ
+; Allow OPEN with con already open if confirmed
+;<PUP.FTP>PUPFTP.MAC.423, 19-Apr-83 20:29:42, Edit by KRONJ
+; Add NO to subcommands for DIRECTORY
+; Clean up various macro definitions
+;<PUP.FTP>PUPFTP.MAC.422, 11-Apr-83 17:04:25, Edit by KRONJ
+; Make TABLUK ignore invisible keywords
+; ASCII is an invisible synonym for type TEXT
+; Allow SCNPRP to return -1 for unrecognized transfer type
+;<PUP.FTP>PUPFTP.MAC.421,  7-Apr-83 01:08:21, Edit by KRONJ
+; Clean up check for byte-size match in SEND
+; Allow mismatch after confirmation
+;<PUP.FTP>PUPFTP.MAC.420,  5-Apr-83 13:03:00, Edit by KRONJ
+; Use correct socket for second JFN on connection
+;<PUP.FTP>PUPFTP.MAC.419,  4-Apr-83 12:22:48, Edit by KRONJ
+; Split Type missing and Byte-Size missing errors
+; Give somewhat more informative error messages for them
+;<PUP.FTP>PUPFTP.MAC.418,  3-Apr-83 15:03:39, Edit by KRONJ
+; Move STRCMP into PUPPRP, KILFIL into PUPXFR
+;<PUP.FTP>PUPFTP.MAC.417,  3-Apr-83 13:13:45, Edit by KRONJ
+; Add SETVER in PUPDEF to do all sorts of things
+;<PUP.FTP>PUPFTP.MAC.416,  3-Apr-83 01:29:42, Edit by KRONJ
+; MAKPTR is now MKPTR
+;<PUP.FTP>PUPFTP.MAC.415,  1-Apr-83 14:27:22, Edit by KRONJ
+; Pull some flags into PUPDEF
+; Move CHKDSK into PUPXFR
+;<PUP.FTP>PUPFTP.MAC.414, 31-Mar-83 12:12:22, Edit by KRONJ
+; Use .SFUST routine to preserve lower case
+;<PUP.FTP>PUPFTP.MAC.413, 30-Mar-83 13:13:57, Edit by KRONJ
+; Wrong parity of test in SCKSUM
+;<PUP.FTP>PUPFTP.MAC.412, 30-Mar-83 12:11:30, Edit by KRONJ
+; SET [NO] CHECKSUMS
+; SET [NO] ALTERNATE-SOCKETS
+; Add to SHOW display, clean up a bit
+; SOKDEB cell to control initial ALTERNATE-SOCKETS behavior
+;<PUP.FTP>PUPFTP.MAC.411, 28-Mar-83 16:00:30, Edit by KRONJ
+; Don't send directories and nonexistent files
+;<PUP.FTP>PUPFTP.MAC.410, 23-Mar-83 17:46:09, Edit by KRONJ
+; Handle quota exceeded message passed on to us by PUPXFR
+;<PUP>PUPFTP.MAC.409, 15-Mar-83 14:23:31, Edit by KRONJ
+; Flush extra blank line in "Not confirmed" error
+; Try simpler version text macros
+; Clean up command table macros
+; Remove modified FLDDB. macros
+;<PUP>PUPFTP.MAC.408, 14-Mar-83 22:49:25, Edit by KRONJ
+; Break long lines in DIRECTORY
+; Be more terse in typing dir names in DIRECTORY
+; Update DIRECTORY help
+; Random code cleanups (mostly installing DO. macro)
+;<PUP>PUPFTP.MAC.407, 12-Mar-83 16:18:31, Edit by KRONJ
+; Symbolic offsets in CHNTAB
+;<PUP>PUPFTP.MAC.406, 11-Mar-83 21:45:32, Edit by KRONJ
+; Still more fixing to DOCONF
+; Same problem with PROCNO - forgot that SETABORT mungs stack
+;<PUP>PUPFTP.MAC.405, 11-Mar-83 21:37:09, Edit by KRONJ
+; Fix ABTINT - ^G was popping too much
+;<PUP>PUPFTP.MAC.404, 11-Mar-83 21:08:49, Edit by KRONJ
+; Fix DOCONF - was returning +2/+3 instead of +1/+2
+;<PUP>PUPFTP.MAC.403, 11-Mar-83 12:08:51, Edit by KRONJ
+; More informative error when given a bogus socket
+;<PUP>PUPFTP.MAC.402, 11-Mar-83 11:35:32, Edit by KRONJ
+; Allow user to specify socket to connect to
+; Clean up SHOW a little
+;<PUP>PUPFTP.MAC.401,  4-Mar-83 21:38:13, Edit by KRONJ
+; Clear aborts on <cr> and QUIT from DIRECTORY subcom
+; so we don't return to the old value of ABTLOC
+;<PUP>PUPFTP.MAC.400,  2-Mar-83 12:03:43, Edit by KRONJ
+; Fix TYPE and PRINT commands to interact with new ^G
+; multiple-file transfer aborts
+;<PUP>PUPFTP.MAC.399,  1-Mar-83 12:39:05, Edit by KRONJ
+; Don't prompt for SET DIRECTORY if we never did so in the
+; first place -- error 12 can be caused by either a bad
+; (Directory ...) property or a bad filename, we can only
+; handle the first in PROCNO.
+;<PUP>PUPFTP.MAC.398,  1-Mar-83 00:27:46, Edit by KRONJ
+; Various data errors give meaningful PC
+;<PUP>PUPFTP.MAC.397, 26-Feb-83 23:39:21, Edit by KRONJ
+; Ignore comments if TERSEF set
+; Set TERSEF when discarding in DIR, GET aborts
+;<PUP>PUPFTP.MAC.396, 26-Feb-83 23:30:57, Edit by KRONJ
+; Fix previous edit
+; Restore byte-size and type when filling SEND names
+;<PUP>PUPFTP.MAC.395, 26-Feb-83 23:19:49, Edit by KRONJ
+; ^G always aborts any TAKE files
+;<PUP>PUPFTP.MAC.393, 26-Feb-83 22:26:46, Edit by KRONJ
+; More abort cleanup
+;<PUP>PUPFTP.MAC.391, 26-Feb-83 20:17:22, Edit by KRONJ
+; Clean up error message handling
+; CLRABORT done in abort handler
+; Abort directory and multiple-file transfers with ^G
+;<PUP>PUPFTP.MAC.390, 26-Feb-83 19:52:36, Edit by KRONJ
+; Always set a file default in FRNFIL - use *.*.* if none given
+;<PUP>PUPFTP.MAC.389, 26-Feb-83 12:46:00, Edit by KRONJ
+; Set default in SET KEEP parse of ALL
+; Initialize SET KEEP attributes to all but VERSION
+; Fix UPDATE - was transferring files with = write dates
+; Add SET LOWERCASE for Ken
+; Make SET NO PRESERVATION invisible, update SET NO help
+;<PUP>PUPFTP.MAC.388, 25-Feb-83 13:18:48, Edit by KRONJ
+; Using wrong plist to set kept dates in GET
+;<PUP>PUPFTP.MAC.387, 24-Feb-83 17:46:24, Edit by KRONJ
+; One-line send with no wild was ignoring K%VERS
+;<PUP>PUPFTP.MAC.386, 24-Feb-83 16:35:50, Edit by KRONJ
+; Don't type "Source => Dest" if debugging
+; Start adding INSTALL command
+;<PUP>PUPFTP.MAC.382, 22-Feb-83 14:40:33, Edit by KRONJ
+; Type SET USER, SET KEEP info in SHOW
+;<PUP>PUPFTP.MAC.375, 22-Feb-83 13:41:47, Edit by KRONJ
+; Finish TYPE command
+;<PUP>PUPFTP.MAC.374, 22-Feb-83 00:19:28, Edit by KRONJ
+; Keep everything else
+; Bump minor version - this is a fairly large total change
+; Need to do:	finish TYPE command
+;		show KEEP stuff in INFORMATION
+;<PUP>PUPFTP.MAC.371, 21-Feb-83 23:56:43, Edit by KRONJ
+; Keep everything in SEND
+;<PUP>PUPFTP.MAC.369, 21-Feb-83 22:46:16, Edit by KRONJ
+; Keep author and protection in GET
+;<PUP>PUPFTP.MAC.366, 21-Feb-83 15:32:19, Edit by KRONJ
+; Add SET KEEP parameters, flush PREVRF
+; (the only thing actually kept now is VERSION)
+; Add HELP to DIRECTORY for subcommand list
+; VERBOSE includes PROTECTION now
+;<PUP>PUPFTP.MAC.363, 21-Feb-83 14:06:29, Edit by KRONJ
+; TT.FOO transfer type definitions
+; Use Original-Author, Foo-Access in DIRECTORY
+;<PUP>PUPFTP.MAC.362, 16-Feb-83 16:47:26, Edit by KRONJ
+; Better noise word for UPDATE (use new NOISE2 macro)
+;<PUP>PUPFTP.MAC.361, 15-Feb-83 12:24:20, Edit by KRONJ
+; Remove "..." at end of default login message
+;<PUP>PUPFTP.MAC.360, 12-Feb-83 23:57:04, Edit by KRONJ
+; Fix multi-line SEND
+;<PUP>PUPFTP.MAC.359,  9-Feb-83 12:42:41, Edit by KRONJ
+; That should be GJ%OFG - give up on real filenames to allow wildcarding
+; Bulletproof CHKDSK in case we're given a nonexistent device
+;<PUP>PUPFTP.MAC.358,  9-Feb-83 12:21:03, Edit by KRONJ
+; Fix GET if no such file type exists etc - only GJ%IFG, not GJ%IFG!GJ%OFG
+; SKPDIR never takes ^V-quoted chars as directory terminators
+; PRINT never uses New-Store so filenames look pretty in FOO => LPT: typeout
+;<PUP>PUPFTP.MAC.357,  7-Feb-83 21:28:00, Edit by KRONJ
+; Don't type space in front of "Setting default transfer type..."
+;<PUP>PUPFTP.MAC.356,  6-Feb-83 15:53:02, Edit by KRONJ
+; Change IFN LOTSW to IFE SCORSW - no need to inflict
+; Crispin's lossage on the rest of the world
+;BX:<PUP>PUPFTP.MAC.354, 31-Jan-83 13:52:44, Edit by K.KRONJ
+; Last edit broke first open with user default
+; Startup banner and ? verbiage are in LOTSW
+;BX:<PUP>PUPFTP.MAC.353, 31-Jan-83 13:18:57, Edit by K.KRONJ
+; SET NO USER (sets UD%NDF in header word of default block)
+; If logged in before opening connection, ignore SET USER
+; Remove some unnecessary definitions
+; SHOW types info about SET VERBOSE
+; Flush previous edit history - was becoming immense
+;BX:<PUP>PUPFTP.MAC.352, 30-Jan-83 23:41:30, Edit by K.KRONJ
+; INFORMATION is another synonym for SHOW
+; Make more things terse
+;BX:<PUP>PUPFTP.MAC.351, 30-Jan-83 23:29:00, Edit by K.KRONJ
+; SET [NO] VERBOSE
+; SET USER (default for login at) (to)
+;BX:<PUP>PUPFTP.MAC.350, 22-Jan-83 16:11:38, Edit by K.KRONJ
+; Use Name-Body if possible when getting JFN on remote file
+; Implement UPDATE (like GET but looks at write date first)
+; RETRIEVE is another synonym for GET
+;BX:<PUP>PUPFTP.MAC.349,  8-Jan-83 14:06:41, Edit by K.KRONJ
+; Set default version -1 when parsing new foreign file
+;BX:<PUP>PUPFTP.MAC.348,  5-Jan-83 18:43:21, Edit by K.KRONJ
+; More of not-always-defaulting
+; Blank text after directory is *.* only on TOPS-20
+;BX:<PUP>PUPFTP.MAC.347,  5-Jan-83 14:01:42, Edit by K.KRONJ
+; Don't default blank fields in SEND
+;BX:<PUP>PUPFTP.MAC.346,  5-Jan-83 13:36:44, Edit by K.KRONJ
+; Skip over spaces before, not after, FRNFIL parse
+;BX:<PUP>PUPFTP.MAC.345,  5-Jan-83 12:28:17, Edit by K.KRONJ
+; Add INSET macro
+; Add comma to directory-term chars for SAIL files
+;BX:<PUP>PUPFTP.MAC.344, 28-Dec-82 17:09:48, Edit by K.KRONJ
+; Allow octal host numbers in OPEN parse
+;BX:<PUP>PUPFTP.MAC.342, 25-Dec-82 15:52:30, Edit by K.KRONJ
+; Noise word was smashing JFN - move it
+;BX:<PUP>PUPFTP.MAC.341, 23-Dec-82 14:00:05, Edit by K.KRONJ
+; More noise words in GET
+; Check Page-mode before sending one-line GET request
+; SAVE is a synonym for SEND
+; PRINT command jumps into SEND code
+;BX:<PUP>PUPFTP.MAC.340, 20-Dec-82 20:25:54, Edit by K.KRONJ
+; Don't include flags in command tables if there are none
+; Add VDIRECTORY command
+;BX:<PUP>PUPFTP.MAC.339, 19-Dec-82 21:18:31, Edit by K.KRONJ
+; Fix one-line GET with wildcard versions
+;BX:<PUP>PUPFTP.MAC.338, 18-Dec-82 21:13:55, Edit by K.KRONJ
+; Close all files on fatal error
+;BX:<PUP>PUPFTP.MAC.337, 12-Dec-82 23:48:46, Edit by K.KRONJ
+; Set transfer type to paged for FILPRP as well as DEFPRP
+; Clear paged transfer type on connection to non-paged host
+;BX:<PUP>PUPFTP.MAC.335, 12-Dec-82 20:11:19, Edit by K.KRONJ
+; Don't open EXE files thawed unless non-thawed doesn't work
+;BX:<PUP>PUPFTP.MAC.333,  9-Dec-82 11:25:26, Edit by K.KRONJ
+; Clear directory default on connection to new machine
+; Display it with other parameters
+;BX:<PUP>PUPFTP.MAC.332,  8-Dec-82 19:43:24, Edit by K.KRONJ
+; CLOSE is a synonym for BYE and DISCONNECT
+; Add SET DIRECTORY command
+;BX:<PUP>PUPFTP.MAC.331,  6-Dec-82 17:37:25, Edit by K.KRONJ
+; Flush SCREWUP - no longer needed
+;BX:<PUP>PUPFTP.MAC.330,  6-Dec-82 00:34:29, Edit by K.KRONJ
+; Rewrite network-directory parsing routines so never need to
+;    do a PUPNM jsys (so attrib check feature can be flushed)
+; Check for directory begin as well as dir end chars in FRNFIL
+;    file-parse-ended-with char test for SAIL
+; Include filename in print so jobname gets set
+;BX:<PUP>PUPFTP.MAC.329,  5-Dec-82 13:57:50, Edit by K.KRONJ
+; Type "Yes" response to Rename
+; Improve string defaulting in FRNFIL
+;BX:<PUP>PUPFTP.MAC.328,  4-Dec-82 21:17:34, Edit by K.KRONJ
+; Make TMPPRP for not munging FILPRP with New-Store reply
+; Try to make FRNFIL smart if file parse ended in directory
+;    terminator character (for UNIX filenames)
+; Add DDT command for debugging
+;BX:<PUP>PUPFTP.MAC.326,  3-Dec-82 17:13:24, Edit by K.KRONJ
+; Strip device, anglebrackets from C.GET directory default
+;BX:<PUP>PUPFTP.MAC.325,  3-Dec-82 16:23:47, Edit by K.KRONJ
+; Convert from SCREWUP to FATAL and JFATAL
+; Doublequote atom buffer when typing parse errors
+; Set directory default if none to make GET FOO.* *.* win
+;BX:<PUP>PUPFTP.MAC.324, 28-Nov-82 16:57:27, Edit by K.KRONJ
+; Don't take 0 default in FRNFIL as JFN
+;BX:<PUP>PUPFTP.MAC.322, 27-Nov-82 14:00:37, Edit by K.KRONJ
+; GTJDFT was overlapping words somehow
+;BX:<PUP>PUPFTP.MAC.318, 27-Nov-82 00:31:07, Edit by K.KRONJ
+; More intelligent "No" typeout handling - overload NOPREF
+; Make commands check CONOPF after parse, make conn if none
+; Stop pretending some messages were from the server
+; Don't set default transfer type permanently in PRINT
+; Clean up format of statistics typeout
+;BX:<PUP>PUPFTP.MAC.316, 26-Nov-82 00:25:23, Edit by K.KRONJ
+; Fix input JFN check in DOCONF
+;BX:<PUP>PUPFTP.MAC.313, 23-Nov-82 23:36:03, Edit by K.KRONJ
+; Make PROCNO handle typing out of "No" text.
+;BX:<PUP>PUPFTP.MAC.310, 23-Nov-82 21:56:08, Edit by K.KRONJ
+; Clean up SEND command parsing (don't special-case non-wild)
+;BX:<PUP>PUPFTP.MAC.309, 23-Nov-82 20:31:13, Edit by K.KRONJ
+; Save A around "Type Paged illegal" message.
+; Set left half of JFN to zero in call to GTVERS in FRNFIL.
+; Code to do New-Store if possible.
+;BX:<PUP>PUPFTP.MAC.307, 23-Nov-82 16:45:53, Edit by K.KRONJ
+; Fix zero page count in statistics of GET command.
+; Fix extension being copied from filename in one-line GET.
+;BX:<PUP>PUPFTP.MAC.302, 21-Nov-82 19:57:21, Edit by K.KRONJ
+; Improve one-line GET wildcarding.
+; Fix bug in one-line SEND with DSKDVF being set wrong.
+;BX:<PUP>PUPFTP.MAC.285, 20-Nov-82 18:05:06, Edit by K.KRONJ
+; Complete one-liner GET command.
+;BX:<PUP>PUPFTP.MAC.276, 20-Nov-82 14:53:34, Edit by K.KRONJ
+; Complete one-liner SEND command wildcard filling.
+;BX:<PUP>PUPFTP.MAC.273, 19-Nov-82 23:38:42, Edit by K.KRONJ
+; Give up on spaces in remote filenames
+;BX:<PUP>PUPFTP.MAC.264, 19-Nov-82 21:42:27, Edit by K.KRONJ
+; Start introducing one-liner commands.
+;BX:<PUP>PUPFTP.MAC.263, 19-Nov-82 12:49:41, Edit by K.KRONJ
+; Do ended-with-comma checking in C.DIRE instead of FRNFIL
+;BX:<PUP>PUPFTP.MAC.262, 18-Nov-82 23:53:33, Edit by K.KRONJ
+; Fix call to FRNFIL in STORE, add statistics code
+;BX:<PUP>PUPFTP.MAC.246, 18-Nov-82 14:50:41, Edit by K.KRONJ
+; Do COMND defaulting right in FRNFIL
+;BX:<PUP>PUPFTP.MAC.243, 18-Nov-82 13:57:28, Edit by K.KRONJ
+; .CMUQS doesn't set atom buffer, copy from command buffer.
+;BX:<PUP>PUPFTP.MAC.240, 18-Nov-82 13:27:16, Edit by K.KRONJ
+; Add ATMCMA flag for DIRECTORY command
+;BX:<PUP>PUPFTP.MAC.239, 18-Nov-82 13:13:04, Edit by K.KRONJ
+; Bundle all remote file parsing into FRNFIL routine
+;BX:<PUP>PUPFTP.MAC.238, 18-Nov-82 11:34:11, Edit by K.KRONJ
+; Start improving filename parses - change .CMTXT to .CMUQS
+;ACCT:<PUP>PUPFTP.MAC.237, 17-Nov-82 12:53:58, Edit by K.KRONJ
+; Make paged-op-sys lookup win even if not first op-sys in table
+;ACCT:<PUP>PUPFTP.MAC.236,  5-Nov-82 00:45:32, Edit by K.KRONJ
+;ACCT:<PUP>PUPFTP.MAC.235,  4-Nov-82 23:13:19, Edit by K.KRONJ
+; Make CRASHX leave a believable PC, misc code cleanups
+;ACCT:<PUP>PUPFTP.MAC.234, 30-Sep-82 11:26:34, Edit by K.KRONJ
+; Don't halt after SET commands from JCL
+;ACCT:<PUP>PUPFTP.MAC.233, 28-Sep-82 00:58:30, Edit by K.KRONJ
+; Don't print welcome banner if read init file
+;ACCT:<PUP>PUPFTP.MAC.232, 28-Sep-82 00:41:28, Edit by K.KRONJ
+; Fix ENDTAK in case run when .CMIOJ is zero
+;ACCT:<PUP>PUPFTP.MAC.231, 27-Sep-82 17:02:56, Edit by K.KRONJ
+; Read command file at startup, improve JCL handling
+;ACCT:<PUP>PUPFTP.MAC.230, 25-Sep-82 20:16:28, Edit by K.KRONJ
+; Don't try to read JCL if none.  Don't stop after JCL if was an OPEN command.
+;MRC:<PUP>PUPFTP.MAC.229, 23-Sep-82 14:37:10, Edit by CSD.KRONJ
+; Rename some commands, call FLSTAK from PROCNO
+;MRC:<PUP>PUPFTP.MAC.221, 22-Sep-82 22:11:32, Edit by CSD.KRONJ
+; Improve SCREWUP - make it say what the JSYS error is
+;MRC:<PUP>PUPFTP.MAC.220, 22-Sep-82 22:02:16, Edit by CSD.KRONJ
+; Different noise words for STATUS and DISPLAY
+;MRC:<PUP>PUPFTP.MAC.219, 22-Sep-82 21:56:21, Edit by CSD.KRONJ
+; Read command files with TAKE command
+;MRC:<PUP>PUPFTP.MAC.216, 22-Sep-82 20:09:52, Edit by CSD.KRONJ
+; Read JCL command line
+;MRC:<PUP.WORKING>PUPFTP.MAC.214, 17-Sep-82 18:55:38, Edit by CSD.KRONJ
+; Check for IOX5 (most likely timeout) when closing connection errs
+;MRC:<PUP.WORKING>PUPFTP.MAC.212, 16-Sep-82 15:54:39, Edit by CSD.KRONJ
+; Fix DISPLAY of remote username, add some command synonyms
+;MRC:<PUP.WORKING>PUPFTP.MAC.210,  7-Sep-82 17:30:37, Edit by CSD.KRONJ
+; Flush unused flags
+;MRC:<PUP.WORKING>PUPFTP.MAC.209,  7-Sep-82 16:54:47, Edit by CSD.KRONJ
+; Fix FIXNAM - P.DIRE is a string not a user number
+;MRC:<PUP.WORKING>PUPFTP.MAC.207,  7-Sep-82 15:41:48, Edit by CSD.KRONJ
+; Clean up KILFIL, flush DOJFNS
+;MRC:<PUP.WORKING>PUPFTP.MAC.205,  7-Sep-82 14:49:53, Edit by CSD.KRONJ
+; Make some global labels local
+;MRC:<PUP.WORKING>PUPFTP.MAC.204,  6-Sep-82 22:58:40, Edit by CSD.KRONJ
+; Move SET subcommand help messages to before each handler routine
+;MRC:<PUP.WORKING>PUPFTP.MAC.198,  6-Sep-82 21:30:45, Edit by CSD.KRONJ
+; Start flushing lower-fork-runnable code
+;MRC:<PUP.WORKING>PUPFTP.MAC.196,  6-Sep-82 21:02:00, Edit by CSD.KRONJ
+; Merge module PFUDEF.  Merged edit history:
+    ;MRC:<PUP.WORKING>PFUDEF.MAC.21,  6-Sep-82 18:29:43, Edit by CSD.KRONJ
+    ; Accumulators for PFUDIR
+    ;MRC:<PUP.WORKING>PFUDEF.MAC.20,  5-Sep-82 17:47:58, Edit by CSD.KRONJ
+    ; DEFTAB for building command table macros
+    ;MRC:<PUP.WORKING>PFUDEF.MAC.17,  5-Sep-82 17:32:31, Edit by CSD.KRONJ
+    ; Move COMMANDS to PUPFTP.MAC
+    ;MRC:<PUP.WORKING>PFUDEF.MAC.16,  2-Sep-82 13:48:28, Edit by CSD.KRONJ
+    ; LOGCNF instead of RENCNF
+    ;MRC:<PUP.WORKING>PFUDEF.MAC.14, 27-Aug-82 16:00:42, Edit by CSD.KRONJ
+    ; SE is another abbrev for SEND
+    ;MRC:<PUP.WORKING>PFUDEF.MAC.4, 23-Aug-82 15:42:30, Edit by CSD.KRONJ
+    ; Rework command table
+    ;MRC:<PUP.WORKING>PFUDEF.MAC.3, 23-Aug-82 14:44:42, Edit by CSD.KRONJ
+    ; Define SETABORT and CLRABORT
+    ;<PUP>PFUDEF.MAC.5,  9-Jul-82 10:36:47, Edit by R.RMK
+    ; Add some flags.
+    ;<PUP>PFUDEF.MAC.4,  9-Jul-82 10:12:12, Edit by R.RMK
+    ; Commands have totally changed.
+    ;<PUP>PFUDEF.MAC.3,  6-Jul-82 15:21:15, Edit by R.RMK
+    ; Remove DIRECTORY command, add CNFRMF.
+    ;<PUP>PFUDEF.MAC.2,  6-May-82 16:04:33, Edit by R.RMK
+    ; Add DISPLAY command.
+    ;<PUP>PFUDEF.MAC.1, 21-Apr-82 14:43:11, Edit by R.RMK
+    ; TOPS-20.
+    ;<PUP>PFUDEF.MAC.13	19-Jan-81	Edit by SCHOEN
+    ; Add LSTWF flag for PFUDIR 
+    ; Define to TEMP flags TEMPF and TEMPF2 in RH of F
+    ;<PUP>PFUDEF.MAC.12	24-Nov-80 13:15, Edit by SCHOEN
+    ; Added PRINT (LPT) command
+    ;<PUP>PFUDEF.MAC;11	5-Aug-80 9:52:35, Edit by SCHOEN
+    ; Added definitions for lower fork runnable PUPFTP
+    ;<PUP>PFUDEF.MAC;10     2-SEP-79 15:57:36    EDIT BY TAFT
+    ;<PUP>PFUDEF.MAC;9     2-JUN-77 21:27:34    EDIT BY TAFT
+    ; Add "List" and "Rename" commands
+    ;<PUP>PFUDEF.MAC;8    15-APR-77 09:57:01    EDIT BY TAFT
+    ; Move some flag bits to avoid conflict with PUPDEF
+    ;<PUP>PFUDEF.MAC;7    12-APR-77 10:11:57    EDIT BY TAFT
+    ; Remove VERTXT to PUPFTP.MAC
+    ; Add "Exec" and "Halt" commands
+    ;<PUP>PFUDEF.MAC;6    19-MAR-77 20:05:08    EDIT BY TAFT
+    ; Add "Delete" and "Preserve" commands
+    ; Add "No" prefix
+    ;<PUP>PFUDEF.MAC;5    18-MAR-77 17:05:22    EDIT BY TAFT
+    ; Remove mark and property definitions to PUPDEF.MAC
+    ;<PUP>PFUDEF.MAC;4    15-MAR-77 19:33:33    EDIT BY TAFT
+    ; Improve the help strings a bit
+    ;<PUP>PFUDEF.MAC;3    15-MAR-77 18:54:55    EDIT BY TAFT
+    ; Change "Selective" to "Automatic", add "List" and "Version"
+    ;<PUP>PFUDEF.MAC;2    10-MAR-77 14:16:52    EDIT BY TAFT
+    ; Split out from PUPFTP.MAC
+;MRC:<PUP.WORKING>PUPFTP.MAC.189,  6-Sep-82 20:24:22, Edit by CSD.KRONJ
+; Set version numbers in entry vector
+;MRC:<PUP.WORKING>PUPFTP.MAC.176,  6-Sep-82 18:26:20, Edit by CSD.KRONJ
+; Merge module PFUDIR
+;MRC:<PUP.WORKING>PUPFTP.MAC.173,  6-Sep-82 17:34:28, Edit by CSD.KRONJ
+; Don't show list of hosts from top level ?
+;MRC:<PUP.WORKING>PUPFTP.MAC.170,  6-Sep-82 14:08:46, Edit by CSD.KRONJ
+; Merge module PFUUTL.  Merged edit history:
+    ;MRC:<PUP.WORKING>PFUUTL.MAC.19,  1-Sep-82 00:19:35, Edit by CSD.KRONJ
+    ; Flush SETREM and CHKWLD - no longer used
+    ;MRC:<PUP.WORKING>PFUUTL.MAC.18, 31-Aug-82 23:21:58, Edit by CSD.KRONJ
+    ; Call DOECHO if PROCNO is aborted
+    ;MRC:<PUP.WORKING>PFUUTL.MAC.17, 31-Aug-82 22:24:38, Edit by CSD.KRONJ
+    ; Make GETCMD more careful to avoid IO Data errors
+    ;MRC:<PUP.WORKING>PFUUTL.MAC.15, 23-Aug-82 14:45:08, Edit by CSD.KRONJ
+    ; Add ^G abort from PROCNO
+    ;MRC:<PUP.WORKING>PFUUTL.MAC.10, 21-Aug-82 15:09:17, Edit by CSD.KRONJ
+    ; Fix reparse bug in PROCNO
+    ;MRC:<PUP.WORKING>PFUUTL.MAC.8, 20-Aug-82 22:06:35, Edit by CSD.KRONJ
+    ; Add noise words to PRCTAB
+    ;MRC:<PUP.WORKING>PFUUTL.MAC.7, 20-Aug-82 21:45:11, Edit by CSD.KRONJ
+    ; PROCNO handles error 2 (user-name needed and none given)
+    ;MRC:<PUP.WORKING>PFUUTL.MAC.6, 20-Aug-82 15:37:43, Edit by CSD.KRONJ
+    ; Space before text of Comment
+    ;MRC:<PUP.WORKING>PFUUTL.MAC.5, 19-Aug-82 23:45:50, Edit by CSD.KRONJ
+    ; Space before text of NO response in GYESNO
+    ;MRC:<PUP.WORKING>PFUUTL.MAC.2, 18-Aug-82 23:14:46, Edit by CSD.KRONJ
+    ; Fix reparsing in PROCNO
+    ;MRC:<PUP>PFUUTL.MAC.14, 17-Aug-82 17:22:00, Edit by CSD.KRONJ
+    ; Don't set both GJ%IFG and GJ%OFG when parsing remote filespec
+    ;<PUP>PFUUTL.MAC.13     2-Aug-82 18:56:39    TECO'd by ADMIN.MRC
+    ; Suppress terminating dot if null extension
+    ;<PUP>PFUUTL.MAC.12,  9-Jul-82 18:12:56, Edit by R.RMK
+    ; FIXNAM should write .version, not ;version.
+    ;<PUP>PFUUTL.MAC.11,  9-Jul-82 17:15:00, Edit by R.RMK
+    ; Change PROCNO to reflect new command syntax.
+    ;<PUP>PFUUTL.MAC.10,  8-Jul-82 09:39:39, Edit by R.RMK
+    ; Want next higher generation set up in SETREM.
+    ;<PUP>PFUUTL.MAC.9,  6-Jul-82 16:25:26, Edit by R.RMK
+    ; Remove directory entry in PRCTAB.
+    ;<PUP>PFUUTL.MAC.8,  6-Jul-82 15:13:58, Edit by R.RMK
+    ; Clean up assembly errors.
+    ;<PUP>PFUUTL.MAC.7,  2-Jul-82 12:09:46, Edit by R.RMK
+    ; Add routine CHKWLD for checking compatibility of file specifications.
+    ;<PUP>PFUUTL.MAC.6,  2-Jul-82 11:36:04, Edit by R.RMK
+    ; Add routine SETREM - set up GTJFN block for remote files.
+    ;<PUP>PFUUTL.MAC.5, 24-Jun-82 13:37:17, Edit by R.RMK
+    ; Clean up PROCNO.
+    ;<PUP>PFUUTL.MAC.4, 24-Jun-82 09:53:08, Edit by R.RMK
+    ; At ENDCMD, send partial PUP.
+    ;<PUP>PFUUTL.MAC.3, 17-May-82 13:18:35, Edit by R.RMK
+    ; Remove temporaries for debugging.
+    ;<PUP>PFUUTL.MAC.2, 21-Apr-82 14:55:21, Edit by R.RMK
+    ; Clear out assembly errors.
+    ;<PUP>PFUUTL.MAC.1, 20-Apr-82 16:12:55, Edit by R.RMK
+    ; TOPS-20-ize.
+    ;<PUP>PFUUTL.MAC.4   21-Jan-81 17:08:37	Edit by SCHOEN
+    ; Make PROCNO process Connect, Type, Eol, Byte-size, and
+    ;  Default directory errors
+    ;<PUP>PFUUTL.MAC.3    5-Sept-80 17:08:37	Edit by SCHOEN
+    ; Add TRZ F,NEOLEF to PROCN1 because typing <cr> to <account> doeesn't work
+    ;<PUP>PFUUTL.MAC.2    19-Mar-80 10:59:17    TECO'd by GILMURRAY
+    ; Search MONSYM, not STENEX
+    ;<PUP>PFUUTL.MAC;4     4-NOV-79 12:40:18    EDIT BY TAFT
+    ; Restore "Sender" property
+    ;<PUP>PFUUTL.MAC;3     2-SEP-79 15:57:50    EDIT BY TAFT
+    ;<PUP>PFUUTL.MAC;2     3-JUN-77 11:03:04    EDIT BY TAFT
+    ; Remove dummy "Sender" and "Distribution" property parsers
+    ;<PUP>PFUUTL.MAC;1     2-JUN-77 21:35:25    EDIT BY TAFT
+    ; Split out from PUPFTP.MAC
+;MRC:<PUP.WORKING>PUPFTP.MAC.168,  5-Sep-82 22:16:54, Edit by CSD.KRONJ
+; Flush original default type of PAGED, set default in SET BYTE-SIZE parse
+;MRC:<PUP.WORKING>PUPFTP.MAC.165,  5-Sep-82 21:50:24, Edit by CSD.KRONJ
+; Change some TYPEs to TMSG
+;MRC:<PUP.WORKING>PUPFTP.MAC.163,  5-Sep-82 17:35:04, Edit by CSD.KRONJ
+; Include COMMANDS macro from PFUDEF
+;MRC:<PUP.WORKING>PUPFTP.MAC.160,  2-Sep-82 14:38:25, Edit by CSD.KRONJ
+; Confirmation for old login on new machine
+;MRC:<PUP.WORKING>PUPFTP.MAC.158,  2-Sep-82 13:48:45, Edit by CSD.KRONJ
+; Extended help for SET subcommands
+;MRC:<PUP.WORKING>PUPFTP.MAC.153, 31-Aug-82 23:50:00, Edit by CSD.KRONJ
+; Allow ^G abort from GETPAS (careful since can be called from PROCNO)
+;MRC:<PUP.WORKING>PUPFTP.MAC.152, 31-Aug-82 18:19:57, Edit by CSD.KRONJ
+; Don't include +FTP in display of connection status
+;MRC:<PUP.WORKING>PUPFTP.MAC.150, 31-Aug-82 14:38:24, Edit by CSD.KRONJ
+; Fix display of end-of-line convention
+;MRC:<PUP.WORKING>PUPFTP.MAC.147, 30-Aug-82 23:48:58, Edit by CSD.KRONJ
+; Allow default byte size of 0 (unspecified), flush unused break masks
+;MRC:<PUP.WORKING>PUPFTP.MAC.141, 30-Aug-82 14:12:48, Edit by CSD.KRONJ
+; Improve error messages
+;MRC:<PUP.WORKING>PUPFTP.MAC.140, 27-Aug-82 01:57:21, Edit by ADMIN.LOUGHEED
+; More verbose help message for SEND command
+;MRC:<PUP.WORKING>PUPFTP.MAC.133, 25-Aug-82 22:11:25, Edit by CSD.KRONJ
+; Add help strings, allow ^G in DOCONF, fix OUTPUT directory subcommand
+;MRC:<PUP.WORKING>PUPFTP.MAC.128, 24-Aug-82 13:37:00, Edit by CSD.KRONJ
+; Make send/retrieve terminal messages more TOPS20-like
+;MRC:<PUP.WORKING>PUPFTP.MAC.115, 23-Aug-82 15:14:32, Edit by CSD.KRONJ
+; Change format of command tables
+;MRC:<PUP.WORKING>PUPFTP.MAC.114, 23-Aug-82 14:46:18, Edit by CSD.KRONJ
+; Use more version fields, set ^G aborts
+;MRC:<PUP.WORKING>PUPFTP.MAC.103, 20-Aug-82 21:55:04, Edit by CSD.KRONJ
+; Improve help strings for CMCFMs or make them invisible
+;MRC:<PUP.WORKING>PUPFTP.MAC.101, 20-Aug-82 21:38:14, Edit by CSD.KRONJ
+; Allow null username in LOGIN, clean up some FLDDBs
+;MRC:<PUP.WORKING>PUPFTP.MAC.97, 20-Aug-82 17:48:05, Edit by CSD.KRONJ
+; Don't type messages twice when debugging
+;MRC:<PUP.WORKING>PUPFTP.MAC.93, 20-Aug-82 16:39:28, Edit by CSD.KRONJ
+; Add QUIT subcommand for DIRECTORY command
+;MRC:<PUP.WORKING>PUPFTP.MAC.92, 20-Aug-82 16:31:01, Edit by CSD.KRONJ
+; SETCMD does all .CMINI
+;MRC:<PUP.WORKING>PUPFTP.MAC.91, 20-Aug-82 15:54:47, Edit by CSD.KRONJ
+; Fix DELETE to parse text instead of filename
+;MRC:<PUP.WORKING>PUPFTP.MAC.89, 20-Aug-82 15:17:07, Edit by CSD.KRONJ
+; Clean up GET command
+;MRC:<PUP.WORKING>PUPFTP.MAC.73, 20-Aug-82 01:15:40, Edit by CSD.KRONJ
+; GETPAS was zeroing wrong word if no password given
+;MRC:<PUP.WORKING>PUPFTP.MAC.71, 20-Aug-82 00:51:42, Edit by CSD.KRONJ
+; Clean up DIRECTORY command
+;MRC:<PUP.WORKING>PUPFTP.MAC.70, 20-Aug-82 00:29:21, Edit by CSD.KRONJ
+; Parse CONNECT directory as .CMTXT, not .CMFLD
+;MRC:<PUP.WORKING>PUPFTP.MAC.68, 19-Aug-82 23:56:15, Edit by CSD.KRONJ
+; Try using Server-Filename instead of Name-Body in SEND
+;MRC:<PUP.WORKING>PUPFTP.MAC.63, 19-Aug-82 17:52:59, Edit by CSD.KRONJ
+; Flush CHKPTY - no longer needed
+;MRC:<PUP.WORKING>PUPFTP.MAC.62, 19-Aug-82 16:01:21, Edit by CSD.KRONJ
+; Unconfirmed DELETE sends NO back to server
+;MRC:<PUP.WORKING>PUPFTP.MAC.59, 19-Aug-82 00:08:03, Edit by CSD.KRONJ
+; Better confirmation for DELETE
+;MRC:<PUP.WORKING>PUPFTP.MAC.55, 18-Aug-82 23:16:34, Edit by CSD.KRONJ
+; Only have one command block
+;MRC:<PUP.WORKING>PUPFTP.MAC.52, 18-Aug-82 22:06:07, Edit by CSD.KRONJ
+; Save stack pointer in subcommand parses
+;MRC:<PUP.WORKING>PUPFTP.MAC.51, 18-Aug-82 21:43:17, Edit by CSD.KRONJ
+; Try setting TT%ECO instead of TT%DAM in NOECHO and DOECHO
+;MRC:<PUP.WORKING>PUPFTP.MAC.41, 18-Aug-82 17:58:52, Edit by CSD.KRONJ
+; Parse password as CMTXT so ? doesn't display it
+;MRC:<PUP.WORKING>PUPFTP.MAC.37, 18-Aug-82 17:30:40, Edit by CSD.KRONJ
+; Parse passwords on separate lines, flush CM%WKF
+;MRC:<PUP.WORKING>PUPFTP.MAC.35, 17-Aug-82 17:38:05, Edit by CSD.KRONJ
+; Flush typeahead on parsing errors
+;MRC:<PUP.WORKING>PUPFTP.MAC.21, 12-Aug-82 03:05:41, Edit by ADMIN.LOUGHEED
+; Rewrite the SEND command to be more general - less TOPS-20 specific
+;MRC:<PUP.WORKING>PUPFTP.MAC.7, 11-Aug-82 02:47:16, Edit by ADMIN.LOUGHEED
+; Release all JFNS on a reparse
+; Replace CONFIRM macro with CONFRM subroutinea
+; Initialize flag settings to always confirm commands
+; Don't set password (not always a wopr) and don't set connected directory
+;MRC:<PUP.WORKING>PUPFTP.MAC.6, 11-Aug-82 02:19:18, Edit by ADMIN.LOUGHEED
+; CLRTMP, CPYATM routines.  Fix DISPLAY command.
+; Put quick and dirty confirmation routines in for SEND, RETR, DELETE
+;  (dirty because jfn's are left around)
+;MRC:<PUP.WORKING>PUPFTP.MAC.2, 11-Aug-82 01:33:02, Edit by ADMIN.LOUGHEED
+; LOGIN command - fix break mask to allow comma, e.g. LOT,KSL
+; PCRIF routine for pretty printing error messages
+;<PUP>PUPFTP.MAC.21, 10-Jul-82 00:11:22, Edit by R.RMK
+; Upgrade DISPLAY command.
+;<PUP>PUPFTP.MAC.20,  9-Jul-82 21:28:31, Edit by R.RMK
+; Generation cleanups for file transfers.
+;<PUP>PUPFTP.MAC.19,  9-Jul-82 17:42:57, Edit by R.RMK
+; Clean up some more.
+;<PUP>PUPFTP.MAC.18,  9-Jul-82 17:00:04, Edit by R.RMK
+; Clean up command syntax, rework most commands' file parsing.
+;<PUP>PUPFTP.MAC.17,  8-Jul-82 09:40:00, Edit by R.RMK
+;<PUP>PUPFTP.MAC.16,  7-Jul-82 13:42:49, Edit by R.RMK
+; Rework send/store command.
+;<PUP>PUPFTP.MAC.15,  6-Jul-82 16:35:04, Edit by R.RMK
+;<PUP>PUPFTP.MAC.14,  6-Jul-82 15:08:06, Edit by R.RMK
+; Rework retrieve command.  Store command is next.
+;<PUP>PUPFTP.MAC.13, 24-Jun-82 13:44:56, Edit by R.RMK
+; Make .COMND global.
+;<PUP>PUPFTP.MAC.12, 24-Jun-82 12:48:49, Edit by R.RMK
+; Clean up flag setting in LIST command.
+;<PUP>PUPFTP.MAC.11, 24-Jun-82 12:31:28, Edit by R.RMK
+; Use directory breakset at C.CONN.
+;<PUP>PUPFTP.MAC.10, 24-Jun-82 12:06:34, Edit by R.RMK
+; Get password on startup.
+;<PUP>PUPFTP.MAC.9, 24-Jun-82 10:06:11, Edit by R.RMK
+; Turn on echoing at REPARS.
+;<PUP>PUPFTP.MAC.8, 24-Jun-82 10:01:06, Edit by R.RMK
+; Fix brain damage with DSTJFN at C.RT61.
+;<PUP>PUPFTP.MAC.7, 17-May-82 13:16:22, Edit by R.RMK
+; Remove temporaries for debugging without net.
+;<PUP>PUPFTP.MAC.6,  6-May-82 16:22:40, Edit by R.RMK
+; Add first incarnation of DISPLAY command.
+;<PUP>PUPFTP.MAC.5,  3-May-82 09:49:29, Edit by R.RMK
+;<PUP>PUPFTP.MAC.4, 30-Apr-82 12:32:52, Edit by R.RMK
+; Clean up some bugs - .BYTE help wrong, add modified FLDDB. macros
+; to give better defaulting.
+;<PUP>PUPFTP.MAC.3, 21-Apr-82 15:02:42, Edit by R.RMK
+; More assembly errors.
+;<PUP>PUPFTP.MAC.2, 21-Apr-82 14:53:21, Edit by R.RMK
+; Clear out assembly errors.  Add code to clear PSECTS. Rip out code
+; that performed function that FTPLUD now does.
+;<PUP>PUPFTP.MAC.1, 20-Apr-82 14:12:22, Edit by R.RMK
+; TOPS-20 conversion.
+;<4.PUP.SUMEX.USER>PUPFTP.MAC.6, 26-Oct-81 06:41:30, Edit by WOHL
+; CS36 Use CHxPC,STACK etc from psvdef
+;<PUP>PUPFTP.MAC;13  		9/22/81		Edit by RINDFLEISCH
+; Set up PSSTR for use in PUPSUP
+;<PUP>PUPFTP.MAC;11  8-Sep-81 13:11:20, Edit by SCHOEN
+; LIST command now has OUTPUT (to file) subcommand,
+;  all output from LIST now buffered on a per-line basis
+; OPNCON checks net status (PUPON) before attempting connection
+;<PUP>PUPFTP.MAC;6	26-Jan-81 10:56:27	Edit by SCHOEN
+; On Tops20, don't clobber terminator to filename input after
+; call to GETJFN## in C.RET6.
+;<PUP>PUPFTP.MAC;6	21-Jan-81 12:28:50	Edit by SCHOEN
+; Modify C.CONN, C.DIRE, C.BYTE, C.EOL, C.TYPE so they can be 
+; called from PROCNO
+;<PUP>PUPFTP.MAC;6	20-Jan-81 20:19:20	Edit by SCHOEN
+; Make Tenex/Tops20 runtime selectable
+; Use routines from PFUDIR.MAC to read PUP network directory
+;  and create command table for OPEN command
+; Use newly defined attributes under OP-SYS to replace hardwired
+;  table of TWENEX hosts on the network
+; Use newly defined attributes under SERVICES to check for
+;  lineprinter on remote host (LPT/PRINT command)
+;<PUP>PUPFTP.MAC;5	24-Nov-80 13:39:34	Edit by SCHOEN
+; Implement PRINT (LPT) command
+;<PUP>PUPFTP.MAC;4	4-Sept-80 11:54:11	Edit by SCHOEN
+; Implement auto retrieve
+;<PUP>PUPFTP.MAC;3	3-Sept-80 8:50:13   Edit by SCHOEN
+; Implement lower fork runnable option of PUPFTP.  Start at 
+; EntVec+2, pass commands via shared page (SHRPAG)
+; only auto store implemented
+;<PUP>PUPFTP.MAC;2     3/21/80			EDIT BY RINDFLEISCH
+; Converted MAXC defaults to SUMEX
+;<PUP>PUPFTP.MAC;26     4-NOV-79 12:35:06    EDIT BY TAFT
+; Revise MAXTAB
+; Set file creation date from incoming property list during Retrieve
+;<PUP>PUPFTP.MAC;25     2-SEP-79 16:00:11    EDIT BY TAFT
+;<PUP>PUPFTP.MAC;24    28-AUG-77 17:39:38    EDIT BY TAFT
+; Fix "Rename" to send default directory in both property lists
+;<PUP>PUPFTP.MAC;23    24-JUL-77 16:52:33    EDIT BY TAFT
+; Repair buggy NOUT in List command
+;<PUP>PUPFTP.MAC;22     3-JUN-77 11:23:07    EDIT BY TAFT
+; Add "List" and "Rename" commands
+;<PUP>PUPFTP.MAC;19     2-JUN-77 19:16:37    EDIT BY TAFT
+; Split out some subroutines into separate module PFUUTL.MAC
+;<PUP>PUPFTP.MAC;18    12-APR-77 10:39:42    EDIT BY TAFT
+; Move VERTXT here
+; Add "Exec" and "Halt" commands
+;<PUP>PUPFTP.MAC;17     2-APR-77 16:49:49    EDIT BY TAFT
+; Add dummy routines for mail-related properties
+;<PUP>PUPFTP.MAC;16    19-MAR-77 20:04:57    EDIT BY TAFT
+; Add "Delete" command
+; Add "Preserve Version"
+; Add "No" prefix for "Debug" and "Preserve"
+; Straighten out who clobbers what property lists.
+;<PUP>PUPFTP.MAC;14    19-MAR-77 13:46:36    EDIT BY TAFT
+; Fix crash caused by typing in ";?"
+;<PUP>PUPFTP.MAC;13    18-MAR-77 18:09:13    EDIT BY TAFT
+; Add REFILL procedure for property list parser
+;<PUP>PUPFTP.MAC;12    18-MAR-77 17:18:12    EDIT BY TAFT
+; Just send EOC when SCNPRP fails since SCNPRP now generates the
+; appropriate "No" response internally.
+;<PUP>PUPFTP.MAC;11    15-MAR-77 19:25:28    EDIT BY TAFT
+; Change "Selective" to "Automatic", add "List" and "Version".
+; "Quit" now closes connection.
+; Call "Login" command automatically in appropriate places.
+; Default user name in "Login".
+; Add Tenex-paged type
+; Add kludge to make Tenex-paged the default when connect to Maxc
+;<PUP>PUPFTP.MAC;8    10-MAR-77 14:37:48    EDIT BY TAFT
+; Break out major pieces of the program:
+; PUPDEF.MAC -- definitions shared by PUPFTP and PUPSRV
+; PFUDEF.MAC -- definitions specific to PUPFTP
+; PFUCMD.MAC -- keyboard command interpreter
+; PFUPRP.MAC -- property list parser
+; PUPXFR.MAC -- data transfer routines, shared with PUPSRV
+; PUPUUO.MAC -- UUO handler, shared with PUPSRV
+; What remain are the top-level command handlers and various
+; subroutines.
+;<PUP>PUPFTP.MAC;5     8-APR-76 01:53:54    EDIT BY TAFT
+; Make "Debug" toggle the debug flag on and off
+; Add command for setting eol convention
+; Add common procedure GNTPAR for generating type, byte size, eol
+; convention properties
+;<PUP>PUPFTP.MAC;3    25-MAR-76 22:38:34    EDIT BY TAFT
+; Add "Close" command (equivalent to "Disconnect")
+;<PUP>PUPFTP.MAC;2    25-MAR-76 00:56:33    EDIT BY TAFT
+; Send Type and Byte-Size in "Retrieve" property list if we have them
+; Properly handle error returns from INKEY
+
+;<PUP.FTP>PUPDEF.MAC.48, 26-Sep-83 11:24:20, Edit by KRONJ
+; Confirmation for UPDATE and INSTALL
+;<PUP.FTP>PUPDEF.MAC.47, 25-Aug-83 14:38:22, Edit by KRONJ
+; Flag cataclysm
+;<PUP.FTP>PUPDEF.MAC.46, 12-Aug-83 09:35:08, Edit by KRONJ
+; Add MEIS-Paged transfer type
+;<PUP.FTP>PUPDEF.MAC.45, 22-Jul-83 17:01:28, Edit by KRONJ
+; Add FQUITF
+;<PUP.FTP>PUPDEF.MAC.44, 23-Jun-83 17:38:09, Edit by KRONJ
+; File-Author property for sending to lineprinter (from LOTS)
+;<PUP.FTP>PUPDEF.MAC.43, 22-Jun-83 22:37:24, Edit by KRONJ
+; LOGCKF and friends must be permanent flags
+;<PUP.FTP>PUPDEF.MAC.42, 10-Jun-83 18:35:59, Edit by LOUGHEED
+; Support up to five Event Report servers
+;<PUP.FTP>PUPDEF.MAC.41, 10-Jun-83 18:03:29, Edit by LOUGHEED
+;<PUP.FTP>PUPDEF.MAC.40, 10-Jun-83 17:46:15, Edit by LOUGHEED
+; Define all flag bits for AC F in this module
+;<PUP.FTP>PUPDEF.MAC.39, 18-Apr-83 12:33:00, Edit by KRONJ
+; Make SENDER property longer
+;<PUP.FTP>PUPDEF.MAC.37,  3-Apr-83 13:15:32, Edit by KRONJ
+; Define SETVER
+;<PUP.FTP>PUPDEF.MAC.36,  3-Apr-83 01:58:12, Edit by KRONJ
+; Flush some unused symbols
+;<PUP.FTP>PUPDEF.MAC.35,  3-Apr-83 01:34:36, Edit by KRONJ
+; No longer need SEARCH PSVDEF in TTITLE
+;<PUP.FTP>PUPDEF.MAC.34,  3-Apr-83 01:21:32, Edit by KRONJ
+; MAKPTR is now MKPTR
+; Rework ACs
+; Merge module PSVDEF.  Merged edit history:
+    ;BX:<PUP>PSVDEF.MAC.15, 31-Dec-82 13:44:54, Edit by K.KRONJ
+    ; Give mail server it's own start address
+    ;BX:<PUP>PSVDEF.MAC.14, 28-Dec-82 16:19:52, Edit by K.KRONJ
+    ; Flush some useless stuff
+    ;BX:<PUP>PSVDEF.MAC.13, 14-Dec-82 14:28:52, Edit by K.KRONJ
+    ; Turn off misc services
+    ;<PUP>PSVDEF.MAC.12, 13-Dec-82 21:33:03, Edit by B.BOMBADIL
+    ; Turn off Gateway-Info socket
+    ;<PUP>PSVDEF.MAC.11, 26-Nov-82 23:29:46, Edit by B.BOMBADIL
+    ; Turn off Telnet and Echo sockets now that NETSRV works at LOTS
+    ;<PUP>PSVDEF.MAC.10, 23-Sep-82 18:58:21, Edit by B.BOMBADIL
+    ; Turn on Telnet and Echo sockets
+    ;<PUP>PSVDEF.MAC.9,  7-Aug-82 12:09:25, Edit by ADMIN.LOUGHEED
+    ; Slow down gateway information server
+    ;<PUP>PSVDEF.MAC.8,  3-Aug-82 19:26:57, Edit by ADMIN.LOUGHEED
+    ; Comment out Echo server
+    ;<PUP>PSVDEF.MAC.7, 26-Jul-82 01:39:11, Edit by ADMIN.MRC
+    ; Comment out Telnet server
+    ;<PUP>PSVDEF.MAC.6, 15-Apr-82 22:38:22, Edit by B.BOMBADIL
+    ;<PUP>PSVDEF.MAC.5, 15-Apr-82 20:46:24, Edit by B.BOMBADIL
+    ; Move storage declarations into PUPSRV
+    ; Flush many, many unnecessary definitions
+    ;ACCT:<PUP.USER-WORKING>NSVDEF.MAC.3,  1-Apr-82 11:23:26, Edit by R.RMK
+    ; Make PBHEAD a global.
+    ;ACCT:<PUP.USER-WORKING>NSVDEF.MAC.2, 31-Mar-82 11:41:04, Edit by R.RMK
+    ; Make NSVDEF.
+    ;ACCT:<PUP.USER-WORKING>PSVDEF.MAC.4, 31-Mar-82 08:29:20, Edit by R.RMK
+    ; Add STANSW for symbols defined in PUPSYM.
+    ;ACCT:<PUP.USER-WORKING>PSVDEF.MAC.3, 30-Mar-82 12:23:55, Edit by R.RMK
+    ; Up NNETS to 64.
+    ;ACCT:<PUP.USER-WORKING>PSVDEF.MAC.2, 25-Mar-82 19:55:22, Edit by R.RMK
+    ; Make TOPVAR, etc...internal...
+    ;<PUP>PSVDEF.MAC;9     22-Jul-80 14:58:07 Edit by SCHOEN
+    ; Added ESP declarations
+    ;<ANONYMOUS>LOST.THE;HEADER
+    ; Upped NNETS from ^D50 to ^D60
+    ;<PUP>PSVDEF.MAC;8     4-NOV-79 12:44:35    EDIT BY TAFT
+    ; Revise MAXHOP
+    ;<PUP>PSVDEF.MAC;7     2-SEP-79 15:58:31    EDIT BY TAFT
+    ;<PUP>PSVDEF.MAC;6    24-NOV-78 19:10:23    EDIT BY TAFT
+    ; Increase LOGBFS to 2 pages
+    ;<PUP>PSVDEF.MAC;5    15-APR-77 09:49:19    EDIT BY TAFT
+    ; Move flag bits to avoid conflict with PUPDEF.MAC
+    ;<PUP>PSVDEF.MAC;4    31-MAR-77 20:18:43    EDIT BY TAFT
+    ; Add mail server to table
+    ;<PUP>PSVDEF.MAC;3    18-MAR-77 19:02:06    EDIT BY TAFT
+    ; Raise start of global storage
+    ;<PUP>PSVDEF.MAC;2    18-MAR-77 17:47:28    EDIT BY TAFT
+    ; Make symbols defined by the local GS, LS, etc. macros be internal
+    ;<PUP>PSVDEF.MAC;1    10-MAR-77 14:02:43    EDIT BY TAFT
+    ; Split out from PUPDEF.MAC
+    ; This is stuff specific to the server (PUPSRV)
+;<PUP>PUPDEF.MAC.32, 24-Feb-83 15:35:38, Edit by KRONJ
+; User-Access, Previous-Write-Date
+;<PUP>PUPDEF.MAC.29, 21-Feb-83 13:57:22, Edit by KRONJ
+; Owner-Access, Group-Access, Public-Access, Original-Author props
+; MAKPTR, UPCASE macros
+; TT.FOO definitions for transfer type numbers
+;BX:<PUP>PUPDEF.MAC.28, 28-Dec-82 16:24:44, Edit by K.KRONJ
+; Flush some useless cruft
+;BX:<PUP>PUPDEF.MAC.27,  6-Dec-82 17:52:03, Edit by K.KRONJ
+; ^V doesn't work, use backslash
+;BX:<PUP>PUPDEF.MAC.26,  6-Dec-82 17:26:11, Edit by K.KRONJ
+; Use ^V instead of / to delimit FATAL and JFATAL strings
+;<PUP>PUPDEF.MAC.25, 10-Jul-82 23:10:39, Edit by B.BOMBADIL
+; Look in PUPPAR instead of PUPSYM for pup header definitions
+;<PUP>PUPDEF.MAC.24, 20-Apr-82 13:28:49, Edit by R.RMK
+; Flush NOISE, PROMPT UUOs and macros.
+;<PUP>PUPDEF.MAC.22, 19-Apr-82 02:40:45, Edit by B.BOMBADIL
+;<PUP>PUPDEF.MAC.18, 19-Apr-82 02:07:16, Edit by B.BOMBADIL
+;PCLEAR macro
+;<PUP>PUPDEF.MAC.16, 19-Apr-82 01:11:52, Edit by B.BOMBADIL
+;Define FATAL, JFATAL macros
+;<PUP>PUPDEF.MAC.14, 19-Apr-82 00:32:16, Edit by B.BOMBADIL
+;<PUP>PUPDEF.MAC.11, 16-Apr-82 03:07:05, Edit by B.BOMBADIL
+;Define TTITLE macro
+;<PUP>PUPDEF.MAC.10, 16-Apr-82 01:50:02, Edit by B.BOMBADIL
+;<PUP>PUPDEF.MAC.9, 16-Apr-82 01:41:40, Edit by B.BOMBADIL
+;<PUP>PUPDEF.MAC.8, 15-Apr-82 23:42:15, Edit by B.BOMBADIL
+;<PUP>PUPDEF.MAC.7, 15-Apr-82 23:34:01, Edit by B.BOMBADIL
+;<PUP>PUPDEF.MAC.6, 15-Apr-82 23:19:41, Edit by B.BOMBADIL
+;<PUP>PUPDEF.MAC.5, 15-Apr-82 22:56:30, Edit by B.BOMBADIL
+;<PUP>PUPDEF.MAC.4, 15-Apr-82 22:38:43, Edit by B.BOMBADIL
+;<PUP>PUPDEF.MAC.3, 15-Apr-82 20:27:35, Edit by B.BOMBADIL
+;Use psects
+;Flush previous edit history
+;ACCT:<PUP.USER-WORKING>NUPDEF.MAC.2, 31-Mar-82 11:40:35, Edit by R.RMK
+; Make universal NUPDEF.
+;ACCT:<PUP.USER-WORKING>PUPDEF.MAC.2, 29-Mar-82 10:41:23, Edit by R.RMK
+; Search SYSDEF always.
+;<PUP>PUPDEF.MAC;8	3/1/81			Edit by RINDFLEISCH
+; Added SAVE/RSTR macros for PUSH/POP and CALL/RET for PUSHJ/POPJ
+;<PUP>PUPDEF.MAC;7	20-Aug-80 13:12:12  Edit by SCHOEN
+; Added RUNM UUO for lower-fork runnable PUPFTP
+;<PUP>PUPDEF.MAC;6	11-Jul-80 13:06:53  Edit by SCHOEN
+; Added SHXINT, SHXFLG defns for user "!" typeout when not debugging
+;<PUP>SYSDEF.MAC;5	4/23/80		Edit by SCHOEN
+; SEARCH SYSDEF so calls to VACCT and GDACC simulations don't fail
+; on Tops20
+;<SCHOEN>PUPDEF.MAC;4    4/3/80			EDIT BY RINDFLEISCH
+; Added macros to simulate VACCT and GDACC JSYSs
+;<PUP>PUPDEF.MAC;3    25-Mar-80 12:45:08    EDIT BY SCHOEN
+; Changed (no)tenex/tops20 opdefs to macro so they work
+;<PUP>PUPDEF.MAC;2    21-Mar-80 12:45:08    EDIT BY SCHOEN
+; Define (no)tenex/tops20 macros for conditional assembly
+;<PUP>PUPDEF.MAC;30     2-SEP-79 15:58:49    EDIT BY TAFT
+;<PUP>PUPDEF.MAC;29    11-APR-79 17:31:43    EDIT BY TAFT
+; Put Sender property in its right alphabetical sequence, dummy
+;<PUP>PUPDEF.MAC;28    18-MAR-79 19:18:28    EDIT BY TAFT
+; Put back Sender property
+;<PUP>PUPDEF.MAC;27    24-MAY-78 18:12:41    EDIT BY TAFT
+; Add New-Store mark
+;<PUP>PUPDEF.MAC;26    15-SEP-77 11:19:01    EDIT BY TAFT
+; Fix [Mailbox-exception] command to take sub-codes
+;<PUP>PUPDEF.MAC;25     1-SEP-77 15:52:10    EDIT BY TAFT
+; Revise property and mark tables for updated Mail Transfer Protocol
+;<PUP>PUPDEF.MAC;24     3-JUN-77 11:04:13    EDIT BY TAFT
+; Remove "Sender" and "Distribution" properties
+;<PUP>PUPDEF.MAC;23     2-JUN-77 21:33:43    EDIT BY TAFT
+; Add "Size" and "Author" properties
+; Add "Rename" command mark
+;<PUP>PUPDEF.MAC;22    15-APR-77 10:03:57    EDIT BY TAFT
+; Add SERVF
+;<PUP>PUPDEF.MAC;21    31-MAR-77 20:16:42    EDIT BY TAFT
+; Add marks and properties for Mail Transfer Protocol
+;<PUP>PUPDEF.MAC;20    19-MAR-77 20:24:21    EDIT BY TAFT
+; Add "delete" mark type
+; Add date properties
+;<PUP>PUPDEF.MAC;18    18-MAR-77 17:05:38    EDIT BY TAFT
+; Move mark and property definitions here from PFUDEF.MAC.
+; Add some common flag bits.
+;<PUP>PUPDEF.MAC;16    10-MAR-77 14:24:40    EDIT BY TAFT
+; Divide into two definitions files:
+; PUPDEF.MAC contains definitions common to PUPSRV and PUPFTP
+; PSVDEF.MAC contains stuff specific to PUPSRV
+;<PUP>PUPDEF.MAC;14    20-OCT-76 13:27:17    EDIT BY TAFT
+; Add defs for net directory server
+;<PUP>PUPDEF.MAC;13     2-OCT-76 23:16:30    EDIT BY TAFT
+; Add defs for gateway info server
+;<PUP>PUPDEF.MAC;11    30-JUN-76 18:04:45    EDIT BY TAFT
+; Revise storage assignment macros
+; Add defs for event report server
+
+;<PUP.FTP>PUPERS.MAC.13, 10-Jun-83 18:41:46, Edit by LOUGHEED
+;<PUP.FTP>PUPERS.MAC.12, 10-Jun-83 18:31:38, Edit by LOUGHEED
+; Set ERPTIM to +INF if no command file (i.e. not using event report server)
+;SS:<PUP.FTP>PUPERS.MAC.11,  12-Apr-82 14:35:05, TV'd by SWEER
+; Moved LOGLAT definition from PSVDEF
+;BX:<PUP>PUPERS.MAC.10,  6-Dec-82 17:02:05, Edit by K.KRONJ
+; Convert SCREWUP to JFATAL
+;<PUP>PUPERS.MAC.9,  7-Aug-82 12:17:00, Edit by ADMIN.LOUGHEED
+; No complaints if PUPSRV.RUN isn't found - we never use it 
+;<PUP>PUPERS.MAC.8, 18-Apr-82 19:08:33, Edit by B.BOMBADIL
+;<PUP>PUPERS.MAC.7, 16-Apr-82 09:44:02, Edit by R.RMK
+; Still more Slops-20 stuff.
+;<PUP>PUPERS.MAC.6, 16-Apr-82 03:17:26, Edit by B.BOMBADIL
+;<PUP>PUPERS.MAC.5, 15-Apr-82 21:49:09, Edit by B.BOMBADIL
+;TOPS-20 stuff
+;ERPSRV is definitely wrong
+;ACCT:<PUP.USER-WORKING>NUPERS.MAC.4, 31-Mar-82 12:18:28, Edit by R.RMK
+;ACCT:<PUP.USER-WORKING>NUPERS.MAC.3, 31-Mar-82 12:11:33, Edit by R.RMK
+; Convert to Stanford MEIS PUP headers (in STANSW).
+;ACCT:<PUP.USER-WORKING>NUPERS.MAC.2, 31-Mar-82 11:42:39, Edit by R.RMK
+; Search NUPDEF, NSVDEF.
+;<4.PUP.SUMEX.USER>PUPERS.MAC.2,  8-Oct-81 08:33:03, Edit by WOHL
+;CS36 Look for PUPSRV.RUN on SYSTEM:
+;<PUP>PUPERS.MAC;13	31-Jul-81 16:39:50	Edit by SCHOEN
+; Open event report file thawed
+;<PUP>PUPERS.MAC;12	23-APR-80	Edit by Schoen
+; Added Tenex/tops20 assembly conditionals
+;<PUP>PUPERS.MAC;11     2-SEP-79 15:59:54    EDIT BY TAFT
+;<PUP>PUPERS.MAC;10    18-MAR-77 17:09:08    EDIT BY TAFT
+; SEARCH PSVDEF
+;<PUP>PUPERS.MAC;9    14-AUG-76 18:31:50    EDIT BY TAFT
+; Fix bug in DMPEVB
+
+;<PUP.FTP>PUPFSV.MAC.77,  9-Oct-83 01:02:22, Edit by LOUGHEED
+; Force output buffers before starting to send or receive.  Speeds
+;  up switching between data modes.
+;<PUP.FTP>PUPFSV.MAC.76,  9-Sep-83 17:30:16, Edit by KRONJ
+; Cut timeout in CHKRFC
+;<PUP.FTP>PUPFSV.MAC.75,  9-Sep-83 14:03:58, Edit by KRONJ
+; Fix CHKRFC to set correct time for duplicate RFC
+;<PUP.FTP>PUPFSV.MAC.74,  8-Sep-83 21:30:01, Edit by KRONJ
+; Use anonymous login if none given
+;<PUP.FTP>PUPFSV.MAC.73, 25-Aug-83 14:42:15, Edit by KRONJ
+; Flag cataclysm
+;<PUP.FTP>PUPFSV.MAC.71, 16-Aug-83 10:37:53, Edit by KRONJ
+; Complain if PUPXFR doesn't like MEIS-Paged transfer type
+; Bump minor version
+;<PUP.FTP>PUPFSV.MAC.70, 12-Aug-83 23:00:38, Edit by KRONJ
+; Replace a BOUT% with an IDPB
+;<PUP.FTP>PUPFSV.MAC.69, 12-Aug-83 10:04:32, Edit by KRONJ
+; MEIS-Paged transfer type
+;<PUP.FTP>PUPFSV.MAC.68,  8-Aug-83 10:23:57, Edit by KRONJ
+; Make directory list remaining files even if first is protected
+;<PUP.FTP>PUPFSV.MAC.67,  3-Aug-83 10:32:15, Edit by KRONJ
+;<PUP.FTP>PUPFSV.MAC.66,  3-Aug-83 09:55:24, Edit by KRONJ
+; Use device part of supplied directory if no device specified
+;<PUP.FTP>PUPFSV.MAC.65, 28-Jul-83 22:46:36, Edit by KRONJ
+; If we say file open, ready for data in Store and
+; then user says no, must send no back (was just sending EOC)
+;<PUP.FTP>PUPFSV.MAC.64,  5-Jul-83 16:44:41, Edit by KRONJ
+; Don't flush ^V from Server-Filenames
+;<PUP.FTP>PUPFSV.MAC.63, 26-Jun-83 17:49:44, Edit by LOUGHEED
+;<PUP.FTP>PUPFSV.MAC.62, 26-Jun-83 17:39:14, Edit by LOUGHEED
+; High Volume flag set by SDSTS% for all FTP connections
+;<PUP.FTP>PUPFSV.MAC.61, 23-Jun-83 17:49:36, Edit by KRONJ
+; File-Author (set by PUPFTP for lineprinter sends)
+; Use TMPPRP instead of FILPRP in SETAUT
+;<PUP.FTP>PUPFSV.MAC.60, 10-Jun-83 18:24:52, Edit by LOUGHEED
+; Changes from SUMEX
+;   Support Error Report Server
+;   Don't clutter CTY with random error messages unless debugging
+;<PUP.FTP>PUPFSV.MAC.59, 10-Jun-83 17:41:42, Edit by LOUGHEED
+; We had a flag definition mixup
+;   Move AC F's flag definitions to PUPDEF to keep definitions consistent
+;   Replace remaining TLxx and TRxx references with TXxx references
+;<PUP.FTP>PUPFSV.MAC.58, 10-May-83 20:14:31, Edit by KRONJ
+; Flush some unused code
+;<PUP.FTP>PUPFSV.MAC.57, 27-Apr-83 20:01:22, Edit by KRONJ
+; Flush XMAILR support - no longer used at Stanford
+; Use IPCF wakeup of MMAILR for faster delivery
+;<PUP.FTP>PUPFSV.MAC.56, 20-Apr-83 14:59:11, Edit by KRONJ
+; Rewrite "Failed to open" error to not use percent sign
+;<PUP.FTP>PUPFSV.MAC.55, 18-Apr-83 20:20:25, Edit by KRONJ
+; Wrong parity test for mailbox exception
+; If no domain routing sender's user name was being truncated
+; Some other minor cleanups
+;<PUP.FTP>PUPFSV.MAC.54, 18-Apr-83 12:36:56, Edit by KRONJ
+; Make SENDER property longer
+; Flush out a lot of code used by old Tenex mail queuing
+; No longer use HOSTS2 - let MMAILR worry about hosts
+; Allow domain routing (@FOO:USER@BAR) in sender
+; Put XMAILR code in XMAISW condition for easy removal
+;<PUP.FTP>PUPFSV.MAC.53, 17-Apr-83 16:08:30, Edit by KRONJ
+; Allow access to subdirectory of login directory
+; Flush several useless routines left over from PUPSRV
+;<PUP.FTP>PUPFSV.MAC.52, 11-Apr-83 16:43:31, Edit by KRONJ
+; Improve byte-size mismatch check at RTYBIN
+; Allow SCNPRP to return -1 in P.TYPE if unrecognized
+;<PUP.FTP>PUPFSV.MAC.51,  3-Apr-83 15:56:09, Edit by KRONJ
+; Ignore ".ARPA" at the ends of domain names
+;<PUP.FTP>PUPFSV.MAC.50,  3-Apr-83 15:04:34, Edit by KRONJ
+; Move STRCMP into PUPPRP, KILFIL into PUPXFR
+; Flush a lot of unused HOSTS2 routines
+;<PUP.FTP>PUPFSV.MAC.49,  3-Apr-83 13:16:26, Edit by KRONJ
+; Use new SETVER macro in PUPDEF
+;<PUP.FTP>PUPFSV.MAC.48,  3-Apr-83 01:29:10, Edit by KRONJ
+; CX is now CNX
+;<PUP.FTP>PUPFSV.MAC.47,  2-Apr-83 14:53:58, Edit by KRONJ
+; Fix C.RMAI by writing small local xfer routines
+;<PUP.FTP>PUPFSV.MAC.46,  1-Apr-83 15:56:51, Edit by KRONJ
+; Disable C.RMAI -- used old crufty XFR conventions
+; Someday soon this should be re-written
+;<PUP.FTP>PUPFSV.MAC.44, 31-Mar-83 12:13:27, Edit by KRONJ
+; Use .SFUST routine to preserve lower case
+;<PUP.FTP>PUPFSV.MAC.43, 30-Mar-83 17:57:25, Edit by KRONJ
+; Gotta have a dest JFN to write the header to
+;<PUP.FTP>PUPFSV.MAC.42, 30-Mar-83 17:49:58, Edit by KRONJ
+; Write Received: header instead of Mail-from:
+;<PUP.FTP>PUPFSV.MAC.41, 23-Mar-83 17:43:35, Edit by KRONJ
+; Handle quota exceeded given to us by PUPXFR
+;<PUP.FTP>PUPFSV.MAC.40, 21-Mar-83 14:20:24, Edit by KRONJ
+; Abort killed file rather than deleting
+;<PUP>PUPFSV.MAC.39, 15-Mar-83 17:02:52, Edit by KRONJ
+; Byte pointer with ac index was losing in FIXNAM
+;<PUP>PUPFSV.MAC.38, 10-Mar-83 15:16:40, Edit by KRONJ
+; MLRTYP and MLQNAM are globals
+; Run CHEKMM before making temporary filename
+;<PUP>PUPFSV.MAC.37, 26-Feb-83 13:45:19, Edit by KRONJ
+; It's MAILER.FLAGS not MMAILR.FLAGS
+;<PUP>PUPFSV.MAC.35, 25-Feb-83 13:40:11, Edit by KRONJ
+; If XMailr then never try to use MAILQ: to queue
+;<PUP>PUPFSV.MAC.34, 24-Feb-83 19:34:36, Edit by MRC
+; Rewrite MMailr/XMailr testing code
+;<PUP>PUPFSV.MAC.33, 24-Feb-83 18:00:46, Edit by KRONJ
+; Save register in CHEKMM
+;<PUP>PUPFSV.MAC.32, 24-Feb-83 17:13:52, Edit by KRONJ
+; Don't OPENF stored file until after OKed by user
+; (yes, I know the OPEN could fail and the user should
+;  have known about it earlier, but more often the user
+;  says no to an existing file but  having been opened
+;  for write the file contents are now permanently gone)
+;<PUP>PUPFSV.MAC.31, 24-Feb-83 16:26:38, Edit by KRONJ
+;<PUP>PUPFSV.MAC.30, 24-Feb-83 16:21:47, Edit by KRONJ
+;<PUP>PUPFSV.MAC.29, 24-Feb-83 16:11:14, Edit by KRONJ
+; Opposite parity test for New-Store -- oops
+;<PUP>PUPFSV.MAC.27, 24-Feb-83 15:55:58, Edit by KRONJ
+; Previous-Write-Date in New-Store for PUPFTP INSTALL command
+;<PUP>PUPFSV.MAC.26, 24-Feb-83 15:33:40, Edit by KRONJ
+; Support MMAILR
+;<PUP>PUPFSV.MAC.25, 22-Feb-83 15:10:27, Edit by KRONJ
+; Fix protection default - was screwing GTJFN and
+; causing "Illegal Filename" errors if no prot given
+; bump version, date in VERTXT
+;<PUP>PUPFSV.MAC.22, 21-Feb-83 23:36:47, Edit by KRONJ
+; Use author, protection, date fields for new files
+; if supplied in property list.
+;<PUP>PUPFSV.MAC.19, 21-Feb-83 23:00:42, Edit by KRONJ
+; RETRIEVE sends more properties back
+; Say (Type Directory) in DIR for directory files
+;<PUP>PUPFSV.MAC.17, 21-Feb-83 14:32:52, Edit by KRONJ
+; Move GENAUT into PUPPRP, also generate file protection
+; (soon use these if they are given)
+;<PUP>PUPFSV.MAC.16,  6-Feb-83 19:54:43, Edit by KRONJ
+; Type warning message on console if run in job 0
+;BX:<PUP>PUPFSV.MAC.14,  4-Feb-83 22:30:23, Edit by K.KRONJ
+; Don't send obnoxious comment when retrieving 36-bit binary
+;   and file is some other size (requested by people at SAIL)
+;BX:<PUP>PUPFSV.MAC.13,  4-Feb-83 16:14:25, Edit by K.KRONJ
+; Allow ANONYMOUS login with any password if <ANONYMOUS> exists
+; Make sure any other directory is not Frozen or Root-Dir-Subdir
+; Send back End-Of-Line-Convention if not CR
+; Don't try getting EXE files in thawed mode
+; Ignore directories and nonexistent files (but send Comment)
+;BX:<PUP>PUPFSV.MAC.12, 10-Jan-83 20:49:33, Edit by K.KRONJ
+; Don't complain when user RESETs his PUPFTP
+; Save A in CHKGRP so CONNECT password works
+;BX:<PUP>PUPFSV.MAC.11,  7-Jan-83 02:16:48, Edit by B.BOMBADIL
+; Change PUPNM% to PUPNM in schema strings
+;BX:<PUP>PUPFSV.MAC.10, 31-Dec-82 13:48:56, Edit by K.KRONJ
+; Disallow Mail from standalone system
+;BX:<PUP>PUPFSV.MAC.9, 28-Dec-82 16:34:35, Edit by K.KRONJ
+; No longer need RNSTAT, RNERR
+;BX:<PUP>PUPFSV.MAC.7, 26-Dec-82 20:07:08, Edit by K.KRONJ
+; Add CHKRFC to catch and ignore duplicate requests
+;BX:<PUP>PUPFSV.MAC.5, 21-Dec-82 00:28:05, Edit by K.KRONJ
+; Normal time stamp for console messages
+;BX:<PUP>PUPFSV.MAC.4, 21-Dec-82 00:04:30, Edit by K.KRONJ
+; Flush logging code
+;BX:<PUP>PUPFSV.MAC.3, 20-Dec-82 21:23:10, Edit by K.KRONJ
+; Different active channels between controller and FTP forks
+;BX:<PUP>PUPFSV.MAC.2, 18-Dec-82 22:39:29, Edit by K.KRONJ
+; Merge in PUPFTS, PUPMLS, PUPHST
+; Flush error-report code (PUPERS)
+; Flush SUMEX spooling code (PUPSPL)
+;BX:<PUP>PUPFSV.MAC.2, 18-Dec-82 00:44:07, Edit by K.KRONJ
+; Dike out all non-FTP/Mail code
+
+...large gap in here.  also see PUPSSV, PUPMSV, PUPESV, PUPGSV...
+
+;<4.PUP.SUMEX.USER>PUPSRV.MAC.3, 13-Oct-81 09:15:15, Edit by WOHL
+;CS36 Set name on startup
+;<PUP>PUPSRV.MAC.25 25-Sep-81 12:33:21, Edit by SCHOEN
+;<PUP>PUPSRV.MAC;24 		9/20/81		Edit by RINDFLEISCH
+; Added code to queue mail in MAIL:
+;<PUP>PUPSRV.MAC;22 30-Jun-81 21:47:00, Edit by SCHOEN
+; Add Address Lookup to miscellaneous server
+;<PUP>PUPSRV.MAC.21	28-Mar-81 22:24:03	Edit by SCHOEN
+; Add boot server
+; Add boot directory reply
+; Fix MAIL CHECK on Tops20 AND Tenex
+;<PUP>PUPSRV.MAC.20	3/1/81			Edit by RINDFLEISCH
+; Removed ARPANET code
+; Added code to process HOSTSL.BIN network/host/address file
+;<PUP>PUPSRV.MAC.19	1/5/81			Edit by RINDFLEISCH
+; Added storage for local host number
+; Added IFT20 and IFARPN runtime variables to test where we are
+; [SMX #1] Record ARPANET host information if appropriate
+; [SMX #1] Incorporate Eric Schoen's spooler check
+;<PUP>PUPSRV.MAC.18     1-Aug-80 09:25:46    TECO'd by GILMURRAY
+; Must quote !, #, and + (via ^V) for 2020 GTJFN
+;<PUP>PUPSRV.MAC.17  19-Jul-80 15:04:30, Edit by SCHOEN
+; Made ^F output via ELOG, so LOGTTY always gets output
+;<PUP>PUPSRV.MAC.16,  9-Jul-80 15:46:55, Edit by SCHOEN
+;<PUP>PUPSRV.MAC.13,  9-Jul-80 14:52:50, Edit by SCHOEN
+; Removed Tenex conditional around check for detached job
+; Tops20 will now run as normal in PTY/detached mode
+;<PUP>PUPSRV.MAC.12,  8-Jul-80 09:53:04, Edit by GILMURRAY
+; DEBUGF only if controlled by job 0.
+;<PUP>PUPSRV.MAC.11     3-Jul-80 15:15:54    TECO'd by GILMURRAY
+; If not detached (Tenex) or not on PTY (Tops20), set DEBUGF
+; If DEBUGF set then also set PUPBGF (log Pup bugs)
+; Always run enabled on Tenex and Tops20 (even if DEBUGF set)
+;<PUP>PUPSRV.MAC.10    24-Jun-80 09:50:55    TECO'd by GILMURRAY
+; Use ^F instead of ^S for statistics because ^S
+; gets in the way of flow control
+;<PUP>PUPSRV.MAC.9, 19-Jun-80 08:48:53, Edit by SCHOEN
+; Another BBN Tops20 bug.  HRRI A,JOBTTY  -> HRR A,JOBTTY
+;<PUP>PUPSRV.MAC.9 17-Jun-80 14:34:06, Edit by SCHOEN
+;CAMN D,P1 at WHRUS1+4 should have been CAME...
+;<PUP>PUPSRV.MAC.8 16-Jun-80 12:30:59, Edit by SCHOEN
+;tops20: do SMON to open PUP network entry flag after PUPSRV initialized
+;tops20: if not detached, set PUPBGF to log PUPBUGs
+;<PUP>PUPSRV.MAC.7, 12-Jun-80 17:07:55, Edit by SCHOEN
+;Fixed CALL to .CFGRP on 16.70
+;<PUP>PUPSRV.MAC.4, 10-Jun-80 13:10:18, Edit by SCHOEN
+;<PUP>PUPSRV.MAC;4	4/4/80		EDIT BY SCHOEN
+; (Tops20) Give lower forks wheel capabililty.
+; 	   Remove NVTPUP, JOBDIR, change TMON to look at .SFPNV (bit 35)
+; PUPFTS on Tops20 needs wheel capability to do GTDIRs for password.
+;<PUP>PUPSRV.MAC;3	3/26/80		EDIT BY SCHOEN
+; Install Tops20/Tenex assembly conditionals 
+; Add call to search sysdef to find out what system we're on
+; gives tops20, tenex, notops20, notenex conditionals
+;<PUP>PUPSRV.MAC;2	3/21/80		EDIT BY RINDFLEISCH
+; Changed MAXC defaults to SUMEX
+; Added code to set primary i/o to 377777,,400000 if started detached
+;<PUP>PUPSRV.MAC;51     2-SEP-79 16:01:20    EDIT BY TAFT
+;<PUP>PUPSRV.MAC;50    18-MAR-79 19:20:42    EDIT BY TAFT
+; Add call to mail server initialization
+;<PUP>PUPSRV.MAC;49    24-NOV-78 19:09:08    EDIT BY TAFT
+; Fix log code so that only the top fork tries to write on the log file
+;<PUP>PUPSRV.MAC;48    23-NOV-78 19:24:37    EDIT BY TAFT
+;<PUP>PUPSRV.MAC;47    21-NOV-78 18:36:57    EDIT BY TAFT
+; Fix race between fork creation and fork termination interrupt.
+; Add code to record loss of log entries.
+;<PUP>PUPSRV.MAC;45    26-OCT-78 21:50:20    EDIT BY TAFT
+; Log server creation before starting fork -- else scramble log entries
+; Log duplicate RFCs only if debugging
+;<PUP>PUPSRV.MAC;43    16-MAY-78 14:07:03    EDIT BY TAFT
+; Change Laurel MailCheck to require non-empty as well as undeleted mailbox
+;<PUP>PUPSRV.MAC;42    28-APR-78 11:16:38    EDIT BY TAFT
+; Add Laurel variant of Mail Check request
+;<PUP>PUPSRV.MAC;41    24-APR-78 19:37:28    EDIT BY TAFT
+; Remove server for old Alto time standard
+;<PUP>PUPSRV.MAC;40    11-JAN-78 17:15:09    EDIT BY TAFT
+; Raise lower-case password in authentication server
+;<PUP>PUPSRV.MAC;38    31-DEC-77 20:30:55    EDIT BY TAFT
+; Conform to revised local time parameter format
+;<PUP>PUPSRV.MAC;37    18-DEC-77 16:01:26    EDIT BY TAFT
+; Add server for new Alto time standard
+; Add user authentication server
+;<PUP>PUPSRV.MAC;36    15-SEP-77 11:50:58    EDIT BY TAFT
+; Map DDT down to inferior fork if present in top fork.
+;<PUP>PUPSRV.MAC;35    15-APR-77 09:51:15    EDIT BY TAFT
+; Set SERVF during initialization
+;<PUP>PUPSRV.MAC;34     7-APR-77 19:03:57    EDIT BY TAFT
+; Improve handling of various fork states in DELFRK
+; Prevent some possible (but unlikely) races in fork manipulation
+;<PUP>PUPSRV.MAC;33    18-MAR-77 17:43:46    EDIT BY TAFT
+; Rip out UUO handler -- now share PUPUUO.MAC with PUPFTP.
+; Absorb the few remaining routines from PUPUTL back into PUPSRV.
+;<PUP>PUPSRV.MAC;31    25-OCT-76 21:09:26    EDIT BY TAFT
+; Put in better random number generator
+; Top loop computes dismiss time based on next timer to expire
+;<PUP>PUPSRV.MAC;30    20-OCT-76 13:27:23    EDIT BY TAFT
+; Remove name lookup to PUPDIR.MAC
+; Add hooks for network directory update logic
+;<PUP>PUPSRV.MAC;29     5-OCT-76 02:09:20    EDIT BY TAFT
+; Fix FNDCON bug when purging obsolete entry
+;<PUP>PUPSRV.MAC;28     3-OCT-76 00:16:43    EDIT BY TAFT
+; Split out gateway info stuff into separate file PUPGAT.MAC
+;<PUP>PUPSRV.MAC;26    14-AUG-76 18:05:14    EDIT BY TAFT
+; Print octal numbers unsigned
+; Control-S forces event buffer dump also
+;<PUP>PUPSRV.MAC;25    13-AUG-76 17:36:35    EDIT BY TAFT
+; Log illegal pup type errors only if debugging.
+; Fix MAKPRT to handle errors properly.
+;<PUP>PUPSRV.MAC;24    30-JUN-76 20:02:03    EDIT BY TAFT
+; Remove various utility routines to PUPUTL.MAC
+; Modify initialization for new storage assignment mechanisms
+;<PUP>PUPSRV.MAC;21     1-JUN-76 18:02:26    EDIT BY TAFT
+; Change MAKPRT to generate foreign port address as constant, not symbolically
+;<PUP>PUPSRV.MAC;20    14-MAY-76 19:50:29    EDIT BY TAFT
+; Fix race between DELFRK and fork termination interrupt
+; Add code to release log lock when a fork crashes
+;<PUP>PUPSRV.MAC;19     7-MAR-76 00:23:44    EDIT BY TAFT
+; Add check for illegal zero fields in incoming RFCs
+
+;<PUP.FTP>PUPPRP.MAC.38, 25-Aug-83 14:43:17, Edit by KRONJ
+; Flag cataclysm
+;<PUP.FTP>PUPPRP.MAC.37, 12-Aug-83 22:41:24, Edit by KRONJ
+; Rewrite to avoid SK2RET
+;<PUP.FTP>PUPPRP.MAC.36, 12-Aug-83 09:34:51, Edit by KRONJ
+; Add MEIS-Paged transfer type
+;<PUP.FTP>PUPPRP.MAC.35,  1-Aug-83 16:34:37, Edit by KRONJ
+; Obey Ctrl-V in Name-Body
+;ACCT:<PUP.FTP>PUPPRP.MAC.34, 14-Jun-83 16:17:27, Edit by R.RMK
+; File-author support.
+;<PUP.FTP>PUPPRP.MAC.33, 11-Apr-83 17:28:35, Edit by KRONJ
+; Unrecognized transfer types get passed on as -1 to caller
+;<PUP.FTP>PUPPRP.MAC.32,  3-Apr-83 15:03:17, Edit by KRONJ
+; Move STRCMP from PUPFTP and PUPFSV
+;<PUP.FTP>PUPPRP.MAC.31,  3-Apr-83 01:23:29, Edit by KRONJ
+; MAKPTR is now MKPTR
+;<PUP.FTP>PUPPRP.MAC.30,  2-Apr-83 22:24:25, Edit by KRONJ
+; Can't use SAVEAC either
+;<PUP.FTP>PUPPRP.MAC.29,  1-Apr-83 15:43:21, Edit by KRONJ
+; Oops!  Can't have STKVARs in code for PUPFSV
+;<PUP.FTP>PUPPRP.MAC.28, 31-Mar-83 12:10:54, Edit by KRONJ
+; Steal .SFUST routine from MMAILR
+;<PUP>PUPPRP.MAC.27, 11-Mar-83 11:58:57, Edit by KRONJ
+; Clean up externs
+;<PUP>PUPPRP.MAC.26, 24-Feb-83 15:41:04, Edit by KRONJ
+; Previous-Write-Date so I can implement New-Store
+;<PUP>PUPPRP.MAC.25, 21-Feb-83 23:18:17, Edit by KRONJ
+; Make 76 protections become 77 (since we have no letter for 1)
+;<PUP>PUPPRP.MAC.20, 21-Feb-83 14:41:32, Edit by KRONJ
+; Move in GENAUT from PUPFSV
+; add GENPRO to make access properties
+;<PUP>PUPPRP.MAC.17, 21-Feb-83 14:00:08, Edit by KRONJ
+; Owner/Group/Public-Access, Original-Author
+; Directory pseudo-transfer type
+;BX:<PUP>PUPPRP.MAC.16,  4-Feb-83 22:43:31, Edit by K.KRONJ
+; EOLTAB is global (used in PUPFSV)
+;BX:<PUP>PUPPRP.MAC.15, 19-Jan-83 16:54:07, Edit by K.KRONJ
+; Allow 39-char passwords
+;MRC:<PUP.WORKING>PUPPRP.MAC.1, 17-Sep-82 13:35:57, Edit by CSD.KRONJ
+; Bulletproof GSTDR (RCDIR was erring with connect and no login)
+;<PUP>PUPPRP.MAC.13, 30-Jun-82 08:35:00, Edit by R.RMK
+;<PUP>PUPPRP.MAC.12, 29-Jun-82 13:20:02, Edit by R.RMK
+; Remove STKVAR at GSTDR.
+;<PUP>PUPPRP.MAC.11, 29-Jun-82 12:59:36, Edit by R.RMK
+; Make GSTUS really return a user number.
+;<PUP>PUPPRP.MAC.10, 24-Jun-82 16:55:40, Edit by R.RMK
+; TENEX RCUSRs and RCDIRs skip, SLOPS-20 ones don't...
+;<PUP>PUPPRP.MAC.9, 22-Apr-82 11:37:12, Edit by R.RMK
+;<PUP>PUPPRP.MAC.8, 22-Apr-82 11:24:51, Edit by R.RMK
+; Rewrite GSTDR and GSTUS so I can flush PUPSUP out of PUPFTP.
+;<PUP>PUPPRP.MAC.7, 16-Apr-82 14:55:06, Edit by R.RMK
+; More of same.
+;<PUP>PUPPRP.MAC.6, 16-Apr-82 03:27:06, Edit by B.BOMBADIL
+;<PUP>PUPPRP.MAC.5, 16-Apr-82 03:21:01, Edit by B.BOMBADIL
+;<PUP>PUPPRP.MAC.4, 16-Apr-82 01:15:10, Edit by B.BOMBADIL
+;<PUP>PUPPRP.MAC.3, 15-Apr-82 21:59:15, Edit by B.BOMBADIL
+;TOPS-20 Stuff
+;ACCT:<PUP.USER-WORKING>NUPPRP.MAC.2, 31-Mar-82 11:45:33, Edit by R.RMK
+; Search NUPDEF, NSVDEF.
+;ACCT:<PUP.USER-WORKING>PUPPRP.MAC.3, 29-Mar-82 10:46:36, Edit by R.RMK
+; Search SYSDEF.
+;<NORMAL>PUPPRP.MAC.7 10-Jan-81 21:01:11    Edit by SCHOEN
+; Made twenex runtime compatible
+;<PUP>PUPPRP.MAC.6    30-Jul-80 15:47:12    TECO'd by GILMURRAY
+; Remove 2 and Z and insert !, #, and + in FILQUO table
+;<PUP>PUPPRP.MAC.6, 17-Jun-80 14:51:28, Edit by SCHOEN
+; tops20: Fixed missing stack clean-up in GSTUSR,GSTDIR
+;<PUP>PUPPRP.MAC.5, 12-Jun-80 17:23:27, Edit by SCHOEN
+; Created GSTUSR routine to do RCUSR for PPUNAM, GSTDIR 
+; routine for PPCNAM (Tops20).
+;<PUP>PUPPRP.MAC;9  12-Jun-80  Edit by Schoen
+; Fixed directory # handling in PPUNAM, GSTDIR in tops20 version
+;<PUP>PUPPRP.MAC;8     15-APR-80    Edit by Schoen
+; Add Tenex/Tops20 conditional assembly
+;<PUP>PUPPRP.MAC;7     2-SEP-79 16:00:50    EDIT BY TAFT
+;<PUP>PUPPRP.MAC;6     2-JUN-77 21:32:49    EDIT BY TAFT
+; Add "Author" and "Size" property parsers
+;<PUP>PUPPRP.MAC;5    31-MAR-77 20:25:23    EDIT BY TAFT
+; Put in hooks for mail server
+; Make individual property interpreters conditionally external
+; Reinstate forcing device and directory to upper-case.
+; (I knew there was a reason.  Damn silly Tenex problem!)
+;<PUP>PUPPRP.MAC;3    19-MAR-77 20:05:26    EDIT BY TAFT
+; Add code to parse date properties
+;<PUP>PUPPRP.MAC;2    18-MAR-77 18:14:45    EDIT BY TAFT
+; Call external REFILL procedure in SCNPRP
+;<PUP>PUPPRP.MAC;1    18-MAR-77 17:06:55    EDIT BY TAFT
+; Modified to be usable in both server and user
+; Renamed PUPPRP.MAC
+; Uniformly generate "No" response before giving error return.
+; Remove device/directory name check -- it will be caught later if
+; actually used.
+;<PUP>PFUPRP.MAC;3    15-MAR-77 18:54:26    EDIT BY TAFT
+; Add Tenex-paged type
+;<PUP>PFUPRP.MAC;2    10-MAR-77 14:21:00    EDIT BY TAFT
+; Split out from PUPFTP.MAC
+
+;BX:<PUP>PUPSPL.MAC.11,  6-Dec-82 17:13:37, Edit by K.KRONJ
+; Convert from SCREWUP to FATAL and JFATAL
+;<PUP>PUPSPL.MAC.10, 14-May-82 15:16:11, Edit by R.RMK
+; Use PU%MEI so monitor doesn't frob the PUP headers.
+;<PUP>PUPSPL.MAC.9, 16-Apr-82 16:52:21, Edit by R.RMK
+; More of same.
+;<PUP>PUPSPL.MAC.8, 16-Apr-82 03:24:32, Edit by B.BOMBADIL
+;<PUP>PUPSPL.MAC.7, 15-Apr-82 23:36:21, Edit by B.BOMBADIL
+;<PUP>PUPSPL.MAC.6, 15-Apr-82 23:18:23, Edit by B.BOMBADIL
+;<PUP>PUPSPL.MAC.5, 15-Apr-82 23:14:37, Edit by B.BOMBADIL
+;<PUP>PUPSPL.MAC.4, 15-Apr-82 21:35:01, Edit by B.BOMBADIL
+;TOPS-20 stuff
+;ACCT:<PUP.USER-WORKING>NUPSPL.MAC.3, 31-Mar-82 11:48:36, Edit by R.RMK
+; Search NUPDEF, NSVDEF.
+;ACCT:<PUP.USER-WORKING>NUPSPL.MAC.2, 31-Mar-82 11:23:25, Edit by R.RMK
+; Search MACSYM if STANSW.
+;ACCT:<PUP.USER-WORKING>NEW-PUPSPL.MAC.2, 31-Mar-82 10:30:21, Edit by R.RMK
+; In STANSW, now use DEFSTRs from PUPSYM for MEIS PUPs.
+;ACCT:<PUP.USER-WORKING>PUPSPL.MAC.3, 30-Mar-82 21:02:56, Edit by B.BOMBADIL
+;install DAMN
+;ACCT:<PUP.USER-WORKING>PUPSPL.MAC.2, 29-Mar-82 10:54:28, Edit by R.RMK
+; Search SYSDEF.
+
+;<PUP.FTP>PUPUUO.MAC.23, 25-Aug-83 14:44:04, Edit by KRONJ
+; Flag cataclysm
+;<PUP.FTP>PUPUUO.MAC.22, 16-Aug-83 11:11:48, Edit by KRONJ
+; Flush SAVE3 now too
+;<PUP.FTP>PUPUUO.MAC.21, 12-Aug-83 22:48:07, Edit by KRONJ
+; Flush SAVE4 and the various skip returns
+; SAVE3 will go when PUPXFR is finally replaced by MEIXFR
+; Use FBOUT in %Q for efficiency when copying to strings
+;<PUP.FTP>PUPUUO.MAC.18,  1-Aug-83 16:47:57, Edit by KRONJ
+; Add Q to macro format chars - quoted string
+;BX:<PUP>PUPUUO.MAC.17, 28-Dec-82 16:33:49, Edit by K.KRONJ
+; Flush %URUNM
+;BX:<PUP>PUPUUO.MAC.16, 28-Dec-82 16:32:26, Edit by K.KRONJ
+; Flush RUNF - no longer used
+;BX:<PUP>PUPUUO.MAC.15,  5-Dec-82 13:51:36, Edit by K.KRONJ
+; Convert calls to SCREWUP to FATAL and JFATAL
+;<PUP>PUPUUO.MAC.14, 26-Jul-82 01:48:17, Edit by ADMIN.MRC
+; Make RNERR and RNSTAT global
+;<PUP>PUPUUO.MAC.13, 22-Apr-82 09:37:44, Edit by R.RMK
+; Flush RNERR, RNSTAT.  PUPFTP and PUPSRV will define these.
+;<PUP>PUPUUO.MAC.12, 18-Apr-82 23:45:06, Edit by B.BOMBADIL
+;<PUP>PUPUUO.MAC.11, 18-Apr-82 23:34:19, Edit by B.BOMBADIL
+;<PUP>PUPUUO.MAC.10, 18-Apr-82 23:31:28, Edit by B.BOMBADIL
+;<PUP>PUPUUO.MAC.9, 18-Apr-82 19:17:06, Edit by B.BOMBADIL
+;<PUP>PUPUUO.MAC.8, 16-Apr-82 12:14:54, Edit by R.RMK
+; TOPS20 more of same.
+;<PUP>PUPUUO.MAC.7, 16-Apr-82 03:19:21, Edit by B.BOMBADIL
+;<PUP>PUPUUO.MAC.6, 16-Apr-82 02:24:41, Edit by B.BOMBADIL
+;Use .ORG instead of LOC/RELOC to position LUUO block
+;<PUP>PUPUUO.MAC.5, 15-Apr-82 23:10:18, Edit by B.BOMBADIL
+;<PUP>PUPUUO.MAC.4, 15-Apr-82 22:58:04, Edit by B.BOMBADIL
+;<PUP>PUPUUO.MAC.3, 15-Apr-82 21:55:11, Edit by B.BOMBADIL
+;TOPS-20 Stuff
+;ACCT:<PUP.USER-WORKING>NUPUUO.MAC.2, 31-Mar-82 11:44:03, Edit by R.RMK
+; Search NUPDEF, NSVDEF.
+;ACCT:<PUP.USER-WORKING>PUPUUO.MAC.5, 30-Mar-82 12:29:21, Edit by R.RMK
+; Remove previous edit.
+;ACCT:<PUP.USER-WORKING>PUPUUO.MAC.4, 29-Mar-82 11:29:20, Edit by R.RMK
+; Comment RNERR, RNSTAT for PUPFTP load.
+;ACCT:<PUP.USER-WORKING>PUPUUO.MAC.3, 29-Mar-82 10:45:33, Edit by R.RMK
+; Search SYSDEF.
+;ACCT:<PUP.USER-WORKING>PUPUUO.MAC.2, 25-Mar-82 17:40:13, Edit by R.RMK
+; Add search of PSVDEF.
+;<4.PUP.SUMEX.USER>PUPUUO.MAC.3, 26-Oct-81 06:39:15, Edit by WOHL
+;Externalize RNERR and RNSTAT
+;<PUP>PUPUUO.MAC;6    17-May-81 18:03:12    Edit by Schoen
+; Fix %LETU to handle errors correctly on Tops20
+;<PUP>PUPUUO.MAC;4    20-Jan-81 20:45:59    Edit by SCHOEN
+; Fix %PRINT to handle PRINT EOL correctly on both Tops20 and Tenex
+;<PUP>PUPUUO.MAC;5	1/7/81			Edit by RINDFLEISCH
+; Added storage for RNERR and RNSTAT
+;<PUP>PUPUUO.MAC;4    20-Aug-80 11:35:24    Edit by SCHOEN
+; %RUNM UUO for errors in lower fork runnable version
+; %UERRO UUO modified to go to RNERR string in shared page if lower fork
+; %UTYPE UUO modified to be noop in lower fork version
+;<PUP>PUPUUO.MAC.3     9-Jul-80 23:35:18    Edit by SCHOEN
+; %PRINT checked only 37 as EOL, not using EOL defn in PUPDEF
+; This meant that tops20 version never sent <lf> after <cr>
+;<PUP>PUPUUO.MAC;2     6-Dec-79 14:27:46    EDIT BY SWEER
+; added DOLUUO to simulate Maxc UPSHJ opcode
+;<PUP>PUPUUO.MAC;6     2-SEP-79 16:00:59    EDIT BY TAFT
+;<PUP>PUPUUO.MAC;5    12-NOV-77 18:08:19    EDIT BY TAFT
+; Print octal numbers unsigned
+;<PUP>PUPUUO.MAC;4    15-APR-77 09:59:32    EDIT BY TAFT
+; Different format for %F conversion if SERVF is set
+;<PUP>PUPUUO.MAC;2    10-MAR-77 14:37:23    EDIT BY TAFT
+; Split out from PUPFTP.MAC
+
+Done:
+
+	Kronj, 1-Oct
+Bump major version of PUPFTP (which will no longer be PUPFTP).
+Change PSECT definitions to match those of HSTNAM, TCPIO etc.
+Put .REQUIRE etc in top-level modules so that they can be LOADed
+  rather than needing ASMxxx.CMD files.
+Rename modules to reflect new protocol-independance.
+Convert PUPFTP to use HSTNAM
+
+	Kronj, 2-Oct
+Start removing ## construction in favor of EXTERN
+Misc code cleanups especially in FTPUUO, flush the last old edit histories
+Start rewrite of Pup-specific portions of user code
+
+	Kronj, 9-Oct
+Incorporate Kirk's fixes to PUPXFR
+Finish removing ##
+Make sure everyone refers to FTPDEF instead of PUPDEF
+
+	Kronj, 16-Oct
+Teach FRNFIL about files in doublequotes
+
+	Kronj, 17-Oct
+Rename SRCJFN and DSTJFN to be NETJFN and FILJFN.  Clean up much related code.
+Flush lots of useless UUOs and other cruft
+Make PUPFSV cooperate with PUPXFR in setting data modes
+Clean up queueing of Pup mail - don't need two different files
+
+	Kronj, 18-Oct
+Work through GET command in FTP.MAC (still need to do it in PUPFTP.MAC)
+
+	Kronj, 19-Oct
+Clean up default type and byte size setting on connection opening
+Make TT.MEI vs TT.PAG invisible to the user
+Add @ in CALL @xxx(V)
+Convert rest of FRKJFN(FX) to NETJFN in PUPFSV
+Use duplex JFNs in PUPFSV (long since done in PUPFTP)
+Start module PUPUTL, put MRKNAM and GETCMD there (still needs work)
+
+	Kronj, 20-Oct
+Move %UFTPM and GETCMD into PUPUTL
+Write code to convert .PM36 into .PMASC (for GETCMD)
+
+	Kronj, 21-Oct
+Clean up some of FTP, start implementing .RECV in PUPFTP
+Implement DELETE in both FTP.MAC and PUPFTP.MAC
+Copy many random subroutines into PUPFTP frlm old PUPFTP
+
+	Kronj, 22-Oct
+Implement aborts in Pup Sends and Retrieves
+Make sure all EOCs are flushed appropriately
+Implement Pup .SEND, most of SEND command in FTP
+Implement PRINT command in both Pup and FTP
+Flush File-Author prop, PRINT command uses Author for that
+
+	Kronj, 23-Oct
+Move common code into FTPUUO, rename to be FTPUTL
+Clean up large portions of PUPPRP and FTPUTL (flush binary search for TBLUK%)
+Merge PUPERS into PUPFSV
+Flush old %C and %P, make %C send one char, %T and %J smarter about lack of AC
+Write remote filename parser to complete SEND command
+Work through RENAME command - only thing left is DIRECTORY
+
+	Kronj, 24-Oct
+Make SEND hand the file version to .SEND if appropriate
+Work through DIRECTORY command, remainder of FTP.MAC
+Make DIRECTORY smart about SAIL's vs. everyone else's filenames
+
+	Kronj, 25-Oct
+Attempt first compilation.  Lots of errors.  Finally everything
+compiles.  The problem that took the most time to work out was the
+inability of MACRO to deal with TYPE(< %4S%/).  It works if there is a
+space between the ( and the <.  Now to get everything to load...
+
+	Kronj, 26-Oct
+Make LOAD, make DIRECTORY work
+PUPOPS still needs work, as does filling defaults in C.GET
+
+	Kronj, 28-Oct
+Make all sorts of things that didn't work do so.  No known bugs left.
+Remove comma from list of directory terminator characters.
+
+	Lougheed, 29-Oct
+Clear storage areas before setting up stack and FRECOR.
+
+	Kronj, 30-Oct
+Fix SAVEAC in STRCMP to make INFORMATION show login defaults correctly.
+Fix filename defaulting in GET command to not trash CSB
+Fix wrong AC screwup in getting user login default
+Make DIRECTORY without attributes keep files on separate lines
+Add SAVEAC to CHKMEI so TYPE doesn't get wedged
+
+	Kronj, 1-Nov
+Fix check of whether disk file in GET to make sure correct JFN is used
+(was breaking UPDATE with paged mode transfers).
+Add square brackets to host name mask so can specify arbitrary ARPA hosts.
+Add checks after fields parsed to make sure they are non-null.
+Add MULTIPLE command to appease losing TCPFTP users.
+Rework GET local filename wildcard filling.
+
+	Kronj, 2-Nov
+Go over HELP documentation
+Make DEBUG typeout use U:... and S:... again instead of L: and R:
+Make OPEN with previous disconnected LOGIN not use default again
+Allow protocol handler routines to parse socket numbers
+Flush ^F interrupt from PUPFSV
+Make TYPE UUO buffer typeout and then do a PSOUT
+Make SEND to dir name without filename automatically include filename
+
+	Kronj, 6-Nov
+Have to translate when sending out text in 36-bit mode
+Work on data mode switch synchronization
+Flush OKRETR and OKSTOR flags in mark byte dispatch
+Synchronize EOCs in PUPFSV a little better, flush mail archiving
+Reading in an EOC doesn't mung previous mark string
+
+	Kronj, 7-Nov
+More cleanup of PUPFSV
+
+	Kronj, 26-Nov
+Improve FRNFIL - set string default so escape completion can take
+notice of SET LOWERCASE.  Rename SJFNS to the more mnemonic .JFNS and
+use it in more places.  Use G1%NLN to avoid completion of generations
+on files with not more than 6 chars in the filename and 3 in the
+extension in an attempt to appease Brian Reid and the forces of
+"intelligent user interfaces" while retaining "what you see is what
+you get".  Meanwhile, Frank has been busily working on the TCP
+protocol support.  The sticking point has been the data transfer
+commands - TCPIO needs to be hacked up in order to control two
+connections at once, and in order to open one connection in passive
+rather than active mode.  Everything will be wonderful if Paetzold
+ever gives us working DEC-interface support.
+
+Later that day: Brian has finally persuaded me to hack .-1 out of
+filenames.  It is parameterized as SET MUNG-VERSION so I can turn it
+off.  FRNFIL no longer string-defaults file names - that loses too
+badly when the first parse (of a G1%NLN file) loses - it overwrites
+the command buffer with the default and the user's typein of a
+non-TOPS filename is destroyed.  Frank broke ^G interrupts when he
+rearranged some channel numbers - fixed.  The code to call the next
+nested interrupt when ^G from a password has been improved, and PUSHIO
+was made to save the prompt (so a LOGIN command from FTP> followed by
+^G wouldn't leave the prompt "Password:").
+
+	Kronj, 2-Dec
+Add CWD, BYTE, DEBUG, NO, and NODEBUG top-level commands in case some
+poor loser gets confused when we switch from old ARPA FTP.
+
+	Kronj, 18-Dec
+Fix INSTALL in PUPFTP so that NO doesn't think we have unsynch EOC
+
+	Kronj, 27-Dec
+Fix PUSHIO - when I last changed it I forgot to change which piece of
+the stack to increment for skip return from caller.
+Only say "setting default transfer" when actually making different.
+
+	Kronj, 1-Jan-1984
+We were typing both server "no" message and user "i didn't see anything"
+for a directory command with no matching files.  If server said something,
+then don't also type the user message.
+
+	Kronj, 5-Jan
+Fix SET DIRECTORY for Pup connections - was typing string from wrong AC.
+
+	Kronj, 6-Jan
+Make PUPXFR type the final CRLF after those excls even if debugging.
+That way the next debugging printout starts on a new line.  We still
+don't type a space before the first excl, though.  Make calling
+conventions to LOGCHK more normal - something strange was happenning
+with the "return from caller" UFTPMs and I didn't want to find out what.
+Fix massive security hole in LOGCHK.  You could always connect to a
+wheeled directory, even with the wrong password (or no pw).  This is
+because the check for "is he a wheel? if so don't check the pw" was
+looking at the privileges of the dir to be connected to rather than
+the logged in directory.  This was true even of the old FTP server, so
+it must be a pretty old bug.  Don't wait for an EOC after we just got
+one - some commands still don't handle their own EOCs.
+
+Later that evening: improve debugging typeout of Pup GET command.
+Don't want the "FOO => BAR" but include the local file name in the
+user "yes" response so that I can see what it is.  Fix a long-standing
+bug in GET where we were not releasing JFNs (yet another inverted skip).
+This bit both me and Kirk with large update commands.  SET CONFIRM UPDATE
+defaultly on (best to be safe, but my init turns it off anyway).
+
+	Kronj, 7-Jan
+Fix HELP SET CONFIRM to reflect new default.  Make .ERMS1 global for
+Kirk (who has started working on TCPFTP as Frank hasn't done much in
+the last month or so).  Work on text-to-36 conversion so it doesn't
+lose last bytes.  Fix bug where -1 version on Send was causing whole
+GTJFN% flag word to be -1.  Add MODE, STRUCTURE, FORMAT settings for
+TCP FTP, and make SET TYPE and friends smarter.  Add EBCDIC transfer type.
+
+	Kronj, 8-Jan
+Improve access checking in PUPFSV - SEND command was getting JFN and
+then using CHKAC to see if could write the file, rather than asking if
+it could create a file in that directory.  Now also makes sure
+protection of superseded file allows deletion.
+
+	Kronj, 23-Jan
+Start working on TCPFTP module.  No real changes yet - just some minor
+cleanups to give me a feel for the code.  I can still open connections
+and presumable do non-data-transfer commands.  Closing the connection
+takes a long time though - Kirk thinks bugs in TCPBBN (in the monitor).
+
+	Kronj, 30-Jan
+Fix one-line GET to NUL: (multi-line is beyond hope).
+Check for multiple files down to one in GET similarly to existing SEND check.
+Add SET SMART-DIRECTORIES - I can parse TOPS20 STAT replies.
+Ignore comments (number < 100) when reading TCP server responses.
+Make TCP buffer reading flush final CRLF.
+Start working on TOPS-20 SMART-DIRECTORY code.
+
+	Kronj, 31-Jan
+New verbosity level system rather than using flag bits
+Make FTPM UUO protocol-dependant and use in TCPFTP
+Change some strange calling conventions in TCPFTP, improve some labels
+Extra-verbose TFTPM types machine-readable number as well as text
+Add DTYPE macro so can do TFTPM without doing UTYPE by hand
+Compile-time and load-time checks for protocol vector length
+Fix structure, format, mode, type confusion
+Make TCP data param setting know about above things
+%C in format strings does nothing if null
+
+	Kronj, 1-Feb
+Make F%STYO actually suppress OPEN and GET negotiation typeout
+Improve TCPFTP LOGIN, CWD, OPEN, and CLOSE to obey protocol and act nicely
+Make top-level DEBUG etc commands not halt if JCL
+Finish TOPS-20 SMART-DIRECTORY code
+Symbol table grew too large so rearrange PSECTS a little
+
+	Kronj, 2-Feb
+Finish renaming labels in TCPFTP
+Split out data transfer code into new module TCPXFR
+Import LOTS printing changes (Plot-File property and PUPPRT program)
+Go over DELETE and RENAME to make sure they follow protocol
+
+	Kronj, 3-Feb
+Improve response to 332 and 532, clean up LOGIN some more
+Make PUPFTP send name of program in VERS string
+Plot-File property is also preserved on file retrievals
+
+	Kronj, 6-Feb
+Fix bugs with calling CHKDSK and with timing of data mode switches
+causing lots of fun errors.  Make VRBSTY global in PUPFSV.
+
+	Kronj, 8-Feb
+MRC has fixed monitor so no longer need to use different ports for
+data connections.  Also remove "%J" from MEIS mode FATAL text.
+
+	Kronj, 9-Feb
+At MRC's suggestion do TELNET protocol if necessary on the TELNET
+connection.  This makes connections close much faster because the
+server no longer waits for a timing mark reply that will never come.
+"It's not just a good idea, it's the law."
+
+	Kronj, 10-Feb
+Move protocol-independant file transfer routines to FTPUTL from PUPXFR
+Start working on TCP data receive - can do directory listings now,
+i.e. knows about ASCII text with FILE structure and STREAM mode.
+Improve TCPSET to only send commands for params that need setting
+(this should cut down on a lot of useless TELNET connection traffic).
+Start writing code for RECEIVE command - use NLST if possible.
+Install aborts in smart T20 directory code (dumb code is hopeless).
+Various routines smarter about making sure talking to terminal
+rather than a file, so for instance JCL won't leave null prompts.
+JCL halt now closes the connection.
+
+	Kronj, 11-Feb
+Fix text-to-36 conversion to make sure we get a null text byte in an
+even number of halfwords.  There was code to do this but it was wrong.
+Make TCPRSP handle multi-line replies as given on page 33 of RFC765.
+Type FOO => BAR in GET only after connection is fully set up.
+GET works!!  Now I just have to implement the other modes and types.
+
+	Kronj, 12-Feb
+Add SET MULTIPLE-GET, make MULTIPLE command do something.
+Flush CREATE-INIT command - not very useful.  People can use EMACS.
+Split STATUS command, make STATUS primary name, add protocol part.
+Munch spaces in TCPTFM rather than TCPRSQ to keep them in STATUS.
+Add HOST synonym for OPEN command.
+
+	Kronj, 13-Feb
+Flush some useless code (most interrupts, SRCDSP/ERRPDP/DSTDSP etc).
+Add ETYPE UUO and replace all ESOUT% and EMSG with it.
+Finish auto-block mode, implement block receive and stream send.
+Find funny OPENF% error numbers in mon and get Kirk to fix them.
+Add SET ALTERNATE-SOCKETS again.  It used to control 3 vs. 333 in
+PUPFTP but that was less useful than typing sockets after host so
+I flushed it.  Now it controls whether new socket each TCP data conn.
+
+	Kronj, 14-Feb
+Rearrange code in FTP.MAC to look prettier in page menu and such.
+Make all SET commands available at top level, flush top-level synonyms.
+Eliminate use of TMSG, make FTPLUD use UUOs a little.
+
+	Kronj, 15-Feb
+Make work with Tenex, including SMART-DIRECTORY stuff.
+Make GET use SMART-DIR stuff for UPDATE and SET KEEP.
+
+	Kronj, 16-Feb
+Make TCPFTP smarter about remote filenames - fill out versions and
+default directories for Tenex/TOPS-20 filenames if not included in string.
+Also fill out default directories for relative UNIX pathnames.
+Flush question marks from start of displayed server responses.
+Making ^Vs and other unprintable chars line up in directory listings.
+
+	Kronj, 21-Feb
+I have been mostly working on 36-bit binary transfers.  I got them to
+work, but I had to break them for paged transfers - I can't read in a
+full buffer every time because paged transfers stop without closing
+the connection (in clear violation of the layering principle).
+It now works for paged as well as 36-bit binary reception.
+GET now uses STAT and not NLST if it can (avoids switching data modes).
+Fix bug in multi-line GET that overwrote file name defaults with prompt.
+Add copyright notices to all modules.  Split out DIRPNT into FTPDIR.MAC.
+Changed calling convention for TCPSET so GET could call KILFIL if aborted.
+
+	Kronj, 22-Feb
+Improve text-to-.pm36 conversion in PUPUTL in hope of fixing bug.
+Make FTPUTL smarter about printing excls and "<FDB>".
+Fix TCRPAG from returning +3.  Close data conn before TELNET.
+Implement EBCDIC receive.  As with block mode this is unlikely to be
+tested - I can find no servers willing to send me EBCDIC data.
+
+	Kronj, 23-Feb
+Implement another never-to-be-tested piece of code: compressed receive.
+And yet one more: binary mode for sizes 5,7,10,11,...,31,33,34,35.
+Add SET HASH-MARK to be compatible with CMUFTP.
+
+	Kronj, 25-Feb
+Finish TCPFTP.MAC - implement SEND and PRINT commands.
+TCXSND in TCPXFR.MAC still needs a lot of work though.
+
+	Kronj, 26-Feb
+Close and re-open file when protocol demands new transfer type.
+This includes all normal checks e.g. for byte size mismatch.
+Change calling conventions for Pup protocol response readers
+and have them jump to handler on end etc rather than needing that code
+for each caller.  This can be done now that DISCON and EDISC run
+KILFIL, and now that FILJFN is maintained more carefully.
+
+	Kronj, 27-Feb
+Make REENTER do something useful - read JCL and go back to top level.
+
+	Kronj, 3-Mar
+Don't lowercase filenames when sending to other PDP-10s.
+TCP Send in text mode now works, after I added a timeout in closing
+the data connection.  Without it I wait forever for CLOSF% to return.
+Implement 8/16/32-bit binary, 1/2/3/4/6/9/12/18/36-bit binary, EBCDIC sends.
+Split user data transfer routines from TCPXFR into TCPDAT.
+Start implementing different modes for remote and local end of transfers.
+
+	Kronj, 4-Mar
+More work on independant settings of local and remote transfer types.
+
+	Kronj, 6-Mar
+Finish getting page mode send to work.  Now all that's left is the
+useless stuff (block and compressed modes, and the remaining binary
+byte sizes).  Turns out there were several bugs in my 36-bit binary
+send code that weren't being exercised by the logical-byte 36 sends
+but which paged mode cared about.  Now to start on the documentation...
+
+	Kronj, 9-Mar
+Documentation is updated, block and compressed mode sends are written.
+Installed as NEW:FTP but not yet announced (Kirk is proofreading doc).
+
+	Kronj, 10-Mar
+TCP directories give one error instead of two if files not found.
+TCP delete uses smart-dir to handle wildcards.
+Fixed TYPE command to work with latest reworking of GET command.
+Updated FTP.MSS so examples use TCP, start w/blank line, end w/new prompt.
+Created FTP.HLP for a basic introduction to the program.
+
+	Kronj, 12-Mar
+Improve documentation.  Make setting of FORMAT work in SET TYPE ASCII.
+Fix some bugs in TCPFTP - not setting P.XTYP in PRINT, MULTIPLE GET.
+
+	Kronj, 14-Mar
+Fix some UNIX file-parsing problems - how'd they get this far?
+Restore SET CONFIRMATION LOGIN for old PUPFTP.INITs
+Move some mail from my Babyl file into FTP.MAIL (MM format).
+
+	Kronj, 16-Mar
+Lots of ERJMPs in the Pup code to quiet the console down if user ^Cs.
+
+	Kronj, 18-Mar
+Improve SEND multi-line parsing, allow user to give protocol name in OPEN.
+
+	Kronj, 28-Mar
+Finally got around to writing strange-byte-size binary send.
+This is the last "development" change - from now on changes will be
+reported in a normal edit history at the top of each file.
+FTP has been installed as SYS:FTP and SYS:PUPFTP on Sierra for a week
+now, with no bug reports whatsoever (or other mail for that matter).

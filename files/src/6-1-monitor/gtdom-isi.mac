@@ -1,0 +1,2590 @@
+;[SRI-NIC]SRC:<6-1-MONITOR>GTDOM.MAC.3,  5-Jun-87 13:22:26, Edit by MKL
+; add NIC hacks under GTDSW conditional
+;SIERRA::SRC:<GROSSMAN.GTDOM>GTDOM.MAC.33, 10-Mar-87 13:57:34, Edit by GROSSMAN
+;Reduce stack usage in RSOLVE to prevent MONPDL's.
+;[SIERRA.STANFORD.EDU]SRC:<6.1.MONITOR.STANFORD>GTDOM.MAC.32, 17-Dec-86 16:28:56, Edit by BILLW
+; correct TYPO near IF2 conditional
+;SRC:<6.1.MONITOR.STANFORD>GTDOM.MAC.31,  5-Nov-86 13:57:13, Edit by BILLW
+; make HSTGOO know about (stanford specific) subnets, somewhat.
+;[SU-SIERRA.ARPA]FS1:<DEC.6.1.MERGE>GTDOM.MAC.30, 18-Aug-86 18:21:37, Edit by GROSSMAN
+; Use GBLJNO instead of JOBNO in GTDRWT.
+;[SU-SCORE.ARPA]PS:<6-1-MONITOR>GTDOM.MAC.29,  8-May-86 17:20:23, Edit by BILLW
+; work on not needing two sets of args for ANCOPY (ARGBLK vs ACs)
+;[SU-SCORE.ARPA]PS:<6-1-MONITOR>GTDOM.MAC.20,  8-Apr-86 20:33:01, Edit by BILLW
+; code to pick the best address for multi-homed hosts. (for .GTHSN function)
+;[XX.LCS.MIT.EDU]PS:<DOMAIN.5A>GTDOM.NEW.1,  8-Feb-86 06:23:22, Edit by SRA
+;M45 Updated to new resolver code, many jeeves bugfixes, measurement
+;    code.  Basic strategy changed to let resolver wait loop run
+;    OKINT (resolver now -always- releases search blocks).  Resolving
+;    can be disabled while leaving cache and authoritative access
+;    alone by setting DOMSRV to +1 (code only sets -1 or 0).
+;
+;[MIT-SPEECH]SSY:<5-4-MONITOR>GTDOM.MAC.3, 12-Oct-85 11:55:43, Edit by SRA
+;M40 Installation in MIT monitor.  Basicly same code as ISI but massively
+;    rewritten to make it readable.  This version still runs NOINT even
+;    in the resolver loop, which will have to change.  WOPR only for now.
+
+
+;Conditional assembly options
+
+ifndef djsys,<djsys==1>			;assembling JSYS code if non-zero
+ifndef ftbbn,<ftbbn==0>			;BBN style monitor (.UNV files)
+
+define ifdj  (arg) <ifn djsys,<arg>>
+define ifndj (arg) <ife djsys,<arg>>
+
+	Search	DomSym,Prolog		;General monitor and domain symbols
+
+ifdj <	TTitle	(GtDom,GtDom,< Paul Mockapetris - Feb 85>)>
+
+Ifndj <
+	Search	Monsym,Macsym		;Non-monitor, set up standard
+	.Requir SYS:MACREL		;environment
+>
+
+ifn ftbbn,< Search Imppar,MntPar>	;BBN style monitor
+ife ftbbn,< Search Anaunv>		;DEC style monitor
+
+IFE STANSW,<
+ifdj <	swapcd>			;Make this code swappable
+>;IFE STANSW
+IFN STANSW,<
+ifdj <	xswapcd>		;Make this code swappable
+>;IFN STANSW
+
+	Subttl	Local macros and definitions
+
+define djerr (arg) <			;; Unlock and return error code
+	jrst [	movei t1,arg		;; set error code
+		jrst efinis ]		;; branch to error return
+>
+
+ifndj <					;definitions if not JSYS
+morg::	0				;address of master block
+uerc:	block	1			;error code
+userac:	block	20			;space for user AC's
+dombeg:	0				;count of GTDOM% starts (for scheduler)
+ddtadr:	0				;ddt entry point if needed
+osect:	0				;section we entered from
+forkx:	1				;fake FORKX (a la monitor)
+dbinit:	0				;zap nonzero to init database
+
+;Local Non-Jsys versions of common macros
+
+	%djac%==0			;if compiling local ac's
+define	defac(new,old) <
+	ifndef 'old',<new==<%djac%==%djac%+1>>
+	ifdef  'old',<new==old>
+>
+
+define	NoInt	<>			;;A No Op
+define	OkInt	<>			;;A No Op
+
+define	umove(a,b) <foo==<'b'>&<^-17>
+	ife <foo>,<move a,userac+b>
+	ifn <foo>,<move a,b>
+	purge foo>
+
+define	umovem(a,b) <foo==<'b'>&<^-17>
+	ife <foo>,<movem a,userac+b>
+	ifn <foo>,<movem a,b>
+	purge foo>
+
+define	reterr(code) <			;;(a little wasteful of space, oh well)
+	ifnb <code>,<			;;error code specified
+		jrst [	movei t1,code	;;load up error code
+			hrrm t1,uerc	;;stuff it in error flag word
+			hrrm t1,userac+1;;and in user acs
+			jrst uexit]	;;go punt
+	>				;;end of error code specified
+	ifb <code>,<	jrst uexit>	;;not specified, just punt
+>
+
+>; ifndj
+
+;It would be nice if we could put the following in STG, but we need to know
+;how big to make it and somehow it doesn't seem like a good idea to make STG
+;search DOMSYM just for one symbol (too many potential name conflicts).
+ifdj <	RS (domrww,maxsb)>		;resident array for user fork dismiss
+
+
+IFN GTDSW,<
+RS (DOMRES,1)			;address of free space block
+;the following are assigned space with ASGRES
+;the free space layout:
+NC.LOC==0			;addr of local domain name    
+NC.TAB==1			;start of tbluk table
+NC.NAM==NC.TAB+NICTSZ+1		;start of nickname free space
+
+NICTSZ==200
+NICSIZ==1000
+
+LNBFLN==40
+
+;ADD A NICKNAME, RETSKP IF OK, ENTRY TO ADD IN T2
+NICTBA:	MOVE T1,DOMRES
+	ADDI T1,NC.TAB		;address of table
+	TBADD%
+	 ERJMP R
+	RETSKP
+
+;LOOKUP A NICKNAME, STRING IN T2
+;RETSKP IF FOUND WITH ADDRESS OF TABLE ENTRY IN T1
+NICTBL:	MOVE T1,DOMRES
+	ADDI T1,NC.TAB		;address of table
+	TBLUK%
+	 ERJMP R
+	TXNN T2,TL%EXM		;EXACT MATCH?
+	 RET
+	RETSKP
+
+	SUBTTL Nickname Table Initialization
+
+COMMENT \
+	The nickname translation table is used by the GTDOM% jsys.
+Any name without a dot is first looked up in the nickname table
+and if an entry is found it is translated into it's official name
+before being passed off for resolving.
+
+	Things used by this routine:
+
+NICNAM		the name space for strings
+NICSIZ		number of words allocated for NICNAM
+NICSPC		the number of free words in NICNAM space
+NICPTR		pointer to next free word in NICNAM
+NICTAB		a tbluk table of nicknames
+NICTSZ		size of tbluk table
+
+\
+
+NICINI:
+	TRVAR <NICJFN,NICSAV,NICSPC,NICPTR,<TMPBUF,20>,<LINBUF,LNBFLN>,LINPTR>
+
+	MOVX T1,GJ%SHT!GJ%OLD
+	HRROI T2,[ASCIZ /SYSTEM:DOMAIN.CMD/]
+	GTJFN%
+	 ERJMP R		;file not found
+	MOVEM T1,NICJFN		;save JFN
+	MOVX T2,7B5!OF%RD
+	OPENF%
+	 ERJMP NICER1
+
+	NOINT
+	MOVE T1,[.RESP3,,4+NICTSZ+NICSIZ+1]	;PRI,,SIZE
+	MOVE T2,[RS%SE0!.RESGP]			;SECTION 0,,GENERAL POOL
+	CALL ASGRES		;ASSIGN US SOME SPACE
+	 ERJMP [TMSG <%NICINI - NO RESIDENT FREE SPACE
+>
+		JRST NICCLS]
+	MOVEM T1,DOMRES		;SAVE ADDR OF SPACE ASSIGNED
+	OKINT
+
+	MOVEI T2,NICTSZ
+	MOVEM T2,NC.TAB(T1)	;SETUP TBLUK SIZE
+	MOVEI T2,NC.NAM(T1)
+	MOVEM T2,NICPTR		;NEXT AVAILABLE STRING SPACE
+	MOVNI T2,NICSIZ		;SIZE OF NAME SPACE
+	MOVEM T2,NICSPC		;WORDS REMAINING
+
+NICNL:	CALL NCNL		;SKIP TO START OF NEXT DATA LINE
+	 JRST NICCLS		;EOF
+	CALL NCRFLD		;READ A FIELD (primary host name)
+	 JRST NICNL		;NOTHING THERE
+
+	PUSH P,T1
+	HRROI T1,TMPBUF
+	HRROI T2,[ASCIZ /LOCAL-DOMAIN/]
+	STCMP%
+	JUMPE T1,[POP P,T1
+		  CALL NICGLC	;GET LOCAL DOMAIN NAME
+		  JRST NICNL]
+	POP P,T1
+
+	IDIVI T1,5
+	SKIPE T2
+	 ADDI T1,1
+	MOVE T3,T1
+	ADDM T1,NICSPC		;DECREMENT NAME SPACE LEFT
+	SKIPLE NICSPC		;TABLE FULL?
+	 JRST NICERF
+	MOVE T1,T3
+	PUSH P,T1		;SAVE COUNT
+	ADD T1,NICPTR
+	HRLZI T2,TMPBUF
+	HRR T2,NICPTR
+	BLT T2,(T1)		;SAVE STRING
+	MOVE T1,NICPTR		
+	MOVEM T1,NICSAV		;SAVE ADDR OF OFFICIAL NAME
+	POP P,T1		;RESTORE COUNT
+	ADDM T1,NICPTR		;UPDATE POINTER
+
+NICNIC:	CALL NCRFLD		;READ A NICKNAME
+	 JRST NICNL		;NOTHING
+	IDIVI T1,5
+	SKIPE T2
+	 ADDI T1,1
+	MOVE T3,T1
+	ADDM T1,NICSPC		;DECREMENT NAME SPACE LEFT
+	SKIPLE NICSPC		;TABLE FULL?
+	 JRST NICERF
+	MOVE T1,T3
+	PUSH P,T1		;SAVE COUNT
+	ADD T1,NICPTR
+	HRLZI T2,TMPBUF
+	HRR T2,NICPTR
+	BLT T2,(T1)		;SAVE STRING
+	HRLZ T2,NICPTR		
+	POP P,T1		;RESTORE COUNT
+	ADDM T1,NICPTR		;UPDATE POINTER
+	HRR T2,NICSAV		;NICKNAME,,OFFICIAL NAME
+	CALL NICTBA		;ADD TO TABLE
+	 TRN			;SKIP ERRORS
+	JRST NICNIC		;READ ANOTHER NICKNAME
+
+NICER1:	MOVE T1,NICJFN
+	RLJFN%
+	 ERJMP .+1
+	RET
+
+NICERF:	TMSG <%Nickname space full
+>
+NICCLS:	MOVE T1,NICJFN
+	CLOSF%
+	 ERJMP .+1
+	RETSKP			;SUCCESS RETURN
+
+;GET LOCAL DOMAIN NAME
+NICGLC:	CALL NCRFLD		;READ IT
+	 JRST NICNL		;NOTHING
+	IDIVI T1,5
+	SKIPE T2
+	 ADDI T1,1
+	MOVE T3,T1
+	ADDM T1,NICSPC		;DECREMENT NAME SPACE LEFT
+	SKIPLE NICSPC		;TABLE FULL?
+	 JRST NICERF
+	MOVE T1,T3
+	PUSH P,T1		;SAVE COUNT
+	ADD T1,NICPTR
+	HRLZI T2,TMPBUF
+	HRR T2,NICPTR
+	BLT T2,(T1)		;SAVE STRING
+	HRRZ T2,NICPTR		
+	HRLI T2,(<POINT 7,0>)
+	POP P,T1		;RESTORE COUNT
+	ADDM T1,NICPTR		;UPDATE POINTER
+
+	MOVE T1,DOMRES
+	MOVEM T2,NC.LOC(T1)
+	RET
+
+;SKIP TO NEXT LINE, RETSKP IF OK
+NCNL:	MOVE T1,NICJFN
+	MOVE T2,[POINT 7,LINBUF]
+	MOVEI T3,LNBFLN*5-1
+	MOVEI T4,.CHLFD
+	SIN%
+	 ERJMP [SETZM LINPTR
+		RET]
+	SETZ T4,
+	IDPB T4,T2
+	LDB T1,[POINT 7,LINBUF,6]
+	CAIE T1,.CHCRT
+	 CAIN T1,.CHLFD
+	  JRST NCNL
+	CAIE T1,";"
+	 CAIN T1,"!"
+	  JRST NCNL
+	MOVE T1,[POINT 7,LINBUF]
+	MOVEM T1,LINPTR
+	RETSKP
+
+;READ A FIELD, RETSKP IF OK, RETURN CHAR COUNT IN T1, STRING IN TMPBUF
+NCRFLD:	SKIPN LINPTR
+	 RET			;NOTHING TO DO
+	MOVE T2,[POINT 7,TMPBUF]
+	SETZ T3,
+NCRFL1:	ILDB T1,LINPTR
+	JUMPE T1,R
+	CAIE T1,.CHSPC
+	 CAIN T1,.CHTAB
+	  JRST NCRFL1
+	CAIE T1,.CHCRT
+	 CAIN T1,.CHLFD
+	  RET
+NCRFL2:	IDPB T1,T2
+	ADDI T3,1
+	ILDB T1,LINPTR
+	JUMPE T1,NCRFL3
+	CAIE T1,.CHSPC
+	 CAIN T1,.CHTAB
+	  JRST NCRFL3
+	CAIE T1,.CHCRT
+	 CAIN T1,.CHLFD
+	  JRST NCRFL3
+	CAIE T1,","
+	 CAIN T1,":"
+          JRST NCRFL3
+	JRST NCRFL2
+NCRFL3:	SETZ T1,
+	IDPB T1,T2
+	MOVEI T1,1(T3)		;RETURN COUNT (INCLUDING NULL)
+	RETSKP
+>;IFN GTDSW
+
+
+	Subttl	Parameters needed for tuning performance or configuration
+
+;database section
+	dbfirs=domsec*^d512		;page number of first page
+	psize=^d512			;page size
+	dblast=dbfirs+psize+psize-1	;2 sections worth
+
+;does a resolver exist?
+	ereslv==1			;if no resolver, set data not available
+					;error if not in zones or cache
+
+;miscellaneous
+	spd==^d<60*60*24>		;seconds per day
+	cdelta="z"-"Z"			;case conversion
+
+
+	Subttl	Global register definitions for domain JSYS use
+
+	defac (t5,q1)		;Must equate to global ac def
+	defac (t6,q2)
+	defac (t7,q3)
+
+;	defac (savep,p1)	;stack fence (not needed)
+	defac (dbase,p2)	;address of master block/database origin
+	defac (flags,p3)	;flags register
+	defac (label,p4)	;pointer to byte pointer of label
+	defac (sblock,p5)	;pointer to search block
+
+;input flags in AC1 which get set by user
+	ldo==1b0		;local data only
+	mba==1b1		;answer must be authoritative
+	rtcp==1b2		;resolve via tcp to avoid truncation
+	rewrt==1b3		;rewrite query name
+	dnf==1b4		;query name in domain format, not ASCIZ
+	das==1b5		;special glue search for addresses
+	rbk==1b6		;resolve in background
+	gtdtmk==maskb(7,11)	;reserved for resolver TTL field
+
+;mask for input flags and fcode
+	diflag==ldo!mba!rtcp!rewrt!dnf!das!rbk!gtdtmk!<0,,-1>
+
+;internal flags and status returned in AC1 LH
+	rip==1b12		;request terminated with resolve in progress
+	nodot==1b13		;suppress dot in name output
+	aka==1b14		;alias found
+	conly==1b15		;outch to count, not output
+	nullok==1b16		;is a null answer considered correct ?
+	trun==1b17		;answer was truncated
+
+	Subttl	JSys level code
+
+; 	The GTDOM JSYS dispatches to individual function routines in
+; two ways; via the GTDDSP dispatch table, or for NOPs in that
+; table, via a jump to the routine for GTHST.
+;
+;	Domain functions that use the database call routine DSETUP to
+;setup pointers to the database, a search block, etc.  Since these
+;routines may acquire locks, they must run NOINT, and use DFINIS et al
+;to clean up before exiting.  In order to permit the jsys to run OKINT
+;while waiting for the resolver, the search block is considered
+;released once it has been passed to the resolver, and a new one must
+;be obtained to get the results (or lack thereof) out of the cache.
+
+IFE STANSW&DJSYS,<
+.GtDom::
+>;IFE STANSW&DJSYS
+IFN STANSW&DJSYS,<
+XNENT .GTDOM,G
+>;IFN STANSW&DJSYS
+ifdj <	mcent				;Establish monitor context
+	skipn domsrv			;service turned off?
+	 reterr(gtdx6)			;yeah, internal error
+	movsi dbase,domsec		;setup address of database
+>; ifdj
+
+ifndj <	movem 0,userac			;all save registers
+	move 0,[1,,userac+1]
+	blt 0,userac+17
+	movsi dbase,domsec		;setup address of database
+	xmovei t1,0			;see if we are running extended
+	movem t1,osect			;save it for exit
+	ife. t1				;section zero?
+	  skipe morg			;database mapped (been here before)?
+	  ifskp.			;nope, then have to create section one
+	    movx t1,<.fhslf,,0>		;make section one same as section zero
+	    movx t2,<.fhslf,,1>
+	    movx t3,<sm%rd!sm%wr!sm%ex!sm%ind!1>
+	    smap%
+	    movx t1,<.fhslf,,770>	;see if ddt is present
+	    rmap%
+	  camn t1,[-1]			;ddt entry page exists?
+	  anskp.			;yup, take ddt with us
+	    movx t1,<.fhslf,,770>	;need write access to ddt entry page
+	    movx t2,pa%rd!pa%ex!pa%cpy
+	    spacs%
+	    move t1,770000		;get old starting instruction
+	    movem t1,ddtadr		;(well known address, sort of)
+	  endif.			;section 1 is set up now
+	  xjrstf [exp 0,<1,,.+1>]	;jump into it
+	  hrrz p,p			;stack is still in section zero
+	  move t1,[xjrstf [exp 0,<1,,770002>]]
+	  skipe ddtadr			;need to fix ddt address?
+	   movem t1,@[0,,770000]	;yup, extend ddt start address
+	endif.				;done going extended
+	skipn morg			;have we got the database yet?
+	 call domini			;no, map it in
+	  jfcl				;ignore funky return
+	umove t1,1			;get AC1 back
+>; ifndj
+
+; Common code
+	aos msrdat+dcalls(dbase)	;increment GTDOM% call counter
+	tlz t1,-1			;toss flag bits in AC1 LH
+	skipl t1			;Check range of function code
+	 cail t1,gtdmax
+	  reterr (ARGX02)		;Bad function code
+
+	push p,t1			;function is ok, log it by function
+	xmovei t1,msrdat+dbyfn(dbase)	;address of function graph
+	add t1,(p)			;offset for this function
+	aos (t1)			;count this invokation
+	pop p,t1			;get back function code
+	xct gtddsp(t1)			;dispatch to domain function
+
+IFE STANSW,<
+ifdj	<jrst .gthst>			;if nothing happens, do GTHST
+>;IFE STANSW
+IFN STANSW,<
+IFDJ	<XJRST [MSEC1,,.GTHST]>		;If nothing happens, do GTHST
+>;IFN STANSW
+ifndj <	reterr (ARGX02)>		;user context, just punt
+
+	Subttl	Dispatch table for GtDom%/GtHst% functions
+
+gtddsp:	nop				;(00)Get name table size (OLD)
+	nop				;(01)Index into name space (OLD)
+	jrst	gtdnum			;(02)Convert number to string
+	jrst	gtdstr			;(03)Convert string to number
+	nop				;(04)Status by number
+	nop				;(05)Status by index
+	nop				;(06)Get local number on a network
+	nop				;(07)Get status table of a network
+	nop				;(10)Get first hop/route to a host
+	jrst	gtdgen			;(11)General domain resolution request
+	jrst	gtdrwt			;(12)Resolver wait function
+	jrst	gtdfus			;(13)Domain file use
+gtdmax==.-gtddsp			;Number of functions
+	ifn gtdmax-gtdfmx-1,<PRINTX function code count error>
+
+	Subttl	DSETUP sets up database environment for database lookups
+
+; Find and lock a search block in the shared domain section(s).  The
+; search blocks are chained in a circular list.  The search starts at
+; the block pointed to by SBLOOP in the master block.  Call with ac1
+; containing <flags,,fcode> (ie, contents of user ac1 if first time
+; through here).  Unlike previous incarnations of this routine, this
+; one gets called more than once per jsys invokation, since it is used
+; to get a new search block after returning from a resolver wait.
+;
+; Right now if we can't find a search block we DISMS% for a short
+; while and try again.  For efficency it might be a good idea to keep
+; a word in the master block that keeps track of the number of free
+; search blocks, and dismiss to the scheduler until free count becomes
+; non-zero.  Needs resolver support, and word should be in portion of
+; master block that is locked into memory.  Maybe later, not vital.
+; Needs some thought about how to deal with ldo-only sblocks.
+
+dsetup:	NoInt				;make sure nothing left locked
+	aos msrdat+dscall(dbase)	;count this DSETUP call
+	move sblock,sbloop(dbase)	;Get address of first search block
+	do.				;loop looking for lockable block
+	  txnn flags,ldo		;if call is restricted to local data
+	   skipn ldores(sblock)		;or this block not restricted
+	    aose slock(sblock)		;see if we can lock this block
+	     aosa msrdat+dsbbsy(dbase)	;nope, count a busy block, onwards
+	      exit.			;yup, done looping (yow)
+	  move sblock,sbnext(sblock)	;get next
+	  came sblock,sbloop(dbase)	;have we gone clear around the chain?
+	   loop.			;nope, try next search block
+	  aos msrdat+dsbbl(dbase)	;yup, bump all blocks busy count
+	  ifxe. flags,gtdtmk		;effort limiting ttl present?
+	    okint			;no. nothing is locked, psi ok here
+	    move t1,msrdat+lckttl(dbase)	;should dismiss to scheduler
+	    disms%			;fudge it, just sleep for a while
+	    noint			;psi off again
+	    loop.			;try again
+	  else.				;was ttl present, time to die...
+	    aos msrdat+dedoa(dbase)	;got another deader here
+	    okint			;signal recursive death
+	    reterr (gtdx6)		;(gasp, thud)
+	  endif.
+	enddo.				;only get here when found block
+
+	movei t1,serch-sbzf-1		;length to blt in order to zero
+	setzm sbzf(sblock)		; out tail of search block
+	xmovei t2,sbzf(sblock)
+	xmovei t3,sbzf+1(sblock)
+	extend t1,[xblt]		;zero out block section
+	movem flags,fcode(sblock)	;remember what the user asked for
+	xmovei label,stable+dstbp-1(sblock)
+	move t7,[g1bpt 0,8,sname]	;address of last used pointer
+	add t7,sblock
+	jxn flags,rip,r			;exit here if called after a resolve
+
+; Initialize tquery to absolute time at start of query
+ifndj <	time%>
+ifdj  <	move t1,todclk>
+	movem t1,tstart(sblock)		;save sys uptime at start of query
+	aos msrdat+dfgra+touts(dbase)	;increment query starts count
+	gtad%				;get current time of day
+	sub t1,tzero(dbase)		;delta from database creation
+	muli t1,spd			;<days,,stuff> to <seconds,,stuff>
+	ashc t1,-22			;scale down to make absolute time
+	movnm t2,tquery(sblock)		;set absolute reference time
+	ret
+
+	Subttl	GTDRWT - Resolver wait function (and other randomness)
+;
+;	This function exists to provide hooks into the monitor for certain
+;	resolver functions that can only be done from executive context.
+;	Originally this was just for doing scheduler dismisses, but it has
+;	been generalized a bit.  LH(AC1) does *not* contain flags like in
+;	other GTDOM% functions.  Rather, it contains a subfunction code.
+;
+;	At this point there is no documentation of this function other than
+;	the following code and comments.  Nobody but the resolver should ever
+;	call this function, and it is assumed that people hacking on the
+;	resolver will read this code.  Subfunction codes and arguments are
+;	subject to arbitrary change without notice.
+;
+;
+;	Subfunction zero: resolver scheduler dismiss.
+;
+;	AC1/ 0,,12
+;	AC2/ hold time
+;	AC3/ wait time
+;
+;
+;	Subfunction one: unblock jsys context GTDOM% request.
+;
+;	AC1/ 1,,12
+;	AC2/ search block index (zero offset) of request to unblock.
+
+gtdrwt:					;exec mode resolver functions
+ifdj <	skipn domsrv			;make sure database there
+	 reterr (gtdx6)			;error if not
+	move t1,resjob(dbase)		;make sure its the resolver
+	came t1,gbljno			;kill miscreants
+	 reterr (gtdx6)
+>;ifdj
+	umove t1,1			;get user function code
+	hlrzs t1			;get subfunction code
+	jumpl t1,.+3			;(aka SKIP2)
+	caig  t1,gtdr.z			;if legal function code
+	 xct  gtdr.d(t1)		;dispatch
+	reterr(gtdx6)			;punt if that didn't work
+
+;subfunction dispatch table
+gtdr.d:	jrst gtdr.0			;subfunction zero (resolver dismiss)
+	jrst gtdr.1			;subfunction one (unblock user fork)
+	gtdr.z==.-gtdr.d		;length of dispatch table
+
+
+;subfunction zero, resolver wants to do a scheduler dismiss
+gtdr.0:
+ifndj <	movei t1,200			;if not JSYS, just delay
+	disms%
+	setzm uerc			;no error encountered
+	jrst uexit			;return to user
+>;ifndj
+
+ifdj <
+	add t3,todclk			;compute wake up time
+	movem t3,domtmr
+	skipl 4,reshan(dbase)		;check resolver handle
+	 caile 4,niq
+	  reterr (gtdx6)
+	movei t1,domsvr			;get pointer to wait test
+	hrl t1,reshan(dbase)		;and resolver handle
+	hdisms				;t2 has hold time from call
+	mretng
+
+	rescd				;scheduler code must be resident
+
+domsvr::skipe intqsp(t1)		;see if packets queued
+	 jrst 1(4)			;packets queued means runnable
+	move 1,domtmr			;get wake up time
+	camg 1,todclk			;compare with now
+	 jrst 1(4)			;wake up due to alarm clock
+	skipn dombeg			;have any new GTDOM%s happened?
+	 jrst 0(4)			;no, back to sleep
+	setzm dombeg			;wake up for new requests
+	jrst 1(4)
+
+IFE STANSW,<
+	swapcd				;end of scheduler code, swappable again
+>;IFE STANSW
+IFN STANSW,<;;; 
+	xswapcd				;end of scheduler code, swappable again
+>;IFN STANSW
+>;ifdj
+
+
+;subfunction one, resolver wants to unblock jsys context user fork
+gtdr.1:
+ifndj <					;user context code
+	setzm uerc			;this is a complete no-op
+	jrst uexit			;and it always wins
+>;ifndj
+
+ifdj  <					;jsys context code
+	umove t1,2			;get slot index to unblock
+	setzm domrww(t1)		;clear wait word
+	mretng				;and return winningly
+>;ifdj
+
+
+	Subttl	GTDFUS - Obtain domain file usage
+
+;
+;	BEFORE:				AFTER:
+;
+;	AC1/13
+;	AC2/byte pointer 		AC2/update byte pointer
+;
+;	This function returns the filenames for the primary and
+;	secondary files in use by GTDOM
+
+gtdfus:	umove t1,2			;get user destination byte pointer
+	xmovei t2,prifn-1(dbase)	;get address of primary file
+
+ifndj <	move t3,[point 7,(t2),35]	;simulate cpytus
+	do.
+	  ildb t4,t3
+	  jumpe t4,endlp.
+	  idpb t4,t1
+	  loop.
+	enddo.
+	umovem t1,2
+	idpb t4,t1
+	setzm uerc
+	jrst uexit
+>;ifndj
+
+ifdj <	call cpytus			;copy primary file name and update BP
+	mretng				;and return to user
+>;ifdj
+
+
+	Subttl	GTDNUM - Convert number to string
+
+;	BEFORE:				AFTER:
+;
+;	AC1/ 2
+;	AC2/ destination designator	AC2/ updated destination designator
+;	AC3/ host number	
+;					AC4/ host status
+;
+;	This function constructs a domain name for lookup from the address
+;	in AC3.  An address of the form 1.2.3.4 translates to
+;	4.3.2.1.in-addr.arpa.
+;
+;	Currently only HS%NCK is set in status word, this needs to be fixed.
+
+gtdnum:	umove flags,1			;setup flags and fcode
+	andx flags,diflag		;clear any unknown flags
+	call dsetup			;setup database context
+	move t1,t7			;get byte pointer in T1
+	movei t3,^d10			;output decimal numbers
+	umove t4,3			;host number
+	movei t6,4			;four octets to do
+	do.
+	  movem t1,1(label)		;store byte pointer for this piece
+	  aos label			;update label pointer
+	  aos stable+dstcnt(sblock)	;update label count
+	  move t2,t4			;get host number
+	  andi t2,377			;mask off eight bits
+	  lsh t4,-10			;shift input number
+	  movei t5,1			;compute number of digits
+	  caile t2,^d9
+	   movei t5,2
+	  caile t2,^d99
+	   movei t5,3
+	  idpb t5,t1			;output label length
+	  nout%				;output number
+	   nop
+	  sojn t6,top.			;do it four times
+	enddo.
+
+; copy on origin from iaorg
+	move t2,[point 8,iaorg(dbase)]
+	do.
+	  movem t1,1(label)		;set up byte pointer
+	  ildb t3,t2			;get length
+	  idpb t3,t1			;store length byte
+IFN STANSW,<;;; must count terminating nul label too. 
+	  aos stable+dstcnt(sblock)	;increment label count
+>;IFN STANSW
+	  jumpe t3,endlp.		;zero length means done
+	  do.
+	    ildb t4,t2
+	    idpb t4,t1			;store byte of label
+	    sojn t3,top.		;loop till label copied
+	  enddo.
+IFE STANSW,<
+	  aos stable+dstcnt(sblock)	;increment label count
+>;IFE STANSW
+	  aoja label,top.		;increment label value
+	enddo.
+	movei t1,dptr			;looking for pointer
+	jrst dlooki			;go do lookup
+
+	Subttl	GTDSTR - Convert string to number
+
+;	BEFORE:				AFTER:
+;
+;	AC1/ .GTHSN (3)
+;	AC2/ source designator		AC2/ updated source designator
+;					AC3/ host number
+;					AC4/ host status
+;
+;	Currently only HS%NCK is set in status word, this needs to be fixed.
+
+gtdstr:	umove flags,1			;setup flags and fcode
+	andx flags,diflag		;clear any unknown flags
+IFN GTDSW,<
+TRVAR <<nicdnm,<maxdc/5>>>
+	ifxe. flags,dnf			;if asciz name
+	  umove t1,2			;get source designator
+	  call nicsin			;read in string
+	    reterr(gtdx1)
+ 	  umovem t1,2			;store updated designator
+	  call nicluk			;check for special stuff
+	    jrst nicnum			;  [a.b.c.d] format found
+	    jrst nicloc			;  append local domain
+	    jrst nicsub			;  nickname found
+niccon:	  call dsetup			;set up database context
+	  move t1,[point 7,nicdnm]	;source
+	  move t3,[ildb t2,t1]		;load instruction
+	  call sindnx
+	    djerr(gtdx1)
+	else.				;if domain format name
+	  call dsetup			;set up database context
+	  umove t1,2			;get source designator
+	  call sindn			;get domain name set up
+	    djerr(gtdx1)		;lost somehow, punt
+	  umovem t1,2			;store updated designator
+	endif.
+>;IFN GTDSW
+IFE GTDSW,<
+	call dsetup			;set up database context
+	umove t1,2			;get source designator
+	call sindn			;get domain name set up
+	 djerr(gtdx1)			;lost somehow, punt
+	umovem t1,2			;store updated designator
+>
+	movei t1,da
+	jrst dlooki			;and look it up	
+
+
+IFN GTDSW,<
+;read string to translate, retskp if ok
+nicsin:	move t3,[xctbu [ildb t2,t1]]	;instruction to fetch bytes
+	tlnn t1,777777			;if jfn do JSYS
+	 move t3,[bin%]
+	tlc t1,777777			;check for LH=-1
+	tlcn t1,777777
+	 hrli t1,(<point 7,0>)		;use standard pointer
+	movei t4,maxdc			;max chars allowed
+	move t7,[point 7,nicdnm]	;put asciz name here
+nicsi1:	xct t3				;get a character
+	 erjmp r
+	sojl t4,r			;error if more than max
+	jumpe t2,nicsix
+	caie t2,.chspc
+	 cain t2,.chtab
+	  jrst nicsix
+	caie t2,.chcrt
+	 cain t2,.chlfd
+	  jrst nicsix
+	idpb t2,t7			;save it
+	jrst nicsi1
+nicsix:	setz t2,
+	idpb t2,t7			;end string
+	camn t3,[bout%]			;jsys?
+	 retskp				;yeah, don't bother
+	seto t2,			;nope, back up byte pointer
+	adjbp t2,t1			;by one byte
+	move t1,t2			;return updated pointer
+	retskp
+
+;check name read
+;ret +1 if [a.b.c.d] format
+;    +2 if name ended with a dot
+;    +3 if nickname (no dots)
+;    +4 if domain name (dots)
+; ac 4/dot count
+; ac 5/last character
+nicluk:	ldb t2,[point 7,nicdnm,6]
+	cain t2,133			;left bracket?
+	 ret 				;host number return     
+	aos (p)				;ret 2+
+	setzb t4,t5			;zero dot count, last char
+	move t2,[point 7,nicdnm]
+niclu1:	ildb t3,t2
+	jumpe t3,niclu2
+	cain t3,"."			;count dots
+	 addi t4,1
+	move t5,t3			;save last char
+	jrst niclu1
+niclu2:	cain t5,"."			;was last char a dot?
+	 ret				;yes, say name ended with dot
+	aos (p)
+	skipn t4			;any dots?
+	 ret				;no dots, nickname
+	retskp				;otherwise normal domain name
+
+;nicdnm was a nickname, substitute official name
+nicsub:	hrroi t2,nicdnm
+	call nictbl		;lookup nickname
+	 jrst niccon		;failed, do nothing
+	hrrz t1,(t1)		;get address of official name
+	hrli t1,(<point 7,0>)
+	move t2,[point 7,nicdnm]
+nicsu1:	ildb t3,t1		;substitute it
+	idpb t3,t2
+	jumpn t3,nicsu1
+	jrst niccon
+
+;name ended with a dot, so append local domain to it
+nicloc:	move t1,[point 7,nicdnm]
+	ildb t2,t1
+	jumpn t2,.-1		;find end of string
+	seto t2,
+	adjbp t2,t1
+	move t3,domres
+	move t3,nc.loc(t3)	;local domain string
+	ildb t1,t3
+	idpb t1,t2
+	jumpn t1,.-2		;append string
+	jrst niccon
+
+;string was "[a.b.c.d]", just return internet number
+nicnum:	move t1,[point 7,nicdnm]
+	ildb t2,t1		;skip left bracket
+	movei t4,4		;4 octets
+	setz t5,		;form address here
+	movei t3,^d10
+nicnu1:	lsh t5,^d8
+	nin%
+	 erjmp nicnue
+	dpb t2,[point 8,t5,35]
+	sojg t4,nicnu1
+	umovem t5,t3		;return number to user
+	umovem t4,t4		;zero status
+	jrst skmrtn		;skip return
+
+nicnue:	reterr(gtdx1)		;lose
+
+>;IFN GTDSW
+
+
+	Subttl	GTDGEN - General domain resolution request
+
+;	BEFORE:				AFTER:
+;
+;	AC1/ flags,,.GTDRR (11)		AC1/ updated flags
+;	AC2/ address of argument block
+;
+;	Argument block format:
+;	.GTDLN (0)	Length of block not including this word
+;	.GTDQN (1)	Input designator for QNAME
+;	.GTDTC (2)	QTYPE,,QCLASS
+;	.GTDBC (4)	Maximum number of bytes allowed in answer (updated)
+;	.GTDBP (5)	Destination designator for output (updated)
+;
+;	A zero in .GTDBC means no limit on output.
+;	Too few words in the argument block cause an ARGX04 error.
+;	More words than are understood will be ignored, since somebody
+;	may think of more useful fields someday.
+
+gtdgen:	umove flags,1			;setup flags and fcode
+	andx flags,diflag		;clear any unknown flags
+	umove t1,2			;get pointer to argument block
+	umove t2,.gtdln(t1)		;get length word
+	caige t2,.gtdbp			;must be at least through .gtdbp
+	 reterr(argx04)			;too few args, punt
+	push p,t1			;save argblock address
+	call dsetup			;set up database context
+	pop p,t2			;get back argblock address
+	umove t1,.gtdqn(t2)		;get QNAME
+	umove t3,.gtdtc(t2)		;get QTYPE,,QCLASS
+	hlrzm t3,stype(sblock)		;setup type
+	hrrzm t3,sclass(sblock)		;setup class
+	call sindn			;setup input name
+	 djerr(gtdx1)			;lost somehow, punt
+	txo flags,nullok
+	umove t2,2			;argblk address again
+	umovem t1,.gtdqn(t2)		;store updated source designator
+	jrst dlook			;go do the lookup
+
+	Subttl	SinDN
+
+;	SINDN - gets a domain name into SNAME using the byte
+;	pointer specified by the user in AC2.
+;
+;	The domain name is in domain name format if DNF is set;
+;	otherwise ASCIZ is assumed
+;
+;	register usage:
+;	t1/	source designator
+;	t2/	input byte
+;	t3/	instruction to fetch next byte
+;	t4/	count of octets which can be added to dname
+;	t5/	count of octets for label
+;	t7/	byte pointer into dname
+;
+; returns +2 on success, +1 on failure (gtdx1)
+
+sindn:					;caller already set T1 for us
+ifdj  <	move t3,[xctbu [ildb t2,t1]]>
+ifndj <	move t3,[ildb t2,t1]>
+IFN GTDSW,<
+sindnx:
+>
+	tlnn t1,777777			;if jfn do JSYS
+	 move t3,[bin%]
+	tlc t1,777777			;check for LH=-1
+	tlcn t1,777777
+	 hrli t1,(<point 7,0>)		;use standard pointer
+	movei t4,maxdc			;maximum characters in domain name
+	do.
+	  movem t7,1(label)		;save BP to start of name
+	  aos stable+dstcnt(sblock)	;increment label count
+	  ifxn. flags,dnf		;domain name format?
+	    call sinoc			;yup, get and store length
+	     ret
+	    skipn t6,t2			;process a non-zero length label
+	     exit.			;or done, go update designator
+	    call sincl			;go check label length
+	     ret	
+	    do.				;(what the hell, be consistant...)
+	      call sinoc		;get label character
+	       ret
+	      sojn t6,top.		;loop through label
+	    enddo.			;(...even in real tight loops)
+	    aoja label,top.		;loop over all labels
+	  else.				;asciz format
+	    sojl t4,r			;reserve space for length
+	    ibp t7
+	    setz t6,			;zero char count
+	    do.				;eat one label
+	      call sinoc		;get a char
+	       ret
+	      jumpe t2,endlp.		;null?
+	      caie t2,"."		;or dot?
+	       aoja t6,top.		;nope, get another char
+	    enddo.			;done getting chars
+	    call sincl			;validate length
+	     ret
+	    move t5,1(label)		;retrieve byte pointer
+	    idpb t6,t5			;store length
+	    ife. t6			;root (zero length label)?
+	      jumpe t2,endlp.		;yep, exit if marked by null
+	      retskp			;two dots, yow, are we supporting 
+	    endif.			;random weird formats yet?
+	    seto t6,			;back up destination over the dot
+	    adjbp t6,t7
+	    move t7,t6
+	    aoj label,			;count one more label
+	    jumpn t2,top.		;wasn't null terminated, next label
+	    movem t7,1(label)		;was null, must be root
+	    aos stable+dstcnt(sblock)	;count it here too (sigh)
+	  endif.			;c'est ca
+	enddo.
+	camn t3,[bin%]			;back up input designator
+	 bkjfn%				;iff it's a file
+	  erjmp .+1			;oh well, we tried
+	retskp				;done, bye
+
+;read one char, skip return unless error
+sinoc:	xct t3				;get a label character
+	 erjmp r
+	sojl t4,r			;error if more than max
+	idpb t2,t7			;characters total
+	retskp
+
+;check label length, skip return if ok
+sincl:	caile t6,maxlc			;check that t6 is allowable
+	 ret				;label length
+	retskp
+
+
+	Subttl	DLOOK routine looks up the query
+
+;	DLOOKI is entry if t1=type and class=Internet
+dlooki:	movem t1,stype(sblock)		;save search qtype
+	movei t1,din			;set internet class
+	movem t1,sclass(sblock)
+
+; first step is to look up an authoritative zone, if any
+dlook:	call ucases			;set case of search name
+	xmovei t1,szone(dbase)		;get address of search zone lock
+	call zlocks			;get a sharable lock
+	setzm azone(sblock)		;set zone not found
+	move t6,szone+znode(dbase)	;get address of root node
+	do.				;hairy loop looking for labels
+	  skipn t7,zonept(t6)		;get pointer to zone
+	  ifskp.			;anything here?
+	    move t5,sclass(sblock)	;yup, get search class
+	    do.				;loop to find the right class
+	      camn t5,zclass(t7)	;try next if classes different
+	      skipn loaded(t7)		;try next if not loaded
+	      ifskp.			;have we got a winner?
+	        movem t7,azone(sblock)		;yeah, remember this zone
+	        movem label,alabel(sblock)	;and its label level
+	      else.			;wrong class or not loaded
+	        skipe t7,zchain(t7)	;is there another one?
+	         loop.			;yeah, try next class
+	      endif.			;falling....
+	    enddo.			;...
+	  endif.			;...
+	  xmovei t1,stable+dstbp-1(sblock)	;address of last label
+	  camn label,t1			;all labels matched ?
+	   exit.			;yes, out of here
+	  call fson			;try to find descendant
+	   soja label,top.		;and loop if next label found
+	enddo.				;end of hairy loop
+
+; If we get here either azone is zero, and there is no authoritative
+; zone to check, or azone=>zone block and alabel points to the last
+; label in SNAME which corresponds to the last label of the SOA name
+	skipn t1,azone(sblock)		;did we find a zone to try?
+	ifskp.				;yup
+	  aos msrdat+daztry(dbase)	;remember that we did
+	  call zlocks			;and lock it
+	endif.
+	xmovei t1,szone+zonelo(dbase)	;unlock the search zone
+	call ulocks
+	skipn t1,azone(sblock)		;check again for authoritative zone
+	 jrst cache			;no authoritative zone, go try cache
+
+; next step is to descend though the rest of labels to see if node there
+; or delegated
+	move t6,zsoa(t1)		;get address of soa node
+	move label,alabel(sblock)
+	setzb t7,adeln(sblock)		;zero ns delegation node pointer
+	do.
+	  movem t6,lmatch(sblock)	;remember last match
+	  skipe nodelc(t6)		;authoritative?
+	  ifskp.			;nope
+	    move t7,t6			;take delegation
+	    movem t7,adeln(sblock)
+	    movem label,adell(sblock)
+	    aos msrdat+dazdel(dbase)
+	    jrst cache			;and go look in the cache
+	  endif.
+	  xmovei t1,stable+dstbp-1(sblock)
+	  camn label,t1			;skip if more labels to match
+	   jrst antst			;found node in authoritative zone
+	  call fson			;try to match another label
+	   soja label,top.		;iterate
+	enddo.
+
+; named node not there
+	jumpn t7,cache			;try cache if delegation was found
+	xmovei label,starbp(dbase)	;set label for * search
+	move t6,lmatch(sblock)		;return to last success
+	call fson			;look for *
+	 jrst anstst			;found * node
+	aos msrdat+dazne(dbase)		;increment name error count
+	djerr gtdx2
+
+; found named node or * node covering it
+anstst:	aosa msrdat+dazstr(dbase)	;found a star node
+antst:	aos msrdat+dazfnd(dbase)	;found the name
+anhere:	call ancopy			;try to copy answers
+	 djerr(gtdx5)			;error writing answers
+	 jrst dfinis			;successful, clean up and return
+	jumpn t7,cnamel			;if failed but cname found,
+					; restart search
+; name exists but no matching RRs are there
+norrs:	txnn flags,nullok		;is null response allowed ?
+	 djerr gtdx1			;GTHST emulators return error
+	jrst dfinis			;but general routines say its OK
+
+; authoritative search failed, try the cache
+cache:	aos msrdat+dcache(dbase)	;increment cache used count
+	txnn flags,rip			;if have been through resolver
+	 txnn flags,mba			;or cache data is ok
+	  aosa msrdat+dcnmba(dbase)	;then carry on, count this usage
+	   jrst rsolve			;else go resolve, can't use cache
+	xmovei label,stable+dstbp-2(sblock)	;restart label search
+	add label,stable+dstcnt(sblock)	;at label before root
+	setzm cdeln(sblock)		;set cache delegation to not found
+	skipn t1,cachep(dbase)		;see if a cache exists
+	 jrst rsolve			;resolve if no cache
+	move t6,znode(t1)		;get pointer to root node of cache
+	call zlocks			;get a read lock on the cache
+
+; search down the labels, looking for cache delegation which is better
+; than already found authoritative delegation (if any)
+	do.
+	  skipe t1,adeln(sblock)	;no authoritative delegation?
+	  camle t1,label		;or cache delegation better?
+	  ifnsk.			;yup, so try for cache delegation
+	    skipn t7,rrptr(t6)		;get address of first RR for this node
+	  anskp.			;no delegation if no RRs
+	    do.				;look at the RRs
+	      move t1,rrttl(t7)		;get expiration time of RR
+	      camle t1,tquery(sblock)	;should expire after query
+	      ifskp.
+		load t1,rrcla,(t7)	;get class of this RR
+		call cmatch		;check class
+	      anskp.
+		load t1,rrtyp,(t7)	;get RR type
+		caie t1,dns		;better be NS RR
+	      anskp.			;ok, this is a delegation
+		movem label,cdell(sblock)
+		movem t6,cdeln(sblock)	;remember this delegation
+	      else.			;bogus for some reason
+		skipe t7,rrnext(t7)	;more RRs to check?
+		 loop.			;yup, go do it
+	      endif.			;otherwise see if all labels matched
+	    enddo.			;delegation check complete,
+	  endif.			; now see if search is over
+	  xmovei t1,stable+dstbp-1(sblock)
+	  came label,t1			;matched all labels?
+	  ifskp.			;yup
+	    call ancopy			;search name found, copy answers
+	     djerr(gtdx5)		;error copying answers, punt
+	     aosa msrdat+dcans(dbase)	;got answer, flag it and hop...
+	      skipa			; ...skip...
+	       jrst dfinis		; ...and jump out cause we won
+	    jumpn t7,cnamel		;if CNAME found, restart search
+	  else.				;not done
+	    call fson			;try to match another label
+	     soja label,top.		;iterate if found
+	  endif.			;otherwise fall through to resolver
+	enddo.				;end of moby loop
+
+	Subttl	RSolve
+
+; If we get to RSolve either:
+;
+; the search name was not found in the cache
+; 	OR
+; the name was found but no data matched the query AND a CNAME was not found
+;
+; In any case the plan is to set up the search block so that the resolver
+; process will attempt to service the query
+;
+; The JSYS calls the resolver storing 1 in RCOM.  The resolver can use
+; all of the information in the search block to speed query processing.
+; In particular, ADLEN and CDELN are useful for identiying the name
+; server to ask, the resolver process can assume ownerships of the locks
+; acquired by the JSYS, and the resolver can read and change the FLAGS
+; register via RFLAGS.
+;
+; The resolver returns control to the JSYS by setting RCOM to zero,
+; unlocking the search block (and any locks held therein), and clearing
+; RWAITW (actually, setting it to something other than our FORKX, that
+; something just happens to be zero).  The resolver also calls GTDOM%
+; to zero the word in DOMRWW corresponding to the word in RWAITW (since
+; the scheduler test is really looking there to avoid page faults).
+;
+; If the resolver encountered an error, it either returns an error
+; via DERRC(FORKX) or stuffs a LOS RR in the cache.  This comment
+; should be fixed when this is settled.
+;
+; After this is done the answer, if any, will be in the cache,
+; so we get a new search block and restart the search (since
+; we are waiting okint for the resolver to finish it could be
+; days later by the time we get to this, so we might as well
+; check the authoritative data too).
+;
+; If the resolver wedges or otherwise loses and you want to turn
+; off resolving on the fly, you can do it by setting DOMSRV/ 1
+; with MDDT.
+
+rsolve:	aos msrdat+dresol(dbase)	;attempt to resolve
+ifdj <	skipg domsrv>			;don't resolve if resolving disabled
+	txne flags,ldo!rip		;don't resolve if local data only
+IFE GTDSW,<
+	 djerr gtdx4			;set data not available error
+>
+IFN GTDSW,<
+	 jrst fgtdx4			;set data not available error
+>
+	aos msrdat+drnldo(dbase)	;not LDO
+	ife ereslv,<djerr gtdx4>	;if no resolver, data isn't available
+	call infchk			;check for infinite loops
+	 djerr gtdx6			;signal system error if so
+
+;; If we get here we really are going to resolve.
+;; Copy data we need out of search block and wake up resolve
+	ifxe. flags,rbk			;don't copy sblock if rbk
+IFE STANSW,<
+	  movx t1,sbcpz-sbcpb		;how many words to copy
+	  xmovei t2,sbcpb(sblock)	;from search block
+	  xmovei t3,1(p)		;onto stack
+	  adjsp p,sbcpz-sbcpb		;make room on stack (or BUGHLT!)
+	  extend t1,[xblt]		;save sblock stuff we care about
+>;IFE STANSW
+IFN STANSW,<
+;Note carefully!  At this point we need to save all of the information needed
+;to restart the resolution request.  This includes QCLASS, QTYPE, and the
+;domain name.  The goal here is to save all of the info on the stack, and to
+;minimize the amount of stack space used.  (The code that this replaces used
+;to copy the entire SBLOCK onto the stack, and consumed 341 words of stack
+;space!  This resulted in occasional MONPDLs when JOBCOF gets activated).
+;Currently, the scheme here is to essentially save QCLASS and QTYPE in the
+;first word, and then to save the domain name after that.  Since we don't
+;know how big the name is until we've done the copy, we just do the copy
+;first prior to allocating the stack space, and then adjust the stack pointer
+;appropriately.  We also save the length of the area used, and a pointer to
+;.STKRT.  Essentially, we have built a dynamic STKVAR, and can therefore do
+;returns at any point in the code.  Even with the STKVAR stuff, the common
+;case domain resolution request (at STANFORD.EDU) only needs about 9 words of
+;stack space.
+
+	  move t1,sclass(sblock)	;Get the query class
+	  hrl t1,stype(sblock)		;Get the query type
+	  push p,t1			;Save the type and class
+	  push p,tstart(sblock)		;Save the starting time
+	  push p,tquery(sblock)		;Save reference time
+	  movx t1,^d256			;Get max byte count
+	  xmovei t2,sname(sblock)	;Get address of name
+	  txo t2,owgp.(8)		;Turn it into a byte pointer
+	  xmovei t3,1(p)		;Get address of dest (on stack)
+	  txo t3,owgp.(8)		;Make dest into a BP
+	  do.				;Loop over all labels
+	    ildb label,t2		;Get the length of this label
+	    subi t1,1(label)		;Subtract length of label+count byte
+	    skipge t1			;Any room left?
+	     djerr gtdx6		;Is this the appropriate error???
+	    idpb label,t3		;Save it away
+	    jumpe label,endlp.		;Quit when we reach 0 length label
+	    do.				;Loop over all chars in a label
+	      ildb t4,t2		;Get a label char
+	      idpb t4,t3		;Stuff it
+	      sojg label,top.		;And loop over all characters
+	    enddo.			;End of char loop
+	    loop.			;On to next label
+	  enddo.			;End of per label loop
+	  movx t2,^d256+3		;Get max size again (+ round up)
+	  sub t2,t1			;Compute # of bytes used
+	  ash t2,-2			;Convert to words
+	  adjsp p,(t2)			;Fix the stack to cover actual amount
+	  addi t2,3			;Account stype, sclass, tstart, tquery
+	  push p,t2			;Save the length
+	  push p,[msec1,,.stkrt##]	;Save the STKVAR cleanup routine
+>;IFN STANSW
+	endif.
+	movem flags,rflags(sblock)	;store flags for resolver process
+	move t1,sbidx(sblock)		;get our slot index
+	move t2,forkx			;stuff our fork index into RWAITW
+	movem t2,@[gfiwm domsec,rwaitw(t1)]
+ifdj <	movem t2,domrww(t1)>		;jsys context really uses this location
+	aos msrdat+dresol(dbase)	;count a resolver start
+	aos @[gfiwm domsec,rcom(t1)]	;mark block for resolver
+	aos dombeg			;signal resolver to run
+	txo flags,rip			;resolve now in progress
+	ifxn. flags,rbk			;background resolve?
+	  aos msrdat+drrip(dbase)	;yep, remember it
+IFE GTDSW,<  reterr (gtdx4)		;and signal data not available
+>
+IFN GTDSW,<  jrst ggtdx4		;and signal data not available
+>
+	endif.
+
+;; At this point the resolver is (theoretically) running and we
+;; no longer own any locks on anything at all.  Bide time until
+;; the resolver terminates.  If we get interrupted or killed it is
+;; ok, since the data will end up in the cache anyway.
+
+	okint				;resolver owns locks now, psi ok
+	lsh t1,22			;low 9 bits test data is slot idx
+	lsh t2,33			;high 9 bits test data is fork idx
+	ior t1,t2			;test data in lh
+	hrri t1,domusr			;test addr in rh
+ifdj  <	mdisms>				;deschedule until resolver done
+ifndj <					;if not in monitor have to fake it
+	hlrz t3,t1			;save test data
+	do.				;loop
+	  movei t1,^d5000		;five seconds
+	  disms%			;sleep
+	  move t1,t3			;snarf test data
+	  jsp t4,domusr			;do the test
+	   loop.			;not done yet, wait some more
+	enddo.				;end of user context fakeout
+>;ifndj
+
+IFE STANSW,<
+	move t1,forkx			;our fork
+	skipn t1,@[gfiwm domsec,rderc(t1)]
+	ifskp.				;resolver claims we got an error
+	  adjsp p,sbcpb-sbcpz		;fix stack
+	  reterr			;we hold no locks, punt to user
+	endif.				;resolver says we won
+	call dsetup			;get new search block (and go NOINT)
+	adjsp p,sbcpb-sbcpz		;fix stack pointer
+	movx t1,sbcpz-sbcpb		;how many words to copy
+	xmovei t2,1(p)			;from stack (saved search block)
+	xmovei t3,sbcpb(sblock)		;into new search block
+	extend t1,[xblt]		;restore sblock stuff we care about
+>;IFE STANSW
+IFN STANSW,<
+	move t1,forkx			;our fork
+	skipe t1,@[gfiwm domsec,rderc(t1)]
+					;resolver claims we got an error
+IFE GTDSW,<
+	 reterr				;we hold no locks, punt to user
+>
+IFN GTDSW,<
+	 jrst fgtdxn			;error, see if it was gtdx4
+>
+	call dsetup			;get new search block (and go NOINT)
+
+	pop p,(p)			;Dump the STKVAR return address
+	pop p,t1			;Get the STKVAR length
+	movns t1			;Make it negative
+	adjsp p,(t1)			;Fix the stack
+	move t1,1(p)			;Get sclass and stype back
+	hrrzm t1,sclass(sblock)		;Get the query class
+	hlrzm t1,stype(sblock)		;Get the query type
+	move t1,2(p)			;Get the starting time back
+	movem t1,tstart(sblock)		;Save it in the SB
+	move t1,3(p)			;Get the ref time back
+	movem t1,tquery(sblock)		;Restore that too
+	xmovei t3,4(p)			;Get address of saved name
+	txo t3,owgp.(8)			;Make into a BP
+	do.				;Loop over all labels
+	  movem t7,1(label)		;Remember the start of this label
+	  aos stable+dstcnt(sblock)	;And up label count
+	  ildb t1,t3			;Get the length of this label
+	  idpb t1,t7			;Save it away
+	  jumpe t1,endlp.		;Quit when we reach 0 length label
+	  do.				;Loop over all chars in a label
+	    ildb t4,t3			;Get a label char
+	    idpb t4,t7			;Stuff it
+	    sojg t1,top.		;And loop over all characters
+	  enddo.			;End of char loop
+	  aoja label,top.		;On to next label
+	enddo.				;End of per label loop
+>;IFN STANSW
+
+	jrst dlook			;and go restart search
+
+
+;; Test routine to hang out until resolver terminates our request.
+;; AC1 contains FORKX and SBIDX packed in 9 bit fields (yuk).
+;; In user context we look at RWAITW in the master block, in jsys
+;; context we look at DOMRWW to avoid page faulting in scheduler.
+
+ifdj  <	rescd>					;sched code must be resident
+domusr::lshc 1,-11				;1/ FORKX
+	lsh  2,-33				;2/ SBIDX
+ifdj  <	camn 1,domrww(2)>			;still working for us?
+ifndj <	camn 1,@[gfiwm domsec,rwaitw(2)]>	;still working for us?
+	 jrst (4)				;ya, let it crunch some more
+	jrst 1(4)				;no, unblock and get rolling
+IFE STANSW,<
+ifdj  <	swapcd>					;end of resident code
+>;IFE STANSW
+IFN STANSW,<
+ifdj  <	xswapcd>					;end of resident code
+>;IFN STANSW
+
+	Subttl	CNameL
+
+;	CNAMEL gets control when the name is found to be an alias;
+;	it restarts the search at the cannonical name
+;
+;	On Entry:
+;	T7 points at CNAME RR
+cnamel:	aos msrdat+dcncal(dbase)	;killroy was here
+	call infchk			;check for infinite loops
+	 djerr gtdx6			;signal system error if so
+	aos msrdat+dcngo(dbase)		;we survived that
+	txo flags,aka			;set alias found bit
+	move t1,[g1bpt 0,8,sname]	;make g1bpt to search name
+	add t1,sblock
+	setzm stable+dstcnt(sblock)	;zero componant count
+	xmovei label,stable+dstbp-1(sblock)
+	move t7,rdata(t7)		;use rr pointer to get chunk pointer
+	move t7,rrname(t7)		;use chunk pointer to get dname pointer
+
+	do.
+	  move t3,dlabel+labptr(t7)	;get ulabel pointer
+	  add t3,[ g1bpt 0,8,ultext]	;make it into byte pointer for label
+	  ildb t4,t3			;get label length
+	  movem t1,1(label)		;store byte pointer
+	  aos stable+dstcnt(sblock)	;increment label count
+	  idpb t4,t1			;store length
+	  jumpe t4,endlp.		;zero length label means done
+	  do.
+	    ildb t5,t3			;get next octet
+	    idpb t5,t1			;store label octet
+	    sojn t4,top.		;loop till label done
+	  enddo.
+	  move t7,more(t7)		;move on to next label in domain name
+	  aoja label,top.		;move on to next byte pointer slot
+	enddo.
+	call ulocka			;unlock everything
+	jrst dlook			;and start it up again
+
+	Subttl	InfChk	Check for infinite loops
+
+; INFCHK is called before attempting an operation which restarts a
+; search.  For example, INFCHK is called before a CNAME restart. Its
+; purpose is to prevent infinite loops which can be caused by circular
+; CNAMEs or other problems.  It does so by incrementing ERTTL and
+; aboring if ERTTL becomes equal to INFTTL
+
+infchk:	aos t1,erttl(sblock)		;increment counter
+	came t1,msrdat+infttl(dbase)
+	 retskp				;is ok, skip return
+	aos msrdat+dicdie(dbase)
+	ret				;caller should punt with gtdx6
+
+	Subttl	ANCOPY tries to copy matching RR data
+
+;	On entry:
+;		t6 points at node
+;
+;	returns +1 if (jsys) error writing answer
+;		+2 if answers copied
+;		+3 if no answers found
+;
+;	On exit:
+;		t7 points to CNAME if one found, zero otherwise
+
+ancopy:	setzm cnptr(sblock)		;clear CNAME pointer
+	setzm anret(sblock)		;set +3 return
+	skipa t7,rrptr(t6)		;get address of next RR
+	do.				;(and skip over first instruction)
+	  move t7,rrnext(t7)		;look at next RR (unless first time)
+	  jumpe t7,endlp.		;exit if no more RRs to check
+	  skipl t1,rrttl(t7)		;TTL not authoritative?
+	  ifskp.			;yup
+	    camle t1,tquery(sblock)	;expired?
+	     loop.			;yup, try next RR
+	  endif.
+	  load t1,rrcla,(t7)		;get class of RR
+	  call cmatch			;see if classes are compatible
+	   loop.			;they aren't, try next
+	  load t1,rrtyp,(t7)		;get type of RR
+	  call tmatch			;see if types are compatible
+	  ifnsk.			;they aren't
+	    cain t1,dcname		;was it a CNAME?
+	     movem t7,cnptr(sblock)	;yeah, remember cname
+	    loop.			;go look at next RR
+	  endif.
+	  move t5,rdata(t7)		;get address of first chunk
+	  move t4,litdat(t5)		;get address of litchunk or dname
+	  hrrz t1,fcode(sblock)		;get function code of JSYS
+	  caie t1,.gthsn		;is it a name to address call?
+	  ifskp.			;yes
+	    ldb t1,[point 16,0(t4),31]	;high bytes of address
+	    move t2,1(t4)		;low bytes
+	    lshc t1,^d16		;combine 'em
+IFE STANSW,<
+	    umovem t1,3			;store internet address in user ac 3
+	    txnn flags,aka		;alias?
+	     tdza t1,t1			;nope
+	     movx t1,hs%nck		;yup, set nickname flag
+	    umovem t1,4			;save it for user
+	    retskp			;return winningly
+>;IFE STANSW
+IFN STANSW,<;;; pick the best address for a multihomed host.
+PRINTX <******* UNDEBUGGED CODE ********>
+	    SKIPN ANRET(SBLOCK)		;have we had mutilple A answers?
+	     SKIPE RRNEXT(T7)		;or might we have?
+	     IFNSK.			;host is multi-homed.
+		CALL HSTGOO		;compute "Address Goodness"
+		CAMG T2,ANRET(SBLOCK)	; is it better than the last address?
+		 JRST TOP.		;no - go on to next address (if any)
+		MOVEM T2,ANRET(SBLOCK)	;save goodness
+	 	UMOVEM T1,3		;store internet address in user ac 3
+		txnn flags,aka		;alias?
+		 tdza t1,t1		;nope
+		 movx t1,hs%nck		;yup, set nickname flag
+		umovem t1,4		;save it for user
+		JRST TOP.		;loop through next possible answer
+	    ELSE.
+		UMOVEM T1,T3		;only one address.  Return it.
+		txnn flags,aka		;alias?
+		 tdza t1,t1		;nope
+		 movx t1,hs%nck		;yup, set nickname flag
+		umovem t1,4		;save it for user
+		RETSKP			;return winningly.
+	    ENDIF.
+>;IFN STANSW
+	  endif.
+	  caie t1,.gthns		;is it an address to name call ? 
+	  ifskp.			;yes
+	    umove t1,2			;get user destination designator
+	    call setout			;set up for output
+	    call dndump			;dump out domain name
+	    txnn flags,aka		;alias?
+	     tdza t1,t1			;nope
+	     movx t1,hs%nck		;yup, set nickname flag
+	    umovem t1,4			;save it for user
+	    move t2,outins(sblock)	;output null and update user BP
+	    camn t2,[bout%]		;jsys?
+	     retskp			;yeah, don't bother
+	    seto t1,			;nope, back up byte pointer
+	    adjbp t1,outbp(sblock)	; by one byte
+	    umovem t1,2			;write it back to user space
+	    retskp			;return win
+	  endif.
+
+; if we get here, we will dump the whole RR, formatted as follows:
+;    type	2 bytes
+;    class	2 bytes
+;    ttl	4 bytes
+;    length	2 bytes
+;    rdata	length bytes
+
+	  aos anret(sblock)		;increment count of RRs copied
+	  setzm outcnt(sblock)
+	  txo flags,conly		;count only first time
+	  call rddump			;fake outputing all the data
+	   ret				;can't possibly happen here!
+	  umove t1,2			;get pointer to user argument block
+IFE 0*STANSW,<
+	  umove t5,.gtdbc		;get count word
+>;IFE STANSW
+IFN 0*STANSW,<	;;;  Doesn't work!.  Why not?
+	  umove t5,.gtdbc(t1)		;get count word
+>;IFN STANSW
+	  ifge. t5			;if user cares about length
+	    subi t5,^d10		;subtract fixed length stuff
+	    caml t5,outcnt(sblock)	;see if we're going to overflow
+	  anskp.			;yup, we are
+	    txo flags,trun		;remember that we got truncated
+	    exit.			;and get out of here
+	  endif.
+	  umove t1,.gtdbp(t1)		;get user destination designator
+	  call setout			;set up for output
+	  move t5,rdata(t7)		;get chain address back
+	  txz flags,conly		;turn off counting
+	  load t2,rrtyp,(t7)		;output RR type
+	  call outtwo
+	   ret				;lost, punt
+	  load t2,rrcla,(t7)		;output RR class
+	  call outtwo
+	   ret				;punt
+	  skipl t2,rrttl(t7)		;TTL positive?
+	  ifskp.			;nope
+	    sub t2,tquery(sblock)
+	    movms t2			;adjust cache timeout
+	  endif.
+	  call out4
+	   ret				;punt
+	  move t2,outcnt(sblock)	;output rdata length
+	  call outtwo
+	   ret				;punt
+	  call rddump			;output the rdata fields
+	   ret				;punt
+	  umove t1,2			;won, get pointer at user argblock
+	  move t2,outbp(sblock)		;update the user's byte pointer
+	  umovem t2,.gtdbp(t1)
+	  umove t2,.gtdbc(t1)		;get user byte count
+	  jumpe t2,top.			;don't bother to update if infinite
+	  sub t2,outcnt(sblock)		;subtract bytes we wrote
+	  subi t2,^d10			;including fixed length stuff
+	  umovem t2,.gtdbc(t1)		;store it back
+	  jumpe t2,top.			;loop if any room is left
+	  skipe rrnext(t7)		;any RRs we miss for lack of space?
+	   txo flags,trun		;yeah, remember that little fact
+	enddo.				;end of extremely moby loop
+					;done looking when get here
+	skipn anret(sblock)		;nope, find anything?
+	 aos (p)			;nope, set losing (+3) return
+	move t7,cnptr(sblock)		;point at any CNAME we may have found
+	retskp				;and return to caller (no jsys error)
+
+	Subttl	RDDUMP dumps a rdata chain
+
+; On entry T5->first chunk
+; return +2 unless error writing bytes
+
+rddump:	move t4,litdat(t5)		;get pointer to data
+	skipe ckind(t5)			;literal chunk?
+	ifskp.				;yup
+	  iorx t4,<g1bpt 0,8,0>		;make a byte pointer
+	  ildb t1,t4			;get high order length
+	  ildb t2,t4			;get low order length
+	  lsh t1,10			;in correct position
+	  ior t1,t2			;combine 'em
+	  movem t1,dnlc(sblock)		;remember for countdown
+	  movem t4,dnbp(sblock)
+	  do.				;process characters
+	    sosge dnlc(sblock)		;count length down
+	     exit.			;done
+	    ildb t2,dnbp(sblock)	;get next character to output
+	    call outch
+	     ret			;punt
+	    loop.			;next char
+	  enddo.
+	else.				;not a literal chunk
+	  call dndump			;dump a domain name
+	   ret				;punt
+	endif.
+	skipe t5,rdmore(t5)		;get address of next chunk
+	 jrst rddump			;there is one, onward
+	retskp				;none, go home
+
+
+	Subttl	DNDUMP outputs a domain name
+
+;	On entry:
+;	t4 points at DNAME
+;
+;	+----------------------+         +-------+-----+-------------+
+;  t4-->| labuse | ulabel_ptr  |-------->|       | len | octets...   |
+;	|        +-------------+         +-------+-----+-------------+
+;	|        | mod bits    |
+;	+--------+-------------+
+;	|                      |
+;
+;
+;	Returns +2 unless error encountered writing bytes
+
+dndump:	txo flags,nodot			;no dot before first label
+	do.				;process labels
+	  move t1,[point 1,dlabel+casemo(t4)]
+	  movem t1,dncp(sblock)		;setup case mod bits pointer
+	  move t3,dlabel+labptr(t4)	;ulabel pointer
+	  add t3,[g1bpt 0,8,ultext]	;byte pointer for length
+	  movem t3,dnbp(sblock)		;dname byte pointer
+	  ildb t2,dnbp(sblock)		;get length
+	  movem t2,dnlc(sblock)		;remember for countdown
+	  ifxe. flags,dnf		;asciz name format?
+	  andn. t2			;and not the trailing null?
+	    movei t2,"."		;yeah, get a dot ready
+	    txzn flags,nodot		;should the dot go out?
+	  anskp.			;guess not
+	  else.				;have a byte to output
+	    call outch			;do it
+	     ret			;lost, punt
+	  endif.
+	  do.				;loop handling label chars
+	    sosge dnlc(sblock)		;more?
+	     exit.			;no, out of loop
+	    ildb t2,dnbp(sblock)	;get octet of name
+	    ildb t1,dncp(sblock)	;get case mod bit
+	    skipe t1			;skip if no case modify
+	     addi t2,cdelta		;transform case
+	    call outch			;output this character
+	     ret			;lost, punt
+	    loop.			;next
+	  enddo.			;done with this label
+	  skipe t4,more(t4)		;more name?
+	   loop.			;yup, go do it
+	enddo.				;done processing labels
+	retskp				;won, return +2
+
+	Subttl	CMATCH and TMATCH
+
+;	CMATCH tests the class in T1 against the QCLASS in SCLASS,
+;	TMATCH does the analogous function for types.
+;
+;	returns +1 if not compatible
+;	returns +2 if compatible
+;
+;	no bounds checking is done, so be careful...
+
+cmatch:	push p,t2			;don't smash this register
+	move t2,sclass(sblock)		;get class
+	came t1,t2			;equal?
+	cain t2,dstar			;or wildcard?
+	 aos -1(p)			;yup, win
+	pop p,t2
+	ret				;nope, lose
+
+tmatch:	push p,t2			;don't smash this register
+	move t2,stype(sblock)		;get type
+	came t1,t2			;always match if match (!)
+	cain t2,dstar			;always match if wildcard
+	 aos -1(p)
+	camn t2,tmtab(t1)		;match appropriate generic qtype
+	 aos -1(p)
+	pop p,t2
+	ret				;lose
+
+;Strictly speaking, this should be done with a hairy macro table,
+;but these values are pretty well hardwired into the Internet by now.
+;Use -1 as "no match" value just out of paranoia (slightly less common
+;as a random value than zero).  This table tracks the definitions in
+;MASTER.MAC (one componant of DOMSYM.UNV).
+
+tmtab:	-1				;low bound
+	-1				;Address
+	-1				;Name server
+	dmaila				;Mail destination
+	dmaila				;Mail forwarder
+	-1				;Canonical name pointer
+	-1				;Start Of Authority
+	dmailb				;Mailbox
+	dmailb				;Mail group
+	dmailb				;Mail rename
+	-1				;Null RR
+	-1				;Well known service
+	-1				;Domain name pointer
+	-1				;Host information
+	-1				;Mailbox information
+	dmaila				;New mail agent RR
+	-1				;High bound
+ifn <.-tmtab-dtype>,<printx TMTAB doesn't match DOMSYM definitions>
+
+
+	Subttl	Output routines to store string data in user memory
+
+;	setout sets up various things for output, call with
+;	user output designator in ac1.
+;
+;	outch outputs one char in AC2 if CONLY set, otherwise it
+;	increments outcnt.  trashes ac1 and ac3.  skip return
+;	unless some kind of error (jsys, presumably)
+;
+setout:
+ifdj  <	move t2,[xctbu [idpb t2,t1]]>	;get appropriate byte handling
+ifndj <	move t2,[idpb t2,t1]>		;instruction
+	tlcn t1,777777			;if jfn
+	 move t2,[bout%]		;do jsys
+	tlcn t1,777777			;if hrroi format
+	 hrli t1,(<point 7,0>)		;use standard pointer
+	movem t1,outbp(sblock)		;save designator
+	movem t2,outins(sblock)		;save instruction
+	ret
+
+out4:	rot t2,-20
+	call outtwo
+	 ret
+	rot t2,20
+
+outtwo:	rot t2,-10
+	call outch			;output high order
+	 ret
+	rot t2,10			;and fall through for another
+
+outch:	ifxe. flags,conly		;output enabled?
+	  move t1,outbp(sblock)		;yeah, get output byte pointer
+	  move t3,outins(sblock)	;get instruction to execute
+	  xct t3
+	   erjmp r			;bad destination
+	  movem t1,outbp(sblock)
+	else.				;output disabled
+	  aos outcnt(sblock)		;just count it
+	endif.				;done
+	retskp
+
+	Subttl	FSON tries to move down the tree by one label
+
+;	returns +1 if it can
+;	returns +2 if it can't
+;
+;	On entry:
+;		label points to byte pointer of search label
+;		t6 points at node block
+;	On exit:
+;		t6 points to node if found, junk otherwise
+fson:	skipn downtb(t6)		;see if hash table available
+	 skipa t6,downpt(t6)		;get node list from pointer
+	  call hashls			;get down pointer from hashing
+	do.				;just want one good node...
+	  jumpe t6,rskp			;return failure if no node here
+	  push p,t6			;CMPSx reformats byte pointers
+	  move t2,(label)		;byte pointer of key
+	  ildb t1,t2			;length of key
+	  move t5,nodela+labptr(t6)	;adress of ulabel
+	  add t5,[g1bpt 0,8,ultext]	;one word extended pointer
+	  ildb t4,t5			;length of candidate
+	  sub t1,t4			;compute excess length of key
+	  push p,t1			;save it in case minimum length matches
+	  skipge t1			;skip if string one is longer
+	   ldb t4,t2			;use string one length
+	  move t1,t4			;make lengths equal
+	  extend t1,[exp cmpsn,0,0]	;do string compare
+	  ifskp.			;strings differed
+	    ldb t3,t2			;change t3 to difference in bytes
+	    ldb t4,t5
+	    sub t3,t4
+	    movem t3,(p)
+	  endif.
+	  pop p,t3
+	  pop p,t6
+	  jumpe t3,r			;zero t3 signals success
+	  jumpl t3,rskp			;if key is less search failed
+	  move t6,sidept(t6)		;try next node
+	  loop.
+	enddo.				;never get here
+
+	Subttl	HASHLS picks up a hashed down table pointer
+
+;	On entry:
+;		LABEL points to the search byte pointer
+;		t6 points at the node block
+;
+;	On exit:
+;		t6 points at the head of the node list to search
+;
+hashls:	move t1,(label)			;byte pointer of label to hash
+	ildb t3,t1			;get length byte for counting down
+	move t4,t3			;also include it in hash
+	do.
+	  sojl t3,endlp.		;finish up if all bytes hashed
+	  ildb t5,t1			;get a new even byte
+	  lsh t5,6			;shift it
+	  add t4,t5			;add it to sum
+	  sojl t3,endlp.		;finish up if all bytes hashed
+	  ildb t5,t1			;get a new odd byte
+	  add t4,t5			;add it unshifted
+	  loop.				;waltz around again
+	enddo.
+	idivi t4,^d1009			;hash it
+	add t5,downtb(t6)		;add address of start of hash table
+	move t6,(t5)			;get chain head
+	ret				;bye
+
+	Subttl	Lock hackers
+
+;	The following routines manipulate locks in the master database.
+;	The acquired locks are recorded in the search block in variables
+;	lock1 and lock2.  Although the lookup code only acquires locks
+;	in share mode, and assumes share mode for release, the locking
+;	code does check for locks which may have been acquired in
+;	exclusive mode by other parts of the domain system.
+;
+;	ZLOCKS T1=>zone	change T1 to point to lock, fall though to
+;
+;	LOCKS T1=>lock	gets lock in shared mode, waiting if required
+;			records lock in search block
+;
+;	ULOCKA		releases all shared locks recorded in search block
+;
+;	ULOCKS T1=>lock	releases specified lock
+;
+;	BREAKZ T1=>zone	initiaizes lock in zone to be totally unlocked
+;			changes T1 to point to lock
+;
+;	BREAKL T1=>lock	initializes specified loc
+zlocks:	xmovei t1,zonelo(t1)		;change zone address to lock address
+
+locks:	push p,t2			;we're gonna smash this
+	move t2,t1			;to leave ac1 free for disms%
+	skipe lock1(sblock)		;is this slot open to record lock?
+	ifskp.				;yeah
+	  movem t2,lock1(sblock)	;remember in lock1
+	else.				;nope
+	  movem t2,lock2(sblock)	;remember in lock2
+	endif.
+	do.				;loop waiting for lock
+	  aosn lockwd(t2)		;try to acquire primative lock
+	  ifskp.			;lost
+	    aos msrdat+dpwait(dbase)
+	    move t1,msrdat+plttl(dbase)	;wait for lock to free up
+	    disms%
+	    loop.			;go try again
+	  endif.
+	  skipn exclus(t2)		;test for exclusive lock set
+	  ifskp.			;lost
+	    aos msrdat+dewait(dbase)
+	    setom lockwd(t2)		;free master lock
+	    move t1,msrdat+lckttl(dbase)
+	    disms%			;wait for lock to free up
+	    loop.			;go try again
+	  endif.			;ok, we won
+	enddo.				;so stop looping
+	aos share(t2)			;increment share count
+	setom lockwd(t2)		;free master lock
+	move t1,t2			;put acs back the way they were
+	pop p,t2
+	ret				;and return
+
+ulocka:	skipe t1,lock1(sblock)		;free all locked zones
+	 call ulocks
+	skipn t1,lock2(sblock)
+	 ret				;(fall through...)
+
+ulocks:	camn t1,lock1(sblock)		;free appropriate lock
+	 setzm lock1(sblock)
+	camn t1,lock2(sblock)
+	 setzm lock2(sblock)
+	sos share(t1)			;decrement share count
+	ret
+
+breakz:	xmovei t1,zonelo(t1)		;change zone address to lock address
+
+breakl:	setom lockwd(t1)		;set lock to available
+	setzm share(t1)			;set share count to zero
+	setzm exclus(t1)		;set exclusive count to zero
+	ret
+
+	Subttl	UCASE sets the case of a domain name to all upper
+
+;	On entry:
+;	t1 points at first octet of domain name
+;
+;	routine UCASES does the search name
+
+ucases:	move t1,[point 8,sname(sblock)]
+
+ucase:	ildb t2,t1			;get length of label
+	jumpe t2,r			;return on zero length
+	do.				;loop looking at chars
+	  ildb t3,t1			;get character to check
+	  cail t3,"a"			;lowercase letter?
+	  caile t3,"z"
+	  ifskp.			;yes
+	    subi t3,cdelta		;adjust to upper case
+	    dpb t3,t1			;and write it back
+	  endif.
+	  sojn t2,top.			;go get next character
+	enddo.				;isn't one, so...
+	jrst ucase			;go get next label
+
+	Subttl	Exit routine
+;
+;	All terminations of the domain jsys exit through DFINIS
+;
+;	This routine frees up all locked resources, etc
+
+efinis:	movem t1,derc(sblock)		;store domain error code
+dfinis:	call finfix
+
+ifdj <
+	okint				;turn PSI back on
+	jumpe t2,skmrtn			;no error, normal return
+	emretn				;error return
+>; ifdj
+
+ifndj <
+	movem t2,uerc
+uexit:	skipn osect			;did we start out in section zero?
+	 xjrstf [exp 0,<0,,.+1>]	;yes, jump back there
+	skipe t1,ddtadr			;fix ddt address if needed
+	 movem t1,770000
+	movsi p,userac			;restore registers
+	blt p,p
+	skipn uerc
+	 aos (p)			;skip return if no error
+	ret
+>; ifndj
+
+finfix:	aos msrdat+dfgra+tbacks(dbase)
+ifndj <	time%>
+ifdj <	move t1,todclk>
+	sub t1,tstart(sblock)		;compute request service time
+	addm t1,msrdat+dfgra+ttotal(dbase)	;add time to total
+	idiv t1,msrdat+dfgra+tquant(dbase)	;compute slot (?)
+	caile t1,tslots			;paranoia
+	 movei t1,tslots
+	xmovei t2,msrdat+dfgra+tdelay(dbase)
+	add t1,t2
+	aos (t1)			;increment appropriate slot
+	call ulocka			;unlock everything
+	skipn t1,derc(sblock)		;skip if error return
+	 hrr t1,fcode(sblock)		;get function code
+	hll t1,flags			;also flag bits
+	umovem t1,1			;return in register 1
+	skipe t2,derc(sblock)		;get error code,if any, in t2
+	 aosa msrdat+dferr(dbase)	;DFINIS with error
+	  aos msrdat+dfok(dbase)	;DFINIS and ok
+	setom slock(sblock)		;unlock the search block
+	ret
+
+
+
+;resolver error, check for gtdx4 code
+fgtdxn:	caie t1,gtdx4			;was it?
+	 reterr				;no, return whatever it was
+	jrst ggtdx4 
+
+;come here on gtdx4 error (info not available)
+;try host table before returning that error
+fgtdx4:	movei t1,gtdx4
+	movem t1,derc(sblock)		;store domain error code
+	call finfix
+	okint				;turn PSI back on
+ggtdx4:	hrrz t1,flags			;get function part
+	cain t1,.GTHNS			;num to string?
+	 jrst ngtdx4
+	caie t1,.GTHSN			;string to num?
+	 jrst fgtd4e			;no, so die now
+	txne flags,dnf			;asciz?
+	 jrst fgtd4e			;no
+	movei 1,.GTHSN
+	hrroi 2,nicdnm
+	GTHST%
+	 erjmp fgtd4e
+	umovem flags,1
+	umovem t3,3
+	umovem t4,4
+	jrst skmrtn			;no error, normal return
+
+ngtdx4:	stkvar <<hstnam,20>>
+	movei 1,.GTHNS
+	hrroi 2,hstnam
+	umove t3,3
+	GTHST%
+	 erjmp fgtd4e
+	umovem t3,3
+	umovem t4,4
+;dump string here
+ifdj  <	move t3,[xctbu [idpb t2,t1]]>	;get appropriate byte handling
+ifndj <	move t3,[idpb t2,t1]>		;instruction
+	umove t1,t2			;get destination designator
+	tlcn t1,777777			;if jfn
+	 move t3,[bout%]		;do jsys
+	tlcn t1,777777			;if hrroi format
+	 hrli t1,(<point 7,0>)		;use standard pointer
+	move t4,[point 7,hstnam]
+dmphnm:	ildb t2,t4			;byte to output
+	xct t3				;dump it
+	 erjmp fgtd4e			;bad destination
+	jumpn t2,dmphnm
+	camn t3,[bout%]			;jsys?
+	 jrst skmrtn			;yeah, don't bother
+	seto t2,			;nope, back up byte pointer
+	adjbp t2,t1			;by one byte
+	umovem t2,2			;write it back to user space
+	jrst skmrtn			;ok
+
+fgtd4e:	movei t1,gtdx4
+	umovem t1,1
+	emretn				;error return
+
+
+	Subttl	DOMINI is called to initialize the domain database
+
+; the choices are pairs of files called something like:
+;	<domain>flip.dd and <domain>flop.dd
+;
+; the exact names are passed as macros flipfn and flopfn
+;
+; The version to choose is the highest version number such that:
+; 	both files exist and can be opened and at least one file is not dirty
+;
+; within such a set, select the newest update_date which is not dirty
+;
+; In the case of Exec level code, Pagem has already initialized
+; (created) this section, which will inherit a page map on its first
+; reference.
+
+	filver=t5
+	jfn1=t6
+	jfn2=t7
+
+IFN STANSW&DJSYS,<	;; Define resident storage here to minimize changes to STG
+RS DOMIDX,1				;Address of PT of first section
+RS DM2IDX,1				;Address of PT of second section
+RSI DOMSRV,<0>				;-1 if domain service available
+RSI DOMBEG,<0>
+RSI DOMTMR,<0>
+>;IFN STANSW&DJSYS
+
+domini::
+ifdj <	Trvar <ofn1,ofn2>>		; Why use acs?
+
+IFN GTDSW,<
+	CALL NICINI			;initialize nickname table
+	 TRN				;ignore errors
+>;IFN GTDSW
+
+	setz filver,
+	Movsi	DBase,DomSec		; Use the domain section
+
+inilp:	movx t1,gj%sht+gj%old		;setup for gtjfn on first file
+	hrr t1,filver			;setup gtjfn for first file
+	hrroi t2,[ flipfn ]
+	gtjfn%
+	 erjmp	[jumpe filver,mfatal
+		 Jrst	TLower]		; Try next lower version or die
+	move jfn1,t1			;remember jfn
+	ife. filver			;need to get version number?
+	  move t2,[1,,.fbgen]		;want one word of FDB
+	  movei t3,filver		;where to put it
+	  gtfdb%			;get it
+	  hlrzs filver			;just want the generation number
+	endif.				;ok, now have version number
+	movx t1,gj%sht+gj%old		;setup for gtjfn on second file
+	hrr t1,filver			;same version number
+	hrroi t2,[ flopfn  ]
+	Gtjfn%
+	 erjmp rel1
+	move jfn2,t1			;remember second JFN
+	movx t2,of%rd+of%wr+of%thw	;try to open jfn2
+	Openf%
+	 erjmp relb
+	move t1,jfn1			;open JFN 1
+	Openf%
+	 erjmp clo2
+
+; fall through
+
+; ...falling...
+
+; Now both are open, so try to map in one page of flip into the first
+; page of the domain section, and one page of flop into the second page
+ifndj <	hrlz t1,jfn1			; Get jfn for first file
+	move t2,[ .fhslf,,domsec*psize]	; map into 1st page of domain section
+	movx t3,pm%rwx			; full access
+	Pmap%				; Do the mapping
+	 erjmp clob			; Punt-o-matic
+	hrlz t1,jfn2			; Now second file
+	addi t2,1			; Map into second page of 1st section
+	Pmap%				; Do it
+	 erjmp umapj			; No can do, presume dirty
+>; ifndj
+
+ifdj <IFE STANSW,<
+	Hrlz	t1,jfn1			; jfn1,,0
+	Call	JFNOFN			; Convert JFN to ofn,,pn
+	 Bug.	(HLT,DMIOF0,Soft,GtDom,<Can't get OFN0 for Flip File>)
+	Movem	t1,ofn1			; Save it
+	Move	t2,[Pm%RWX!DomIDX]	; Where it goes
+	Call	SetMPG			; Map it
+	hrlz	t1,jfn2			; jfn2.0
+	Call	JFNOFN			; ofn2.0
+	 Bug.	(HLT,DMIOF1,Soft,GtDom,<Can't get OFN0 for Flop File>)
+	Movem	t1,ofn2			; Save ofn2.0
+	Move	t2,[Pm%RWX!Dm2IDX]	; Map into second page
+	Call	SetMPG			; Do it
+>;IFE STANSW
+IFN STANSW,<
+	HRLZ T1,JFN1			; jfn1,,0
+	CALLX (MSEC1,JFNOFN)		; Convert JFN to OFN,,PN
+	 BUG.(HLT,DMIOF0,SOFT,GTDOM,<Can't get OFN0 for Flip File>)
+	MOVEM T1,OFN1			; Save it
+	MOVX T2, <DOMSEC,,0>		; map into first page of first section
+	TXO T2,PM%RWX			; What access
+	CALLX (MSEC1,SETMPG)		; Map it
+	HRLZ T1,JFN2			; jfn2.0
+	CALLX (MSEC1,JFNOFN)		; ofn2.0
+	 BUG.(HLT,DMIOF1,SOFT,GTDOM,<Can't get OFN0 for Flop File>)
+	MOVEM T1,OFN2			; Save ofn2.0
+	MOVX T2,<DOMSEC,,PSIZE>	; Map into second page
+	TXO T2,PM%RWX			; What access
+	CALLX (MSEC1,SETMPG)		; Do it
+>;IFN STANSW
+>; ifdj
+
+; Fall through with files mapped
+
+; ...falling...
+
+; now both are mapped, check internal version number before we ILMNRF!
+	call	cdbver			; Check internal version numbers
+	 jrst	umapb			; Got a bad one, punt it
+
+; versions are ok, see if they are both dirty
+	Setz	t1,			; Say check first file
+	Call	CDirty			; See if dirty
+	 Jrst	[Movei	t1,1		; Say check 2nd file
+		 Call	CDirty
+		  jrst	 umapb
+		 Jrst	sflop]		;select jfn2
+	Movei	t1,1			; Say check second buffer
+	Call	CDirty			; Check it
+	 jrst fpmap			;second file dirty, select flip
+
+ifdj  <
+IFE STANSW,<
+	move	t2,update+domidx	; Compare update words
+	camge	t2,update+psize+domidx	;skip to select flip
+>;IFE STANSW
+IFN STANSW,<
+	movx	t1,<DOMSEC,,0>		; Compare update words
+	move	t2,update(t1)
+	camge	t2,update+psize(t1)	;skip to select flip
+>;IFN STANSW
+>;ifdj
+
+ifndj <	move	t2,update(DBase)	; Check update word
+	camge	t2,update+psize(DBase)>	;skip to select flip
+
+sflop:	 exch jfn1,jfn2			;select flop
+
+fpmap:	Setz	t1,
+
+ifndj <	call umap0			;unmap page 0
+	call umap1			;unmap page 1
+	hrlz t1,jfn1			;PMAP in whole database
+	movx t2,<.fhslf,,dbfirs>
+	movx t3,pm%rd+pm%wr+pm%cnt+dblast-dbfirst+1
+	pmap				;map in whole database
+	 erjmp clob			;on failure, try lower version
+>; ifndj
+
+Ifdj <
+IFE STANSW,<
+	Movei	t2,Domidx
+	Call	SetMPG			; Unmap first page
+	Setz	t1,
+	Movei	t2,Dm2idx		; Unmap first page o' other file
+	Call	SetMPG			; I love it when a plan comes together
+	Hrlz	t1,jfn1			; jfn.0
+	Call	JfnOfn			; Get OFN on first section
+	 Bug.	 (HLT,DMIOF2,Soft,GtDom,<Can't get section 0 OFN>)
+	Movem	t1,ofn1			; Save it
+	Hrlz	t1,jfn1			; Get this back for a sec
+	Hrri	t1,1000			; jfn.2nd section
+	Call	JfnOfn			; get it
+	 Bug.	 (HLT,DMIOF3,Soft,GtDom,<Can't get section 1 OFN>)
+	Movem	t1,ofn2
+	Hrli	t1,224000		; This kind o' ptr
+	Hlr	t1,ofn1			; Get this back
+	Movem	t1,DomSec+MSectb	; Make it a new section ptr
+	Hlr	t1,ofn2
+	Movem	t1,Dm2Sec+MSectb	; Hahahahaha
+>;IFE STANSW
+IFN STANSW,<
+	MOVX T2,<DOMSEC,,0>
+	CALLX (MSEC1,SETMPG)
+	SETZ T1,
+	MOVX T2,<DOMSEC,,PSIZE>	; Umap first page of other file
+	CALLX (MSEC1,SETMPG)		; ...
+	HRLZ T1,JFN1			; jfn.0
+	CALLX (MSEC1,JFNOFN)		; Get OFN on first section
+	 BUG.(HLT,DMIOF2,SOFT,GTDOM,<Can't get section 0 OFN>)
+	MOVEM T1,OFN1			; Save it
+	HRLZ T1,JFN1			; Get this back for a sec
+	HRRI T1,1000			; jfn.2nd section
+	CALLX (MSEC1,JFNOFN)		; get it
+	 BUG.(HLT,DMIOF3,SOFT,GTDOM,<Can't get section 1 OFN>)
+	MOVEM T1,OFN2
+;Sigh.  Now we map all 1024 pages, one at a time.  It only happens once...
+	MOVEI T3,1000		;512 pages in first section
+	HRLZI T2,DOMSEC		;start at page DOMSEC,,0
+	TXO T2,PM%RWX		; What access
+	HLLZ T1,OFN1		; and file page OFN1,,0
+	CALLX (MSEC1,MSETMP)	;map these pages
+	MOVEI T3,1000		;512 pages in second section
+	HRLZI T2,DM2SEC		;start at page 0
+	TXO T2,PM%RWX		; What access
+	HLLZ T1,OFN2		;add in ofn/page 0
+	CALLX (MSEC1,MSETMP)	;map these pages
+>;IFN STANSW
+>;ifdj
+
+; Fall through...
+
+; ...falling...
+
+; The database is now mapped in, initialize if appropriate
+
+ifndj <	movem dbase,morg		;mark database as mapped
+	skipn dbinit			;should we init the database?
+	 retskp				;no, done, win
+	setzm dbinit			;yes, make sure we don't repeat this
+>
+
+	skipn jsysin(dbase)		;mark database as initialized
+	 aos jsysin(dbase)
+	move t1,[g1bpt domsec,7,prifn]	;set up filenames in database
+	move t2,jfn1			;primary filename
+	movx t3,js%spc!js%paf		;full filespec please
+	jfns%
+	 erjmp r			;shouldn't lose
+	move t1,[g1bpt domsec,7,secfn]	;secondary filename
+	move t2,jfn2
+	jfns%
+	 erjmp r
+
+; now go clear all of the locks
+	xmovei t1,szone(dbase)		;unlock search zone
+	call breakz
+	skipn t1,cachep(dbase)		;unlock cache, if any
+	ifskp.
+	  skipe zonelo+exclus(t1)	;cache was write-locked?
+	anskp.				;no, we can salvage it
+	  call breakz			;so clean it up
+	else.				;no cache or cache corrupt
+	  setzm cachep(dbase)		;throw cache away
+	endif.
+	move t4,szone+znode(dbase)	;get top node of search zone
+	xmovei t3,bzlist		;break locks in this zone list
+	call walkn
+
+; unlock all search blocks
+	move sblock,sbloop(dbase)	;get address of first block
+	do.				;loop unlocking search blocks
+	  setom slock(sblock)		;break lock
+	  move 1,sbidx(sblock)		;get slot index
+	  setzm @[gfiwm domsec,rcom(1)]	;mark as not to be resolved
+	  setzm @[gfiwm domsec,rwaitw(1)]
+ifdj <	  setzm domrww(1)>		;and nobody waiting pending resolve
+	  move sblock,sbnext(sblock)	;get next block
+	  came sblock,sbloop(dbase)
+	   loop.
+	enddo.
+
+ifdj  <	setom domsrv>			;signal all is ready
+	retskp				;return after database initialized
+
+
+	Subttl	Highly Conditional subroutines
+
+; Entered with t1 containing a page offset to selected compare buffer
+CDirty:
+	Lsh	t1,9			; Turn into page offset
+ifndj <	add	t1,DBase>		; Reference right dom sec page
+ifdj  <
+IFE STANSW,< skipn dirty+domidx(t1)>	; Check selected buffer
+IFN STANSW,<
+	ADD T1,[DOMSEC,,0]		; Add base of address
+	SKIPN DIRTY(T1)			; Check selected buffer
+>;IFN STANSW
+>;ifdj
+ifndj <	skipn	dirty(t1)>		; in right place
+	 Aos	(p)			; File is clean
+	Ret				; Emit proper return
+
+; CDBVer - check database version numbers (flip and flop)
+; Makes same assumptions as CDirty (probably bad ones)
+IFE STANSW,<
+CDBVer:	movx	t1,dbvern		; Version number we are looking for
+ifdj  <	came	t1,dbvers+domidx>	; Check flip, monitor context
+ifndj < came	t1,dbvers(dbase)>	; Check flip, user context
+	ifskp.				; If flip is ok...
+ifdj  <	came	t1,dbvers+1000+domidx>	; Check flop, monitor context
+ifndj < came	t1,dbvers+1000(dbase)>	; Check flop, user context
+	anskp.				; And flop is ok
+	  aos	(p)			; Both versions ok, skip return
+	else.				; saw a bad internal version number
+ifdj  <	  Bug.	(CHK,DMIBVR,Soft,GtDom,<Monitor/database version mismatch>)>
+ifndj <	  tmsg	<Database internal version number does not match GTDOM code!!!
+>>					; Flame loudly but don't crash
+	endif.				; (Hope resolver figures this out!)
+	ret				; Done in any case, return to user
+>;IFE STANSW
+IFN STANSW,<
+CDBVer:	movx	t1,dbvern		; Version number we are looking for
+	movx T2,<DOMSEC,,0>		; get address where data is mapped.
+ifdj  <	came	t1,dbvers(T2)>		; Check flip, monitor context
+ifndj < came	t1,dbvers(dbase)>	; Check flip, user context
+	ifskp.				; If flip is ok...
+ifdj  <	came	t1,dbvers+1000(t2)>	; Check flop, monitor context
+ifndj < came	t1,dbvers+1000(dbase)>	; Check flop, user context
+	anskp.				; And flop is ok
+	  aos	(p)			; Both versions ok, skip return
+	else.				; saw a bad internal version number
+ifdj  <	  Bug.	(CHK,DMIBVR,Soft,GtDom,<Monitor/database version mismatch>)>
+ifndj <	  tmsg	<Database internal version number does not match GTDOM code!!!
+>>					; Flame loudly but don't crash
+	endif.				; (Hope resolver figures this out!)
+	ret				; Done in any case, return to user
+>;IFN STANSW
+
+; TLower - go to previous version if can
+tlower:
+ifndj <	TMsg	<Version >
+	Movx	t1,.Priou
+	Move	t2,FilVer
+	Movei	t3,<5+5>
+	Nout%
+	 Nop
+	TMsg	< failed
+>>; ifndj
+	sojn filver,inilp	;try next lower version
+	jrst mfatal
+
+mfatal:
+ifdj <	setzm domsrv			; Say no such service
+IFN STANSW,<
+	SKIPN FILVER			;Failed on first try?
+	 RETSKP				; Yes, skip return to avoid bugchk
+>;IFN STANSW
+	Ret
+>; ifdj
+
+ifndj <	TMsg	<
+% Domini/MFatal - Cannot open primary file
+>
+	 Haltf%
+	 Jrst	.-1
+>; ifndj
+
+
+	Subttl	BZLIST called by WALKN for every node in search zone
+
+bzlist:	skipn t2,zonept(t2)		;get address of first zone in list
+	 ret				;return if none
+	do.				;loop over nodes
+	  xmovei t1,zonelo(t2)		;get address of lock
+	  call breakl			;break this zone's lock
+	  skipe t2,zchain(t2)		;get address of next zone in list
+	   loop.			;iterate if more
+	enddo.				;weren't any more
+	ret				;bye
+
+	Subttl	Unmapping and Closing routines
+
+umap1:	skipa	t2,[.fhslf,,dbfirs+1]	;unmap the second page
+umap0:	move	t2,[.fhslf,,dbfirs]	;unmap the first page	
+	seto	t1,
+	setz	t3,
+	Pmap%
+	 nop
+	ret
+
+umapb:	call umap1			;both dirty back up
+umapj:	call umap0
+clob:	move t1,jfn1			;if PMAP fails close and loop
+	Closf%
+	 nop
+clo2:	move t1,jfn2
+	Closf%
+	 nop
+relb:	move t1,jfn2			;on error, release both jfns and loop
+	Rljfn%
+	 nop
+rel1:	move t1,jfn1			;on error, release jfn1 and try again
+	Rljfn%
+	 nop
+	jrst tlower
+
+	Subttl	WALKN walks a node tree
+
+; On entry:
+;
+;	t4 points to a node
+;	t3 points to routine to execute
+;
+;	when routine specified by t3 is called,
+;		t2 points at node
+;		routine may garbage t2
+walkn:	move t2,t4			;call at root node
+	call (t3)
+	skipe t2,downpt(t4)		;only one string of sons?
+	ifskp.				;nope
+	  skipn t2,downtb(t4)
+	   ret				;return if no down table
+	  xmovei t2,labelh-1(t2)	;get address of last table entry
+	  do.
+	    push p,t2			;save table address
+	    push p,t4			;save starting point
+	    skipe t4,(t2)		;get actual pointer
+	     call callch		;walk string if non-zero
+	    pop p,t4			;restore starting point
+	    pop p,t2			;restore table address
+	    camn t2,downtb(t4)		;was it last one in table?
+	     ret			;yes, return
+	    soja t2,top.		;no, next
+	  enddo.
+	endif.
+	move t4,t2			;setup node address
+					;fall through...
+callch:	push p,t4			;save node address
+	call walkn
+	pop p,t4
+	skipe t4,sidept(t4)		;get next in list, skip if end
+	 jrst callch
+	ret
+
+IFN STANSW,<;;; routine to check for a host address "Goodness"
+; Accepts:  T1/ host number
+; returns:  T2/ goodness
+;		6 : host is directly connected to a preferred net
+;		4 : host is directly connected to an available net
+;		3 : a gateway to the host's net is on the preferred net
+;		2 : a gateway to the host's net is on an available net.
+;		1 : host is at least 2 hops away..
+; At present, this code does not know about Subnets, or fast nets/gateways
+; vs slow nets/gateways.  Maybe someday.
+;
+HSTGOO:	NETNUM T2,T1			;Get network number of destination
+	CAME T2,PRFNET
+	IFSKP.
+	 MOVEI T2,6			;really good address.
+	 RET
+	ENDIF.
+;Now check if we have ANY interface direct to the desired net
+	XMOVEI T3,NCTVT			; Point to the NCT table
+	DO.
+	 LOAD T3,NTLNK,(T3)		; Get net in the chain
+	 JUMPE T3,ENDLP.		; no more Interfaces - failure
+	 CAME T2,NTNET(T3)		; sam	e network?
+	  LOOP.				; No, loop
+	 MOVEI T2,4			;YES. return goodness level 4
+	 RET
+	ENDDO.
+; now check if we know of any gateways connected directly to the specified net
+	SAVEAC T1			;save t1
+	CALL FNDGAT			;find a gateway
+	IFSKP.				; one has been found...
+	 MOVE T1,.GWILS(T1)		;get its (local) address
+	 NETNUM T1,T1			; get network number of gateway
+	 CAME T1,PRFNET			;is it on our preferred net?
+	  TDZA T2,T2			;no
+	   MOVEI T2,1			;yes - it gets an extra point
+	 ADDI T2,2			;2 or 3 total points
+	 RET				;return this value
+	ENDIF.
+	MOVEI T2,1			;address is minimally good.
+	RET
+
+;FNDGAT: Find a gateway (in the gateway table) that is directly connected
+;	 to the Network specified (and to a net we are on).
+;Entry:	T2/ Network number
+;Exit:	+1 failure.  No good gateways were found.
+;	+2 success.  T1/ (extended) pointer to gateway block.
+;
+MAXGWA==^d50			;this is defined in IPIPIP, only need approx #.
+;
+FNDGAT:	ACVAR	<GWT,I>
+	MOVSI	I,-MAXGWA		; Size of tables
+FNDGA0:	HRRZ	GWT,I			; Get offset
+	ADD	GWT,GWTAB		; Point into table
+	SKIPN	GWT,(GWT)		; Get entry (if any)
+	 RET				; Slot is empty - assume end of table
+	JE	GWUP,(GWT),FNDGA1 	; Gateway is not up
+	MOVE	T1,.GWILS(GWT)		; Get accessable address
+	CALL	NETCHK			; Is this interface up?
+	 JRST	FNDGA1			; No, try another gateway
+	LOAD	T3,GWICT,(GWT)		; Get the interface count
+	XMOVEI	T4,.GWILS(GWT)		; Point to interface names
+	DO.
+	  MOVE	T1,(T4)			; Get an address
+	  NETNUM T1,T1			; Get the net number
+	  CAME T1,T2			; Same network as we want?
+	  IFSKP.
+	   MOVE	T1,GWT			; Get the address of this GW block
+	   RETSKP			; and return
+	  ENDIF.
+	  ADDI T4,1			; Point to the next entry
+	  SOJG T3,TOP.			; and loop through this gateway
+	ENDDO.
+FNDGA1:	AOBJN	I,FNDGA0		; Loop through all gateway blocks
+	RET				;failure.  no skip.
+	ENDAV.
+>;IFN STANSW
+
+	Subttl	Housecleaning
+
+ifn stansw,<;; reference some symbols so taht they will be accessible in mddt
+	ret <logrn+logri+logrp+logue+logua>
+>;ifn stansw
+
+	dcheck				;verify values for consistency
+
+ifdj <	tnxend>
+	end
+
+;;; Local Modes:*
+;;; Mode:MACRO*
+;;; Comment Column:40*
+;;; Comment Start:;*
+;;; Comment Begin:;*
+;;; Auto Fill Column:72*
+;;; End:*

@@ -1,0 +1,882 @@
+;<403-INET>INPAR.MAC.4, 21-Apr-82 16:58:00, Edit by TAPPAN
+; Change NETNUM to assume that high order bits of address are 0
+;<CLYNN.REL3>INPAR.MAC.40302, 22-Feb-82 11:07:10, Edit by TAPPAN
+; Merge in some BBN changes, and extended addressing and ICMP
+;<403-INET>INPAR.MAC.40301 29-Jan-82 15:13:20, Edit by CLYNN
+; Updated for IP release 3
+; Move user queue definitions to MONSYM
+; Remove some unused definitions
+;[BBNF]<MNET-INET>INPAR.MAC.7,  8-Jan-82 18:18:42, Ed: RBASCH
+;ADDED INTLAC AS SYNONYM FOR LOCAL
+	UNIVER	INPAR
+	SUBTTL	Internet Parameters, William W. Plummer, 2Mar79
+	SEARCH	IMPPAR,PROLOG,MACSYM,MONSYM
+
+	SALL
+;FR			; Flags, preserved by routines
+;T1			; Temporary ACs.  Maybe freely clobbered.
+;T2			; Subrs never expected to preserve these.
+;T3			; Used to send args to subrs.
+;T4			; Functions return value in T1
+NTEMPS==4		; Number of temps. (used only in TEMP macro)
+;Q1			; Locals.  Always preserved by subrs.
+;Q2
+;Q3
+;P1			; More locals.
+NLOCLS==4		; Number of locals (used only in LOCAL macro)
+FR==0			; Be sure that AC0 is what we use for flags
+DEFAC(BFR,P2)		; Global ACs.  Implicit args to lower level
+DEFAC(TPKT,P3)		; Subrs.  Changed only with great care.
+DEFAC(PKT,P4)
+DEFAC(TCB,P5)		; Pointer to connection (TCP)
+;P6			; Frame base used by .TRSET
+;CX			; Scratch AC used by Jxxx macros and stack stuff
+;P			; Push pointer.  Always covers the stack.
+
+
+; Set processor flags since -20 PROLOG lacks KAFLG and TENEX lacks SMFLG
+IFNDEF KAFLG,<KAFLG==0>
+IFNDEF KIFLG,<KIFLG==0>
+IFNDEF KLFLG,<KLFLG==0>
+IFNDEF SMFLG,<KLFLG==0>
+IFE KAFLG+KIFLG+KLFLG+SMFLG,<PRINTX ? Processor not defined>
+
+DEFINE IFNKA(STUFF)<IFE KAFLG!KIFLG,<STUFF>>
+DEFINE IFKA(STUFF)<IFN KAFLG!KIFLG,<STUFF>>	; KI and KA are the same
+DEFINE IFKL(STUFF)<IFN KLFLG,<STUFF>>
+DEFINE IFSM(STUFF)<IFN SMFLG,<STUFF>>
+
+IFKA <	DEFINE SETSEC (AC,SECTION)<>>
+IFKL <	DEFINE SETSEC (AC,SECTION) <	HRLI AC,SECTION>>
+IFSM <	DEFINE SETSEC (AC,SECTION) <>>
+
+IFKL <DEFINE GIW (ADDR,X<0>,I<0>) < <I>B1!<X>B5!<ADDR>B35>>
+IFSM <DEFINE GIW (ADDR,X<0>,I<0>) < <I>B13!<X>B17!<ADDR>B35>>
+IFKA <DEFINE GIW (ADDR,X<0>,I<0>) < <I>B13!<X>B17!<ADDR>B35>>
+
+IFKA <	IFIW==:1B0
+	OPDEF XMOVEI [SETMI]	>
+
+; Macro to handle bugs in the IP (and TCP)
+; Monitor-independent BUG macro:
+
+
+DEFINE INBUG(TYPE,STRING,TAG) <
+	IFKA <	IFIDN <TYPE>,<INF>,<BUG(NTE,<STRING>)>
+		IFDIF <TYPE>,<INF>,<BUG(TYPE,<STRING>)>
+	>
+	IFNKA <	BUG(TAG)>
+>
+
+
+;******* THIS MACRO IS ONLY USED BY TCP AND INET MONITOR MODULES NOW****
+
+
+;MACROS FOR DEFINING BUGHLT AND BUGCHK STRINGS
+
+;THIS IS THE MACRO THAT APPEARS IN THE CODE.  ITS FIRST ARG IS INF, CHK 
+;OR HLT, AND CAUSES ASSEMBLY OF JSR BUGINF, JSR BUGCHK OR JSR BUGHLT
+;RESPECTIVELY.  ITS SECOND ARGUMENT IS A GLOBAL SYMBOL WHICH IS TYPED
+;OUT AT THE TIME OF THE CHECK.   ITS THIRD ARGUMENT IS A STRING DEFINING
+;THE PROBLEM REPRESENTED BY THE CHECK. THE FORTH ARGUMENT IS AN OPTIONAL
+;LIST OF REGISTERS TO BE TYPED OUT AND TO BE PUT IN THE SYSERR REPORT.
+;A LIMIT OF 4 IS IMPOSED.
+
+BUGMXR==:4
+DEFINE OLDBUG (TYP,TAG,STR,REGS,%NAM,%STR)<
+	XCT [TAG::	JSR BUG'TYP
+		..NRGS==0
+		IRP REGS,<
+		..NRGS==..NRGS+1
+		IFG ..NRGS-BUGMXR,<IF2,<PRINTX %TOO MANY REGISTERS IN DEFINITION OF BUG'TYP TAG>
+				STOPI>
+		Z REGS>
+		SIXBIT /TAG/]
+	.PSECT BGSTR
+%STR:!	ASCIZ \STR\
+	.ENDPS BGSTR
+	.PSECT BGPTR
+	XWD TAG,%STR
+	.ENDPS BGPTR
+>
+
+;**** END OF OLD-STYLE BUG DEFINITION ********
+
+
+
+; Some auxilliary macros to be used by local variable stuff
+
+DEFINE $INIT <
+	DEFINE $INFO(X,Y)<X
+Y>
+$ACVNM==0
+$STVNM==0
+$TMVNM==0
+>
+
+DEFINE $REMOTE(Z)<$INFO(<DEFINE $INFO(X,Y)><X
+Z,Y>)>
+
+DEFINE $HERE <
+	$INFO
+	$INIT
+>
+
+
+DEFINE $IPMSG(L,M,A,S,T) <PRINTX M at L (A,S,T)>
+
+
+DEFINE $POP(L) <
+	OPDEF %POP% [POP P,]
+	$REMOTE (<%POP% L>)
+>
+
+DEFINE $PURGE (L)<$REMOTE (<PURGE L>)>
+
+; Macro to be used at entry to subroutine to define local variables
+;  and assign ACs to them.
+
+DEFINE LOCAL(LIST) <
+	IFG $ACVNM,<	$IPMSG(\.,<?LOCAL: Missing RESTORE>,\$ACVNM)
+			$ACVNM==0
+	>
+	IRP LIST,<	IFGE $ACVNM-NLOCLS,<$IPMSG(\.,<?Too many LOCALs>)>
+			$DFACL(LIST,\<$ACVNM>)
+			$ACVNM==$ACVNM+1
+	>
+>
+SYN LOCAL,INTLAC		; FOR THOSE MODULES THAT NEED IT
+
+DEFINE $DFACL(N,V) <
+	IFDEF N,<$IPMSG(\.,<?LOCAL AC N already defined>)>
+	PUSH P,T1+NTEMPS+V
+	N==T1+NTEMPS+V
+	$PURGE N
+	$POP T1+NTEMPS+V
+>
+
+
+; Macro for giving names to temporary AC's
+
+DEFINE	TEMP(LIST) <
+	IFG $TMVNM+$STVNM+$STVNM,<	$IPMSG(\.,<?TEMP: Missing RESTORE>,\$ACVNM,\$STVNM,\$TMVNM)
+					$STVNM==0
+					$TMVNM==0
+					$ACVNM==0
+	>
+	IRP LIST,<	IFGE $TMVNM-NTEMPS,<$IPMSG(\.,<?Too many TEMPs>)>
+			$DFTMP(LIST,\<$TMVNM>)
+			$TMVNM==$TMVNM+1
+	>
+>
+
+DEFINE $DFTMP(N,V) <
+	IFDEF N,<$IPMSG(\.,<?TEMP N already defined>)>
+	N==T1+V
+	$PURGE N
+>
+
+; Macro for allocating locals on the stack
+DEFINE	STACKL(LIST) <
+	IFG $ACVNM+$STVNM,<	$IPMSG(\.,<?STACKL: Missing RESTORE>,\$ACVNM,\$STVNM)
+				$ACVNM==0
+				$STVNM==0
+	>
+	IRP LIST,<	$STKL1(LIST)>
+	JSP CX,.TRSET##
+	$STVNM,,$STVNM
+>
+
+DEFINE $STKL1(PAIR)<	$STKL2(PAIR)>
+
+DEFINE $STKL2(NAME,SIZE) <
+	$STKL3(NAME,\$STVNM)
+	IFB <SIZE>,<$STVNM==$STVNM+1>
+	IFNB <SIZE>,<$STVNM==$STVNM+SIZE>
+>
+
+DEFINE $STKL3(NAME,LOC) <
+	IFDEF NAME,<$IPMSG(\.,<?STACKL local NAME already defined>)>
+	DEFINE NAME<^O'LOC+1(P6)>
+	$PURGE NAME
+>
+
+
+; Macro to restore all locals
+DEFINE RESTORE <
+	IFLE $ACVNM+$STVNM+$TMVNM,<$IPMSG(\.,<?Extra RESTORE macro>,\$ACVNM,\$STVNM,\$TMVNM)>
+	$HERE
+>
+
+$INIT
+
+
+; Macro to leave a subroutine.
+; Assembles as a RET if no RESTORE is needed.
+
+DEFINE EXIT(TAG) <
+	IFN $ACVNM,<JRST TAG>
+	IFE $ACVNM,<RET>
+>
+
+; Check consistency of IMPPAR so that IMPPHY, INGWAY, and TCP agree.
+
+IF1 <	IFDEF .INTVR,<
+	  IFN .INTVR-4,<PRINTX % .INTVR defined wrong in IMPPAR
+			.INTVR==4
+	  >
+	>
+	IFNDEF .INTVR,<PRINTX % .INTVR not defined in IMPPAR
+			.INTVR==4
+	>
+>
+
+
+
+; Internet Gateway Parameters -- determine buffer and packet sizes:
+
+;MF==^D<512/8>	; Fragments are a multiple of this size.
+;		;  Must be power of 2.
+;M0==^D144	; Segment size guaranteed not to require Internet
+;		;  fragmentation.  Net input buffer must be this big.
+;M1==4*M0	; Smallest segment size all Internet reassemblers
+;		;  guarantee to handle.
+;M2==M1		; Largest segment that a particular Internet layer is
+;		;  able to receive, independent of reassembly.  Local
+;		;  implementation limitation.
+;M3==M1		; Largest seg size a particular protocol implementation
+		;  will accept.  Determined by mutual agreement.
+;M4==^D<2_14>	; Largest segment Internet level can talk about
+; Constraints on the above:
+; MF le M0 le M1 le M2 le M3  and M2 le M4.
+; M0 chosen to so that one subtype-3 ARPANET packet can contain an
+; Internet fragment.
+
+
+; Protocol table definitions
+
+.INTPC==0	; (Extended) address of Time Check routine (xxxCHK)
+.INTPF==1	; Run request flag (xxxFLG)
+.INTPI==2	; (Extended) address of Initialization routine (xxxINI)
+.INTPQ==3	; (Extended) address of Input Queue head (xxxIPQ)
+.INTPO==4	; Protocol ON flag (0 is off) (xxxON)
+.INTPL==5	; Protocol number (.xxxFM)
+.INTPP==6	; (Extended) address of Processing routine (xxxPRC)
+.INTPS==7	; Protocol Segment Id (xxxSID)
+.INTPT==^D8	; Next run Time, msec (xxxTIM)
+.INTPE==^D9	; Handle an ICMP error message for this protocal (xxxICM)
+.INTPZ==^D10	; Table length
+
+; Parameters for this system:
+
+; Note: %NETS and MAXNET must be defined for STG, here is too late
+
+	REPEAT 0,<
+
+;%NETS==
+;MAXNET==44		; Maximum size of net-indexed tables
+
+
+; Figure out what interfaces we have on this machine and
+; what they connect to.  This will be automatic in the future.
+
+IFKA <
+  IFDEF NIIS,<	; TENEX with MIMPDV
+
+	;Interface codes
+
+	ARPA==0
+	BBNRCC==1
+	;BOSPRN==2
+	;....
+	%NETS==2		; Number of nets we are connected to
+  > ; end IFDEF NIIS
+
+  IFNDEF NIIS,<		; Old TENEX with IMPDV
+
+	;Interface codes
+
+	ARPA==0
+	;BBNRCC==1
+	;BOSPRN==2
+	;....
+	%NETS==1		; Number of nets we are connected to
+  > ; end IFNDEF NIIS
+>; end IFKA
+
+
+
+
+IFNKA <				; All else
+	;Interface codes
+
+	ARPA==0
+	;BBNRCC==1
+	;BOSPRN==2
+	;....
+	%NETS==1		; Number of nets we are connected to
+> ; end IFNKA
+
+	>
+
+
+;;; Definitions of network formats
+;;; These extract a network number from right justified host number.
+
+DEFSTR  NETCLS,0,6,3			; Bits identifying network class
+
+;;; Class A network. High 8 bits
+.NETCA==1B4				; Bit is off for a class A network
+$NETCA==-^D24				; Shift to isolate number
+DEFSTR	NETCA,0,11,8
+
+;;; Class B network. High 16 bits
+.NETCB==1B5				; Bit is on for a class B network
+$NETCB==-^D16				; Shift to isolate number
+DEFSTR	NETCB,0,19,16
+
+;;; Class C network. High 24 bits.
+$NETCC==-^D8				; Shift to isolate net number
+DEFSTR	NETCC,0,27,24
+
+;;; Macro for extracting the network number from a host address,
+;;; both SRC and DST must be AC's (obviously).
+DEFINE	NETNUM(DST,SRC,%HERE)<
+IFDIF <SRC>,<DST>,<MOVE DST,SRC>
+	TXNN	SRC,.NETCA		; Class A network?
+	 JRST	[ LSH	DST,$NETCA	; Get number
+		 JRST	%HERE]
+	TXNN	SRC,.NETCB		; Class B?
+	 JRST	[LSH	DST,$NETCB
+		 JRST	%HERE]
+	LSH	DST,$NETCC
+%HERE:!
+>
+
+; PACKET structure (indexed by PKT):
+
+PKTQ==<.P==0>			; Offset of Packet queue
+
+PKTFLG==<.P==.P+QSZ>		; Packet flags -- internal use only
+DEFSTR(PFLGS,\<PKTFLG>,35,36)
+  ; Specific flags:
+  DEFSTR(PPROG,\<PKTFLG>,0,1)	; non-0 means program still needs Pkt
+				; I.E. TCP RX
+  DEFSTR(PINTL,\<PKTFLG>,1,1)	; non-0 means int. level still has Pkt
+  DEFSTR(PFSIZ,\<PKTFLG>,2,1)	; non-0 if this is a full size TCP pkt
+			; MAXPSZ is buffer length & PACKSZ is IMPPHY length
+				; I.E. it can be recycled as an input buffer
+  DEFSTR(PRXD,\<PKTFLG>,3,1)	; non-0 means packet has been retrans'd
+  DEFSTR(PSCR,\<PKTFLG>,4,1)	; non-0 if packet on a secure connection
+  DEFSTR(PNLCL,\<PKTFLG>,5,1)	; non-0 to prevent local delivery
+				; I.E. Send it to the source from the dest
+  DEFSTR(PSROU,\<PKTFLG>,6,1)	; non-0 if user is source routing
+  DEFSTR(PLCLO,\<PKTFLG>,7,1)	; 0 if packet came from net, 1 if from host
+
+PKTSII==<.P==.P+1>		; Start of internal information
+
+DEFSTR(PTG,\<.P>,35,36)		; PACKET.TIME-GENERATED
+.P==.P+1
+DEFSTR(PXT,\<.P>,35,36)		; PACKET.XMIT-TIME
+.P==.P+1
+DEFSTR(PRXI,\<.P>,35,36)	; PACKET.REXMIT-INTERVAL
+.P==.P+1
+DEFSTR(PDCT,\<.P>,35,36)	; PACKET.DISCARD-TIME
+.P==.P+1
+DEFSTR(PTS,\<.P>,35,36)		; PACKET.TIMESTAMP
+.P==.P+1
+DEFSTR(PESEQ,\<.P>,35,36)	; PACKET.END-SEQUENCE (for TCP)
+
+LCLPKT==<.P==.P+1>		; Marks start of local substructure
+
+;  Area between LCLPKT and PKTELI must be big enough to hold the
+;  biggest possible local leader including fake free header.
+
+; The first word of all local packets is a fake IMPPHY-style free
+; storage header.
+
+IMP96L==LCLPKT		; 96-bit ARPANET Leader (should be flushed)
+MAXLDR==4		; Current maximum local leader (Arpanet)
+PKTELI==<.P==.P+MAXLDR>	; End Local Information 
+
+
+; Some related numbers:
+
+;INTXPB (in STG) contains maximum PIPL for any interface
+;INTXPW (in STG) contains the maximum # words for PACKET structure
+; Note	Packets buffers of this size are "full size" and have PFSIZ set
+
+;PACKSZ==PKTELI-LCLPKT+<M2+3>/4	; Num. words in IMPPHY Pkt
+;MAXPSZ==LCLPKT+PACKSZ		; Maximum packet size
+; Note:	MAXWPM <-> NBBSZ <-> PACKSZ <=> PFSIZ <=> MAXPSZ (for GETBLK)
+; Internet Header:
+; Word offsets:
+
+.IPKVR==0		; Word with version, type of service, etc
+.IPKSG==1		; Word with segmentation info
+.IPKPR==2		; Word with time to live, checksum, protocol
+.IPKSH==3		; Word with source host
+.IPKDH==4		; Word with destination host
+
+MINIHS==<.IPKDH+1>*4	; Minimum Internet Header size (bytes)
+
+DEFSTR(PIVER,PKTELI+.IPKVR,3,4)		; PACKET.IP.VERSION
+DEFSTR(PIDO,PKTELI+.IPKVR,7,4)		; PACKET.IP.DATA-OFFSET
+DEFSTR(PITOS,PKTELI+.IPKVR,15,8)	; PACKET.IP.TYPE-OF-SERVICE
+  ; Overlays for the above:
+  DEFSTR(PIPRC,PKTELI+.IPKVR,10,3)	; PACKET.IP.PRECEDENCE
+  DEFSTR(PILDY,PKTELI+.IPKVR,11,1)	; PACKET.IP.LOW-DELAY
+  DEFSTR(PIHTR,PKTELI+.IPKVR,12,1)	; PACKET.IP.HIGH-THROUGHPUT
+  DEFSTR(PIHRL,PKTELI+.IPKVR,13,1)	; PACKET.IP.HIGH-RELIABILITY
+  ; 2 Unuded bits
+DEFSTR(PIPL,PKTELI+.IPKVR,31,16)	; PACKET.IP.PACKET-LENGTH
+DEFSTR(PISID,PKTELI+.IPKSG,15,16)	; PACKET.IP.SEGMENT-ID
+DEFSTR(PIFLG,PKTELI+.IPKSG,18,3)	; PACKET.IP.FLAGS
+  ; Overlays for the above:
+  ; Unused bit
+  DEFSTR(PIDF,PKTELI+.IPKSG,17,1)	; PACKET.IP.DONT-FRAGMENT
+  DEFSTR(PIMF,PKTELI+.IPKSG,18,1)	; PACKET.IP.MORE-FRAGMENTS
+DEFSTR(PIFO,PKTELI+.IPKSG,31,13)	; PACKET.IP.FRAGMENT-OFFSET
+DEFSTR(PITTL,PKTELI+.IPKPR,7,8)		; PACKET.IP.TIME-TO-LIVE
+DEFSTR(PIPRO,PKTELI+.IPKPR,15,8)	; PACKET.IP.PROTOCOL
+  .ICMFM==1	;See INCMP.MAC		; Internet Control Message protocol
+  .SCRFM==2	;See TCPPAR.MAC		; Secure TCP format
+  .GGPFM==3	;See INGGP.MAC		; Gateway-gateway protocol
+  .TCPFM==6	;See TCPPAR.MAC		; TCP format
+  .CHAFM==20	;See CHAOS.MAC		; CHAOS format (Kludge)
+DEFSTR(PICKS,PKTELI+.IPKPR,31,16)	; PACKET.IP.HEADER-CHECKSUM
+DEFSTR(PISH,PKTELI+.IPKSH,31,32)	; PACKET.IP.SOURCE-HOST
+DEFSTR(PIDH,PKTELI+.IPKDH,31,32)	; PACKET.IP.DESTINATION-HOST
+
+; Internet options, if any, are here.
+; ***** beware
+;MINIOS==10			; Minimum # Option bytes to cope with
+MAXIOS==<.RTJST(-1,PIDO)*4-MINIHS>	; Maximum # Option bytes possible
+
+; Options: Two cases.
+
+; Case 1: A single byte of option code
+
+; ENDOPT is and must be 0.  This marks the end of the option list.
+; NOPOPT is and must be 1.  This is one byte long and has no purpose.
+
+; Case 2: General form of options is 1 byte of "kind", 1 byte of total
+; length, and N-2 bytes of data, where N is read from the length byte.
+
+; All options are included under the appropriate checksum.
+
+; IP Options which are copied on fragmentation if this bit is set
+
+CPYOPT==200
+
+
+; Class 0: Control
+
+; END	End of options		ENDOPT
+; NOP	Filler			NOPOPT
+; LSR	Loose Source Routing	LSROPT,Len,ptr.ge.4,<route data>
+; RRT	Record Route		RRTOPT,Len,ptr.ge.4,<route data>
+; SID	Stream ID		SIDOPT,4,I,D
+; SSR	Strict Source Routing	SSROPT,Len,ptr.ge.4,<route data>
+; STY	Autodin II security	STYOPT,^D11,S,S,C,C,H,H,TCC,TCC,TCC
+
+; Class 1: Reserved for future use	(OBSOLETE)
+
+; ERR	Error
+; SOP	Secure Open
+; SCL	Secure Close
+
+; Class 2: Debugging and measurement
+
+; TSP	Timestamp		TSPOPT,Len,Ptr,OFLW/FLAG,[<inet adr>],<tsmp>
+; Flag 0 <timestamp> only
+;      1 <internet adr>,<timestamp> pairs
+;      3 <internet adr>,<timestamp> pairs with <internet adr> pre-specified
+
+; Class 3: Reserved for future use
+
+; General IP Option generation macro
+
+
+DEFINE IPOPTS (USER,RECV,ECHO)<
+  OPTION(I,END,,^D0,^D1,USER,RECV,ECHO)
+  OPTION(I,NOP,,^D1,^D1,USER,RECV,ECHO)
+  OPTION(I,LSR,C,^D3,^D7,USER,RECV,ECHO)
+  OPTION(I,RRT,,^D7,^D7,USER,RECV,ECHO)
+  OPTION(I,SID,C,^D8,^D4,USER,RECV,ECHO)
+  OPTION(I,SSR,,^D9,^D7,USER,RECV,ECHO)
+  OPTION(I,STY,C,^D2,^D11,USER,RECV,ECHO)
+
+; OPTION(I,ERR,,^D33,^D2,USER,RECV,ECHO)
+; OPTION(I,SOP,,^D34,^D4,USER,RECV,ECHO)
+; OPTION(I,SCL,,^D35,^D2,USER,RECV,ECHO)
+
+  OPTION(I,TSP,,^D68,^D8,USER,RECV,ECHO)
+
+> ; End of DEFINE IPOPTS
+
+
+
+; Define Option Names
+
+DEFINE OPTION(TYPE,NAME,COPY,NUMBER,LENGTH,USER,RECV,ECHO)<
+IFDIF <COPY>,<C>,<	NAME'OPT==NUMBER	>
+IFIDN <COPY>,<C>,<	NAME'OPT==CPYOPT+NUMBER	>
+>
+
+IPOPTS
+
+
+; Packet Printer Buffer
+
+; Size and layout of the Packet Printer Buffer
+; Must make assumption about the size of the per-protocol
+; area in the packet:
+
+; Assume max protocol to be TCP at 17(8) words & allow 2 words of data
+; Size of a packet header including options:
+
+PPBFSZ==PKTELI+.RTJST(-1,PIDO)+17+2-LCLPKT
+
+; Size of the Packet Printer Buffer including control words:
+
+DEFSTR(DFLAG,PPBFSZ+0,35,36)	; PPB.FLAGS
+DEFSTR(DSS,PPBFSZ+1,17,18)	; PPB.SOURCE STATE
+DEFSTR(DDS,PPBFSZ+1,35,18)	; PPB.DESTINATION STATE
+DEFSTR(DTIME,PPBFSZ+2,35,18)	; PPB.REPORT TIME
+DEFSTR(DPKTP,PPBFSZ+3,17,18)	; PPB.PACKET ADDRESS
+DEFSTR(DPTRC,PPBFSZ+4,35,36)	; PPB.TRACE BITS
+
+PPBWDS==PPBFSZ+5+1+LCLPKT	; Remove LCLPKT, add to PPBFSZ & reorder
+
+
+; Flag bits in PPFLAG cell (Kept in F locally):
+
+PP%MT==1B0	; Buffer is empty
+PP%SK==1B1	; Source address is known
+PP%DK==1B2	; Destination address is known
+PP%SNT==1B3	; Packet has been sent
+PP%RCV==1B4	; Packet has been received
+PP%REX==1B5	; Packet retransmitted
+PP%PZ==1B6	; Packet passed through Packetizer
+PP%RA==1B7	; Packet passed through Reassembler
+PP%GSS==1B8	; Got Source state (LH of PPSTAT valid)
+PP%GDS==1B9	; Got Dest state (RH of PPSTAT valid)
+PP%DUN==1B10	; Packet printable
+
+; Packet Printer Trace Codes
+; Old codes
+
+PT%XX0==^D0	;     BG is flushing packet printer buffer
+PT%XX1==^D1	; PZ  Generated normal packet "being output"
+PT%XX2==^D2	; SNT EMTPKT, ABTNTC
+PT%XX3==^D3	; RCV PKT on no connection, for RA
+PT%XX4==^D4	; RA  Reassembly from packet completed
+PT%XX5==^D5	;     IP Flushed (checksum, PKT on closed conn)
+PT%XX6==^D6	;     INPUT finished: New SYN, DUP, IGN, no SEQ#, sent RST
+PT%XX7==^D7	; SNT Sent a RST in response to received packet
+PT%XX8==^D8	; REX Retransmitted a PKT
+
+; New codes  (NB don't use 400000,,0)
+
+; Bit indicating validity
+PP%%VR==100000,,0	; Registers valid
+PT%%VH==040000,,0	; Higher level protocol (TCB=14)
+PT%%VB==020000,,0	; User buffer (BFR=11)
+PT%%VP==010000,,0	; Protocol pkt (T/CPKT=12)
+PT%%VI==004000,,0	; IP (PKT=13)
+PT%%VG==002000,,0	; Gateway (PKT=13)
+PT%%VN==001000,,0	; Local Net (PKT=13)
+
+; Bit indicating error level
+PT%%EI==000400,,0	; Internal error
+PT%%EU==000200,,0	; Unimplemented
+PT%%ER==000100,,0	; Resource
+PT%%EN==000040,,0	; Normal
+
+; Bit indicating level of detail
+PT%%LH==000010,,0	; High level
+PT%%LF==000004,,0	; Filter
+PT%%LM==000002,,0	; Medium
+PT%%LL==000001,,0	; Low
+
+; Bit indicating "protocol"
+PT%%TC==200000		; TCP
+PT%%UQ==100000		; IP User Queues
+PT%%GG==040000		; GGP
+PT%%IC==020000		; ICMP
+PT%%IP==010000		; IP
+PT%%GW==004000		; Gateway
+PT%%NT==002000		; Local Net
+
+; Agent & Direction
+PT%%SY==001000		; System
+PT%%UR==000400		; User
+PT%%OU==000200		; Output
+PT%%IN==000100		; Input
+
+; Plus an ID code
+
+DEFINE PT(NAM,VAL,LST)<	.X==VAL
+			IRP LST,<.X==.X+PT%%'LST>
+			PT%'NAM==.X>
+
+; Input, gateway level
+
+
+PT(RGW,30,<SY,IN,GW,LL,VI>)		; Packet received at gateway from net
+PT(KIP,11,<SY,IN,GW,LL,VI,EN>)		; Killed invalid format
+PT(KCS,13,<SY,IN,GW,LL,VI,EN>)		; Killed checksum
+PT(KDP,14,<SY,IN,GW,LL,VI,EN>)		; Killed duplication
+PT(KIS,20,<SY,IN,GW,LL,VI,ER>)		; Killed no space to reassemble
+PT(KIT,21,<SY,IN,GW,LL,VI,EN>)		; Killed reassembly timeout
+PT(QIF,40,<SY,IN,GW,LL,VI>)		; Internet fragment queued (INTRAQ)
+PT(DIF,44,<SY,IN,GW,LL,VI>)		; Dequeued and reassembled
+PT(IRA,45,<SY,IN,GW,LL,VI>)		; Reassembled packet created
+
+; - - - - - - - - - - - - - - - - - - - - - - - -
+; Input, IP level
+
+PT(IDD,30,<SY,IN,IP,LL,VI>)		; Dequeued for dispatch
+PT(IKC,13,<SY,IN,IP,LL,VI,EN>)		; Killed due to invalid checksum
+PT(IKP,16,<SY,IN,IP,LL,VI,EU>)		; Killed due to invalid protocol
+PT(IQP,57,<SY,IN,IP,LL,VI>)		; Queued for protocol module
+
+; - - - - - - - - - - - - - - - - - - - - - - - -
+; Output, IP level
+
+PT(IDO,57,<SY,OU,IP,LL,VI>)		; Dequeued packet for output
+PT(IQG,30,<SY,OU,IP,LL,VI>)		; Queued packet for gateway
+
+; - - - - - - - - - - - - - - - - - - - - - - - -
+; Output, Gateway level
+
+PT(RGI,57,<SY,OU,GW,LL,VI>)		; Received at gateway from IP
+PT(KDF,24,<SY,OU,GW,LL,VI,EN>)		; Killed fragmentation not allowed
+PT(KIA,23,<SY,OU,GW,LL,VI,EN>)		; Killed addressing failure
+PT(KPT,21,<SY,OU,GW,LL,VI,EN>)		; Killed packet (fragmentation) timeout
+PT(KIO,22,<SY,OU,GW,LL,VI,EN>)		; Killed ill formated options
+PT(KFS,20,<SY,OU,GW,LL,VI,ER>)		; Killed insufficient space to fragment
+PT(BYP,34,<SY,OU,GW,LL,VI>)		; Queued for GW input
+PT(IFR,33,<SY,OU,GW,LL,VI>)		; Internet fragment created
+PT(QLN,30,<SY,OU,GW,LL,VI>)		; Queued for local net
+
+; ICMP
+
+PT(CDI,30,<SY,IN,IC,LM,VP>)		; ICMP received packet
+PT(CKS,12,<SY,IN,IC,LL,VP,EN>)		; Killed due to truncated packet
+PT(CKC,13,<SY,IN,IC,LL,VP,EN>)		; Killed due to bad checksum
+PT(CKT,16,<SY,IN,IC,LL,VP,EN>)		; Killed due to bad ICMP Type
+PT(CKX,17,<SY,IN,IC,LL,VP,EN>)		; Killed due to bad ICMP Code
+
+; - - - - - - - - - - - - - - - - - - - - - - - -
+; GGP
+
+PT(GDI,30,<SY,IN,GG,LM,VP>)		; Received packet
+PT(GKS,12,<SY,IN,GG,LL,VP,EN>)		; Killed due to truncated packet
+PT(GKC,13,<SY,IN,GG,LL,VP,EN>)		; Killed due to bad checksum
+PT(GKT,16,<SY,IN,GG,LL,VP,EN>)		; Killed due to bad GGP Type
+PT(GKX,17,<SY,IN,GG,LL,VP,EN>)		; Killed due to bad GGP Code
+
+;------------------------------------------------
+; Input, Internet User Queues
+
+PT(UDI,30,<SY,IN,UQ,LM>)		; Received packet
+PT(UKQ,16,<SY,IN,UQ,LL,EN>)		; Killed due to no such queue
+PT(UKS,20,<SY,IN,UQ,LL,ER>)		; No space in RECIN queue
+PT(UKT,21,<SY,IN,UQ,LL,EN>)		; RCVIN queue timedout
+PT(UQU,57,<SY,IN,UQ,LM>)		; Passed to user
+
+; User Interface, Internet User Queues
+
+PT(UQA,02,<UR,IN,UQ,LM>)		; User queue assigned
+PT(URJ,30,<UR,IN,UQ,LM>)		; User receive
+PT(USJ,57,<UR,OU,UQ,LM>)		; User send
+PT(UQD,02,<UR,OU,UQ,LM>)		; User queue deassigned
+
+; Output, Internet User Queues
+
+PT(UDU,57,<SY,OU,UQ,LH,VI>)		; Received from user
+PT(UKP,11,<SY,OU,UQ,LL,VI>)		; Killed
+PT(UQO,30,<SY,OU,UQ,LL,VI>)		; Queued for output
+
+; - - - - - - - - - - - - - - - - - - - - - - - -
+; Input, TCP level
+
+PT(TDI,30,<SY,IN,TC,LH,VH,VP,VI>)	; Received packet
+PT(TRS,01,<SY,IN,TC,LL,VH,VP,VI,EN>)	; Reset received
+PT(TKR,10,<SY,IN,TC,LL,VH,VP,VI,EN>)	; Killed & sent RST
+PT(TKC,13,<SY,IN,TC,LL,VH,VP,VI,EN>)	; Killed due to bad checksum
+PT(TKD,14,<SY,IN,TC,LL,VH,VP,VI,EN>)	; Killed due to duplicate
+PT(TKS,15,<SY,IN,TC,LL,VH,VP,VI,EN>)	; Killed due to sequence error
+PT(TKX,16,<SY,IN,TC,LL,VH,VP,VI,EN>)	; Killed due to no local connection
+PT(TKN,17,<SY,IN,TC,LL,VH,VP,VI,EN>)	; Killed due to closed connection
+PT(TKT,20,<SY,IN,TC,LL,VH,VP,VI,EN>)	; TRMPKT killed packet - no space
+PT(TTP,37,<SY,IN,TC,LL,VH,VP,VI>)	; TRMPKT trimming packet
+PT(TQR,40,<SY,IN,TC,LL,VH,VP,VI>)	; Queued for reassembly
+PT(TRA,42,<SY,IN,TC,LM,VH,VP,VI>)	; Being reassembled
+PT(TDR,44,<SY,IN,TC,LL,VH,VP,VI>)	; Dequeued from reassembly
+PT(TID,60,<SY,IN,TC,LL,VH,VP,VI>)	; Done with packet
+PT(TIR,01,<SY,OU,TC,LL,VH,VP,VI,EN>)	; Reset sent in response to input pkt
+
+; User Interface, TCP level
+
+PT(TST,01,<UR,IN,TC,LM,VH,VP,VI>)	; User status request
+PT(TOJ,02,<UR,IN,TC,LM,VH,VP,VI>)	; User Open
+PT(TIS,03,<UR,IN,TC,LM,VH,VP,VI>)	; Interrupt levels specified
+PT(TSL,05,<UR,IN,TC,LM,VH,VP,VI>)	; User security level change
+PT(TRD,30,<UR,IN,TC,LM,VH,VP,VI>)	; User receive data
+PT(TIO,34,<UR,OU,TC,LM,VH,VP,VI>)	; Options to user
+PT(TOO,35,<UR,IN,TC,LM,VH,VP,VI>)	; User options processed
+PT(TSD,57,<UR,OU,TC,LM,VH,VP,VI>)	; User send data
+PT(TBD,60,<UR,IN,TC,LM,VH,VP,VI>)	; User buffer processing completed
+;PT(T  ,30,<UR,OU,TC,LM,VH,VP,VI>)	; User buffer processing completed
+PT(TER,11,<UR,OU,TC,LM,VH,VP,VI>)	; Error
+PT(TIU,06,<UR,IN,TC,LM,VH,VP,VI>)	; Interrupt to user
+PT(TSC,04,<UR,OU,TC,LM,VH,VP,VI>)	; Secure close
+PT(TCJ,02,<UR,OU,TC,LM,VH,VP,VI>)	; User Close
+PT(TAJ,01,<UR,OU,TC,LM,VH,VP,VI>)	; User Abort
+PT(TAB,01,<SY,OU,TC,LM,VH,VP,VI>)	; Abort (not user)
+
+; Output, TCP level
+
+PT(TPZ,60,<SY,OU,TC,LM,VH,VP,VI>)	; TCP packet generated (Normal)
+PT(TQX,40,<SY,OU,TC,LM,VH,VP,VI>)	; TCP PKT queued for RX
+PT(TRX,42,<SY,OU,TC,LM,VH,VP,VI>)	; TCP PKT being RX'd
+PT(TDX,44,<SY,OU,TC,LM,VH,VP,VI>)	; TCP PKT dequeued from RX
+PT(TRX,30,<SY,OU,TC,LM,VH,VP,VI>)	; TCP packet transmitted
+PT(TSC,04,<SY,OU,TC,LM,VH,VP,VI>)	; TCP secure close generated
+PT(TOR,03,<SY,OU,TC,LM,VH,VP,VI>)	; TCP Reset generated by output
+
+
+; QUEUE structure:
+
+DEFSTR(QNEXT,0,35,18)		; QUEUE.NEXT
+DEFSTR(QPREV,0,17,18)		; QUEUE.PREVIOUS
+	QSZ==1			; Number of words in a QUEUE structure
+
+
+
+; LOCK Structure:
+
+DEFSTR(LWORD,0,35,36)		; LOCK.WORD
+DEFSTR(LIDX,1,35,36)		; LOCK.WAITBIT INDEX
+DEFSTR(LLOKR,2,35,36)		; LOCK.LOCKER
+DEFSTR(LCCNT,3,35,36)		; LOCK.CONFLICT COUNT
+DEFSTR(LOLKR,4,17,18)		; LOCK.CONFLICT.OLDLOCKER
+DEFSTR(LNLKR,4,35,18)		; LOCK.CONFLICT.NEWLOCKER
+	LOCKSZ==5		; Number of words in a LOCK structure
+
+
+; Histogram structure
+
+DEFSTR(HTOTL,0,35,36)		; HISTOGRAM.TOTAL
+DEFSTR(HSMPL,1,35,36)		; HISTOGRAM.SAMPLES
+DEFINE IHBIN(X,I)<
+	MOVEI CX,2(X)
+	ADDI CX,0(I)
+	AOS 0(CX)
+>
+NHBINS==^D14		; Number of real bins, not incl garbage bin
+HISTSZ==2+NHBINS+1	; Number of words in a histogram (for STG)
+
+
+; Internet user queue definitions:
+
+; Queue descriptor block for ASNIQ:
+
+IFNDEF .IQPRV,<	PRINTX % ASNIQ descriptor block not defined in MONSYM
+; Bit definitions
+AQ%SCR==1B0	; B0: Use secure interface.
+AQ%SPT==1B1	; B1: Single(local) port protocol
+AQ%ICM==1B2	; B2: Allow sending and receiving ICMP messages
+;	(Other flag bits must be 0)
+RIQ%NW==1B0	; RCVIN -- Don't wait bit
+
+.IQPRV==0		; Internet version,,protocol value word
+.IQFHV==1		; Internet foreign host value word
+.IQSHV==2		; Internet source host value word
+.IQPTV==3		; Local,,Foreign ports value word
+.IQPRM==4		; Mask words corresponding to the above
+.IQFHM==5
+.IQSHM==6
+.IQPTM==7
+.IQLEN==^D8		; Length of a queue descriptor block
+	>
+
+;;;
+;;; ICMP packet structure and error codes
+;;;
+
+;;; Message types (error type)
+
+ICM%ER==^D0			; Echo reply message
+ICM%DU==^D3			; Destination unreachable
+ICM%SQ==^D4			; Source quench
+ICM%RD==^D5			; Redirect output
+ICM%EC==^D8			; Echo message
+ICM%TE==^D11			; Time exceeded
+ICM%PP==^D12			; Parameter problem
+ICM%TM==^D13			; Timestamp
+ICM%TR==^D14			; Timestamp reply
+ICM%IQ==^D15			; Information request
+ICM%IR==^D16			; Information reply
+
+
+;;;
+;;; Error codes (error subtypes)
+;;;
+
+;;; Codes for Destination unreachable
+
+DU%NET==0			; Net unreachable
+DU%HST==1			; Host unreachable
+DU%PRO==2			; Protocal unreachable
+DU%PRT==3			; Port unreachable
+DU%FRG==4			; Fragmentaion needed
+DU%SRF==5			; Source route failed
+
+;;; Codes for Redirect
+
+RD%NET==0			; Redirect output for net.
+RD%HST==1			; Redirect for host
+RD%TSN==2			; Redirect type of service and net
+RD%TSH==3			; Redirect type of service and host
+
+;;; Codes for Time Exceeded
+
+TE%TTL==0			; Time to live exceeded
+TE%RTE==1			; Reassembly time exceeded
+
+;;; Codes for Parameter Problem
+
+PP%PTR==0			; Pointer to byte causing problem
+
+;;; ICMP Packet format, offset from 0
+;;; (preceded by an internet header)
+
+DEFSTR(CMTYP,0,7,8)		; Type of message
+ 
+DEFSTR(CMCOD,0,15,8)		; Code for messages
+DEFSTR(CMCKS,0,31,16)		; Checksum
+
+;;; The following structures are each only used by some message types.
+
+DEFSTR(CMID,1,15,16)		; ID number in ICM%EC,R ICM%TM,R ICM%IQ,R
+DEFSTR(CMSEQ,1,31,16)		; Sequence number in same
+
+DEFSTR(CMPTR,1,7,8)		; Pointer for ICM%PP messages
+DEFSTR(CMGWA,1,31,32)		; Gateway address for ICM%RD messages
+.CMINH==2			; Internet header in ICM%SQ,ICM%RD,ICM%DU etc.
+
+;;;
+;;; Timestamp fields
+;;;
+
+DEFSTR(CMTSO,2,31,32)		; Originate timestamp
+DEFSTR(CMTSR,3,31,32)		; Receive timestamp
+DEFSTR(CMTST,4,31,32)		; Transmit timestamp
+
+
+	END
+

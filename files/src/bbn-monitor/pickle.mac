@@ -1,0 +1,1267 @@
+	TITLE PICKLE TICKLE, GATHER AND FILE IP STATUS REPORTS
+	COMMENT \ 
+PICKLE is an internet protocol tickler and statusgram logger.  It runs
+as a user program and requires NETWIZ capability.
+
+The send-tickle (S) command prompts for a host address, which may be
+typed as an octal number, four decimal bytes separated by ".", or a
+text name.  A terminator alone defaults to the previous ticklee.  The
+tickle has 4 octets of data: 16 bits of local port (source of tickle),
+and 16 bits of foreign port (destination of tickle).  The ticklee is
+expected to return a statusgram, an IP packet reporting its status,
+which TICKLE logs.
+
+The receive (R) command puts TICKLE into a spooling mode, primarily
+intended for unattended monitoring operation.  Received statusgrams
+are logged to appropriate files.
+
+The verbose (V) command toggles whether text information indexing the
+log files is printed on the terminal or not.  The default is not to
+print it.  It is always written into index files, however.
+
+The exit (E) command leaves PICKLE gracefully, after allowing any
+logging in progress to complete and halting the inferior process.
+
+The inferior process executes a loop: read an IP message, process it,
+loop.  If the reception (RCVIN) is in error, the packet is ignored.
+If the packet is an ICMP message, TICKLE prints a warning on the
+terminal, such as:
+
+Received ICMP message from host BBNA, type 3 (dest unreachable), code 2
+
+and does not further process the ICMP message.  Otherwise, TICKLE
+appends the packet, including the RCVIN argument-and-return-value word
+containing the word count, to a file.  The file name is host.bin,
+where "host" is the text name of the packet's source, such as
+BBNA.BIN.  If no text name is available, TICKLE uses the four decimal
+bytes punctuated with "-", such as 3-3-0-5.BIN.
+
+Then TICKLE constructs a text string describing the index information
+for the packet it has just logged.  This string has the date and time
+from the packet, the source host system up time from the packet, the
+sequence number (segment ID), the decimal value of the host.bin file
+pointer at the start of the new entry, the length of the entry in
+words, and the source host (as text or as four decimal bytes
+punctuated with ".").  This string is appended to the file host.index,
+where "host" is the same as with the host.bin file.
+
+If verbose mode has been enabled (see V command, above), the string is
+also printed on the terminal.  A header line, listing the various
+fields of the index text string, is printed each time the verbose (V)
+command is serviced; this is an easy way to obtain a run-time printout
+of the field meanings.  The inferior then returns to awaiting another
+packet.
+
+When the first receive (R) or send (S) command is serviced, the
+inferior fork is started.  Also at this time the ASNIQ, to assign an
+internet queue, is executed.  Some parameters of the ASNIQ vary
+depending on whether the command needing the ASNIQ is an R or an S,
+that is, which is serviced first.  The difference in parameters
+creates two modes of operation.  R first creates "monitor mode", where
+TICKLE logs all statusgrams initiated by foreign sites.  S first
+creates "manual mode", where TICKLE logs only responses to tickles
+initiated by the user of this instance of TICKLE.  A single host may
+run one TICKLE in monitor mode and one or more TICKLEs in manual mode,
+all simultaneously.  The varying parameters are:
+
+mode		local port value	local port mask (octal)
+----		----------------	-----------------------
+monitor (R)	LOCPOR (= 240.)		177777
+manual (S)	job#,0 (1 octet each)	177400
+
+The job number is also used in the segment ID field of each tickle;
+the high octet is the job number, and the low octet is a count
+starting at 1 and incrementing for each tickle sent.
+
+	\ ; End of COMMENT
+
+	SEARCH ANAUNV,MONSYM,MACSYM
+
+VWHO==^D7	; M Beeler, BBN
+VMAJOR==^D0
+VMINOR==^D0
+VEDIT==66	;20-Mar-84 CLynn Domains broke file names, include auto mode
+;65	; 4-Jun-83 MBeeler
+
+
+DEFINE	GREET	(MJ,MN,ED,WH)<
+ HRROI T2,[ASCIZ /Tops-20 Monitoring Statusgram Filer   V'MJ'.'MN(ED)-WH
+/]>
+
+T1=1
+T2=2
+T3=3
+T4=4
+Q1=5
+Q2=6
+Q3=7
+P1=10
+P2=11
+P3=12
+IPKT=13					; Pointer for IP header in IPBUF
+FD=14					; Pointer to inferior's data area
+;P6=15
+CX=16
+P=17
+
+INMNPR==^D70				; INET protocol number
+INMNPT==^D241				; Foreign port
+LOCPOR==INMNPT-1			; Local port (monitor mode only)
+
+MAXINF==10				; Maximum number of inferiors
+STACKL==100				; Length of a stack
+IPBUFL==40000				; Inferior packet buffer length
+
+DECRAD==^D10
+OCTRAD==^D8
+
+  	SUBTTL	Initialization
+
+ENTVEC:	JRST START			; Interactive mode entry address
+	JRST AUTO			; Automatic mode entry address
+	<VWHO>B2+<VMAJOR>B11+<VMINOR>B17+VEDIT ; Version
+
+START:	TDZA T1,T1			; Normal interactive mode
+AUTO:	  SETO T1,			; Automatic (batch) mode
+	MOVEM T1,AUTOFG			; Remember which mode
+
+	RESET%
+	MOVE P,[IOWD STACKL,PDL]
+
+	GREET	\VMAJOR,\VMINOR,\VEDIT,\VWHO ; Give program id
+	CALL DOSOUT
+
+	MOVEI T1,.FHSLF
+	RPCAP%
+	TRNE T2,SC%NWZ			; Net wiz capability
+	IFSKP.
+	  HRROI T2,[ASCIZ \NETWIZ capability enable\]
+	  CALL ERROR
+	  JRST ERHLT
+	ENDIF.
+	IORI T3,SC%NWZ
+	EPCAP%
+
+	MOVEI T1,.GTHSZ			; Function = get size and local host
+	GTHST%
+	IFNSK.
+	  HRROI T2,[ASCIZ \GTHST of local host\]
+	  CALL ERROR
+	  JRST ERHLT
+	ENDIF.
+
+	LSH T4,4
+	MOVEM T4,TICSRC			; I am source of tickles
+	GJINF%
+	DPB T3,[POINT 8,TICSEG,7]	; Top byte of segment id = job number
+
+	MOVX T1,<-MAXINF,,0>
+	DO.
+	  SETZM IFORKT(T1)		; Forget old forks
+	  AOBJN T1,TOP.
+	ENDDO.
+
+	MOVEI FD,PGMEND			; End of program+symbols
+	ADDI FD,<..INFD+777>
+	ANDI FD,777			; Page aling
+	MOVEI T1,LOCPOR			; Assume receieve-only, Local port
+	MOVEI T2,177777			; Mask = all ones
+	DMOVEM T1,PORTS
+	SETZM RCNT			; No statusgrams received
+	SETZM SCNT			; Not sent any requests
+	SETZM ISTOPF			; Inferiors may proceed
+	SETZM VERBF			; Verbose mode initially off
+
+	SKIPGE AUTOFG			; Automatic (batch) mode? [PBIN prob.]
+	  JRST RCV			; Yes, pretend saw an "R"
+	HRROI T2,[ASCIZ \  R (receive) command first ==> monitor mode
+  S (send) command first ==> manual mode
+READY
+\]
+	CALL DOSOUT
+	SUBTTL	Main Command Loop
+
+MAIN:	DO.
+	  PBIN%				; Get command character
+	  ANDI T1,177
+	  CAIL T1,"a"
+	   CAILE T1,"z"
+	    SKIPA
+	     SUBI T1,40			; Convert upper to lower case
+	  CAIN T1,12			; LF
+	    LOOP.
+
+	  CAIN T1,"E"			; Dispatch to command processors
+	    JRST EXIT
+	  CAIN T1,"R"
+	    JRST RCV
+	  CAIN T1,"S"
+	    JRST SEND
+	  CAIN T1,"V"
+	    JRST VERBOS
+
+	  HRROI T2,[ASCIZ \
+  E = exit, R = receive, S = send, V = verbose
+\]					; Invalid command
+	  CALL DOSOUT
+	  LOOP.				; Try again
+	ENDDO.
+
+	SUBTTL	Exit Command
+
+EXIT:	AOS ISTOPF			; Tell inferiors to stop
+	HRROI T2,[ASCIZ /  Stopping inferiors ... /]
+	CALL DOSOUT
+	DO.				; While have inferiors
+	  MOVX Q2,<-MAXINF,,0>
+	  SETZ Q1,			; Number still going
+	  DO.
+	    SKIPN T1,IFORKT(Q2)		; Have a fork?
+	    IFSKP.			; Inferior never created
+	      HFORK%			; Stop fork so can
+	      ERJMP TRSHFK
+	      RFSTS%			; Get inferior's status
+	      ERJMP TRSHFK
+	      LOAD T1,RF%STS,+T1	; process status code
+	      CAIN T1,.RFHLT		; process halted?
+	      ANSKP.			; yes, 
+	        HRRZ T2,T2		; clear flags
+	        MOVE T1,IFORKT(Q2)	; Will need it again
+	        TRNN Q2,-1		; TCP fork?
+	        IFSKP.			; Yes
+	          CAIE T2,TOPNER+1	; Fatal error stop?
+	          IFSKP.		; Yes, can kill it off
+	            KFORK%
+	            ERJMP TRSHFK
+	            SETZM IFORKT(Q2)
+	          ELSE.
+	            CAIE T2,TOPN+1	; Was inferior doing TCP OPEN, or
+	            IFSKP.		; Yes, proceed with cleanup
+	              MOVEI T2,TCPABT	; Where to continue
+	              SFORK%		; (T1 has connection id)
+	              ERJMP TRSHFK
+	            ENDIF.
+	            RFORK%		; Make it go
+	            ERJMP TRSHFK
+	            AOS Q1		; Count it
+	          ENDIF.
+	        ELSE.			; User datagram
+	          CAIE T2,URCV+1	; Was inferior doing RCVIN?
+	          IFSKP.		; Yes, proceed with cleanup
+	            KFORK%
+	            ERJMP TRSHFK
+	            SETZM IFORKT(Q2)
+	          ELSE.			; No, must be fileing
+	            RFORK%		; Restart fork
+	            ERJMP TRSHFK
+	            AOS Q1		; Count it
+	          ENDIF.		; Waiting or processing
+	        ENDIF.			; User datagram (or TCP)
+	    ELSE.
+TRSHFK:	      SETZM IFORKT(Q2)		; No fork, halted, or error, flush it
+	    ENDIF.			; Inferior exists
+	  AOBJN Q2,TOP.			; Back for next inferior
+	  ENDDO.
+
+	  IFN. Q1			; Some still running
+	    MOVX T1,^D5000		; 5 sec
+	    DISMS%
+	    LOOP.			; Go back and check now
+	  ENDIF.
+	ENDDO.
+
+	HRROI T2,[ASCIZ /stopped,/]
+	CALL DOSOUT
+
+	SETOM T1
+	CLOSF%
+	IFNSK.
+	  HRROI T2,[ASCIZ \CLOSF\]
+	  CALL ERROR
+	ENDIF.
+
+	MOVE T1,INETQH
+	SETZB T2,T3
+	RELIQ%
+	IFNSK.
+	  HRROI T2,[ASCIZ \RELIQ\]
+	  CALL ERROR
+	ENDIF.
+
+	RESET%
+	HRROI T2,[ASCIZ \  quitting...
+\]
+	CALL DOSOUT
+	HALTF%
+	JRST START
+
+	SUBTTL	Receive Command
+
+RCV:	SETZ Q1,			; Flag if anything started
+	SKIPE UFORKH			; Have a User datagram fork?
+	IFSKP.				; Not yet, set one up
+	  DMOVE T1,PORTS		; Monitor/Interactive info
+	  CALL DOASN			; Do ASNIQ with monitor mode parameters
+	  CALL RCVUD			; Get inferior & start it
+	  AOS Q1
+	ENDIF.
+
+	SKIPE IFORKT+1			; Have a TCP fork?
+	IFSKP.				; Not yet
+	  CALL RCVTCP			; Start TCP receiver
+	  AOS Q1
+	ENDIF.
+
+	HRROI T2,[ASCIZ \
+  Reception and filing of statusgrams begun.
+\]
+	SKIPN Q1
+	  HRROI T2,[ASCIZ \
+% Reception already in progress.
+\]
+	CALL DOSOUT
+
+	SKIPL AUTOFG			; Automatic (batch) mode?
+	  JRST MAIN			; No, interactive
+
+	MOVE T1,UFORKH			; Yes, wait forever
+	WFORK%
+	JRST EXIT
+
+
+; Routine to assign a user queue, T1/ local port, T2/ local mask
+
+DOASN:	DPB T1,[POINT ^D16,IQDBLK+.IQPTV,^D15] ; Set local port value
+	DPB T2,[POINT ^D16,IQDBLK+.IQPTM,^D15] ; And mask
+	DPB T1,[POINT ^D16,TICPOR,^D15]	; Also local port in tickle packet
+	MOVE T1,[AQ%ICM+IQDBLK]
+	SETZB T2,T3
+	ASNIQ%
+	IFNSK.
+	  HRROI T2,[ASCIZ \ASNIQ\]
+	  CALL ERROR
+	  JRST ERHLT
+	ENDIF.
+	MOVEM T1,INETQH			; Save queue handle
+	MOVEM T2,MAXPSZ
+	RET
+
+
+
+; Routine to create and start inferior user datagram fork
+
+RCVUD:					; Fire up the inferior fork
+	MOVEI FD,<<PGMEND+777>&-1000>	; End of program+symbols, aligned
+
+	MOVX T1,<CR%MAP+CR%CAP+CR%ACS+CR%ST+FLD(UBEG,CR%PCV)>
+	MOVEI T2,0			; Our ACS (FD)
+	CFORK%
+	  JRST CFKERR
+	MOVEM T1,UFORKH
+	RET
+
+
+
+
+; Routine to create and start inferior TCP fork
+
+
+RCVTCP:	MOVX Q2,<-MAXINF+1,,1>		; Look for TCP slot
+	DO.
+	  SKIPE IFORKT(Q2)		; In use?
+	    AOBJN Q2,TOP.		; Yes
+	ENDDO.
+
+	IFGE. Q2			; Find a free slot?
+	  HRROI T2,[ASCIZ /
+% No free TCP inferiors.
+/]
+	  CALL DOSOUT
+	  RET
+	ENDIF.
+
+	MOVEI FD,<<<..INFD+777>/1000>*1000> ; Size of a data area
+	IMULI FD,(Q2)			; Offset for this inferior
+	ADDI FD,<<PGMEND+777>&-1000>	; End of program+symbols, aligned
+
+	MOVX T1,<CR%MAP+CR%CAP+CR%ACS+CR%ST+FLD(TBEG,CR%PCV)>
+	MOVEI T2,0			; Our ACS (FD)
+	CFORK%
+	  JRST CFKERR
+	MOVEM T1,IFORKT(Q2)		; Save fork handle
+	RET
+
+	SUBTTL	Subroutine to Translate Statusgram's Sender to String
+
+FINDSH:	  MOVEI IPKT,IPBUF+1-PKTELI(FD)	; Pointer for IP header
+
+	  MOVX T1,.GTHNS		; Function = host number to string
+	  MOVX T2,<POINT 7,IHSTNM(FD)>	; Dest byte pointer
+	  LOAD T3,PISH,(IPKT)		; Source host addr
+	  GTHST%			; Clobbers AC4 also!
+	  IFSKP.
+	    SETZ T1,
+	    IDPB T1,T2			; Terminate string with NUL
+	  ELSE.
+	    MOVX T1,<POINT 7,IHSTNM(FD)> ; Dest byte pntr
+	    MOVX T2,"["
+	    IDPB T2,T1
+	    LOAD T4,PISH,(IPKT)		; Src host addr
+	    LSH T4,-4
+	    MOVEI Q1,"."		; Punctuate with "."
+	    CALL P4BYTS
+	    MOVX T2,"]"
+	    IDPB T2,T1
+	    SETZ T2,
+	    IDPB T2,T1			; Terminate string with NUL
+	  ENDIF.
+	RET
+
+	SUBTTL	Subroutine to File received Statusgram
+
+;FD/	Pointer to fork's data area
+;IHSTNM/	ASCIZ host name (may have special characters in it)
+
+FILEIT:
+	MOVEI IPKT,IPBUF+1-PKTELI(FD)	; Pointer for IP header
+	LOAD Q1,PIDO,(IPKT)		; Data offset
+	ADDI Q1,IPBUF+1(FD)		; Pointer to data sample @ port word
+
+	MOVE T1,[POINT 7,IFNAME(FD)]	; Output pointer
+	MOVE T2,[POINT 7,IHSTNM(FD)]	; Input pointer
+	MOVEI T4,26			; ^V is quoting character
+	DO.
+	  ILDB T3,T2			; Next character
+	  JUMPE T3,ENDLP.		; NUL ends string
+	  CAIL T3,"a"			; Raise lower case
+	   CAILE T3,"z"
+	    TRNA
+	     TRZ T3,40
+	  CAIE T3,"$"			; Don't need to be quoted
+	   CAIN T3,"-"
+	    JRST NOQUOT
+	  CAIL T3,"0"
+	   CAILE T3,"Z"
+	    JRST DOQUOT			; Do need to be quoted
+	  CAILE T3,"9"
+	   CAIL T3,"A"
+	    JRST NOQUOT			; Don't need to be quoted
+DOQUOT:	  IDPB T4,T1			; Quote the character
+NOQUOT:	  IDPB T3,T1			; The character
+	  LOOP.				; Back for next
+	ENDDO.
+	MOVEM T1,IHSTPT(FD)		; Save for index file name
+
+	HRROI T2,[ASCIZ \.BIN\]
+	MOVNI T3,5			; 5th byte is a zero
+	SOUT%
+
+	MOVX T1,GJ%SHT
+	HRROI T2,IFNAME(FD)		; Output file is "foreign-host".BIN
+	GTJFN%
+	IFSKP.
+	  HRRZS T1
+	  MOVEM T1,IOFJFN(FD)		; 36-bits, append, restricted access
+	  MOVX T2,<FLD(^D36,OF%BSZ)+OF%RD+OF%APP+OF%AWT+OF%RTD>
+	  OPENF%
+	  ANSKP.
+	    RFPTR%
+	    IFSKP.
+	      MOVEM T2,IBINP(FD)	; Save for verbose mode
+	      MOVX T2,<POINT ^D36,IPBUF(FD)>
+	      HLRZ T3,IPBUF(FD)		; Pkt word count+1 for count word
+	      MOVEM T3,ILEN(FD)		; Save for verbose mode
+	      MOVNS T3
+	      SOUT%
+	    ENDIF.
+	    MOVE T1,IOFJFN(FD)
+	    CLOSF%
+	    ANSKP.			; To "else" on error
+	ELSE.
+	  MOVE T1,IOFJFN(FD)		; Problem with GTJFN or OPENF
+	  RLJFN%
+	    JFCL
+	ENDIF.
+	SETZM IOFJFN(FD)
+
+	HRROI T1,IVSTR(FD)		; Build the message string
+	MOVE T2,3(Q1)			; Shifted date and time value
+	LSH T2,-4			; Right justify
+	TLO T2,100000			; Restore the lost bit
+	MOVEI T3,0
+	ODTIM%
+
+	MOVE T2,4(Q1)			; Shifted system uptime (msec) value
+	LSH T2,-4			; Right justify
+	IDIVI T2,^D60000		; 60000., discard sec and msec
+	IDIVI T2,^D60			; 60., get hours
+	MOVE T4,T3			; Save minutes
+	MOVX T3,<NO%MAG+NO%LFL+NO%OOV+FLD(4,NO%COL)+DECRAD>
+	NOUT%
+	  JFCL				; May be column overflow
+	MOVX T2,":"
+	IDPB T2,T1
+	MOVE T2,T4			; Print minutes
+	MOVX T3,<NO%MAG+NO%LFL+NO%ZRO+NO%OOV+FLD(2,NO%COL)+DECRAD>
+	NOUT%
+	  JFCL
+
+	LOAD T2,PISID,(IPKT)		; Sequence number (segment id)
+	CAIL T2,4*400			; Look like sample # or probe number?
+	IFSKP.				; Sample #
+	  MOVX T3,<NO%MAG+NO%LFL+NO%OOV+FLD(6,NO%COL)+DECRAD>
+	  NOUT%
+	    JFCL
+	  MOVX T2," "			; " xxxxx  "
+	  IDPB T2,T1
+	  IDPB T2,T1
+	ELSE.
+	  IDIVI T2,400			; Separate bytes
+	  PUSH P,T3
+	  MOVX T3,<NO%MAG+NO%LFL+NO%OOV+FLD(4,NO%COL)+DECRAD>
+	  NOUT%
+	    JFCL
+	  MOVX T2,","
+	  IDPB T2,T1
+	  POP P,T2
+	  MOVX T3,<NO%MAG+NO%OOV+FLD(3,NO%COL)+DECRAD>
+	  NOUT%
+	    JFCL
+	ENDIF.
+
+	MOVE T2,IBINP(FD)		; .BIN file pointer at start of entry
+	MOVX T3,<NO%MAG+NO%LFL+NO%OOV+FLD(^D12,NO%COL)+DECRAD>
+	NOUT%
+	  JFCL
+
+	MOVE T2,ILEN(FD)		; Length of entry (words)
+	MOVX T3,<NO%MAG+NO%LFL+NO%OOV+FLD(5,NO%COL)+DECRAD>
+	NOUT%
+	  JFCL
+	MOVX T2," "
+	IDPB T2,T1
+
+	HRROI T2,IHSTNM(FD)		; Source host addr
+	SETZ T3,
+	SOUT%
+
+	MOVX T2,15
+	IDPB T2,T1
+	MOVX T2,12
+	IDPB T2,T1
+	MOVX T2,0
+	IDPB T2,T1
+
+	HRROI T2,IVSTR(FD)		; Print the string
+	SKIPE VERBF			; Suppress if not in verbose mode
+	  CALL DOSOUT
+
+	MOVE T1,IHSTPT(FD)		; And write the string to a file
+	HRROI T2,[ASCIZ \.INDEX\]
+	MOVNI T3,7			; Last byte is a zero
+	SOUT%
+
+	MOVX T1,GJ%SHT
+	HRROI T2,IFNAME(FD)		; Output file is "foreign-host".INDEX
+	GTJFN%
+	IFSKP.
+	  HRRZS T1
+	  MOVEM T1,IOFJFN(FD)		; 36-bits, append, restricted access
+	  MOVX T2,<FLD(^D7,OF%BSZ)+OF%RD+OF%APP+OF%AWT+OF%RTD>
+	  OPENF%
+	  ANSKP.
+	    HRROI T2,IVSTR(FD)
+	    SETZ T3,
+	    SOUT%
+	    MOVE T1,IOFJFN(FD)
+	    CLOSF%
+	    ANSKP.			; To "else" if error
+
+	ELSE.
+	  MOVE T1,IOFJFN(FD)		; Problem with GTJFN or OPENF
+	  RLJFN%
+	    JFCL
+	ENDIF.
+
+	SETZM IOFJFN(FD)		; JFN gone
+	RET
+
+	SUBTTL	USer Datagram Inferior Fork Main Loop
+
+; Following is executed by the User Datagram inferior fork, which loops
+; Receive a message, append it to a file, loop...
+
+UBEG:	MOVEI P,IPDL-1(FD)		; Get a stack
+	HRLI P,-STACKL
+	DO.
+	  SKIPN ISTOPF
+	  IFSKP.			; Oops, superior is exiting
+	    DO.				; Forever
+	      MOVX T1,.INFIN		; A long time
+	      DISMS%
+	      LOOP.
+	    ENDDO.
+	  ENDIF.
+
+	  MOVEI T1,IPBUFL		; Set maximum buffer length
+	  MOVEM T1,IPBUF(FD)
+	  MOVE T1,INETQH		; Queue handle
+	  MOVEI T2,IPBUF(FD)		; Address of buffer
+	  MOVEI T3,0
+URCV:	  RCVIN%
+	    LOOP.			; Just try another
+
+	  AOS RCNT			; Count received packet
+
+	  CALL FINDSH			; Find source host string
+
+	  LOAD T4,PIPRO,(IPKT)		; Protocol number
+	  CAIE T4,INMNPR		; Monitoring protocol?
+	  IFSKP.	
+	    CALL FILEIT			; File report away
+	    LOOP.
+	  ENDIF.
+
+	  CAIE T4,.ICMFM		; ICMP message?
+	  IFSKP.
+	    HRROI T2,[ASCIZ \
+  Received ICMP message from host \]
+	  ELSE.
+	    HRROI T2,[ASCIZ \
+  Received protocol \]
+	    CALL DOSOUT
+	    MOVE T2,T4
+	    MOVX T3,DECRAD
+	    NOUT%
+	      JFCL
+	    HRROI T2,[ASCIZ \ message from host \]
+	  ENDIF.
+	  CALL DOSOUT
+
+	  HRROI T2,IHSTNM(FD)		; Insert host name
+	  CALL DOSOUT
+	  CALL CRLF
+
+	  LOAD T1,PIPRO,(IPKT)
+	  CAIE T1,.ICMFM		; Stop here if not ICMP message
+	    LOOP.
+
+; Process received ICMP message
+
+	  HRROI T2,[ASCIZ \    type \]
+	  CALL DOSOUT
+
+	  LOAD T4,PIDO,(IPKT)
+	  ADDI T4,PKTELI(IPKT)
+
+	  MOVEI T1,.PRIOU
+	  LOAD T2,CMTYP,(T4)		; TYPE
+	  MOVEI T3,DECRAD
+	  NOUT%
+	    JFCL
+	  CAIGE T2,ICMPTL		; Type bigger than type table length?
+	   SKIPN T2,ICMPTS(T2)
+	  IFSKP.			; No, and have string
+	    HLRZ Q1,T2			; Save secondary table, if any
+	    HRROS T2			; Text pointer
+	    CALL DOSOUT
+	  ENDIF.
+	  HRROI T2,[ASCIZ \, code \]
+	  CALL DOSOUT
+	  MOVEI T1,.PRIOU
+	  LOAD T2,CMCOD,(T4)		; CODE
+	  MOVEI T3,DECRAD
+	  NOUT%
+	    JFCL
+	  IFN. Q1
+	    ADD T2,Q1
+	    HRRO T2,(T2)		; Get code text
+	    CALL DOSOUT
+	  ENDIF.
+	  CALL CRLF
+	  LOOP.
+	ENDDO.				; Main forever loop
+
+; Strings for TYPE field of ICMP messages
+
+ICMPTS:	0,,[ASCIZ \ (echo reply)\]		;TYPE 0
+	0
+	0
+
+	[[ASCIZ /(net)/]			;TYPE 3
+	 [ASCIZ /(host)/]
+	 [ASCIZ /(port)/]
+	 [ASCIZ /(protocol)/]
+	 [ASCIZ /(fragmentation required)/]
+	 [ASCIZ /(source routing failure)/]],,[ASCIZ \ (dest unreachable)\]
+
+	0,,[ASCIZ \ (source quench)\]		;TYPE 4
+
+	[[ASCIZ /(net)/]			;TYPE 5
+	 [ASCIZ /(host)/]
+	 [ASCIZ /(net+tos)/]
+	 [ASCIZ /(host+tos)/]],,[ASCIZ \ (redirect)\]
+	0
+	0
+	0,,[ASCIZ \ (echo)\]			;TYPE 8
+	0
+	0
+	[[ASCIZ /(time to live)/]		;TYPE 11
+	 [ASCIZ /(fragmentation reassembly)/]],,[ASCIZ \ (time exceeded)\]
+
+	0,,[ASCIZ \ (parameter problem)\]	;TYPE 12
+	0,,[ASCIZ \ (timestamp)\]		;TYPE 13
+	0,,[ASCIZ \ (timestamp reply)\]		;TYPE 14
+
+ICMPTL==.-ICMPTS			; ICMP TYPE string table length
+
+;-----  End of code for User Datagram inferior  -----
+
+	SUBTTL	Code for TCP Receiver
+
+TBEG:	MOVEI P,IPDL-1(FD)		; Get a stack
+	HRLI P,-STACKL
+	SETZM TCPSTP(FD)		; No fatal errors so far
+
+	SETZM TCDB(FD)			; Clear connection descriptor block
+	HRLI T3,TCDB(FD)
+	HRRI T3,TCDB+1(FD)
+	BLT T3,TCDB+.TCPCS-1(FD)
+
+	MOVE T1,PORTS			; Setup local port
+	MOVEM T1,.TCPLP+TCDB(FD)
+	MOVX T1,INMNPT			; Foreign port
+	MOVEM T1,.TCPFP+TCDB(FD)
+
+	MOVEI IPKT,IPBUF+1-PKTELI(FD)	; Point for IP header
+
+TLOOP:	SKIPN ISTOPF
+	IFSKP.				; Oops, superior is exiting
+	  DO.				; Forever
+	    MOVX T1,.INFIN		; A long time
+	    DISMS%
+	    LOOP.
+	  ENDDO.
+	ENDIF.
+
+	SETZM TBHDR(FD)			; Clear buffer header
+	HRLI T3,TBHDR(FD)
+	HRRI T3,TBHDR+1(FD)
+	BLT T3,TBHDR+.TCPBS(FD)
+
+	MOVEI T1,IPBUF+1(FD)		; For next read
+	MOVEM T1,.TCPBA+TBHDR(FD)	; Where to begin next read
+	ADD T1,[<POINT 8,0,31>-1]	; 8-bit bytes at previous word
+	MOVEM T1,TCPBPT(FD)
+	MOVX T3,<IPBUFL*4-4>		; Amount of available space
+	MOVEM T3,TCPBCT(FD)
+	MOVEM T3,.TCPBC+TBHDR(FD)
+
+	MOVEI T1,TCDB(FD)		; Connection block
+	TXO T1,TCP%WT
+	MOVX T2,<^D15000>		; Synchronization timeout
+	MOVX T3,<0>			; Retransmission parameters
+TOPN:	OPEN%
+	  JRST TOPNER
+	MOVEM T1,TCPJFN(FD)		; Save connection id
+
+
+; Tell superior to start another?
+
+TBLOOP:	DO.
+	  MOVE T1,TCPJFN(FD)		; Connection id
+	  TXO T1,TCP%WT
+	  MOVEI T2,TBHDR(FD)
+;	  SETZRO TCP%DN,+.TCPBF(T2)	; Clear done bit
+	  MOVX T3,<^D<5*60*1000>>	; Retransmission timeout
+	  PUSH P,.TCPBCT+TBHDR(FD)
+	  SETZ T4,
+TRCV:	  RECV%				; Wait for a buffer
+	    MOVEM T1,TSTSOT+0(FD)	; Set error code
+
+	  POP P,T4
+	  SUB T4,.TCPBC+TBHDR(FD)	; Less remaining gives used
+	  SKIPN T2,T4			; Anything there?
+	  IFSKP.			; Yes
+
+	    MOVE T3,TCPBPT(FD)		; Byte pointer to free octet is dest.
+	    TXNE T3,-1B2		; Check for word alignment
+	    IFSKP.			; Nothing to be squeezed out
+	      ADJBP T2,T3		; Pointer for next byte
+	    ELSE.			; Someone did a PUSH??
+	      MOVX T1,<POINT 8,0>	; Build source pointer
+	      HRR T1,.TCPBA+TBHDR(FD)
+	      MOVE T2,T3		; Destination pointer
+	      DO.
+	        ILDB T3,T1		; Get received byte
+	        IDPB T3,T2		; Pack it after last
+	        SOJG T4,TOP.		; Copy all octets just received
+	      ENDDO.
+	    ENDIF.
+
+; Update pointers
+
+	    MOVEM T2,TCPBPT(FD)		; Point before next free octet
+	    MOVEI T3,1(T2)		; Next free word
+	    MOVEM T3,.TCPBA+TBHDR(FD)	; For next RECV (count is good enough)
+	  ENDIF.
+
+	  MOVE T1,TSTSOT+0(FD)		; Error code
+	  TRNN T1,200			; Bad?
+	    LOOP.			; No, back for another buffer
+	ENDDO.
+
+
+; Check on connection status
+
+TCPSTS:	MOVEI T2,TSTSIN			; Names of desired information
+	HRLI T2,-NSTS
+	MOVEI T3,TSTSOT(FD)		; Where to pit it
+	HRLI T3,-NSTS
+IFN <1B0-TCP%JS>,<PRINTX % Fix SKIPL in TCPSTS>
+	SKIPGE T1,TCPJFN(FD)		; Connection id
+	 TXOA T1,TCP%SY			; Giving symbols
+	  SKIPA T1,EFP+^D7		; Fake an error if none
+	   STAT%
+	    MOVEM T1,TSTSOT+0(FD)	; Set error code
+
+	DMOVE T1,TSTSOT+0(FD)		; Error code & Receive state
+	ANDI T1,37
+	CAIE T1,0			; Remote end closing?
+	IFSKP.
+	  MOVE T1,TCPJFN(FD)
+	  CLOSE%			; Yes, close this end too
+	    MOVEM T1,TSTSOT+0(FD)	; Set error code
+	ENDIF.
+
+; Fake a User Queue header for compatability with user datagrams
+
+	MOVX T3,<IPBUFL*4-4>;-MINIHS-4	; Amount of available space, incl IP
+	MOVEI T4,4(T3)
+	HRRM T4,IPBUF(FD)		; Words available
+	SUB T3,.TCPBC+TBHDR(FD)		; Bytes received
+	ADDI T3,4+3
+	LSH T3,-2			; Words + User Queue header word
+	HRLM T3,IPBUF(FD)		; Words used
+
+	AOS RCNT			; Count received "packets"
+
+	CALL FINDSH			; Get source host string
+	CALL FILEIT			; File received data
+
+	SKIPA T1,TCPJFN(FD)		; Connection to be aborted
+
+; Restarted here (with connecion id in T1) on forced stop to abort connection
+
+TCPABT:	  AOS TCPSTP(FD)		; Stop
+	ABORT%				; All done with connection
+	  MOVEM T1,TSTSOT+0(FD)		; Set error code
+	SETZM TCPJFN(FD)
+
+	SKIPN TCPSTP(FD)		; Fatal error?
+	  JRST TLOOP			; No do another
+TOPNER:	HALTF%
+	JRST .-1
+
+;-----  End of code for TCP inferior  -----
+
+	SUBTTL	Send Command
+
+SEND:	GJINF%				; Get local port
+	MOVE T1,T3
+	LSH T1,8			; Local port = <job number,0>
+	MOVEI T2,177400			; Mask = -1, 0
+	DMOVEM T1,PORTS
+
+	HRROI T2,[ASCIZ \  Host to tickle: \]
+	CALL DOSOUT
+
+	MOVSI T4,-DHTBSZ
+SEND1:	DO.
+	  PBIN%
+	  ANDI T1,177
+	  CAIN T1,6			; CTRL-F
+	    JRST SENDT
+	  CAIN T1,12			; LF	
+	    JRST SENDT
+	  CAIN T1,15			; CR
+	    JRST SENDT
+	  CAIN T1,22			; CTRL-R
+	    JRST SENDR
+	  CAIN T1,25			; CTRL-U
+	    JRST SENDA
+	  CAIN T1,27			; CTRL-W
+	    JRST SENDA
+	  CAIN T1,33			; ESC
+	    JRST SENDT
+	  CAIN T1," "			; SPACE
+	    JRST SENDT
+	  CAIN T1,"?"			; ?
+	    JRST SENDQ
+	  CAIN T1,177			; DEL
+	    JRST SENDD
+	  CAIG T1,37
+	    LOOP.			; Ignore all other CTRL chars
+	  MOVEM T1,DHTBUF(T4)		; Store the char as part of string
+	  AOBJN T4,TOP.
+	ENDDO.
+
+	HRROI T2,[ASCIZ \
+  Host string too long.
+\]
+	CALL DOSOUT
+	JRST MAIN
+
+SENDA:	HRROI T2,[ASCIZ \
+  ...aborted
+\]
+	CALL DOSOUT
+	JRST MAIN
+
+SENDD:	TRNN T4,-1			; Delete one char from string
+	  JRST SENDA			; Cannot back up over start
+	SUB T4,[1,,1]
+	MOVE T1,DHTBUF(T4)
+	PBOUT%
+	MOVX T1,"\"
+	PBOUT%
+	JRST SEND1
+
+SENDQ:	HRROI T2,[ASCIZ \
+  e.g., 1200000005 or 10.0.0.5 or BBNF\]
+	CALL DOSOUT
+SENDR:	CALL CRLF			; Retype the string
+	MOVEI T3,(T4)
+	JUMPE T3,SEND1			; No chars in string
+	MOVNS T3
+	HRLZS T3
+	DO.
+	  MOVE T1,DHTBUF(T3)
+	  PBOUT%
+	  AOBJN T3,TOP.
+	ENDDO.
+	JRST SEND1
+
+; String typein has terminated, so evaluate the string
+
+SENDT:	CAIE T1,15			; Was terminator CR?
+	  CALL CRLF			; No, print one
+	MOVEI T3,(T4)			; Try parsing as 32-bit octal number
+	MOVNS T3
+	HRLZS T3
+	MOVEI T2,0			; Accumulates number
+	JUMPE T3,SEND2			; No chars = same as before
+	DO.
+	  MOVE T1,DHTBUF(T3)
+	  SUBI T1,"0"
+	  TRNE T1,777770
+	    JRST SENDT2			; Not an octal digit
+	  LSH T2,3
+	  IOR T2,T1
+	  AOBJN T3,TOP.
+	ENDDO.
+	TLNN T2,740000			; Don't worry if some bits LSH'ed out
+	  JRST SENDT9			; Got it (octal)
+SENDT2:	MOVEI T3,(T4)			; Try parsing as 4 decimal bytes
+	MOVNS T3
+	HRLZS T3
+	MOVEI T2,0
+	CALL SENDT3			; Get byte
+	CALL SENDT3
+	CALL SENDT3
+	CALL SENDT3
+
+	JUMPL T3,SENDT6			; . and maybe more junk after 4th byte
+	CAIE T3,(T4)
+	  JRST SENDT6			; Fail, parse not at end of string
+	JRST SENDT9			; Got it (4 decimal bytes)
+
+
+POP6:	POP P,T1			; Restore P
+SENDT6:	MOVEI T3,(T4)			; Try parsing as host name text
+	MOVNS T3
+	HRLZS T3
+	MOVX T2,<POINT 7,DHSBUF>
+	DO.
+	  MOVE T1,DHTBUF(T3)
+	  IDPB T1,T2
+	  AOBJN T3,TOP.
+	ENDDO.
+	SETZ T1,
+	IDPB T1,T2			; Insure termination with NUL byte
+	MOVEI T1,.GTHSN			; Translate string to host number
+	HRROI T2,DHSBUF
+	GTHST%				; Clobbers AC4 also!
+	IFNSK.
+	  HRROI T2,[ASCIZ \  ? Cannot parse that as a host.
+\]
+	  CALL DOSOUT
+	  JRST MAIN
+	ENDIF.
+	MOVE T2,T3			; Host number (= address)
+
+SENDT9:	LSH T2,4
+	MOVEM T2,TICDST			; Store the parsed value
+
+SEND2:	SKIPE TICDST			; Is default tickle dest = 0?
+	IFSKP.
+	  HRROI T2,[ASCIZ \  No old host to use as default.
+\]
+	  CALL DOSOUT
+	  JRST MAIN
+	ENDIF.
+
+	HRROI T2,[ASCIZ \
+  Tickle # \]
+	CALL DOSOUT
+	MOVEI T1,.PRIOU
+	MOVE T2,SCNT
+	AOS T2				; SCNT itself gets AOSed later
+	MOVEI T3,DECRAD
+	NOUT%
+	  JFCL
+	HRROI T2,[ASCIZ \ to host \]
+	CALL DOSOUT
+
+	MOVEI T1,.PRIOU
+	MOVE T2,TICDST
+	LSH T2,-4
+	MOVX T3,<NO%MAG+FLD(^D12,NO%COL)+OCTRAD>
+	NOUT%
+	  JFCL
+	HRROI T2,[ASCIZ \ = \]
+	CALL DOSOUT
+	MOVEI T1,.PRIOU
+	MOVEI T4,TICDST
+	MOVEI Q1,"."			; Punctuate with "."
+	CALL P4BYTS			; Print as 4 decimal bytes
+	HRROI T2,[ASCIZ \ = \]
+	CALL DOSOUT
+	MOVEI T1,.GTHNS			; Function = host number to string
+	MOVEI T2,.PRIOU			; destination = TTY
+	MOVE T3,TICDST
+	LSH T3,-4
+	GTHST%				; Clobbers AC4 also!
+	IFNSK.
+	  MOVEI T1,"?"
+	  PBOUT%
+	ENDIF.
+	CALL CRLF
+
+	SKIPE UFORKH			; Has fork for receiving been set up?
+	IFSKP.				; No
+	  DMOVE T1,PORTS
+	  CALL DOASN			; Do ASNIQ with manual mode parameters
+	  CALL RCVUD			; Create inferior fork
+	ENDIF.
+
+	SKIPE IFORKT+1			; Have a TCP fork?
+	IFSKP.				; Not yet
+	  CALL RCVTCP			; Start TCP receiver
+	  AOS Q1
+	ENDIF.
+
+	AOS T1,SCNT			; Now actually send the tickle
+	ANDI T1,377
+	DPB T1,[POINT 8,TICSEG,15]	; 2nd byte of segment id = count
+	MOVE T1,INETQH
+	MOVEI T2,TICKLE
+	MOVEI T3,0
+	SNDIN%
+	  JRST SNDERR
+	JRST MAIN
+
+
+; Routine
+
+SENDT3:	SETZ T1,			; Accumulates byte value
+SENDT4:	DO.
+	  MOVE P3,DHTBUF(T3)
+	  CAIN P3,"."
+	  IFSKP.
+
+	    CAIL P3,"0"
+	    CAILE P3,"9"
+	      JRST POP6			; Char out of range
+	    SUBI P3,"0"
+	    IMULI T1,DECRAD
+	    ADD T1,P3
+	    TRNE T1,777400
+	      JRST POP6			; Byte value too big
+	    AOBJN T3,TOP.
+	  ELSE.
+	    AOBJN T3,.+1		; Advance over the .
+	  ENDIF.
+	ENDDO.
+	LSH T2,8			; Put new byte into result
+	IOR T2,T1
+	RET
+
+	SUBTTL	Verbose Command
+
+VERBOS:	SETCMM VERBF			; Complement verbose mode
+	HRROI T2,[ASCIZ \  Verbose mode on
+Date & time in pkt/up H:M/ seq # /   .bin ptr/ len/src host
+\]
+	SKIPN VERBF
+	  HRROI T2,[ASCIZ \  Verbose mode off
+\]
+	CALL DOSOUT
+	JRST MAIN
+
+
+
+ERROR:	CALL DOSOUT
+	HRROI T2,[ASCIZ \ failure
+\]
+	CALL DOSOUT
+	MOVEI T1,.PRIOU
+	MOVE T2,[.FHSLF,,-1]
+	MOVEI T3,0
+	ERSTR%
+	  JFCL
+	  JFCL
+	CALL CRLF
+	RET
+
+ERHLT:	HALTF%
+	JRST .-1
+
+CFKERR:	HRROI T2,[ASCIZ \CFORK\]
+	CALL ERROR
+	JRST ERHLT
+
+SNDERR:	HRROI T2,[ASCIZ \SNDIN\]
+	CALL ERROR
+	JRST ERHLT
+
+; Print @<D> as 4 decimal bytes, to <A>, punctuated with <E>
+
+P4BYTS:	HRLI T4,(POINT 8,)
+	MOVEI T3,DECRAD
+	DO.
+	  ILDB T2,T4
+	  NOUT%
+	    JFCL
+	  TLNN T4,700000		; No skip after 4th ILDB
+	    RET
+	  MOVE T2,Q1
+	  BOUT%
+	  LOOP.
+	ENDDO.				; Of do forever
+
+
+CRLF:	HRROI T2,[ASCIZ \
+\]
+DOSOUT:	MOVEI T1,.PRIOU
+	SETZ T3,
+	SOUT%
+	RET
+
+
+DONOUT: MOVEI T1,.PRIOU
+	MOVX T3,<NO%MAG+OCTRAD>		; Unsigned, octal
+	NOUT%
+	  JFCL
+	RET
+
+
+TSTSIN:	ASCII /TERR/			; TCP fork constants
+	ASCII /TRSYN/
+	ASCII /TFH/
+	ASCII /TFP/
+	ASCII /TLH/
+	ASCII /TLP/
+NSTS==.-TSTSIN
+
+PATCH:	BLOCK 100
+PDL:	BLOCK STACKL			; Superior stack
+
+ACS:	BLOCK 20			; Inferior ACs
+AUTOFG:	0				; 0 - Interactive, -1 - Automatic
+PORTS:	BLOCK 2				; Local port & mask
+INETQH:	0				; Inet queue handle
+MAXPSZ:	0				; Max pkt size before fragmentation
+RCNT:	0				; Received packet count
+SCNT:	0				; Sent packet count
+VERBF:	0				; Verbose mode, 0 = OFF, -1 = ON
+
+DHTBSZ==100				; DHTBUF size
+DHTBUF:	BLOCK DHTBSZ			; Dest host typein buf (1 char/word)
+DHSBUF:	BLOCK DHTBSZ/5+1		; Dest host string buf, for GTHST
+
+IQDBLK:					; Internet queue descriptor block
+RELOC IQDBLK+.IQPRV
+	BYTE (32)INMNPR			; Inet protocol version
+RELOC IQDBLK+.IQFHV
+	0				; Foreign host Inet addr
+RELOC IQDBLK+.IQSHV
+	0				; Local host Inet addr
+RELOC IQDBLK+.IQPTV
+	BYTE (16)0,INMNPT		; Local port (DOASN arg), foreign
+RELOC IQDBLK+.IQPRM
+	BYTE (32)377			; Protocol mask
+RELOC IQDBLK+.IQFHM
+	0				; Foreign host mask
+RELOC IQDBLK+.IQSHM
+	0				; Local host mask
+RELOC IQDBLK+.IQPTM
+	BYTE (16)0,-1			; Local, foreign port mask (DOASN arg)
+RELOC IQDBLK+<.IQPRV!.IQFHV!.IQSHV!.IQPTV!.IQPRM!.IQFHM!.IQSHM!.IQPTM>+1
+
+TICKLE:	TICEND-.			; Words, self+header+text
+	FLD(.INTVR,PIVER)+FLD(<<MINIHS+3>/4>,PIDO)+FLD(0,PITOS)+FLD(TICBL,PIPL)
+TICSEG:	FLD(0,PISID)+FLD(0,PIFLG)+FLD(0,PIFO) ; Top 2 bytes <job number,count>
+	FLD(6,PITTL)+FLD(INMNPR,PIPRO)+FLD(0,PICKS)
+TICSRC:	FLD(0,PISH)
+TICDST:	FLD(0,PIDH)
+TICPOR:	FLD(0,PSP)+FLD(INMNPT,PDP)	; Src port (local) = DOASN arg
+TICEND:					; Dest port (foreign)
+TICBL==<<TICEND-TICKLE-1>*4>
+
+; Variables about or for inferior fork
+
+ISTOPF:	0				; NZ=> inferiors should stop
+;NIFORK:	0				; Number of inferior forks
+
+IFORKT:
+UFORKH:	0				; User Datagram inferior fork handle
+	BLOCK MAXINF			; TCP inferior fork handles
+
+	LIT				; Literals here
+
+	ASCIZ /END/
+PGMEND==.+4000				; End of relocatable program + symbols
+
+; Inferior fork data structure
+
+DEFINE INFD(nam,len<1>)<
+nam=..INFD
+..INFD==..INFD+len
+>
+
+..INFD==0
+
+INFD(TSTSOT,NSTS)			; Returned connection status
+INFD(TCDB,.TCPCS)			; Connection block
+;INFD(TCPERR);use tstsot+0		; Error code returned by JSYS
+INFD(TCPJFN)				; TCP connection id
+INFD(TCPBCT)				; Initial count for RECV
+INFD(TCPBPT)				; Byte pointer to next free octet
+INFD(TCPSTP)				; Error stop
+INFD(TBHDR,.TCPBS)			; Buffer header
+
+INFD(IOFJFN)				; Inferior output file JFN
+INFD(IHSTPT)				; Pointer into IFNAME, after <name>
+INFD(IBINP)				; .BIN file pointer for new entry
+INFD(ILEN)				; Length of new entry in .BIN file
+INFD(IHSTNM,20)				; Host name
+INFD(IFNAME,20)				; File name composed here
+INFD(IVSTR,40)				; Verbose mode message string
+INFD(IPDL,STACKL)			; Inferior stack
+
+INFD(IPBUF,IPBUFL)			; IP datagram buffer
+
+..==..INFD				; Size of inferior data area
+
+	END <3,,ENTVEC>

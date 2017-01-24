@@ -1,0 +1,405 @@
+;-*-Midas-*-
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	EMACSI - EMACS Interface
+;;
+;;	Call EMACSI"EDITIT with
+;;
+;;	1/ BP to source buffer
+;;	2/ Length of source text or -1 if not known (but ASCIZ)
+;;	3/ BP to destination buffer
+;;	4/ Available character-space in destination
+;;	5/ Page# of two-page block for EMACSI's use
+;;
+;;	It returns +1 on fatal error, +2 on success, but not all
+;;	the text would fit in the destination buffer, and +3 on
+;;	total win; +2 and +3 also have:
+;;
+;;	3/ BP to end of destination buffer
+;;	4/ #characters written in buffer
+;;
+;;
+;;	EMACSI expects the SOUT.MID library to be inserted, and
+;;	uses $SOUT in place of the JSYS SOUT for all string-to-
+;;	string transfers, for efficiencies sake.
+;;
+;;	BP's to source and destination buffers may be in HRROI
+;;	TOPS-20 format, or just an address - both are converted
+;;	to 440700,,addr.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;IFNDEF $SOUT,$SOUT=SOUT
+
+	.BEGIN EMACSI
+
+   BB%BEG==0			;Offsets into a TECO Buffer Block
+  BB%BEGV==1
+    BB%PT==2
+   BB%GPT==3
+    BB%ZV==4
+     BB%Z==5
+BB%EXTRAC==6
+   BB%CP1==7
+   BB%CP2==8
+
+Define TYPE &string
+	Hrroi 1,[Asciz string]
+	PSOUT
+Termin
+
+Editor:	Asciz "SYS:EMACS.EXE"
+EdJCL:	Asciz "EDIT MM Text ModewFS Exitw"
+
+.SCALAR ArgACs(5)		;Arguments passed to us.
+.SCALAR EdJFN			;JFN on EMACS.EXE
+.SCALAR EditPH			;Process Handle for EMACS fork
+.SCALAR OurMOD			;The TTY mode word as we like it
+.SCALAR HisMOD			;and as EMACS likes it.
+.SCALAR OurTMOD			;The same but for TTY mode word (ours)
+.SCALAR HisTMOD			;and what EMACS likes.
+.SCALAR OurTIW(2)		;Our TTY Interrupt Word
+.SCALAR HisTIW(2)		;and what EMACS likes.
+.SCALAR E1st			;First time EMACS run?
+.SCALAR EdACs(20)		;ACs of fork...
+.SCALAR EdArgs			;Offset within out page of "buffer block"
+.SCALAR CLeft			;Characters left to snarf from EMACS
+.SCALAR EAPage			;Page in EMACS Address space we're writing
+.SCALAR SAvail			;Bytes available for writing in page
+.SCALAR topBP			;BP to top (start) of section of buffer
+.SCALAR endBP			;BP to corresponding bottom (end)
+.SCALAR PSBlok(5)		;Program Status of the halted EMACS
+.SCALAR GETSAC(2)		;Saved arguments to GetSeg
+.SCALAR Writen			;Number of character written into dest buffer
+.SCALAR BBPage			;Page# of page for mapping in Buffer Block
+.SCALAR BBaddr			;Addr of same
+.SCALAR EdPage			;Page# of page for mapping in data pages
+.SCALAR EdAddr			;addr of same
+.SCALAR BPLH			;LH of normal string BP, 440700,, or 610000,,
+
+EditIt:	Movem 2,ArgACs+1
+	Movem 4,ArgACs+3
+	Movem 5,EdPage
+	LSH 5,9.		;turn page# into addr
+	Movem 5,EdAddr
+	LSH 5,-9.		;back to page#
+	Addi 5,1		;next page
+	Movem 5,BBPage
+	LSH 5,9.		;turn page# into addr
+	movem 5,BBaddr
+	Movem 1,ArgACs
+	Movem 3,ArgACs+2
+
+	movsi 2,440700
+	XMOVEI 1,.		;check if we're running extended...
+	HLRZS 1			 
+	skipe 1
+	  movsi 2,610000
+	movem 2,bplh
+
+	Skipe EdJFN
+	  Jrst ForkIt
+	Movsi 1,(GJ%SHT\GJ%OLD)
+	Hrroi 2,Editor
+	GTJFN			;Get a JFN on the Editor of choice
+	  Jrst [Type "?Can't find editor "
+		hrroi 1,Editor
+		psout
+		Type " -- "
+		Jrst Barf]
+	Movem 1,EdJFN
+ForkIt:	Skipe EditPH
+	  Jrst StartE
+	Movsi 1,(CR%CAP)
+	CFORK
+	  Jrst [Type "?Can't create inferior process -- "
+		Jrst Barf]
+	Movem 1,EditPH
+	Hrl 1,EditPH		;Process Handle,,JFN
+	Hrr 1,EdJFN
+	GET
+	 Erjmp [Move 1,EdJFN
+		RLJFN
+		  Nop
+		Setzm EdJFN
+		Type "?Can't load in editor "
+		hrroi 1,Editor
+		psout
+		Type " -- "
+		Jrst Barf]
+StartE:	Skipe E1st
+	  Jrst nth
+	Movei 1,.CTTRM
+	RFMOD
+	Movem 2,OurMOD		;The way we like our TTY mode word.
+;;IFDEF RTMOD,[
+;;	RTMOD
+;;	Movem 2,OurTMOD
+;;];Has RTMOD
+	Movei 1,.FHJOB
+	RTIW
+	DMovem 2,OurTIW
+
+	Hrroi 1,EdJCL
+	RSCAN
+	  Nop
+	Move 1,EditPH
+	Setz 2,
+	SFRKV			;Start the Editor,
+	WFORK			;Thank you.
+	FFORK			;Freeze so I can read the status...
+	Skipe E1st		;First time we've used this EMACS?
+	  Jrst EReq		;  No, so already know this junk.
+	Move 1,EditPH		;Read Fork Status
+	Movei 2,EdACs
+	RFACS			;Read the Editor's ACs now...
+	Move 3,EdACs+2		;"Buffer block" address
+	Idivi 3,1000
+	Movem 4,EdArgs		;Address within page of start of buffer block
+	Hrl 1,EditPH
+	Hrr 1,3
+	Move 2,BBPage
+	Hrli 2,.FHSLF
+	Movsi 3,(PM%RD\PM%WR)
+	PMAP			;Get the argument page...
+	Setom E1st
+
+	Movei 1,.CTTRM
+	RFMOD
+	Movem 2,HisMOD		;TTY mode word as EMACS likes it.
+	Movei 1,.FHJOB
+	RTIW
+	DMovem 2,HisTIW
+	Jrst EReq
+
+nth:	Move 3,EdArgs
+	Add 3,BBAddr
+	Move 4,BB%Z(3)
+	Move 1,BB%BEG(3)
+	Movem 1,BB%BEGV(3)
+	Sub 4,1			;4/ #chars we're getting rid of.
+	Movem 1,BB%PT(3)
+	Movem 1,BB%GPT(3)
+	Movem 1,BB%ZV(3)
+	Movem 1,BB%Z(3)
+	Addm 4,BB%EXTRAC(3)	;Increase by the right amount.
+	Movei 1,.CTTRM
+	Move 2,HisMOD
+	SFMOD			;Set the mode word to what EMACS likes
+	Movei 1,.FHJOB
+	DMove 2,HisTIW
+	STIW
+
+EReq:	Movei 1,5		;Want 5 words of status
+	Hrrzm 1,PSBlok+.RFCNT
+	Move 1,EditPH
+	Tlo 1,(RF%LNG)
+	Movei 2,PSBlok
+	RFSTS			;Read Fork Status, so we have the old PC
+	Move 3,EdArgs
+	Add 3,BBAddr
+	Skipge 4,ArgACs+1	;Characters in source buffer specified?
+	  pushj p,Count		;  Nope, so calculate; put in AC4 and ArgACs
+	Movem 4,BB%CP2(3)	;Set argument to #characters in text
+	Move 1,EditPH
+	RFORK
+	Move 2,EdACs+2
+	Addi 2,BB%CP1
+	SFORK			;Let it make some room.
+	WFORK			;Thank you.
+	Skipg ArgACs+1		;Really anything there?
+	  Jrst DoIt		;  Naw, so can skip this part.
+ereq00:	Move 4,BB%BEG(3)	;Start of buffer (funny BP)
+	pushj p,BPconv		;Turn into real BP ...
+	Movem 4,topBP
+	hrrz 1,4		;Get a single page of EMACS for us to write
+	idivi 1,1000		;into...
+	Movem 1,EAPage		;Page in EMACS Address space we want...
+	Add 2,EdAddr
+	hllz 1,topBP		;get back lh bp part
+	tlz 1,77		;keep only XXXX00 part
+	ior 2,1			;final bp
+	movem 2,topBP
+	Move 1,BB%BEG(3)	;Teco BP to top of buffer
+	IDivi 1,1000*5		;Get rid of stray pages, 2/ within page
+	Movei 1,1000*5
+	Sub 1,2
+	Movem 1,SAvail		;Characters available in this page.
+	
+EReq0:	Hrrz 1,EAPage
+	Hrl 1,EditPH
+	Move 2,EdPage
+	Hrli 2,.FHSLF
+	Movsi 3,(PM%RD\PM%WR)
+	PMAP
+	Move 4,SAvail		;Space available in page.
+	Camle 4,ArgACs+1	;More than necessary?
+	  Move 4,ArgACs+1	;  Yeah, so just need this much.
+	Move 1,topBP
+	Move 2,ArgACs		;BP to source buffer
+	Movn 3,4
+IFDEF $SOUT, $SOUT
+.ELSE [
+	push p,4
+	ildb 4,2
+	idpb 4,1
+	aojl 3,.-2
+	pop p,4
+]
+	Move 1,ArgACs+1		;Old count
+	Sub 1,4			;1/ characters left to write
+	Jumpe 1,DoIt		;If written it all, then done.
+	Movem 1,ArgACs+1	;Updated characters-left-to-write
+	Movem 2,ArgACs		;Updated BP to source.
+	Aos EAPage		;Next EMACS page we'll want to write to.
+	Movei 1,1000*5
+	Movem 1,SAvail		;Space available in next page...
+	Move 1,EdAddr
+	IOR 1,BPLH
+	Movem 1,topBP
+	Jrst EReq0		;Do another block.
+
+DoIt:	Move 2,PSBlok+.RFPPC
+DoIt0:	Move 1,EditPH
+	SFORK			;Now let you edit it...
+	WFORK			;and wait until you're done...
+	RWM			;See why it stopped
+	Tlnn 2,200000		;Level 1 in progress?
+	  Jrst GetBak		;  No
+	Move 1,EditPH
+	RFSTS			;PC word returned in AC2
+	HALTF			;Pass ^C effectively up the tree
+	Jrst DoIt0		;when they continue, continue.
+
+GetBak:	Setzm Writen
+	Move 3,EdArgs
+	Add 3,BBAddr
+	Move 1,BB%BEGV(3)
+	Move 2,BB%GPT(3)
+	pushj p,GetSeg		;Segment before (bletch!) GAP.
+	  Jrst Yahoo
+	Move 3,EdArgs
+	Add 3,BBAddr
+	Move 1,BB%GPT(3)
+	Add 1,BB%EXTRAC(3)
+	Move 2,BB%Z(3)
+	Add 2,BB%EXTRAC(3)
+	pushj p,GetSeg		;Segment after (ack!) GAP.
+	  Skipa
+	    Aos (P)		;+3: If fell into here, was room for text.
+Yahoo:	Movei 1,.CTTRM
+	Move 2,OurMOD
+	SFMOD
+;;IFDEF RTMOD,[
+;;	Move 2,OurTMOD
+;;	STMOD
+;;];Has RTMOD/STMOD
+	Movei 1,.FHJOB
+	DMove 2,OurTIW
+	STIW
+	Move 3,ArgACs+2
+	Move 4,Writen
+popj1:	Aos (P)			;At least +2 return.
+CPopj:	popj p,
+
+Barf:	Movei 1,.PRIOU
+	Hrloi 2,.FHSLF
+	Setz 3,
+	ERSTR
+	  Nop
+	  Nop
+	popj p,
+
+Count:	Setz 4,
+	Move 2,ArgACs		;BP to source buffer
+Count0:	Ildb 1,2
+	Skipe 1
+	  Aoja 4,Count0
+	Movem 4,ArgACs+1	;Set #characters
+	popj p,
+
+BPconv:	Push P,5
+	IDivi 4,5		;T/ address, TT/ position within word
+	IOR 4,BPLH
+	Ibp 5,4
+	Move 4,5
+	Pop P,5
+	popj p,
+
+GetSeg:	Camg 2,1
+	  Jrst Popj1		;Always room for nothing.
+	Movem 1,GetSAC		;Save args.
+	Movem 2,GetSAC+1
+	Move 4,1		;Start of segment
+	pushj p,BPconv
+	Movem 4,topBP
+	Hrrz 1,4
+	IDivi 1,1000
+	Movem 1,EAPage
+	Add 2,EdAddr
+	hllz 1,4
+	tlz 1,77
+	ior 2,1
+	movem 2,topBP
+
+	Move 4,GetSAC+1		;End of segment
+	pushj p,BPconv
+	Movem 4,endBP
+	Hrrz 1,4
+	IDivi 1,1000
+	Sub 1,EAPage
+	IMuli 1,1000
+	Add 2,EdAddr
+	Add 2,1
+	movem 2,endBP
+
+	Move 1,GetSAC+1
+	Sub 1,GetSAC	
+	Camle 1,ArgACs+3	;Room for it all?
+	  Skipa 1,ArgACs+3	;  No, so just take what we have room for.
+	    Aos (P)		;    Yes, room, so skip return later.
+	Addm 1,Writen
+	Movem 1,CLeft		;#characters in region
+
+	Move 1,GetSAC
+	IDivi 1,1000*5
+	Movei 1,1000*5
+	Sub 1,2
+	Movem 1,SAvail		;Characters in this partial page...
+
+GetSe0:	Hrrz 1,EAPage
+	Hrl 1,EditPH
+	Move 2,EdPage
+	Hrli 2,.FHSLF
+	Movsi 3,(PM%RD)
+	PMAP			;Map in single page
+	Move 4,SAvail		;# characters can grab from this page.
+	Camle 4,CLeft		;More characters here than we need?
+	  Move 4,CLeft		;  Yes, so just take what we want.
+	Move 1,ArgACs+2		;Destination buffer BP
+	Move 2,topBP		;BP to source text
+	Movn 3,4		;-# characters to copy.
+IFDEF $SOUT, $SOUT
+.ELSE [
+	push p,4
+	ildb 4,2
+	idpb 4,1
+	aojl 3,.-2
+	pop p,4
+]
+	Movem 1,ArgACs+2	;Save updated destination buffer BP
+	Idpb 3,1		;3/ 0, so make ASCIZ.
+	Move 1,CLeft		;Total #characters in this region (left)
+	Sub 1,4			;minus number we just got = # left to get.
+	Jumpe 1,CPopj		;No more?  then all done.
+	Movem 1,CLeft		;Else new total #characters to grab.
+	Aos EAPage		;Go to next page in EMACS address space
+	Movei 1,1000*5		;which contains 1000*5 characters
+	Movem 1,SAvail		;(starting at the very beginning)
+	Move 1,EdAddr
+	IOR 1,BPLH
+	Movem 1,topBP		;(matter of fact, at this BP)
+	Jrst GetSe0		;Now go get another piece.
+
+	.END EMACSI

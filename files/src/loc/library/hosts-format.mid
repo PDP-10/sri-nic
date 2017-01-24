@@ -1,0 +1,226 @@
+	subttl HOSTn table FORMATS
+
+; Herein is the description of the compiled binary output file.  The
+; HOSTS2 and HOSTS3 binary files have almost the same format and most
+; of the following description applies to both; exceptions are noted.
+; General terms:
+;	"fileaddr" = a file address, relative to start of file.
+;	"netaddr" = a network address, in either HOSTS2 or HOSTS3 format.
+;
+; All strings (hostnames etc) are uppercase ASCIZ, word-aligned and
+; fully zero-filled in the last word.  The strings are stored in the
+; file in such a way that their locations are sorted, and only ONE
+; copy of any distinct string is stored - everything that references
+; the same string points to the same place.  Thus it is reasonable to
+; compare string pointers for = as well as < and >, which is much
+; faster than comparing the strings.
+
+;The format of the compiled output file is:
+
+HSTSID==:0	; wd 0	SIXBIT /HOSTS2/ or /HOSTS3/
+HSTFN1==:1	; wd 1	SIXBIT FN1 of source file (eg HOSTS)
+HSTVRS==:2	; wd 2	SIXBIT FN2 of source file (TNX: version #)
+HSTDIR==:3	; wd 3  SIXBIT directory name of source file (eg SYSENG)
+HSTDEV==:4	; wd 4  SIXBIT device name of source file (eg AI)
+HSTWHO==:5	; wd 5	SIXBIT login name of person who compiled this
+HSTDAT==:6	; wd 6  SIXBIT Date of compilation as YYMMDD
+HSTTIM==:7	; wd 7	SIXBIT Time of compilation as HHMMSS
+NAMPTR==:10	; wd 10 Fileaddress of NAME table.
+SITPTR==:11	; wd 11	Fileaddress of SITE table.
+NETPTR==:12	; wd 12 Fileaddress of NETWORK table.
+NTNPTR==:13	; wd 13 Fileaddress of NETNAME table.
+		;....expandable....
+  HDRLEN==:14	; length of header
+
+; NETWORK table
+;	wd 0	Number of entries in table.
+;	wd 1	Number of words per entry. (2)
+; This table contains one entry for each known network.
+; It is sorted by network number for HOSTS3, but alphabetically by name
+; for HOSTS2 (for compatibility, sigh)
+; Each entry contains:
+
+NETNUM==:0	; wd 0 network number (HOSTS2: 8-bit #) (HOSTS3: full netaddr)
+NTLNAM==:1	; wd 1 LH - fileaddr of ASCIZ name of network
+NTRTAB==:1	; wd 1 RH - fileaddr of network's ADDRESS table
+ NETLEN==:2
+
+; ADDRESS table(s)
+;	wd 0	Number of entries in table.
+;	wd 1	Number of words per entry. (HOSTS2 2, HOSTS3 3)
+; There is one of these tables for each network.  It contains entries
+; for each site attached to that network, sorted by network address.
+; These tables are used to convert a numeric address into a host name.
+; Also, the list of network addresses and services for a site is stored
+; within these tables.
+; Each entry contains:
+
+ADDADR==:0	; wd 0	Network address of this entry, in HOSTS2 or HOSTS3 fmt.
+ADLSIT==:1	; wd 1 LH - fileaddr of SITE table entry
+ADRCDR==:1	; wd 1 RH - fileaddr of next ADDRESS entry for this site
+		;	 0 = end of list
+ ADDLN2==:2	; HOSTS2 length of entry; 3rd word only used if HOSTS3
+ADLXXX==:2	; wd 2 LH - unused
+ADRSVC==:2	; wd 2 RH - fileaddr of services list for this address
+		;	0 = none, else points to SERVICE node of format:
+	SVLCNT==:0	;		<# wds>,,<fileaddr of next, or 0>
+	SVRCDR==:0
+	SVLFLG==:1	;		<flags>,,<fileaddr of svc name>
+	SVRNAM==:1
+	SVCARG==:2	;		<param1> ? <param2> ? ...
+ ADDLEN==:3
+
+; SITE table
+;	wd 0	Number of entries in table.
+;	wd 1	Number of words per entry. (3)
+; This table contains entries for each network site,
+; not sorted by anything in particular. A site can have more
+; than one network address, usually on different networks.
+; This is the main, central table.
+; Each entry looks like:
+
+STLNAM==:0	; wd 0 LH - fileaddr of official host name
+STRADR==:0	; wd 0 RH - fileaddr of first ADDRESS table entry for this
+		;		site.  Successive entries are threaded
+		;		together through ADRCDR.
+STLSYS==:1	; wd 1 LH - fileaddr of system name (ITS, TIP, TENEX, etc.)
+		;		May be 0 => not known.
+STRMCH==:1	; wd 1 RH - fileaddr of machine name (PDP10, etc.)
+		;		May be 0 => not known.
+STLFLG==:2	; wd 2 LH - flags:
+STFSRV==:400000	;	4.9 1 => server site (has FTP or TELNET)
+STFGWY==:200000	;	4.8 1 => Internet Gateway site (HOSTS3 only)
+ SITLEN==:3
+
+; NAMES table:
+;	wd 0	Number of entries
+;	wd 1	Number of words per entry. (1)
+; This table is used to convert host names into network addresses.  It
+; contains entries sorted alphabetically by host name.
+
+NMLSIT==:0	; wd 0 LH - fileaddr of SITE table entry for this host.
+NMRNAM==:0	; wd 0 RH - fileaddr of host name
+		; This name is official if NMRNAM = STLNAM of NMLSIT.
+ NAMLEN==:1
+
+; NETNAME table:
+;	wd 0	Number of entries
+;	wd 1	Number of words per entry. (1)
+; This table is used to convert network names into network numbers.  It
+; contains entries sorted alphabetically by network name, exactly as
+; for the NAMES table.  Although the symbols below are different (in order
+; to make semantic distinctions), programs can depend on the fact
+; that the NETNAME table format is identical to that of the NAMES table.
+; NOTE: this table did not exist in the original HOSTS2 format, but its
+; addition doesn't break anything in HOSTS2.
+
+NNLNET==:0	; wd 0 LH - fileaddr of NETWORK table entry for this host.
+NNRNAM==:0	; wd 0 RH - fileaddr of network name
+ NTNLEN==:1
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;		HOSTS3 Network Address Format           ;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;;	All network numbers and network addresses are stored
+;;;	internally in HOSTS3 format.  If the binary output is in
+;;;	HOSTS2 format, the addresses are converted as the last
+;;;	step before actual output begins.
+
+comment |
+HOSTS3 network address format:
+
+   4.9-4.6 - 4 bits of format type, which specify interpretation of
+		the remaining 32 bits.
+IN	0000 - Internet address (handles ARPA, RCC, LCS)
+		4.5-1.1 - 32 bits of IN address.
+UN	0001 - Unternet address.  Same format, but not part of Internet.
+		4.5-3.7 - HOSTS3-defined network number (1st 8-bit byte)
+		3.6-1.1 - address value in next 24 bits.
+			This handles CHAOS and any local nets.  The network
+			numbers are unique within the HOSTS3 table but
+			don't necessarily mean anything globally, as do
+			Internet network numbers.
+	0011 - String address.
+		4.5-3.7 - HOSTS3-defined network number (1st 8-bit byte)
+		3.6-3.1 - 0
+		2.9-1.1 - address of ASCIZ string in file/process space
+
+Note that the "network number" for all of these formats is located in
+the same place.  However, for fast deciphering of the entire range of
+possibilities, one could simply consider all of the high 12 bits as the
+network number.  Beware of the Internet class A, B, and C formats, though;
+the only truly general way to compare network numbers is to use their
+masked 36-bit values, although simpler checks are OK for specific nets.
+For this reason (among others) network numbers are represented by
+full 36-bit values with the "local address" portion zero.
+
+The 4-bit "String address" value is much more tentative than the IN or UN
+values.  Bit 4.9, the sign bit, is being reserved as usual for the possible
+advent of a truly spectacular incompatible format.
+|
+NT$NUM==:301400		; Byte pointer to network number (high 12 bits)
+NE%UNT==:040000,,0	; Escape bit indicating "Unternet" type address
+NE%STR==:100000,,0	; Escape bit indicating "string" type address
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;		HOSTS2 Network Address Format           ;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;;	This is the old pre-HOSTS3 format.  Only addresses for
+;;;	a few specific networks can be accepted, as the compiler
+;;;	must have built-in knowledge about each one.
+
+; The following networks are acceptable during HOSTS2 parsing:
+;	IN, ARPA, BBN-RCC, CHAOS, DSK, DIAL, LCS, SU, RU, ECL, ZOT.
+; To add more networks, add entries to the UNTTAB table.
+
+comment |
+HOSTS2 network address format:
+
+  4.9-4.1 network number.
+  3.9-1.1 network dependent.  In following descriptions, unused bits must be 0.
+
+Net - (0):	<small number> in octal
+	For HOSTS2-format INPUT only, if a net address has a zero net number
+	then the compiler assumes it is an "old-format"	ARPAnet address,
+	which looks like:
+		1.8-1.7 Host number
+		1.6-1.1 IMP number
+	However, it is instantly converted to a canonical format address
+	and thus "old-format" addresses will never appear in the tables.
+
+Net ARPA (12) and RCC (3): <imp>/<host> in decimal
+	3.7-2.1	IMP
+	1.8-1.1	Host
+
+Net DIAL (26): <string>		; Dialnet addresses are always ASCIZ strings.
+	2.9-1.1	(RH) fileaddress of ASCIZ phone number string
+
+Net CHAOS (7)	<address> in octal
+	2.7-1.1 address (2.7-1.9 subnet, 1.8-1.1 host)
+
+Net SU (44):	<subnet>#<host> in octal
+	2.7-1.1 address (2.7-1.9 subnet, 1.8-1.1 host)
+
+Net LCS (22):	<subnet>/<host> in octal
+	3.8-3.1	Subnet
+	1.8-1.1	Host
+
+Net RU (61):	<address> in octal
+	3.8-3.1 Subnet
+	1.8-1.1 Host
+
+Net DSK (777):	<address> in octal (becomes Unternet 1 in HOSTS3)
+Net ECL (776):	<address> in octal (becomes Unternet 2 in HOSTS3)
+Net ZOT (775):	<address> in octal (becomes Unternet 3 in HOSTS3)
+
+Net IN (*):	<a>.<b>.<c>.<d> in decimal
+	3.6-1.1 low 24 bits of Internet address
+
+	If the network number is not otherwise known to HOSTS2, it is
+	interpreted as the first octet of an Internet address
+	with the remaining 24 bits right justified (ie a gap
+	of 3 bits between 1st octet and next 3 octets).
+|
+NW$BYT==:331100	;Byte pointer to HOSTS2 network number

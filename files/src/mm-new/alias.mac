@@ -1,0 +1,203 @@
+;format of alias files:
+;name  PS:<userid>ALIAS.TXT
+;  comments start with a semicolon only and continue to eol
+;  blank lines are ok
+;  format:   <alias>= <address>
+;    equal sign must be exactly after the <alias>
+
+	Title	Alias -- alias lookup routines
+	Subttl	by Mark K. Lottor, September 1985
+
+	Search	Macsym,Monsym	; system definitions
+	Sall			; suppress macro expansions
+	.directive Flblst	; sane listings for ASCIZ, etc.
+	Intern $ALIAS
+
+A=1
+B=2
+C=3
+D=4
+StdAc.
+
+	.Psect	Data
+
+AliSiz==2			;max size of alias file (pages)
+AliAdr:	Block	AliSiz*1000	;alias space
+AliJFN:	0			;JFN on alias file
+AliBuf:	Block	40		;name of alias file/alias string
+AliSet:	0			;flag if we've set up yet
+AliasP:	0			;flag if setup failed
+AliStr:	0			;string pointer to alias
+	.EndPs
+
+	.Psect	Code
+
+;This module contains code to lookup mail address aliases.
+;$ALIAS: Takes	AC1/  byte pointer to alias
+;	 Returns +1 on error, or +2 on success with:
+;		AC1/  byte pointer to alias's string
+;		AC2/  byte pointer to alias's host (or zero if none)
+$ALIAS::Movem	A,AliStr	;save pointer
+	Skipe	AliasP		;setup failed?
+	 Ret			;yep, don't try anymore
+	Skipn	AliSet		;setup yet?
+	 Jrst	[Call	AliIni	;nope, initialize
+		  Ret		;error
+		 Jrst	.+1]	;all's well
+	Move	B,[Point 7,AliAdr]	;start at beginning of aliases
+AliLp:	Move	A,AliStr
+	Call	$STCMP
+	Jumpe	A,AliFnd	;if we previously found it
+AliLp1:	Ildb	A,B
+	Jumpn	A,AliLp1	;find end of current alias
+AliLp2:	Ildb	A,B
+	Jumpn	A,AliLp2	;find end of alias's address
+	Move	C,B
+	Ildb	A,C		;peek at next char
+	Cain	A,177
+	 Jrst	AliEos		;end of alias space
+	Jrst	AliLp		;try next alias
+AliFnd:	Move	C,[Point 7,AliBuf]
+AliFn1:	Ildb	A,B
+	Jumpe	A,[Setz	B,	;no host string
+		   Jrst AliFn2]
+	Cain	A,"@"
+	 Jrst	AliFn2
+	Idpb	A,C
+	Jrst	AliFn1
+AliFn2:	Setz	A,
+	Idpb	A,C
+	Move	A,[Point 7,AliBuf]	;return pointer to alias string
+	RetSkp 			;found alias
+AliEos:	Ret
+
+
+;suck in the alias file, returns +1 on error, +2 if ok
+AliIni:	Hrroi	A,AliBuf
+	Hrroi	B,[Asciz /PS:</]
+	Setz	C,	
+	SOUT%
+	Push	P,A
+	GJINF%
+	Move	B,A		;get user number
+	Pop	P,A
+	DIRST%
+	 Erjmp	Alias1
+	Hrroi	B,[Asciz />ALIAS.TXT/]
+	Setz	C,
+	SOUT%
+	Movx	A,GJ%SHT!GJ%OLD
+	Hrroi	B,AliBuf
+	GTJFN%
+	 Erjmp	Alias1
+	Movem	A,AliJFN
+	Move	B,[Fld(7,OF%BSZ)!OF%RD]
+	OPENF%
+	 Erjmp	Alias1
+	Move	A,AliJFN
+	SIZEF%
+	 Erjmp	Alias1
+	Caile	C,AliSiz	;too big?
+	 Jrst	Alias1		;yep
+	Push	P,Q1
+	Move	Q1,[Point 7,AliAdr]	;alias space
+AliRd:	Move	A,AliJFN
+	Hrroi	B,AliBuf	;destination
+	Movei	C,40*5-1
+	Movei	D,.CHLFD	;read till LF
+	SIN%
+	 Erjmp	AliEof
+	Movni	A,1
+	Adjbp	A,B		;back up to CR
+	Setz	B,
+	Dpb	B,A		;null CR
+	Move	A,[Point 7,AliBuf]	;start of buffer
+AliRd1:	Ildb	B,A		;get a char
+	Jumpe	B,AliRd		;eol? next line then
+	Caie	B,.CHSPC
+	 Cain	B,.CHTAB
+	  Jrst	AliRd1		;skip white space
+	Cain	B,";"		;comment?
+	 Jrst	AliRd		;yes, skip this line
+	Cain	B,"="		;no alias?
+	 Jrst	AliRd		;error skip it
+	Idpb	B,Q1		;save first char
+
+AliRd2:	Ildb	B,A
+	Jumpe	B,AliRd		;eol? next line then
+	Cain	B,"="		;end of alias?
+	 Jrst	AliRd3
+	Idpb	B,Q1
+	Jrst	AliRd2
+
+AliRd3:	Setz	B,
+	Idpb	B,Q1		;tie off end of alias
+AliRd4:	Ildb	B,A
+	Jumpe	B,[Idpb	B,Q1	;null alias address
+		   Jrst	AliRd]	;next line then
+	Caie	B,.CHSPC
+	 Cain	B,.CHTAB
+	  Jrst	AliRd4		;skip white space
+AliRd5:	Idpb	B,Q1
+	Ildb	B,A
+	Cain	B,";"		;comment?
+	 Setz	B,
+	Jumpn	B,AliRd5	;not eol yet?
+	Idpb	B,Q1		;tie off end of address
+	Jrst	AliRd		;do next line
+AliEof:	Movei	A,177
+	Idpb	A,Q1		;mark end of alias space
+	Pop	P,Q1
+	Move	A,AliJFN
+	CLOSF%
+	 Erjmp	.+1
+	Setom	AliSet
+	RetSkp
+
+Alias1:	Setom	AliasP		;flag setup failed
+	Ret
+
+
+
+;;	User-mode replacement for STCMP JSYS ($STCMP)
+$STCMP:
+CMPST:	Push P,3
+	Push P,4
+	Tlce 1,-1
+	  Tlcn 1,-1
+	    Hrli 1,440700
+	Tlce 2,-1
+	  Tlcn 2,-1
+	    Hrli 2,440700
+CMPST1:	Ildb 3,1
+	Ildb 4,2
+	Jumpe 3,[Setz 3,
+		 Skipe 4
+		   Movsi 3,(SC%SUB)
+		 Jrst CMPST2]
+	Camn 3,4
+	  Jrst CMPST1
+	Cail 3,"a"
+	  Caile 3,"z"
+	    Skipa
+	   Trz 3,40
+	Cail 4,"a"
+	  Caile 4,"z"
+	    Skipa
+	   Trz 4,40
+	Camn 3,4
+	  Jrst CMPST1
+	Camg 3,4
+	  Jrst [Movsi 3,(SC%LSS)
+		Jrst CMPST2]
+	Movsi 3,(SC%GTR)
+
+CMPST2:	Move 1,3
+	Pop P,4
+	Pop P,3
+	Ret
+
+
+	.EndPs
+
+	END

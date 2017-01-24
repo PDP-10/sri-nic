@@ -1,0 +1,218 @@
+! Define keyboard coordinates KXY(X,Y) such that the keys
+  of the top row, 1, 2, . . ., 0, get (1,1), (2,1), . . ., (10,1),
+  of the 2nd row, Q, W, . . ., P, get (1,2), (2,2), . . ., (10,2),
+  of the 3rd row, A, S,..,semicolon,  (1,3), (2,3), . . ., (10,3), and
+  of the 4th row, Z, X, . . ., /, get (1,4), (2,4), . . ., (10,4).
+  Only letters, digits, and the following punctuation marks are defined:
+  , . / ? and semicolon.  Other printing characters map to 0 for
+  undefined.  Space maps to -1 and terminates the hop command.  The rest
+  (CTRLs and DEL) map to -2, they terminate the command are executed.
+
+  NOTE.  The  x  and  y  of KXY have to be both defined (>0).  The KXY
+  macro does not check for that.
+  ;
+
+Define kxy!(x,y) = "(x lsh 18) lor (y land '777777)";
+
+Preset!with 
+
+[32] -2,        ! All control characters terminate and are stacked;
+
+! SP; -1,       ! -1 will terminate Hop command;
+! !;  0,        ! Undefined, beep;
+! #;  0,
+! ";  0,
+! $;  0,
+! %;  0,
+! &;  0,
+! ';  0,
+
+! (;  0,
+! );  0,
+! *;  0,
+! +;  0,
+! ,; kxy!(8,4),
+! -;  0,
+! .; kxy!(9,4),
+! /; kxy!(10,4),
+
+! 0; kxy!(10,1),
+! 1; kxy!(1,1),
+! 2; kxy!(2,1),
+! 3; kxy!(3,1),
+! 4; kxy!(4,1),
+! 5; kxy!(5,1),
+! 6; kxy!(6,1),
+! 7; kxy!(7,1),
+
+! 8; kxy!(8,1),
+! 9; kxy!(9,1),
+! :;  0,
+! semicolon; kxy!(10,3),
+! <;  0,
+! =;  0,
+! >;  0,
+! ?; kxy!(10,4),
+
+! @;  0,
+! A; kxy!(1,3),
+! B; kxy!(5,4),
+! C; kxy!(3,4),
+! D; kxy!(3,3),
+! E; kxy!(3,2),
+! F; kxy!(4,3),
+! G; kxy!(5,3),
+
+! H; kxy!(6,3),
+! I; kxy!(8,2),
+! J; kxy!(7,3),
+! K; kxy!(8,3),
+! L; kxy!(9,3),
+! M; kxy!(7,4),
+! N; kxy!(6,4),
+! O; kxy!(9,2),
+
+! P; kxy!(10,2),
+! Q; kxy!(1,2),
+! R; kxy!(4,2),
+! S; kxy!(2,3),
+! T; kxy!(5,2),
+! U; kxy!(7,2),
+! V; kxy!(4,4),
+! W; kxy!(2,2),
+
+! X; kxy!(2,4),
+! Y; kxy!(6,2),
+! Z; kxy!(1,4),
+! [;  0,
+! \;  0,
+! ];  0,
+! ^;  0,
+! _;  0,
+
+! `;  0,
+! a; kxy!(1,3),
+! b; kxy!(5,4),
+! c; kxy!(3,4),
+! d; kxy!(3,3),
+! e; kxy!(3,2),
+! f; kxy!(4,3),
+! g; kxy!(5,3),
+
+! h; kxy!(6,3),
+! i; kxy!(8,2),
+! j; kxy!(7,3),
+! k; kxy!(8,3),
+! l; kxy!(9,3),
+! m; kxy!(7,4),
+! n; kxy!(6,4),
+! o; kxy!(9,2),
+
+! p; kxy!(10,2),
+! q; kxy!(1,2),
+! r; kxy!(4,2),
+! s; kxy!(2,3),
+! t; kxy!(5,2),
+! u; kxy!(7,2),
+! v; kxy!(4,4),
+! w; kxy!(2,2),
+
+! x; kxy!(2,4),
+! y; kxy!(6,2),
+! z; kxy!(1,4),
+! {;  0,
+! |;  0,
+! };  0,
+! ~;  0,
+! DEL; -2;      ! Terminate chase and stack DEL;
+
+Integer Array  KEYXY [0:127];
+
+! TO THINK ABOUT:
+1.  IN CHASE, LET ILLEGAL KEY TAKE NEXT AS NEW ORIGIN. TO ALLOW FOR
+    DETERMINISTIC RESYNC.
+
+2.  IN CHASE, USE STEEP GRADIENT FOR THE FIRST 3 INCREMENTS, PERHAPS
+    0,1,4,10 FOR DX, 0,1,3,5 FOR DY.
+
+3.  TIME LAST HOP.  IF INTERVAL OVER A CERTAIN AMMOUNT, REQUIRE RESYNC
+    OR DO SOMETHING ELSE TO REMIND OF THE HOP STATE.  THE PROBLEM IS,
+    HOW TO MAKE CHANGE OF STATE AS INVISIBLE AS POSSIBLE.
+;
+
+Subroutine HOP;
+!	   ---
+        $n semicolon:  Hop on the current line.
+        $nH:  2-dimensional hop.
+        First  n  are big hops, then small ones.
+        Space, control characters, and DEL terminate hopping.  Ctrl
+          chars and DEL are stacked.
+	;
+ Begin "Hop" Integer CNT, OKXY, KXY, KX, KY, DX, DY, X;
+    cnt _ count;  okxy _ -1;  dx _ dy _ 0;
+    
+    Forever Do
+     Begin "hop1"
+        nextC;  ! What key is it?;
+
+        If (kxy _ keyXY[char]) leq 0 Then
+         If kxy = 0 Then Begin ring; Continue "hop1" End  ! Undefined;
+         Else
+          Begin
+             If kxy = -2 Then stackString(char);  ! CTRL, DEL;
+             Return;
+          End
+        ;
+
+	kx _ kxy lsh -18;  ky _ kxy land '777777;
+
+        If command neq ";" Then closeLine;
+
+	If (dec(cnt)) geq 0 Then
+	 Begin "bigHop"
+	    ! Strech the row, KX = 1 through 10, to total width
+	      of window:  1 -> 1, 10 -> MAXX;
+	    x _ ( (kx - 1)*(maxX - 1) div 9 + 1 ) max 1 min maxX;
+
+	    If lineOpen Then tByTX (wx0 + x)
+            Else setXY ( x, If command = ";" Then yy
+			    Else ((ky-1)*(maxY-1) div 3 + 1) )
+			    ! Row 1 -> line 1, row 3 -> MAXY;
+	    ;
+	 End "bigHop"
+	Else If okxy < 0 Then ring  ! Ref. key undefined;
+	Else
+	 Begin "lilHop"
+	    If kxy neq okxy Then  ! New key, new displacement;
+             Begin "chaise"
+                dx _ kx - (okxy lsh -18);
+                dx _ (dx max -1 min 1)*(Case abs(dx) of
+                       (0,1,3,6,10,15,21,28,36,45,55,66));
+                dy _ ky - (okxy land '777777);
+                dy _ (dy max -1 min 1)*(Case abs(dy) of
+                       (0,1,3,6,10,15,21,28,36,45,55,66));
+             End "chaise"
+	    ;
+	    If dx = 0 and dy = 0 Then ring  ! No hop, ring for feedback;
+	    Else
+	     Begin "doHop"
+		x _ (xx + dx) max 1 min maxX;
+
+		If lineOpen Then tByTX (wx0 + x)
+                Else setXY (x, If command = ";" Then yy Else (yy + dy))
+		;
+	     End "doHop"
+	    ;	
+	 End "lilHop"
+	;
+	okxy _ kxy;
+
+        ! The following has been copied from EDIT in TVCOM;
+	IF lineOpen THEN updateL
+	ELSE IF cx NEQ xx OR cy NEQ yy  THEN moveCursor (xx, yy)
+	;
+     End "hop1" ! forever;
+    ;
+ End "Hop"
+;
+

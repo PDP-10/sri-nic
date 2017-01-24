@@ -1,0 +1,883 @@
+TITLE ARSUGW
+SUBTTL ARPANET => SUnet Gateway
+SEARCH MONSYM
+
+; Modified from Jeff Schiller's MIT Chaosnet gateway
+;
+;  No claim is made that this program is the best possible, nor that it's
+; even good.  However, it seems to work on SUMEX TENEX.  -- MRC 3/81
+;
+; Modified from SUMEX gateway for SCORE, 7/82
+
+A==1
+B==2	
+C==3
+D==4
+E==5
+F==6
+T==7
+TT==10
+TTT==11
+P==17
+
+LSNCHN==1		; PSI channel for change of network state interrupt
+NETBFR==^D100		; size of network buffers in bytes (8-bit)
+
+; Individual network buffer lengths
+
+AROBSZ==NETBFR
+ARIBSZ==NETBFR
+ENOBSZ==NETBFR
+ENIBSZ==NETBFR
+
+OPDEF CALL [PUSHJ P,]
+OPDEF RET [POPJ P,]
+
+SUBTTL Random impure junk
+
+CHNTAB:	0
+	2,,ICPWRK
+	REPEAT ^D17,<0>
+	1,,FDIED
+	REPEAT ^D16,<0>
+
+LEVTAB:	P1PC
+	P2PC
+P1PC:	BLOCK 1
+P2PC:	BLOCK 1
+
+FATACS:	BLOCK 6
+SAVAC:	BLOCK 1
+SBASE:	BLOCK 1
+ICPJFN: BLOCK 1
+FTBLO:	BLOCK 1
+FHOST:	BLOCK 1			; these four locations must be in this order
+LSCKT:	BLOCK 1			; ditto
+FSCKT:  BLOCK 1			; ditto
+STATE:	BLOCK 1			; ditto
+BUFFR:	BLOCK 40
+DIJFN:  BLOCK 1
+DOJFN:	BLOCK 1
+FRKTBL:	BLOCK ^D8
+NFRKTB==.-FRKTBL
+
+SUBTTL Start of program
+
+START:	RESET
+	MOVE P,[-30,,PDL]
+	MOVEI A,400000
+	RPCAP
+	IOR C,B
+	EPCAP
+	MOVE B,[LEVTAB,,CHNTAB]
+	SIR
+	EIR
+	MOVE B,[200000,,200000]
+	AIC
+	MOVSI A,1
+	HRROI B,[ASCIZ /NET:131#./]
+	GTJFN
+	 ERCAL FATAL
+	MOVEM A,ICPJFN		; now have ICPJFN
+	MOVE A,[SIXBIT /NETRDY/]
+	SYSGT
+	JUMPL A,TLOOP
+NETWAT:	MOVEI A,^D6*^D1000	; wait a while if net not up
+	DISMS
+	JRST START
+
+SUBTTL Top level loop
+
+RETRY:	HRLI A,400000		; don't release the JFN
+	HRR A,ICPJFN
+	CLOSF			; close it
+	 ERJMP .+1		; ignore error
+TLOOP:	HRRZ A,ICPJFN		; get the ICP socket to use
+	MOVE B,[400000,,100000] ; listen on this socket
+	OPENF			
+	 ERJMP NETWAT		; lost, wait and try again
+	HRRZ A,ICPJFN		; setup change of state PSI channel
+	MOVEI B,24
+	MOVSI C,777700+LSNCHN
+	MTOPR
+CHECK:	SETOM FTBLO		; no fork yet
+	MOVEI A,4		; return status
+	HRRZ B,ICPJFN
+	MOVEI C,FHOST
+	MOVE D,[-4,,1]		; host/local socket/foreign socket/state
+	GTNCP
+	 ERCAL FATAL
+	MOVE B,STATE
+	CAIN B,4		; received an RFC?
+	 JRST [	HRRZ A,ICPJFN	; yes, accept connection
+		MOVEI B,20
+		MTOPR
+		 ERJMP RETRY
+		JRST MCONN]	; make connection and fork to control it
+WAITPC:	WAIT			; beddy-bye
+	JRST WAITPC
+
+; Here on ICP change of state interrupt
+
+ICPWRK:	MOVEM A,SAVAC		; save this AC
+	HRRZ A,P2PC		; where were we interrupted from
+	CAIE A,WAITPC
+	 CAIN A,WAITPC+1
+	  JRST ICPWK1		; indicate we should check JFN
+	MOVE A,SAVAC		; this interupt is sperious
+	DEBRK
+
+ICPWK1:	MOVE A,[10000,,CHECK]	; go check on JFN
+	MOVEM A,P2PC
+	MOVE A,SAVAC
+	DEBRK
+
+SUBTTL Make the ARPANET connection
+	
+MCONN:	CALL ALFRK		; allocate fork table slot
+	 JRST RETRY		; none left, punt
+	MOVEM A,FTBLO		; offset into fork table for this fork
+	CALL CONV		; get local socket number to communicate
+	MOVE B,A
+	HRRZ A,ICPJFN
+	BOUT			; send off 
+	 ERJMP RETRY
+	MOVSI A,400000		; don't release the JFN
+	HRR A,ICPJFN
+	CLOSF			; close ICP connection
+	 ERCAL FATAL
+	MOVE T,FSCKT		; get supplied foreign socket
+	ADDI T,2		; make receive socket from it
+	MOVEM T,FSCKT		; store back 
+	CALL MJFNN		; make string for GTJFN
+	MOVE B,A
+	MOVSI A,1
+	GTJFN			; get JFN for it
+	 ERCAL FATAL
+	MOVEM A,DIJFN		; input JFN
+	MOVE B,[100000,,200000]
+	OPENF
+	 ERJMP RETRY
+	MOVSI A,1		; GTJFN feature: use same string
+	HRROI B,BUFFR
+	GTJFN
+	 ERCAL FATAL
+	MOVEM A,DOJFN		; output JFN JFN for this connection
+	MOVE B,[100000,,100000]
+	OPENF
+	 ERJMP RETRY
+	PUSH P,DIJFN		; give the inferior the ARPA input JFN
+	PUSH P,DOJFN		; ... ARPA output JFN
+	PUSH P,FTBLO		; and fork index
+	MOVEI B,-2(P)
+	MOVE A,[660000,,FSTART]
+	CFORK
+	 ERCAL FATAL
+	ADJSP P,-3		; cleanup stack
+	MOVE B,FTBLO
+	MOVEM A,FRKTBL(B)	; remember this fork for later
+	JRST TLOOP		; head back to top loop
+
+; Make JFN name for ARPANET GTJFN
+
+MJFNN:	SETZ C,
+	HRROI B,[ASCIZ/NET:/]
+	MOVE A,[POINT 7,BUFFR]
+	SOUT
+	MOVE C,[400000,,^D8]	; radix for NOUT
+	PUSH P,A
+	MOVE A,FTBLO		; fork table offset
+	CALL CONV		; convert to local socket
+	MOVE B,A
+	POP P,A
+	NOUT
+	 ERCAL FATAL
+	MOVEI B,"."
+	IDPB B,A
+	MOVE C,[400000,,^D8]	; radix for NOUT
+	MOVE B,FHOST
+	NOUT			; cons up "NET:<lsck>.<fhost>-<fsckt>"
+	 ERCAL FATAL
+	MOVEI B,"-"
+	IDPB B,A
+	MOVE C,[400000,,^D8]	; radix for NOUT
+	MOVE B,FSCKT
+	NOUT
+	 ERCAL FATAL
+	MOVEI B,";"		; want job based socket number
+	IDPB B,A
+	MOVEI B,"T"
+	IDPB B,A
+	SETZ B,
+	IDPB B,A		; make sure of null termination
+	MOVE A,[POINT 7,BUFFR]
+	RET
+
+SUBTTL Fork table subroutines
+
+; Allocate a slot in the fork table
+
+ALFRK:	MOVE T,[-NFRKTB,,FRKTBL]
+ALFLP:	SKIPN TT,(T)
+	 JRST [	HRR A,T		; slot free, assign it
+		SUBI A,FRKTBL
+		AOS (P)
+		RET]
+	AOBJN T,ALFLP
+	SETO A,
+	RET
+
+; Convert fork table slot number into socket number
+
+CONV:	MOVE T,SBASE		; get base of available sockets
+	JUMPN T,CONV1		; if not zero this is real simple
+	PUSH P,A		; save fork table offset
+	GJINF
+	MOVEM C,SBASE
+	POP P,A
+	MOVE T,SBASE
+	ADDI T,303240		; 100,000 decimal for job sockets
+	LSH T,17
+	ADDI T,100		; add a random number
+	MOVEM T,SBASE		; save it away...
+CONV1:	LSH A,1			; sockets are even numbers
+	ADD A,T			; add in socket base
+	RET
+
+; Check the status of each fork and flush halted forks on fork termination PSI
+
+FDIED:	MOVE T,[-NFRKTB,,FRKTBL]
+FLOOP:	SKIPN A,(T)		; get fork handle
+	 JRST FLOOPN
+	RFSTS			; read fork status
+	 ERCAL FATAL
+	MOVE B,[220700,,A]	; extract process status
+	LDB C,B
+	CAIE C,2		; is it halted?
+	 JRST FLOOPN
+	MOVE A,(T)		; get process handle of fork to kill
+	KFORK			; its dead now
+	SETZM (T)		; clear forktbl entry
+FLOOPN:	AOBJN T,FLOOP		; continue processing
+	DEBRK			; if all done
+
+SUBTTL Fatal error handler
+
+FATAL:	DMOVEM A,FATACS		; save the ACs we clobber
+	DMOVEM C,FATACS+2
+	DMOVEM E,FATACS+4
+	HRROI A,[ASCIZ/ARSUGW: /]
+	ESOUT
+	MOVEI A,101		; output error string
+	HRLOI B,400000
+	SETZ C,
+	ERSTR
+	 JFCL
+	 JFCL
+	HRROI A,[ASCIZ/, JSYS at PC=/]
+	PSOUT
+	MOVE F,(P)
+	MOVEI F,-2(F)		; point PC at actual location of the JSYS
+
+;  Clever symbol table lookup routine.  For details, read "Introduction to
+; DECSYSTEM-20 Assembly Language Programming", by Ralph Gorin, published by
+; Digital Press, 1981.
+
+	SETZB C,E		; no current program name or best symbol
+	MOVE D,.JBSYM##		; symbol table pointer
+	HLRO A,D
+	SUB D,A			; -count,,ending address +1
+SYMLUP:	LDB A,[POINT 4,-2(D),3]	; symbol type
+	JUMPE A,NXTSYM		; program names are uninteresting
+	CAILE A,2		; 0=prog name, 1=global, 2=local
+	 JRST NXTSYM		; none of the kind we want
+	MOVE A,-1(D)		; value of the symbol
+	CAMN A,F		; exact match?
+	 JRST [	MOVE E,D	; yes, select it
+		JRST FNDSYM]
+	CAML A,F		; smaller than value sought?
+	 JRST NXTSYM		; too large
+	SKIPE B,E		; get best one so far if there is one
+	 CAML A,-1(B)		; compare to previous best
+	  MOVE E,D		; current symbol is best match so far
+NXTSYM:	ADD D,[2000000-2]	; add 2 in the left, sub 2 in the right
+	JUMPL D,SYMLUP		; loop unless control count is exhausted
+	SKIPN D,E		; did we find anything helpful?
+	 JRST FATAL1
+;	JRST FNDSYM
+
+; Found an entry that looks close.  See if it really is and if so use it
+
+FNDSYM:	MOVE A,F		; desired value
+	SUB A,-1(D)		; less symbol's value = offset
+	CAIL A,200		; is offset small enough?
+	 JRST FATAL1		; no, not a good enough match
+	MOVE D,E		; get the symbol's address
+	MOVE A,-2(D)		; symbol name
+	TLZ A,740000		; clear flags
+	CALL SQZTYO		; print symbol name
+	MOVE B,F		; get desired value
+	SUB B,-1(D)		; less this symbol's value
+	JUMPE B,FATAL2		; if no offset, don't print "+0"
+	MOVEI A,"+"		; add + to the output line
+	PBOUT
+	CAIA
+FATAL1:	 MOVE B,F		; here if PC must be in octal
+	MOVEI A,101		; and copy numeric offset to output
+	MOVEI C,^D8
+	NOUT
+	 JFCL
+FATAL2:	HRROI A,[ASCIZ/
+/]
+	PSOUT
+	DMOVE A,FATACS		; restore ACs
+	DMOVE C,FATACS+2
+	DMOVE E,FATACS+4
+	HALTF
+	JRST FATAL		; continue retypes the error message
+
+; Convert a 32-bit quantity in A from squoze to ASCII
+
+SQZTYO:	IDIVI A,50		; divide by 50
+	PUSH P,B		; save remainder, a character
+	SKIPE A			; if A is now zero, unwind the stack
+	 CALL SQZTYO		; call self again, reduce A
+	POP P,C			; get character
+	MOVE B,[POINT 7,[ASCII/ 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ.$%/]]
+	ILDB A,B		; convert squoze code to ASCII
+	SOJGE C,.-1
+	PBOUT
+	RET
+
+SUBTTL Gateway server fork
+
+; AC's 0 and 1 have the input and output ARPA JFNs.
+; Must impurify PDL and impure page right away!!
+
+; PDL cannot be touched yet
+
+FSTART:	MOVE T,0		; get JFNs out of the way
+	MOVE TT,1
+	MOVE TTT,2		; as well as my fork index
+	MOVEI B,PDL		; get address of PDL
+	LSH B,-11		; get its page number
+	HRLI B,400000
+	SETO A,
+	SETZ C,
+	PMAP			; unmap page where PDL is
+	 ERCAL FATAL
+	MOVE P,[-20,,PDL]
+	MOVES PDL		; touch PDL to create page
+	MOVEM T,ARIJFN		; save ARPA receive JFN
+	MOVEM TT,AROJFN		; and send JFN
+	LSH TTT,6
+	MOVEM TTT,LCLSKT
+
+; Output banner message
+
+	HRRZ A,AROJFN
+	HRROI B,[ASCIZ/SU-SCORE ARPANET => SUnet Gateway Version 1.0
+/]
+	SETZ C,
+	SOUT
+	 ERJMP DEATH
+	MOVEI B,21
+	MTOPR
+	 ERCAL DEATH
+
+; Setup Ethernet JFN file string
+
+	DMOVE A,[POINT 7,PUPFIL,27
+		 ASCII/PUP:/]
+	MOVEM B,PUPFIL
+	MOVE B,LCLSKT		; set local socket
+	MOVEI C,^D8
+	NOUT
+	 ERCAL FATAL
+	HRROI B,[ASCIZ/!J./]	; job-relative socket
+	SETZ C,
+	SOUT
+
+; falls through
+
+; drops in
+
+	PUSH P,A		; save string pointer on stack as well
+	MOVE B,A		; string pointer to B temporarily
+	HRRZ A,ARIJFN		; read host name from network
+	MOVEI C,20
+	MOVEI D," "
+	SIN
+	 ERJMP DEATH
+	MOVE A,(P)		; look at first character of string
+	ILDB A,A
+	CAIL A,"0"		; numeric?
+	 CAILE A,"7"
+	  JRST [ADJSP P,-1	; clean up stack
+		SETO A,		; get filename string pointer back in A
+		ADJBP A,B
+		JRST OUTSKT]
+	MOVE A,(P)		; numeric address, get pointer back again
+	MOVEI C,^D8		; slurp up the number
+	NIN
+	 ERJMP DEATH
+	MOVE E,B		; save the address we got
+	LDB B,A
+	CAIE B," "		; ended with space?
+	 JRST [	HRRZ A,AROJFN	; no, barf on it
+		HRROI B,[ASCIZ/-Invalid host address
+/]
+		SETZ C,
+		SOUT
+		 ERJMP DEATH
+		MOVEI B,21
+		MTOPR
+		 ERJMP DEATH
+		JRST DEATH]
+	POP P,A
+	LDB B,[POINT 8,E,27]	; get network number
+	JUMPE B,OUTHSN
+	NOUT
+	 ERCAL FATAL
+	MOVEI B,"V"-100
+	IDPB B,A
+	MOVEI B,"#"
+	IDPB B,A
+OUTHSN:	LDB B,[POINT 8,E,35]	; now host number
+	NOUT
+	 ERCAL FATAL
+	MOVEI B,"V"-100
+	IDPB B,A
+	MOVEI B,"#"
+	IDPB B,A
+;	JRST OUTSKT
+
+OUTSKT:	HRROI B,[ASCIZ/+Telnet/]; socket name
+	SETZ C,
+	SOUT
+	MOVSI A,1		; get ICP JFN
+	HRROI B,PUPFIL
+	GTJFN
+	 ERJMP NOSUCH		; can't do this
+	HRRZM A,ENIJFN		; set JFN
+	MOVE B,[100010,,200000]	; now try to open the connection
+	OPENF			;  with a 30 second timeout
+	 ERJMP NOSUCH
+	MOVE C,[2,,C]		; get foreign port address
+	GDSTS
+	MOVEM C,HOST		; save host/socket pair
+	MOVEM D,SOCKET
+	CVSKT			; get local port address
+	 ERCAL FATAL
+	MOVE A,[POINT 7,PUPFIL,27]
+	MOVE B,C		; socket from CVSKT
+	MOVEI C,^D8		; output socket in octal
+	NOUT
+	 ERCAL FATAL
+	HRROI B,[ASCIZ/!A./]	; absolute socket
+	SETZ C,
+	SOUT
+	HLRZ B,HOST		; now output foreign network
+	MOVEI C,^D8
+	NOUT
+	 ERCAL FATAL
+	MOVEI B,"V"-100
+	IDPB B,A
+	MOVEI B,"#"
+	IDPB B,A
+	HRRZ B,HOST		; foreign host...
+	NOUT
+	 ERCAL FATAL
+	MOVEI B,"V"-100
+	IDPB B,A
+	MOVEI "#"
+	IDPB A
+	MOVE B,SOCKET		; and socket
+	NOUT
+	 ERCAL FATAL
+	MOVSI A,1		; get the output JFN
+	HRROI B,PUPFIL
+	GTJFN
+	 ERJMP NOSUCH
+	HRRZM A,ENOJFN
+	MOVE B,[100000,,100000]
+	OPENF
+	 ERJMP NOSUCH
+
+; falls through
+
+; drops in
+
+; Create Ethernet receive fork and do send loop ourselves
+
+	MOVEI A,400000		; setup PSI system
+	MOVE B,[ILEVTB,,ICHNTB]
+	SIR
+	EIR
+	MOVEI B,200000		; enable fork termination ints
+	AIC
+	HRRZ A,AROJFN		; tell ARPAnet we won
+	MOVEI B,"+"
+	BOUT			; output "+" to indicate success
+	 ERJMP DEATH
+	SETOM ECHOP
+	MOVEI B,377		; IAC WILL ECHO
+	BOUT
+	 ERJMP DEATH
+	MOVEI B,^D251
+	BOUT
+	 ERJMP DEATH
+	MOVEI B,1
+	BOUT
+	 ERJMP DEATH
+	SETOM SUPGAP
+	MOVEI B,377		; IAC WILL SUPRGA
+	BOUT
+	 ERJMP DEATH
+	MOVEI B,^D251
+	BOUT
+	 ERJMP DEATH
+	MOVEI B,3
+	BOUT
+	 ERJMP DEATH
+	MOVEI B,21
+	MTOPR
+	 ERJMP DEATH
+	MOVE A,[620000,,PUPRCV]	; where inferior starts
+	CFORK
+	 ERCAL FATAL
+	MOVEM A,RCVFRK		; remember him
+
+; falls through
+
+; drops in
+
+; ARPANET => Ethernet fork
+
+	MOVEI A,ENOBSZ
+	MOVEM A,ENOCTR
+	MOVE A,[POINT 8,ENOBFR]
+	MOVEM A,ENOPTR
+	SETZM ARICTR
+ARPRC1:	SOSL ARICTR		; anything in net input buffer?
+	 JRST ARPRC2
+	HRRZ A,ARIJFN		; any input for me?
+	SIBE
+	 JRST ARPRC0
+	CALL PUPSND
+	HRRZ A,ARIJFN
+	MOVEI B,1		; just get one byte
+ARPRC0:	CAILE B,ARIBSZ		; bounds check
+	 MOVEI B,ARIBSZ		; guess we should reassemble!
+	MOVEM B,ARICTR		; note number of words this buffer
+	MOVNI C,(B)
+	MOVE B,[POINT 8,ARIBFR]
+	MOVEM B,ARIPTR		; re-initialize pointer
+	SIN			; slurp up the net data
+	 ERJMP DEATH		; this can't happen it says here
+	JRST ARPRC1
+
+ARPRC2:	ILDB B,ARIPTR		; process the byte
+	AOSG NETCMP		; IAC in progress?
+	 JRST IACSER
+	AOSG WILLP
+	 JRST WILLSR
+	AOSG WONTP
+	 JRST WONTSR
+	AOSG DOP
+	 JRST DOSR
+	AOSG DONTP
+	 JRST DONTSR
+	CAIN B,377		; IAC?
+	 JRST [	SETOM NETCMP
+		JRST ARPRC1]
+ARPRC3:	AOSN CRP		; previous character a CR?
+	 JRST ARPRC1		; yes, flush this character
+	CAIN B,15
+	 SETOM CRP
+	IDPB B,ENOPTR		; stick the character in the buffer
+	SOSG ENOCTR		; buffer full?
+	 CALL PUPSND
+	JRST ARPRC1
+
+; TELNET protocol service routines
+
+IACSER:	CAIN B,^D246		; Are You There?
+	 JRST [	HRRZ A,AROJFN
+		HRROI B,[ASCIZ/SUMEX-AIM ARPANET => SUnet Gateway is alive
+/]
+		SETZ C,
+		SOUT
+		 ERJMP DEATH
+		MOVEI B,21
+		MTOPR
+		 ERCAL DEATH
+		JRST ARPRC1]
+	CAIN B,^D251		; WILL/WONT/DO/DONT
+	 SETOM WILLP
+	CAIN B,^D252
+	 SETOM WONTP
+	CAIN B,^D253
+	 SETOM DOP
+	CAIN B,^D254
+	 SETOM DONTP
+	CAIN B,377		; doubled IAC?
+	 JRST ARPRC3
+	JRST ARPRC1
+
+; IAC DO/DONT
+
+DOSR:	JUMPE B,[SKIPE TRBINP	; transmit binary
+		  JRST ARPRC1
+		 SETOM TRBINP
+		 JRST DOOK]
+	CAIN B,1		; remote echo (what a win!)
+	 JRST [	SKIPE ECHOP	; catch protocol loops
+		 JRST ARPRC1
+		SETOM ECHOP
+		JRST DOOK]	; command, we always accept it
+	CAIE B,3		; suppress GA?
+	 JRST DOBAD
+	SKIPE SUPGAP		; command or reply?
+	 JRST ARPRC1
+	SETOM SUPGAP
+DOOK:	SKIPA C,[^D251]		; WILL
+DOBAD:	 MOVEI C,^D252		; WONT
+	PUSH P,B
+DOPROT:	MOVEI B,377
+	BOUT
+	 ERJMP DEATH
+	MOVE B,C
+	BOUT
+	 ERJMP DEATH
+	POP P,B
+	BOUT
+	 ERJMP DEATH
+	MOVEI B,21
+	MTOPR
+	 ERJMP DEATH
+	JRST ARPRC1
+
+DONTSR:	JUMPE B,[SKIPN TRBINP
+		  JRST ARPRC1
+		 SETZM TRBINP
+		 JRST DOBAD]
+	CAIN B,1
+	 JRST [	SKIPN ECHOP
+		 JRST ARPRC1
+		SETZM ECHOP	; back to lossage
+		JRST DOBAD]
+	CAIN 3
+	 SKIPL SUPGAP
+	  JRST ARPRC1		; protocol violator
+	SETZM SUPGAP
+	JRST DOBAD
+
+; IAC WILL/WONT
+
+WILLSR:	JUMPE B,[SKIPE RCBINP	; catch protocol loops
+		  JRST ARPRC1
+		 SETOM RCBINP
+		 PUSH P,B
+		 MOVEI C,^D253
+		 JRST DOPROT]
+WONTOK:	PUSH P,B
+	MOVEI B,^D254
+	JRST DOPROT
+
+WONTSR:	JUMPN B,ARPRC1
+	 SKIPN RCBINP
+	  JRST ARPRC1
+	SETZM RCBINP
+	JRST WONTOK
+
+; Ethernet => ARPANET fork
+
+PUPRCV:	MOVE P,[-20,,RPDL]	; receiving PDL
+	SETZM ENICTR
+	MOVEI A,AROBSZ
+	MOVEM A,AROCTR
+	MOVE A,[POINT 8,AROBFR]
+	MOVEM A,AROPTR
+PUPRC1:	SOSL ENICTR		; anything in net input buffer?
+	 JRST PUPRC2
+	HRRZ A,ENIJFN		; any input for me?
+	SIBE
+	 JRST PUPRC0		; yes, go slurp it up
+	CALL ARPSND
+	HRRZ A,ENIJFN
+	MOVEI B,1		; read in one byte
+PUPRC0:	CAILE B,ENIBSZ		; bounds check
+	 MOVEI B,ENIBSZ		; guess we should reassemble!
+	MOVEM B,ENICTR		; note number of words this buffer
+	MOVNI C,(B)
+	MOVE B,[POINT 8,ENIBFR]
+	MOVEM B,ENIPTR		; re-initialize pointer
+	SIN			; slurp up the net data
+	 ERJMP PUPERR
+	JUMPL C,PUPERR		; in case the ERJMP didn't take
+	LDB B,C			; yet another test of this type...
+	JUMPE B,PUPERR
+	JRST PUPRC1
+
+PUPRC2:	ILDB B,ENIPTR		; yes, process the byte
+	IDPB B,AROPTR		; stick the character in the buffer
+	SOSG AROCTR		; buffer full?
+	 CALL ARPSND
+	JRST PUPRC1		; no, get another byte
+
+PUPERR:	SETZ C,			; not interested in port status cruft
+	GDSTS			; find out what happened
+	 ERCAL FATAL
+	TLNE B,10000		; end encountered?
+	 JRST DEATH		; decree death to the infidels!
+	TLZN B,20000		; mark encountered?
+	 JRST PUPRC1		; no, must be randomness then
+	SDSTS			; clear mark condition
+	 ERCAL FATAL
+	MOVEI B,23		; get the mark byte that did us in
+	MTOPR
+	 ERCAL FATAL
+	CAIE C,5		; timing mark?
+	 JRST PUPRC1		; get out of this cruft now
+	MOVE A,ENOJFN		; need output JFN to send data mark
+	MOVEI B,3		; send mark
+	MOVEI C,6		; timing mark reply
+	MTOPR
+	 ERCAL FATAL
+	MOVE A,ENIJFN		; restore input JFN
+	JRST PUPRC1
+
+; Force out accumulated Ethernet buffer
+
+PUPSND:	MOVEI C,ENOBSZ
+	CAMN C,ENOCTR
+	 RET
+	EXCH C,ENOCTR
+	SUB C,ENOCTR
+	HRRZ A,ENOJFN
+	MOVE B,[POINT 8,ENOBFR]
+	MOVEM B,ENOPTR
+	SOUT
+	 ERJMP DEATH
+	MOVEI B,21
+	MTOPR
+	 ERJMP DEATH
+	RET
+
+; Force out accumulated ARPANET buffer
+
+ARPSND:	MOVEI C,AROBSZ
+	CAMN C,AROCTR
+	 RET
+	EXCH C,AROCTR
+	SUB C,AROCTR
+	MOVE A,AROJFN
+	MOVE B,[POINT 8,AROBFR]
+	MOVEM B,AROPTR
+	SOUT
+	 ERJMP DEATH
+	MOVEI B,21
+	MTOPR
+	 ERJMP DEATH
+	RET
+
+SUBTTL Server error handling code
+
+NOSUCH:	HRRZ A,AROJFN
+	MOVEI B,"-"		; indicate connection failed
+	BOUT
+	 ERJMP DEATH
+	HRROI A,ERRBUF		; output to error buffer instead of directly
+	HRLOI B,400000		;  to AROJFN to evade Tenex monitor bug
+	SETZ C,
+	ERSTR
+	 JFCL
+	 JFCL
+	HRRZ A,AROJFN
+	HRROI B,ERRBUF
+	SETZ C,
+	SOUT
+	 ERJMP DEATH
+	MOVEI B,21
+	MTOPR
+	 ERJMP DEATH
+;	JRST DEATH	
+
+; Some connection has closed
+
+DEATH:	RESET			; kludgey but sure way to kill inferior
+	HRRZ A,AROJFN
+	CLOSF
+	 ERJMP .+1
+	HRRZ A,ARIJFN
+	CLOSF
+	 ERJMP .+1
+	HRRZ A,ENIJFN
+	CLOSF
+	 ERJMP .+1
+	HRRZ A,ENOJFN
+	CLOSF
+	 ERJMP .+1
+	HALTF			; short little sucker isn't he!
+
+; Here if we get a fork termination PSI
+
+IFDIE:	MOVE A,[10000,,DEATH]
+	MOVEM A,IP1PC
+	DEBRK
+
+SUBTTL Impure page that is not shared from fork to fork
+
+DEFINE ALLOC (CELL,SIZE) <
+CELL=LOCPTR
+LOCPTR==LOCPTR+SIZE
+>;DEFINE ALLOC
+
+LOCPTR==400000
+
+ALLOC (AROBFR,^D26)
+ALLOC (ENOBFR,^D26)
+ALLOC (ARIBFR,^D26)
+ALLOC (ENIBFR,^D26)
+ALLOC (ENIPTR,1)
+ALLOC (ENOPTR,1)
+ALLOC (ARIPTR,1)
+ALLOC (AROPTR,1)
+ALLOC (ENOCTR,1)
+ALLOC (ENICTR,1)
+ALLOC (ARICTR,1)
+ALLOC (AROCTR,1)
+ALLOC (PDL,30)
+ALLOC (RPDL,30)
+ALLOC (ARIJFN,1)
+ALLOC (AROJFN,1)
+ALLOC (LCLSKT,1)
+ALLOC (HOST,1			; Ethernet host/socket)
+ALLOC (SOCKET,1)
+ALLOC (ERRBUF,^D20)
+ALLOC (PUPFIL,30)
+ALLOC (RCVFRK,1)
+ALLOC (ENIJFN,1)
+ALLOC (ENOJFN,1)
+ALLOC (CRP,1)
+ALLOC (NETCMP,1)
+ALLOC (WILLP,1)
+ALLOC (WONTP,1)
+ALLOC (DOP,1)
+ALLOC (DONTP,1)
+ALLOC (TRBINP,1)
+ALLOC (RCBINP,1)
+ALLOC (ECHOP,1)
+ALLOC (SUPGAP,1)
+ALLOC (IP1PC,1)
+
+ICHNTB: REPEAT ^D19,<0>
+	1,,IFDIE
+ILEVTB:	IP1PC
+
+	XLIST			; cut out literals
+	LIT
+	LIST
+
+END START

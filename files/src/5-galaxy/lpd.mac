@@ -1,0 +1,2946 @@
+;[SRI-NIC]SRC:<5-GALAXY>LPD.MAC.102, 31-May-88 15:28:58, Edit by MKL
+; add hack to PRINT routine to set last writer of spool file
+; to be string "}filename" so spoolers can use it on header page
+;[SRI-NIC]SRC:<5-GALAXY>LPD.MAC.94, 30-May-88 17:16:57, Edit by MKL
+; if filename ends in ".ps" then set things for postscripting
+;[SRI-NIC]XS:<5-GALAXY>LPD.MAC.88, 20-Nov-87 16:01:37, Edit by MKL
+; fix user name on create job call to quasar
+;[SRI-NIC]XS:<5-GALAXY>LPD.MAC.87, 28-Oct-87 16:14:53, Edit by MKL
+; allow anyone to print on us for now
+; need better checking once we have our own net
+;XS:<5-GALAXY>LPD.MAC.86,  4-May-87 14:40:02, Edit by KNIGHT
+; Some more close error logs
+;XS:<5-GALAXY>LPD.MAC.85,  4-May-87 14:31:17, Edit by KNIGHT
+; Log file close errors in DOPR
+;XS:<5-GALAXY>LPD.MAC.84, 21-Jan-87 14:53:03, Edit by KNIGHT
+; Remove send to quasar
+;SRC:<5-GALAXY>LPD.MAC.83, 17-Jun-86 09:54:03, Edit by KNIGHT
+;SRC:<5-GALAXY>LPD.MAC.82, 11-Jun-86 11:37:44, Edit by KNIGHT
+; Rework host name parsing so that SRI- and .ARPA always get flushed
+;SRC:<5-GALAXY>LPD.MAC.81, 11-Jun-86 11:23:04, Edit by KNIGHT
+; make sure all users can use our printers.
+;SRC:<5-GALAXY>LPD.MAC.80, 11-Jun-86 10:57:03, Edit by KNIGHT
+;Flush pup
+;SS:<5-1-GALAXY>LPD.MAC.78,  2-Dec-85 22:39:16, Edit by PIERRE
+; Make access checking at CSLI the same as LOTS
+;<5-1-GALAXY>LPD.MAC.77, 15-Nov-85 14:56:52, Edit by HEGARTY
+; Blast edit number 76/53.  It doesn't work ...
+;<5-1-GALAXY>LPD.MAC.77, 15-Nov-85 14:47:07, Edit by HEGARTY
+; Make it look at SPOOL: at LOTS instead of PS:<SPOOL>
+;<5-1-GALAXY>LPD.MAC.77, 15-Nov-85 14:46:49, Edit by HEGARTY
+; Make access check at LOTS be whether or not the user has
+; an account on the requesting machine too.
+;SS:<5-1-GALAXY>LPD.MAC.76, 11-Nov-85 10:45:25, Edit by PIERRE
+; Skip access checking at CSLI
+;<5-1-GALAXY>LPD.MAC.75,  2-Aug-85 20:19:08, Edit by WHP4
+; start work on more general filter mechanism
+;<5-1-GALAXY>LPD.MAC.74, 27-Jun-85 13:53:30, Edit by WHP4
+; finish up 57 after much tedium
+;<5-1-GALAXY>LPD.MAC.63, 26-Jun-85 20:34:13, Edit by WHP4
+; more of edit 57
+;<5-1-GALAXY>LPD.MAC.59, 26-Jun-85 17:09:53, Edit by WHP4
+; copy DDT's section (37) for ease in debugging
+;<5-1-GALAXY>LPD.MAC.58, 26-Jun-85 16:12:59, Edit by WHP4
+;<5-1-GALAXY>LPD.MAC.57, 26-Jun-85 15:27:05, Edit by WHP4
+; add support for running pr(1) over files so requested when spooled
+;<WHP4>LPD.MAC.65, 12-Jun-85 00:44:25, Edit by WHP4
+; log flushing of command cards
+;HYPER:<WHP4>LPD.MAC.55, 11-Jun-85 17:01:24, Edit by WHP4
+; support more printjob cards - send mail to user when queued
+;<5-1-GALAXY>LPD.MAC.53,  6-May-85 01:06:50, Edit by HEGARTY
+; Skip access checking at LOTS
+;<5-1-GALAXY>LPD.MAC.52, 26-Apr-85 16:42:33, Edit by LOUGHEED
+;<5-1-GALAXY>LPD.MAC.51, 26-Apr-85 15:10:24, Edit by LOUGHEED
+; QUOTE quotes dots so that dots in strings like dfA345SU-SIERRA.ARPA
+;  aren't treated as filename punctuation by other routines
+; Put some code in STANSW and PUPSW conditionals
+;<5-1-GALAXY>LPD.MAC.50, 18-Apr-85 15:50:01, Edit by WHP4
+; bump maxidl to 2
+;<WHP4>NLPD.MAC.49, 28-Mar-85 19:25:23, Edit by WHP4
+; strip off SU- prefixes, .ARPA suffixes
+;<WHP4>NLPD.MAC.48, 26-Mar-85 17:50:05, Edit by WHP4
+; fix slipped bit
+;<WHP4>NLPD.MAC.47, 26-Mar-85 17:24:18, Edit by WHP4
+; damn MACRO's angle-bracket parser!
+;<WHP4>NLPD.MAC.46, 26-Mar-85 17:21:30, Edit by WHP4
+;<WHP4>NLPD.MAC.45, 26-Mar-85 17:07:45, Edit by WHP4
+; clean up pup dependencies, compartmentalize access checking a bit.
+; flush previous edit history
+
+
+TITLE LPD - Internet Line Printer Server
+SUBTTL Bill Palmer / Stanford University / February 1985
+
+COMMENT =
+
+LPD is based on a program by the same name written by Chris Maio, 
+of Columbia University (CHRIS@COLUMBIA-20).
+
+LPD provides a one-way interface between 4.2BSD and TOPS-20 print
+spoolers.  LPD listens for incoming print requests from the network
+and queues them for the requested printer, using the utility routines
+in LPDQSR.MAC.
+
+=
+
+SEARCH MONSYM, MACSYM, LPDMAC
+.REQUIRE SYS:MACREL, LPDQSR, SNDMAI
+EXTERN GETPID,CREATE,CANCEL,LISTQ,SNDQSR,RCVQSR,SNDMAI
+
+IFNDEF STANSW,<STANSW==0>	;Stanford dependencies
+IFNDEF LOTSW,<LOTSW==0>		;LOTS dependencies
+IFNDEF CSLISW,<CSLISW==0>	;CSLI dependencies
+IFE NICSW,<
+IFN STANSW,<PUPSW==1>		;If Stanford, we have PUP protocol support
+>;IFE NICSW
+IFN NICSW,<
+PUPSW==0
+>;IFN NICSW
+IFE STANSW,<PUPSW==0>		;Elsewhere we don't have PUP
+
+;version information
+VMAJOR==0			
+VMINOR==2
+VEDIT==63
+VWHO==0				;0 = WHP4
+
+STDAC.				;standard ac definitions
+F=0				;flags
+A=1				;temporary acs
+B=2
+C=3
+D=4
+FX=14				;fork index for FKnnn DEFSTRs
+P=17				;stack pointer
+
+PDLEN==1000			;length of stack
+LINLEN==100			;length of line buffer
+BUFLEN==200			;length of general purpose buffer
+
+PURDAT==2000			;start of pure data psect (PURE)
+SUPDAT==5000			;start of superior-only data psect (SDATA)
+SUPCOD==10000			;start of superior-only code psect (SCODE)
+INFDAT==400000			;start of per-fork data psect (IDATA)
+INFCOD==420000			;start of per-fork code psect (ICODE)
+PURLEN==SUPDAT-PURDAT		;length of pure data psect
+INDLEN==INFCOD-INFDAT		;length of per-fork data psect
+INFLEN==50000			;length of per-fork code psect
+
+.PSECT PURE,PURDAT
+.ENDPS
+
+.PSECT SDATA,SUPDAT
+.ENDPS
+
+.PSECT SCODE,SUPCOD
+.ENDPS 
+
+.PSECT IDATA,INFDAT
+.ENDPS
+
+.PSECT ICODE,INFCOD
+.ENDPS
+
+IFNDEF FTLOG,<FTLOG==1>		;we want logging
+IFNDEF DEBUG,<DEBUG==1>		;we want debugging
+IFNDEF FTMAP,<FTMAP==1>		;copy ourself instead of gtjfn/get
+IFNDEF MAXIDL,<MAXIDL==2>	;maximum idle forks allowed
+IFNDEF NFKS,<NFKS==5>		;maximum simultaneous connections
+IFNDEF MXPIDS,<MXPIDS==NFKS>	;maximum pid quota desired (1/subfork)
+TMRCHN==0			;timeout channel
+IFN DEBUG,STSCHN==1		;status interrupt channel (^A)
+
+IFN DEBUG,PICHNS==1B<.ICIFT>!1B<TMRCHN>!1B<STSCHN> ;int channels
+IFE DEBUG,PICHNS==1B<.ICIFT>!1B<TMRCHN>	;int channels
+
+IFNDEF REQINT,<REQINT==^D<1*60*1000>> ;request timeout = 1 minute
+IFNDEF JOBINT,<JOBINT==^D<5*60*1000>> ;print job timeout = 5 minutes
+IFNDEF CLSINT,<CLSINT==^D<10*1000>>   ;closf% timeout = 10 seconds
+IFNDEF RSTINT,<RSTINT==^D<5*60*1000>> ;error restart delay = 5 minutes
+
+INIJFN==0			;offset of net JFN in AC block at startup
+RANK==1				;offset of flag for inferior  "" "" ""
+
+
+; fork variables
+;
+; the current fork index (not a TOPS-20 fork handle) is always kept in
+; ac FX, so indexing into the fork table is done implicitly by the following
+; defstrs.
+
+DEFSTR FH,FKSTAT(FX),17,18	; TOPS-20 fork handle
+DEFSTR FKRUN,FKSTAT(FX),18,1	; 1 if fork is currently running
+DEFSTR FKJFN,FKSTAT(FX),35,9	; fork's network jfn
+IFN DEBUG,<
+DEFSTR FKCT,FKTIM1(FX),35,36	;fork's console time when started
+DEFSTR FKRT,FKTIM2(FX),35,36	;fork's cpu time when started
+>;IFN DEBUG
+
+ 
+;PRINTF routines
+;<CS-SOURCES>PRINTF.MAC.31, 25-May-84 21:48:47, Edit by CHRIS
+; allow "*" in place of field width so user can specify the address
+; of a format word for the following functions: o,d,r,c,t,f. %*e takes
+; the address of either an error code or a fork handle; %*h means use dot
+; notation.
+;<CS-SOURCES>PRINTF.MAC.13, 23-Mar-84 04:39:36, Edit by CHRIS
+; add %h - print a host name, for tcp/ip
+;<CS-SOURCES>PRINTF.MAC.12, 19-Mar-84 05:10:46, Edit by CHRIS
+; add %l (go to left margin), formerly done with negative arg to %n
+;<CHRIS>PRINTF.MAC.2, 14-Mar-84 06:10:35, Edit by CHRIS
+; add %p ("push"), like %j but does uses SOUTR% (for DECnet, TCP/IP)
+; add erjmp/ercal simulation (mostly for %p), e.g.
+; 	printf <%p...>,<netjfn>
+;	 erjmp ioerr
+;PS:<MACRO-LIBRARY>PRINTF.MAC.2,  6-Mar-84 17:11:56, EMACSed by Sy.Bill
+; Add %r to print a real number.
+;<CS-SOURCES>PRINTF.MAC.7, 20-Feb-84 12:56:18, Edit by CHRIS
+; Change %J to %F, %= to %J, %= now sets output designator to immediate value
+; (mostly to save typing and reduce errors due to typos)
+; Arguments to %S are now immediate values, so buffer addresses can be used
+; instead of literals containing byte pointers.
+
+.PSECT ICODE
+
+define printf (s,args) <
+	if1,<.....p==0>
+ 	call doprin			;; call the routine to do the work
+	 trn [	point 7,[asciz s]	;; pointer to format string
+		irp <args>,<
+		if1,<ifb <args>,<.....p==1>>
+				 	;; flag null argument seen in
+					;;  argument list - argument
+					;;  probably needs quoting with <>'s
+		z args>			;; expand the argument
+		]			;; that's it
+if1,<	ifn <.....p>,<printx ? BAD ARGUMENTS "args" FOR PRINTF "s">
+	 purge .....p>
+>;printf
+
+; Note: When specifying the argument list, arguments containing commas
+; may be interpreted incorrectly, due to the way the assembler interprets 
+; commas within macro arguments, e.g.
+; 	printf <This string has a %s%n>,<[point 7,[asciz "bad arg"]]>
+; generates the error
+;	? BAD ARGUMENT LIST FOR PRINTF "This string has a %s%n"
+;
+; The solution is to surround any arguments containing commas with <>, e.g.
+;	printf <This string has no %s%n>,<<[point 7,[asciz "bad args"]]>>
+;
+; Also, %s (print asciz string function) converts an 18-bit address to a 7-bit
+; byte pointer, which simplifies the argument specification for word-aligned
+; strings.
+;
+
+; %j	set output designator to jfn (or byte pointer) addressed by argument.
+;
+; %=	set output designator to immediate value of argument, nominally
+;	a string buffer address, which is converted to a 7-bit byte pointer
+;	the argument is not evaluated, so %j should be used when the byte
+;	pointer is contained in a variable, e.g.
+;	
+;		printf <%=Hi there%n>,<buffer>
+;
+;	is equivalent to
+;	
+;		printf <%jHi there%n>,<<[-1,,buffer]>>
+;	
+; %@	do 1 or more 'extra' indirect fetches to find the argument data
+;	
+; %'	print a sixbit word
+;
+; %+	ignore an argument (just increments the argument list pointer)
+;
+; %%	print a percent sign
+;
+; %?	flush output and do an esout%
+;
+; %xy	where x is a decimal (or, with a leading zero, octal) number and
+;	y is a valid dispatch character, specifies a numeric argument
+;
+; %c	print the current time and date (negative numeric argument means take
+;	the format word from the argument list)
+;
+; %d	print a decimal number
+;
+; %o	print an octal number
+;
+; %e	print the last error code
+;
+; %f	print the name of a file, given a jfn
+;	
+; %n	newline (if negative numeric arg, only if not at left margin)
+;
+; %q	c-like conditional (nyi)
+;
+; %r	print a floating point (real) number
+;
+; %s	print a string starting at the immediate value of the address.
+;
+; %t	print the time and date from data on the argument list.  with a
+;	negative numeric argument, take the format flags from the arg list
+;	too.
+;
+; %u	user or directory
+;
+
+	stdac.
+
+
+; doprin - the handler routine printf
+;
+; preserves all acs except cx (clobbered by trvar)
+;
+; signxx holds the sign of the argument.  a function can effectively
+;  have an argument of negative zero by omitting the number, e.g. "%-n"
+;
+; argrdx holds the radix under which the number will be interpreted.  The
+;  number is interpreted as octal if it begins with a leading 0, decimal
+;  otherwise.
+;
+; outdes is the output designator, which may be changed with "%j" (for
+; jfns) or %= (for word-aligned buffer addresses)
+;
+; fmtwrd is nonzero if the user wants to specify the address of a word
+; containing format flags for functions that take them, and either a
+; fork handle or jsys error code for %*e
+
+doprin::trvar <<acs,20>,<buffer,200>,signxx,outdes,fmtwrd,argrdx,dopush>
+	movem acs			; save ac0
+	movei 1+acs			; get start of ac block
+	hrli 1				; and first ac to save
+	blt 17+acs			; save acs
+	move t1,.fp			; get frame pointer TRVAR set up
+	pop t1,.fp+acs			; restore caller's .fp to fake acs
+	pop t1,q3			; get address of arglst pointer in q3
+	movem t1,p+acs			; restore caller's p to fake acs
+	hrrz q3,(q3)			; fetch pointer to argument list
+	movei t1,.priou			; get the default output designator
+	movem t1,outdes			; save it
+	setzm dopush			; don't "push" data by default
+
+	movei q1,buffer
+	hrli q1,(point 7,)		; q1 holds a running destination ptr
+	move q2,(q3)			; q2 holds the source pointer
+	setzm buffer			; ensure output is asciz
+
+doprlp:	ildb t1,q2			; get a character
+	cain t1,"%"			; is it the escape character?
+	 jrst dspini
+	jumpe t1,dprend
+dopdpb:	idpb t1,q1			; else, just pass the character
+	jrst doprlp			; and go get another one
+
+dprend:	call endwrt			; flush pending output
+dprret:	hrli 1+acs
+	hrri 1
+	blt 14				; restore acs 1-14
+	move acs			; restore ac 0
+	move cx,p+acs			; get user context stack pointer
+	adjsp cx,1			; make it point to the return pc
+	push p,cx			; save it on the stack
+	move .fp,.fp+acs		; restore previous frame pointer
+	move p,(p)				; flush trvar junk
+	retskp				; return, skipping over arg list
+
+dspini:	movei t1,1			; get argument multiplier
+	movem t1,signxx			; set it
+	movei t1,^d10			; get default argument radix
+	movem t1,argrdx			; set it
+	setzm fmtwrd			; say no "*" seen yet
+	setzm p4			; p4 initialize the field width
+
+dodisp:	ildb t1,q2			; get the next character
+	jrst @dsptab(t1)		; get the address of the handler
+
+dobdch:	movei t2,"%"			; get back the "%" character we ate
+	idpb t2,q1			; deposit it, along with the next char
+	jrst dopdpb
+
+; endwrt - flush any pending output and reinitialize things
+
+endwrt:	saveac <t1,t2,t3,t4>		; save the acs we need
+	movei t1,buffer
+	hrli t1,(point 7,)		; build ptr to start of buffer
+	camn t1,q1			; have we written anything?
+	 ret				;  no, just return
+	move t1,q1			; get the output designator
+	setz t2,			; get a null
+	idpb t2,t1			; ensure string is asciz
+	move t1,outdes			; t1/ destination designator
+	hrroi t2,buffer			; t2/ source designator
+	setzm t3			; t3/ terminate on null
+	ifxe. t1,.lhalf			; byte pointer or jfn?
+	 skipe dopush			; jfn - want to force data out?
+	 ifskp.
+	  sout%				; no, just write out the string
+	   erjmp wrterr			; handle any errors
+	 else.
+	  soutr%			; yes, write it and force it out
+	   erjmp wrterr			; handle any errors
+	 endif.
+	else.
+	 call cpystr			; byte pointer - do it ourself
+	endif.
+	movem t1,outdes			; update output pointer
+	movei q1,buffer			; reinitialize the string buffer
+	hrli q1,(point 7,)		; q2 holds a running destination ptr
+	setzm buffer			; ensure output is asciz
+	ret
+
+; here on output errors
+
+opcode==-1b13
+
+wrterr:	move cx,p+acs			; get the stack pointer from entry
+	hrro cx,1(cx)			; get return pc (next on stack)
+	move cx,1(cx)			; get the following instruction
+	andx cx,opcode			; mask off the uninteresting bits
+	camn cx,[ercal]			; ercal follows?
+	 jrst dprerc			; yes, simulate it
+	camn cx,[erjmp]			; erjmp follows?
+	 jrst dprerj			; yes, simulate it
+
+; here if no error handling supplied by user.  print an error message,
+; halt, and return to user's program if continued
+
+wrter1:	push p,[ifiw!wrter2]		; set up dummy return pc
+	saveac <t1,t2,t3>		; save acs on jsmsg0's behalf
+	hrroi t1,[asciz "PRINTF output failed: "]
+	esout%
+	callret jsmsg0			; print the jsys error
+
+wrter2:	haltf%				; return here after acs are restored
+	jrst dprret			; if continued, return to user
+
+; simulate ercal for failing printf
+
+dprerc:	move cx,p+acs			; get the stack pointer from entry
+	push p,cx			; save it
+	move cx,1(cx)			; get return pc (next on stack)
+	hrroi cx,1(cx)			; get address of following instruction
+
+; simulate erjmp for failing printf
+
+dprerj:	move cx,p+acs			; get the stack pointer from entry
+	push p,cx			; save it
+	move cx,1(cx)			; get return pc (next on stack)
+	hrrzi cx,1(cx)			; get the following instruction
+
+dprer1:	hrli 1+acs			; ercal simulation joins us here
+	hrri 1				; restore acs 1-14
+	blt 14
+	move acs			; restore ac 0
+	move .fp,.fp+acs		; restore ac 15
+	move p,(p)			; restore users stack pointer
+	tlzn cx,-1			; simulating ercal?
+	 push p,cx			; yes, push fake return pc
+	move cx,(cx)			; get branch address in cx
+	jrst @cx			; jump to indicated address
+
+; come here to deposit a "?" instead of the field we couldn't handle.
+; most jsys errors are handled by coming here.
+
+%je:	movei t1,"?"			; get a question mark
+	idpb t1,q1			; deposit it
+	move t1,q1			; now get the byte pointer
+	setz t2,			; get a null
+	idpb t2,t1			; deposit it
+	jrst doprlp			; and continue
+
+
+; printf support routines
+
+; cpystr - copy an asciz string in core
+;
+; call:		t1/ destination pointer
+;		t2/ source pointer
+;
+; returns:	t1/ updated destination pointer
+;
+; preserves other acs
+
+cpystr::saveac <t2,t3,t4>
+	tlc t1,-1			; convert -1,,addr to point 7,addr
+	tlcn t1,-1
+	 hrli t1,(point 7,)
+	tlc t2,-1
+	tlcn t2,-1
+	 hrli t2,(point 7,)
+	do.
+	 ildb t3,t2			; get a byte
+	 jumpe t3,endlp.
+	 idpb t3,t1			; deposit it
+	 loop.
+	od.
+	move t4,t1			; get destination pointer
+	idpb t3,t4			; make the string asciz
+	ret				; and return
+
+; strlen - find the length of a string
+;
+; accepts:
+;	t1/ string pointer
+; returns:
+;	t1/ unchanged
+;	t2/ string length
+;
+; preserves t3,t4
+
+strlen::saveac <t1,t3>			; save acs we'll use
+	tlce t1,-1
+	tlcn t1,-1
+	 hrli t1,(point 7)
+	setzm t2			; zero count
+strln1:	ildb t3,t1			; get a byte
+	jumpe t3,r			; if null, all done
+	aoja t2,strln1			; else count it and loop
+
+; getarg - retrieve an argument for printf
+;
+; in order to allow the use of stkvar and trvar arguments to printf,
+; we have to calculate the effective address of an argument ourselves,
+; since contents of the acs (in particular, p and .fp) are different from
+; the caller's context.  Effadr, in particular, takes an word containing
+; Y, AC, and I fields, and returns in the effective address with respect to
+; the context of printf's caller.
+;
+; getarg returns the argument in t2, and preserves all other acs except cx
+
+getarg:	saveac <t1>			; preserve t1
+	aos q3				; increment argument list pointer
+	move t1,(q3)			; get argument address
+	call effadr			; calculate the effective address
+	move t2,(t1)			; return word addressed by it in t2
+	ret				;  
+
+; getadr is like getarg, except it returns the address of the argument
+; instead of the argument itself, in case the caller has to manipulate
+; the actual argument.
+;
+; getadr returns the address of the argument in t1, preserving all other
+; acs except cx
+
+getadr:	saveac <t2>
+	aos q3				; increment the argument list ptr
+	move t1,(q3)			; get the address of the argument
+	call effadr			; calculate the effective address
+	ret				; return it
+
+; effadr - calculate an effective address using the caller's context
+;
+; accepts:
+;	t1/	word with I, X, and Y fields
+;
+; returns:
+;	t1/	18-bit effective address in caller's context
+;
+; clobbers no other acs except cx
+
+defstr (I,,13,1)
+defstr (X,,17,4)
+defstr (Y,,35,18)
+
+effadr:	saveac <t2>			; preserve all acs
+effad2:	move t2,t1			; copy word into t2
+	load t1,X,t2			; load the X field
+	jumpe t1,effad1			; none there, skip ahead
+	addi t1,acs			; calculate address of "fake" ac
+	load t1,Y,(t1)			; get Y field from fake ac
+	add t1,t2			; add Y field from t2
+	hrr t2,t1			; update Y field in t1 (without carry)
+	txz t2,X			; say index no longer needed
+effad1:	load t1,Y,t2			; get Y part of address
+	caig t1,17			; is this an accumulator reference?
+	 addi t1,acs			; yes, address "fake" acs then
+	txzn t2,I			; was indirect bit on?
+	 ret				; no, all done then, so return
+	move t1,(t1)			; yes, fetch next word
+	jrst effad2			; and repeat the process
+
+; printf field handler routines
+
+; %[-0123456789] - accumulate a numeric argument in p4
+
+%digit:	cain t1,"-"			; is it a dash?
+	 jrst %dash			; yes, go handle it
+	cain t1,"0"			; is it zero?
+	 jumpe p4,%zero
+	imuli p4,argrdx			; multiply existing field with by ^o10
+	subi t1,"0"			; decode the "number"
+	imul t1,signxx			; give it the right sign
+	add p4,t1			; add it to the running sum
+	jrst dodisp			; get another character
+
+%dash:	movns signxx			; negate the sign
+	jrst dodisp			; otherwise ignore the "-"
+
+%zero:	movei t1,^d8			; set radix to octal
+	movem t1,argrdx
+	jrst dodisp			; and go get another character
+
+; %o, %d - print a number.  Numeric argument is the number of columns, and a
+; negative argument means use trailing instead of leading filler
+
+%o:	skipa t3,[^d8]			; octal number
+%d:	 movei t3,^d10			; decimal number
+	skipge p4			; argument negative?
+	ifskp.
+	 hrl t3,p4			; t3/ field width,,radix
+	else.
+	 movms p4			; yes, make it positive
+	 hrl t3,p4			; get it in the proper field
+	 txo t3,no%lfl			; say we want leading filler
+	endif.
+	call getarg			; get the argument
+	skipn fmtwrd			; format word specified?
+	ifskp.
+	 move t3,t2			; yes, save the argument
+	 call getarg			; fetch the format word
+	 exch t3,t2			; get them in the right acs
+	endif.	 
+	move t1,q1			; t1/ destination pointer
+	nout%				; output the number
+	 jfcl
+	movem t1,q1			; save the updated pointer
+	jrst doprlp			; and go back for more
+
+; %f - print the filename for a jfn.  Numeric argument is the number of
+; fields (from left to right), negative means don't punctuate.
+
+%f:	skipn t1,p4			; numeric argument?
+	 movei t1,5			; no, assume we want all fields
+	movms t1			; make it positive
+	caile t1,5			; too many fields?
+	 movei t1,5			; yes, use the maximum then
+	movei t2,5			; we want the difference from 5 now
+	subm t2,t1			; t1 := (5-t1)
+	imuli t1,3			; get the number of bits to shift
+	move t3,[xwd 111110,0]		; get jfns bits
+	lsh t3,(t1)			; calculate the jfns argument
+	skipl p4			; argument negative?
+	 txo t3,js%paf			; no, turn on punctuation
+	call getarg			; t2/ jfn
+	move t1,q1			; t1/ output designator
+	skipn fmtwrd			; format word wanted?
+	ifskp.
+	 move t3,t2			; yes, save the argument
+	 call getarg			; fetch the format word
+	 exch t3,t2			; get them in the right acs
+	endif.	 
+	jfns%				; do the work
+	 erjmp %je
+	movem t1,q1			; update the destination pointer
+	jrst doprlp			; keep looping
+
+; %s - print a string.  numeric argument is maximum length, or if negative,
+;  length to pad out to.
+
+%s:	call getadr			; get immediate value
+	move t2,t1			; get it in t2
+	tlce t2,-1			; convert 0,,addr to "point 7,addr"
+	tlcn t2,-1			; convert -1,,addr to "point 7,addr"
+	 hrli t2,(point 7,)
+	move t1,q1			; t1/ destination pointer
+	movm t3,p4			; get field width, forcing positive
+	skipn t3
+	 movei t3,777777		; if no count, use +infinity
+	setzm t4
+	do.
+	 sojl t3,endlp.			; leave loop when count exhausted
+	 ildb t4,t2			; get a source byte
+	 jumpe t4,endlp.		; if a null, leave the loop
+	 idpb t4,t1			; deposit it
+	 loop.
+	od.
+	skipl p4			; argument negative?
+	 jrst %s1			; no, move on
+	movei t4," "			; yes, pad with trailing spaces
+	do.
+	 sojl t3,endlp.
+	 idpb t4,t1			; drop in a trailing blank
+	 loop.
+	od.
+%s1:	movem t1,q1			; update the byte pointer
+	setz t4,			; get a null
+	idpb t4,t1			; make the string asciz
+	jrst doprlp			; go back for some more
+
+; %u - print a user or directory name.
+
+%u:	move t1,q1			; t1/ destination designator
+	call getarg			; t2/ user/directory number
+	dirst%				; convert a string
+	 erjmp %je
+	movem t1,q1			; save the updated pointer
+	jrst doprlp			; go back for more
+
+; %l - go to left margin
+
+%l:	call endwrt			; flush any pending output
+	movei t1,.priin
+	rfpos%				; get the cursor position
+	hrrzs t2			; isolate column number
+	jumpe t2,doprlp			; if 0, we're all done here
+	callret %n			; join common code for %n
+
+; %n - print n newlines (default is 1)
+
+%n:	movms p4			; make any negative arg positive
+	move t1,q1			; get the destination pointer
+	do.
+	 hrroi t2,[byte (7) .chcrt,.chlfd,.chnul]
+	 call cpystr			; copy in the crlf
+	 sojg p4,top.			; loop for the repeat count
+	od.
+	movem t1,q1			; save the updated pointer
+	jrst doprlp
+
+; %e - output the last jsys error.  Numeric argument is maximum length
+;  of string; "*" means that next arg is a fork handle or error code.
+
+%e:	skipn fmtwrd			; format word wanted?
+	ifskp.
+	 call getarg			; fetch the format word
+	 hrrz t1,t2			; clear junk from left half
+	 caile t1,.erbas		; error code?
+	 ifskp.
+	  geter%			; no, get last error for the fork
+	   erjmp %je
+	 endif.
+	 hrli t2,.fhslf			; t2/ .fhslf,,error code
+	else.
+	 hrloi t2,.fhslf		; t2/ .fhslf,,last error code
+	endif.
+%e2:	move t1,q1			; t1/ destination designator
+	movm t3,p4			; get argument, force positve
+	movns t3			; make it negative now
+	hrlzs t3			; t3/ -count,,0
+	erstr%				; output the error string
+	 jrst %je
+	 jrst %je
+	movem t1,q1			; update the destination pointer
+	jrst doprlp			; ignore errors
+
+; %q - do an ESOUT%
+
+%q:	call endwrt			; flush any pending output
+	hrroi t1,[asciz ""]
+	esout%				; print the ? and crlf if necessary
+	jrst doprlp
+
+; %t - Print the time and date in a "nice format."  "*" modifier
+; means find the flags in the next argument.  %c means use current time
+; and date.
+
+%t:	call getarg			; get the argument
+	skipa t3,t2			; save time and date in t3
+%c:	 seto t3,			; %c handler enters here
+	skipe fmtwrd			; any format word specified?
+	ifskp.
+	 movx t2,ot%scl+ot%12h+ot%nsc	; no format word, so use default
+	else.
+	 call getarg			; format word, so get it
+	endif.
+	exch t2,t3			; swap time and flags
+	move t1,q1			; get the destination designator
+	odtim%				; print the time and date
+	 erjmp %je			; error?
+	movem t1,q1			; save updated byte pointer
+	jrst doprlp
+
+; %j - flush pending output and take new output designator from arg list
+;      like %= below, but expects the address of a jfn or byte pointer as
+;      it's argument, e.g. printf <%j...>,<netjfn>
+
+%j:	call endwrt			; flush pending output
+%j1:	call getarg			; get address of the argument
+	movem t2,outdes			; save it as output designator
+	jrst doprlp			; go get some more characters
+
+; %p - like %j, but uses SOUTR% instead of SOUT% (for network jfns)
+
+%p:	call endwrt			; flush any pending output
+	setom dopush			; set the flag
+	jrst %j1			; join code for %j
+
+
+; %= - set output to constant in argument list.  converts buffer addresses to
+;      7-bit byte pointers.
+
+%set:	call endwrt			; flush pending output
+	call getadr			; get the argument address
+	move t2,t1			; get the (immediate) value in t2
+	tlce t2,-1			; convert -1,,addr or 0,,addr to 
+	tlcn t2,-1			;  7-bit string pointer
+	 hrli t2,(point 7)		; ...
+	movem t2,outdes			; save the new output designator
+	jrst doprlp			; go get some more characters
+
+; %% - print a percent sign
+
+%pcent:	move t1,q1			; output designator
+	hrroi t2,[asciz "%"]		; get a "%"
+	call cpystr			; drop it in the output buffer
+	movem t1,q1			; update destination pointer
+	jrst doprlp			; and go back for more
+
+; %*x - specifies that a format word follows the argument for function x.
+
+%star:	setom fmtwrd			; save the flag
+	setz p4,			; clear any numeric argument
+	movei t1,1			; get default multiplier
+	movem t1,signxx			; save it
+	movei t1,^d10			; restore default radix
+	movem t1,argrdx
+	jrst dodisp			; now find next char to dispatch on
+
+; %' - Print a sixbit string.  Numeric argument is field width, negative
+; argument means convert to lowercase instead of upper case.
+
+%6:	move t1,q1			; t1/ destination designator
+	call getarg			; t2/ sixbit word
+	caig p4,6			; if numeric arg is too large
+	skipg p4			;  or too small
+	 movei p4,6			; p4/ positive loop count
+	move t3,[point 6,t2]		; t3/ source pointer
+	do.
+	 ildb t4,t3			; load a byte
+	 addi t4,40			; convert to uppercase
+	 skipl signxx			; was argument negative?
+	 ifskp.				; yes, lower case it then
+	  cail t4,"A"			; is it uppercase alpha?
+	  caile t4,"Z"			; well?
+	  anskp.			; yes, so
+	  addi t4,40			;  convert to lowercase
+	 endif.
+	 idpb t4,t1			; drop converted char in output buffer
+	 sojg p4,top.			; keep looping
+	od.
+	movem t1,q1			; save updated byte pointer
+	jrst doprlp			; and go back for more
+
+
+; %R - print a floating point number
+
+%r:	call getarg			; get the number to output
+	movem t2,p1			; save the number to print
+	skipn fmtwrd			; argument given for format?
+	ifskp.
+	 call getarg			; yes, so get the argument
+	 move t3,t2			; put in flout register
+	else.
+	 setzm t3			; else use monitor's default
+	endif.
+	move t1,q1			; get the output designator
+	move t2,p1			; here is the number
+	flout%				; output it
+	 erjmp %je			; handle errors
+	movem t1,q1			; save the updated pointer
+	jrst doprlp			; and go back for more
+
+; %h - print a host number
+
+; "*" modifier means always use dot notation
+
+%h:	call getarg			; get the host number
+	move t3,t2			; t3/ host number
+	move t2,q1			; t2/ destination
+	skipe fmtwrd			; "*" specified?
+	 jrst hstnum			; yes, just use dot notation
+	movx t1,.gthns			; t1/ funtion code
+	gthst%				; convert number to string
+	 erjmp hstnum			; failed, print octets
+	movem t2,q1			; update the pointer
+	jrst doprlp			; and go back for more
+
+hstnum:	movem t3,p1			; get host number in p1
+	move p2,[point 8,p1,3]		; set up byte pointer to octets in p2
+	move t1,q1			; get destination pointer
+	movei t3,^d10			; radix is decimal
+	movei t4,3			; loop 4 times
+	do.
+	 ildb t2,p2			; get an octet
+	 nout%				; print the number
+	  jfcl				; can't happen
+	 jumpe t4,endlp.		; exit if all done
+	 movei t2,"."			; get a dot
+	 idpb t2,t1			; deposit it
+	 soja t4,top.			; loop
+	od.
+	movem t1,q1			; save update byte pointer
+	jrst doprlp			; go back for more
+
+
+define xx (chr,addr) <
+  irpc <chr>,<
+	reloc dsptab+"chr"
+	ifiw!addr
+	reloc
+  >
+>
+
+dsptab:	repeat 200,<ifiw!dobdch>	; default is to ignore meaning of "%"
+	xx <=>,%set			; %= set output designator to constant
+	xx <*>,%star			; %* - specify an extra argument
+	xx ',%6				; %' - print a sixbit word
+	xx %,%pcent			; %% - a percent sign
+	xx ?,%q				; %? - simulate esout%
+	xx <-0123456789>,%digit		; %1 - decimal field width
+	xx cC,%c			; %c - current time and date
+	xx dD,%d			; %d - decimal number
+	xx eE,%e			; %e - string for last jsys error
+	xx fF,%f			; %f - name associated with jfn
+	xx nN,%n			; %n - newline (no argument)
+	xx oO,%o			; %o - octal number
+	xx sS,%s			; %s - a string from immediate addr
+	xx tT,%t			; %t - time and date
+	xx uU,%u			; %u - user or directory
+	xx jJ,%j			; %j - output to jfn
+	xx pP,%p			; %p - output to jfn, "push" output
+	xx rR,%r			; %r - real (floating) number
+	xx lL,%l			; %l - go to left margin
+	xx hH,%h			; %h - print a host name
+.ENDPS
+;end of PRINTF code
+
+
+
+
+; Macros
+
+DEFINE OKINT <JSP CX,OKINT0>	;allow interrupts
+DEFINE NOINT <JSP CX,NOINT0>	;disallow interrupts
+
+DEFINE LOG (MSG, ARGS) <	;log message
+IFN FTLOG,<				
+	CALL [CALL OPNLOG
+	      IFNB <ARGS>,<PRINTF <%j%c MSG'%n>,<LOGJFN,ARGS>>
+	      IFB <ARGS>,<PRINTF <%j%c MSG'%n>,<LOGJFN>>
+	      CALLRET CLSLOG]
+>;IFN FTLOG
+>;LOG
+
+DEFINE JMSG (MSG) <		;log message, restart appropriately
+	ERJMP  [LOG <? MSG - %e>
+		SKIPN SUPERF
+		 JRST ISTOP	;inferiors quit
+		JRST RESTART]	;superior restarts
+>
+
+DEFINE EMSG (MSG) <
+	JRST   [LOG <? MSG - %e>
+		SKIPN SUPERF
+		 JRST ISTOP	;inferiors quit
+		JRST RESTART]	;superior restarts
+>
+
+DEFINE CMSG (MSG) <		;print message on "console"
+	JRST   [PRINTF <? MSG - %e>
+		SKIPN SUPERF
+	 	 JRST ISTOP
+		JRST RESTART]
+>
+DEFINE FATAL (MSG,ARGS,ADDR<R>) < ;only used in actual LPD code
+ JRST [	IFNB <ARGS>,<LOG <MSG>,<ARGS>>
+	IFB <ARGS>,<LOG <MSG>>
+	CALL NAK
+	JRST ADDR]
+>
+
+
+;Pure data
+
+.PSECT PURE
+TCPSCK:	ASCIZ/TCP:515#;timeout:60/	;socket to listen on for lpd requests
+IFE STANSW&LOTSW,<
+LOGNAM:	ASCIZ/PS:<SPOOL>LPD.LOG/ ;log file name
+SCNFLN:	ASCIZ/PS:<SPOOL>cf*.*/	;files to scan in <SPOOL>
+>;IFE STANSW&LOTSW
+IFN STANSW&LOTSW,<
+LOGNAM:	ASCIZ/SPOOL:LPD.LOG/ 	;log file name
+SCNFLN:	ASCIZ/SPOOL:cf*.*/	;files to scan in <SPOOL>
+>;IFN STANSW&LOTSW
+EXENAM: ASCIZ/SYSTEM:LPD.EXE/	;our name
+.ENDPS
+
+
+; Access Checking
+
+COMMENT =
+
+LPD uses a number of tests to screen out the riff-raff who might be
+trying to use our printers.  The first thing checked is the foreign
+address.  If it is on the local network (as defined by LCLMSK and
+LCLNET), or the hostname appears in the host table at WLDHST, the
+connection is accepted, subject to verification of individual user
+eligibility for printer use.  
+
+Note that at Stanford, local hosts may not be in the NIC host table,
+but we can still obtain a host name from them via the PUPNM% jsys.
+
+User eligibility is determined by first seeing if there is a directory
+for the remote site; for example, a machine named Glacier would have a
+directory PS:<GLACIER> on the machine LPD is running on.  If such a
+directory exists, then we do an existance check for
+PS:<MACHINE.USERNAME>.  If that also exists, then everything is fine
+and we can print the file.  
+
+Note: Since Stanford LOTS doesn't have billable printers, we allow any
+      host to print on our lineprinters providing the user name of the
+      requestor exists at LOTS -- PAH
+=
+
+DEFINE HADDR (B1,B2,B3,B4) <BYTE (4) 0 (8) ^D<B1>,^D<B2>,^D<B3>,^D<B4>>
+
+.PSECT PURE
+
+IFN STANSW,<
+LCLMSK:	HADDR -1,0,0,0		; local network mask
+LCLNET:	HADDR 36,0,0,0		; local network number
+>;IFN STANSW
+
+IFN PUPSW,<
+DEFSTR PUPNET,HOSTNO,3+8+8,8		; xx.40.xx.xx
+DEFSTR PUPHST,HOSTNO,3+8+8+8+8,8	; xx.xx.xx.213
+>;IFN PUPSW
+
+; a list of patterns is matched against the internet host name of the
+; client (as returned by GTHST%) if the test above fails.
+
+DEFINE T (S) <[ASCIZ |S|]>
+
+WLDHST:	T SU*			; the vax relay, etc etc
+NWLD==.-WLDHST
+
+.ENDPS
+
+
+;Main program, top fork
+
+.PSECT SCODE
+START:	RESET%			;flush any garbage
+	MOVE P,[IOWD PDLEN,PDL]	;set up stack pointer
+	MOVX A,.FHSLF
+	SETOM B,C
+	EPCAP%			;enable all capabilities
+	SETOM SUPERF		;we are the top level
+	CALL PSIINI		;set up interrupt system
+	CALL FRKINI		;set up fork tables
+	CALL PIDINI		;initialize pid quotas
+	SETZM SPLDIR		;don't know where <SPOOL> is yet
+	PRINTF <%=%h>,<OURNAM,[-1]> ;get our hostname
+	HRROI A,OURNAM
+	CALL LC			;lowercase it for losing unix
+	LOG <LPD starting up; scanning for old print requests>
+	CALL SCAN		;scan the spool directory for old requests
+	 LOG <scan failed, last error: %e>
+MAIN:	MOVE A,NRUN		;get number of forks running
+	CAIL A,NFKS		;can we create any more?
+WAITPC:	 WAIT%			;nope, wait for one to terminate
+	CALL LISTEN		;listen for a request
+	 NOP			;ignore failure
+	JRST MAIN		;proceed directly to GO and collect $200.00
+
+RESTART:MOVX A,RSTINT		;wait a while after something bad happens
+	DISMS%
+	JRST START		;and restart
+
+
+;support routines for LOG macro
+OPNLOG:	SAVEAC <A,B,C>		;save from destruction
+	MOVX A,GJ%SHT
+	HRROI B,LOGNAM
+	GTJFN%			;try to get handle on log file
+	IFJER.
+	 CMSG <GTJFN failed for log file> ;trouble
+	ENDIF.
+	MOVEM A,LOGJFN		;save jfn
+	MOVEI C,^D10		;try a bunch of times to get log file
+OPNLG1: MOVE A,LOGJFN
+	MOVX B,OF%APP!FLD(7,OF%BSZ) ;open for append access
+	OPENF%			;try to open it
+	IFJER.			;no luck
+	 MOVX A,^D1000		;wait a second
+	 DISMS%
+	 SOJG C,OPNLG1		;try again a few times if needed
+	 MOVE A,LOGJFN		;didn't work, get jfn back
+	 SETZM LOGJFN		;clear cell
+	 RLJFN%			;flush jfn 
+	  ERJMP .+1		;just can't win
+	 CMSG <OPENF failed for log file> ;give up for now, complain 
+	ENDIF.
+	RET
+
+CLSLOG:	SAVEAC <A>
+	SETZM A			; get a zero
+	EXCH A,LOGJFN		; swap with the jfn
+	CLOSF%			;close the file
+	 CMSG <CLOSF on log file failed> ;complain and restart, can't keep 
+	RET			;file open
+
+
+;PSI stuff
+
+;PSIINI - called at startup to initialize PSI system
+PSIINI:	MOVEI A,.FHSLF		;this process
+	MOVE B,[LEVTAB,,CHNTAB]	;tables for monitor's perusal
+	SIR%			;set addresses of tables
+	EIR%			;enable interrupt system
+	MOVX B,PICHNS		;activate the actual channels we want
+	AIC%
+IFN DEBUG,<
+	MOVE A,[.CHCNA,,STSCHN]	;status interrupt on ^A
+	ATI%			;if debugging code enabled
+>;IFN DEBUG	
+	RET
+
+
+;Interrupt control code
+
+;allow interrupts
+OKINT0:	PUSH P,A		;save A
+	MOVEI A,.FHSLF		;this fork
+	EIR%			;enable interrupt system
+	POP P,A			;restore A
+	JRSTF @CX		;restore flags and PC
+
+;disallow interrupts
+NOINT0:	PUSH P,A		;save A
+	MOVEI A,.FHSLF		;this fork
+	DIR%			;disable interrupt system
+	POP P,A			;restore A
+	JRSTF @CX		;restore flags and PC
+
+
+;FRKINT - fork termination interrupt received
+FRKINT:	CALL FKINT		;call fork termination code
+	DEBRK%			;attempt to return from interrupt
+	 JMSG <DEBRK failed %e> ;probably coding error if we get here
+
+;handler for fork termination interrupt
+FKINT:	SAVEAC <A,B,C,D,Q1,Q2,Q3,FX,CX>	;save acs
+	HRRZ A,LEV2PC		;get pc of interrupted fork
+	CAIE A,WAITPC+1		;are we WAIT%ing for a free fork?
+	IFSKP.			;yes
+	 SETONE PC%USR,LEV2PC	;force return to user mode
+	ENDIF.
+	MOVSI FX,-NFKS		;form AOBJN pointer
+FKINT0:	JE FKRUN,,FKINT1	;this fork here?
+	LOAD A,FH		;yes, get fork handle
+	RFSTS%			;read status
+	 JMSG <RFSTS failed>
+	HRRZS B			;isolate PC
+	LOAD D,RF%STS,A		;get fork status
+	CAIE D,.RFHLT		;halt
+	CAIN D,.RFFPT		;forced halt?
+	 SOSA NRUN		;yes, one less running
+	  JRST FKINT1		;no, next fork
+	SETZRO FKRUN		;turn off running bit
+IFN DEBUG,<			;if debugging
+	LOAD A,FH
+	MOVEM B,Q1		; save pc
+	RUNTM%			; get it's runtime
+	MOVE B,Q1		; get pc back
+	MOVEM A,Q1		; save run time
+	MOVEM C,Q3		; save console time
+>;IFN DEBUG
+	LOAD C,FH		;get fork handle
+	TRZ C,.FHSLF		;convert to fork number
+	CAIE D,.RFHLT		;did this fork halt normally?
+	IFSKP.			;yes
+IFN DEBUG,<
+	 LOAD A,FH		; get the fork handle
+	 LOG <Fork %o halted, pc %o, last error %*e>,<c,b,a>
+	 LOAD B,FKRT		; get fork's initial runtime
+	 SUB Q1,B		; subtract it from final runtime
+	 IDIVI Q1,^D1000	; convert to seconds
+	 LOAD B,FKCT		; same for fork's console time
+	 MOVE Q2,Q3		; get start time in q2
+	 SUB Q2,B
+	 IDIVI Q2,^D1000
+	 LOG <Fork %o used %d cpu seconds in %d seconds>,<c,q1,q2>
+>;IFN DEBUG
+	 MOVE A,NFORKS
+	 SUB A,NRUN
+	 CAILE A,MAXIDL		;too many forks
+	 IFNSK.
+IFN DEBUG,<
+	  LOG <Deleting fork %o>,<c>
+>;IFN DEBUG
+	  CALL DELFRK		;yep, delete this guy
+	 ENDIF.
+	ELSE.
+IFN DEBUG,<
+	 LOAD A,FH		; get the fork handle
+	 LOG <Fork %o terminated, pc %o, status %o, %*e>,<c,b,d,a>
+	 LOAD A,FKRT
+	 SUB Q1,B
+	 IDIVI Q1,^D1000	; calculate runtime
+	 LOAD B,FKCT
+	 MOVE Q2,Q3		; get console time in q2
+	 SUB Q2,B
+	 IDIVI Q2,^D1000	; and console time
+	 LOG <Fork %o used %d cpu seconds in %d seconds>,<c,q1,q2>
+>;IFN DEBUG
+	 CALL DELFRK		;got an error, flush it
+	ENDIF.
+	SETZRO FKJFN		;flush the jfn from our tables
+FKINT1:	AOBJN FX,FKINT0		;loop over all the forks
+	RET			;and return
+
+
+IFN DEBUG,<
+;STSINT - 
+STSINT:	CALL STATUS		;call status printer
+	DEBRK%
+	 JMSG <DEBRK failed>
+
+; called at interrupt level to print fork status
+
+STATUS:	SAVEAC <A,B,C,D,FX,CX>	; don't clobber any acs
+	MOVSI FX,-NFKS		; make an aobjn pointer
+	NOINT			; prevent interrupts
+	PRINTF <Forks: %d (%d active)%nConnections: %d%n>,<nforks,nrun,njfns>
+	SETZB A,B		; clear counters
+	SETZM C
+	PRINTF <FX JFN HOST%n>
+STS1:	LOAD D,FH		;get fork handle
+	IFQN. FKRUN		;is it running?
+	 LOAD A,FKJFN		;yes
+	 GDSTS%			;get connection status
+	 IFJER.
+	  SETZM C
+	 ENDIF.
+	 HRRZ B,FX		;isolate fork handle
+	 PRINTF <%2o %3o %h (%*e)%n>,<b,a,c,d>
+	ELSE.
+	 HRRZ B,FX
+	 IFQN. FKJFN
+	  LOAD A,FKJFN
+	  PRINTF <%2o %3o  -- (%*e)%n>,<b,a,d>
+	 ELSE.
+	  IFQN. FH
+	   PRINTF <%2o  --  -- (%*e)%n>,<b,d>
+	  ENDIF.
+	 ENDIF.
+	ENDIF.
+	AOBJN FX,STS1
+	OKINT			; allow interrupts again
+	RET			; return
+
+>;IFN DEBUG
+
+;Fork handling stuff
+
+; scans the fork table looking for an idle fork.  if one is found, it's
+; index is returned, otherwise a new fork is created unless the table is
+; full.
+;
+; returns:
+;	+1 no more forks
+;	+2 success, fork index in fx
+
+GETFRK:	MOVSI FX,-NFKS			; make an aobjn pointer
+GETFK1:	JN FKJFN,,GETFK2		; fork in use?
+	JE FH,,GETFK2			; no, and fork exists?
+	 RETSKP				; yes, just return this handle
+GETFK2:	AOBJN FX,GETFK1
+
+; no idle fork exists, so create one if table can hold it
+
+	MOVSI FX,-NFKS		;make another aobjn pointer
+GETFK3:	JN FKJFN,,GETFK9	;fork in use?
+	HRRZS FX		;no, isolate the fork index
+	JN FH,,RSKP		;if fork exists, just return it
+	MOVX A,CR%CAP!CR%MAP	;else make one, our caps and map
+	CFORK%
+	 JMSG (CFORK failed)	;nice try, anyway
+	AOS NFORKS		;bump the fork count
+	STOR A,FH		;save the handle
+IFN DEBUG,<
+	TXZ A,.FHSLF
+	LOG <Created fork %o, table entry %o>,<A,FX>
+	LOAD A,FH
+>;IFN DEBUG
+	CALL MAPSLF		;map appropriate parts of ourself into child
+	RETSKP			; return with fx set up
+
+GETFK9:	AOBJN FX,GETFK3		; loop if more to try
+	RET			; otherwise, fail
+
+;here to delete a fork
+DELFRK:	LOAD A,FH		;get fork handle
+	KFORK%			;exterminate, exterminate, exterminate
+	 JMSG<KFORK failed>	
+	SOS NFORKS		;decrement number of forks running
+	SETZRO FH		;clear the fork handle
+	RET
+
+
+; frkini - initialize the fork tables
+
+FRKINI:	SETZM FKSTAT		; clear the fork table
+	MOVE A,[XWD FKSTAT,FKSTAT+1]
+	BLT A,FKSTAT+NFKS
+	RET
+
+; set our pid quota as needed
+PIDINI:	ACVAR <<ARGBLK,3>>
+	GJINF%			;get job number
+	MOVEM C,ARGBLK+1	;store in right slot
+	MOVEI C,MXPIDS		;pid quota desired
+	MOVEM C,ARGBLK+2
+	MOVEI C,.MUSPQ		;set quota function
+	MOVEM C,ARGBLK		
+	MOVEI A,3		;length of arg block
+	MOVEI B,ARGBLK		;addr of " "
+	MUTIL%			;talk to the gods 
+	 JMSG <MUTIL to set pid quota failed> ;they struck us down
+	RET
+	ENDAV.
+
+; subfork setup
+
+;copy ourselves into inferior, diddling page maps appropriately
+MAPSLF:	SAVEAC <A,B,C>
+	STKVAR <FORKH>
+	MOVEM A,FORKH
+	SETZM INITF		;never run before
+IFE FTMAP,<
+	MOVX A,GJ%SHT!GJ%OLD
+	HRROI B,EXENAM		;get copy of ourselves
+	GTJFN%
+	 JMSG <Can't find SYSTEM:NLPD.EXE>
+	LOAD B,FH		;form jfn,,fh in a
+	HRL A,B
+	GET%			;get into address space of new fork
+	 JMSG <GET failed>
+>;IFE FTMAP
+IFN FTMAP,<
+	MOVE A,[.FHSLF,,<INFCOD/1000>]
+	HRL B,FORKH
+	HRR B,A
+	MOVX C,PM%CNT!PM%RD!FLD(<INFLEN/1000>,PM%RPT)
+	PMAP%
+	 JMSG <INFCOD PMAP failed>
+>;IFN FTMAP
+	MOVE A,[.FHSLF,,<INFDAT/1000>]
+	HRL B,FORKH
+	HRR B,A
+	MOVX C,PM%CNT!PM%RD!PM%CPY!FLD(<INDLEN/1000>,PM%RPT)
+	PMAP%
+	 JMSG <INFDAT PMAP failed>
+IFN FTMAP,<
+	MOVE A,[.FHSLF,,<PURDAT/1000>]
+	HRL B,FORKH
+	HRR B,A
+	MOVX C,PM%CNT!PM%RD!FLD(<PURLEN/1000>,PM%RPT) ;this can be read-only
+	PMAP%
+	 JMSG <PURDAT PMAP failed>
+>;IFN FTMAP
+	MOVE A,[.FHSLF,,37]		;copy DDT's section
+	HRL B,FORKH
+	HRRI B,37
+	MOVX C,SM%RD!SM%WR!SM%EX!1
+	SMAP%
+	RET
+	ENDSV.
+
+; Listen - listen for a request
+
+LISTEN:	ACVAR <SAVJFN>
+	MOVX A,GJ%SHT
+	HRROI B,TCPSCK
+	GTJFN%			;get handle on port
+	 JMSG <GTJFN failed>
+	HRRZ SAVJFN,A		;save jfn away
+	HRRZS A
+	MOVX B,OF%RD!OF%WR!FLD(^D8,OF%BSZ)!FLD(.TCMWI,OF%MOD)
+	OPENF%			;open connection
+	IFJER.
+	 LOG <TCP open error: %e> ;oops
+	 MOVE A,SAVJFN		;get jfn back
+	 RLJFN%			;release it
+	  NOP
+	 RET			;return to caller
+	ENDIF.
+	AOS NJFNS		;bump up number of connections
+	GDSTS%			;find out who is talking to us
+	 JMSG <GDSTS failed>
+	LOG <Connect from %h>,<C> ;log it
+	CALL GETFRK		;get a fork for this one
+	IFNSK.			;oops, couldn't get a fork
+	 LOG <? can't allocate a fork - %e> ;put in Pearl Harbor file
+	 CALLRET NETCLS		;shut them down
+	ENDIF.
+	MOVE A,SAVJFN
+	STOR A,FKJFN		;store jfn in slot for subfork
+IFN DEBUG,<
+	LOAD A,FH		;fork handle
+	RUNTM%			;get runtime
+	 JMSG <RUNTM failed>
+	STOR A,FKRT		;save runtime
+	STOR C,FKCT		;and console time
+>;IFN DEBUG
+	NOINT			;don't allow interruptions now
+	SETZM FRKACS		;clear fork acs for IPC
+	MOVE A,[FRKACS,,FRKACS+1]
+	BLT A,FRKACS+17
+	LOAD A,FH		;get fork handle
+	MOVE B,SAVJFN		;get jfn for it
+	MOVEM B,FRKACS+INIJFN	;put in right ac
+	SETZM FRKACS+RANK	;tell it is subfork
+	MOVEI B,FRKACS		;addr of acs for subfork
+	SFACS			;set them
+	 JMSG <SFACS failed>
+IFE FTMAP,<
+	LOAD A,FH		;get fork handle
+	MOVEI B,1		;offset 1
+	SFRKV%			;start it up
+	 JMSG <SFRKV failed>
+>;IFE FTMAP
+IFN FTMAP,<
+	LOAD A,FH		;get fork handle
+	MOVEI B,LPD		;start in actual LPD code
+	SFORK%			;start fork
+	 JMSG <SFORK failed>
+>;IFN FTMAP
+	SETONE FKRUN		;flag fork is running
+	AOS NRUN		;bump count up by one
+	OKINT			;okay to be interrupted now
+	RETSKP			;return success
+	ENDAV.
+.ENDPS
+
+ 
+;LPD work routines
+
+;Main routine of actual code that talks to remote hosts
+.PSECT ICODE			;get in right code segment
+
+;subfork starts here
+LPD:	MOVEM INIJFN,NETJFN	;save our connection jfn
+	MOVEM RANK,SUPERF	;and our rank (we are peons)
+	RESET%			;do this for good measure
+	MOVE P,[IOWD PDLEN,PDL]	;set up stack
+	MOVX A,.FHSLF
+	SETOM B,C
+	EPCAP%			;enable all capabilities
+	CALL GETPID		;get pids to talk to quasar
+	IFNSK.			;can't talk to quasar, complain and die
+	 LOG <LPD: Couldn't assign pids - %e>
+	 JRST ISTOP
+	ENDIF.				
+	SKIPE INITF		;do we need to initialize more?
+	 JRST LPD1
+	MOVX A,.FHSLF
+	MOVE B,[XWD LEVTAB,CHNTAB]
+	SIR%			; set up interrupt tables
+	EIR%			; enable interrupts
+	MOVX B,PICHNS
+	AIC%			; active interrupt channels
+	SETZM SPLDIR		; zero out idea of spool dir. #
+	PRINTF <%=%H>,<OURNAM,[-1]> ; get our host name
+	HRROI A,OURNAM
+	CALL LC			; lowercase it
+	SETOM INITF		;we have been initialized
+LPD1:	MOVE A,NETJFN		;get the connection jfn
+	GDSTS%			;get the status
+	 JMSG <GDSTS failed>
+	MOVEM C,HOSTNO		;save remote host addr
+	PRINTF <%=%h>,<REMHST,HOSTNO> ;fill in the blanks
+	CALL ACCCHK		;check access
+	 JRST ISTOP		;no good, halt
+	CALL GETJOB		;go figure out what they want to do and do it
+	IFNSK.			;failure
+	 LOG <GETJOB failed, last error: %e> ;complain
+	ENDIF.
+	SKIPE NETJFN		;do we have a connection still
+	 CALL NETCLS		;flush it
+	SKIPN A,DSKJFN		;still have an open disk file?
+	IFSKP.			;yes,
+	 TXO A,CZ%ABT		;flush it with extreme prejudice
+	 CLOSF%
+	  LOG <Disk file close failed, last error: %e>
+	 SETZM DSKJFN		;deny ever having seen it
+	ENDIF.
+	SKIPN SCNFLG		;need to check for print requests?
+	 JRST ISTOP		;nope, stop
+	CALL SCAN		;yes, scan spool directory
+	 LOG <Scan failed, last error: %e> ;complain about failure
+	CALL EXPSPL		;expunge spool directory
+ISTOP:	HALTF%			;stop
+	HALT .			;really stop!
+
+ACCCHK:
+	MOVEI A,.GTHNS		;convert number to string
+	HRROI B,HSTNAM		;into this location
+	MOVE C,HOSTNO		;with this host number
+	GTHST%			;go call crufty jsys
+IFN PUPSW,<
+	IFJER.			;failed, try pup name
+	 LOAD B,PUPNET		;get pup net num
+	 LOAD C,PUPHST		;and pup host num
+	 HRROI A,HSTNAM
+	 HRLM B,C		
+	 MOVX B,PN%FLD!PN%OCT!C	;50,,316 = Fuji
+	 SETZM D
+	 PUPNM%			;look up host name
+	 IFJER.
+	  LOG <PUPNM% failed on %h>,<HOSTNO> ;
+	 ENDIF.
+	ENDIF.
+>;IFN PUPSW
+IFE PUPSW,<
+	IFJER.			;failed, use dot notation
+	 PRINTF <%=%h>,<HSTNAM,HOSTNO> 
+	ENDIF.
+>;IFE PUPSW
+IFN STANSW,<
+IFE NICSW,<
+	MOVE A,HSTNAM
+	TRZ A,77777
+	CAME A,[BYTE (7) "S","U","-",0,0] ;SU- prefix?
+	IFSKP.			;yes, strip it off
+>;IFE NICSW
+	 MOVE B,[POINT 7,HSTNAM]
+IFE NICSW,<
+	 MOVE C,[POINT 7,HSTNAM,6+7+7] ;point at first non-prefix char
+>;IFE NICSW
+IFN NICSW,<
+	MOVE A,HSTNAM
+	TRZ A,377
+	MOVE C,[POINT 7,HSTNAM]
+	CAMN A,[BYTE (7) "S","R","I","-",0]	;SRI- prefix?
+	 MOVE C,[POINT 7,HSTNAM,6+7+7+7] ;point at first non-prefix char
+>;IFN NICSW	
+ACCCH0:	 ILDB A,C
+	 CAIN A,"."		;go until ".ARPA"
+	  MOVEI A,0
+	 IDPB A,B
+	 JUMPN A,ACCCH0		;loop until we hit null
+IFE NICSW,<
+	ENDIF.
+>;IFE NICSW
+>;IFN STANSW
+	CALL CHKOK		;make sure this site is legit
+	IFNSK.
+	 LOG <host is not authorized to talk to us>
+	 PRINTF <%plpd: sorry, your host (%s) isn't authorized to talk to me%n>,<NETJFN,REMHST>
+	 CALLRET NETCLS		; close down the connection
+	ENDIF.
+	MOVE A,NETJFN
+	MOVEI B,.TCRTW		; read a word from the TCB
+	MOVEI C,11		; this location
+	TCOPR%
+	 JMSG <TCOPR to read foreign port failed>
+	HRRZS C			; make sure we only get right half
+	CAIGE C,^D1024		; should be less than ^D1024
+	IFSKP.
+	 LOG <Foreign port of %d from host %s not allowed access>,<c,remhst>
+	 PRINTF <%plpd: sorry, illegal foreign port (%d)%n>,<netjfn,c>
+	 CALLRET NETCLS			; close down the connection
+	ENDIF.
+	RETSKP
+;;; This code could be used as part of a more complex access checking routine
+REPEAT 0,<
+	MOVE C,HOSTNO		; get the host number
+	AND C,LCLMSK		; keep the interesting bits
+	CAMN C,LCLNET		; local network host?
+	 RETSKP			; yes, return success
+	MOVSI D,-NWLD		; make an aobjn pointer
+	DO.
+	 MOVX A,.WLSTR
+	 HRRO B,WLDHST(D)	; point at the wild host name
+	 HRROI C,REMHST		; and at the remote host name
+	 WILD%			; do they match?
+  	  JMSG <WILD%% failed>	
+	 JUMPE A,RSKP		; if they match, return success
+	 AOBJN D,TOP.		; if other possibilities, loop
+	ENDDO.
+	LOG <host is not authorized to talk to us>
+	PRINTF <%plpd: sorry, your host (%s) isn't authorized to talk to me%n>,<netjfn,remhst>
+	CALLRET NETCLS			; close down the connection
+>;REPEAT 0
+
+; chkok - check that site can talk to us
+; this is the routine to change for customizing access checking
+; this version merely checks to make sure that there is an account with
+; the name PS:<SITE> on the local host.  In the PRINT routine, we will
+; check further to make sure there exists PS:<SITE.USER> so that we have
+; someone to whom to bill the request.
+
+CHKOK:
+ifn nicsw,<
+	retskp
+>
+IFN STANSW&<LOTSW!CSLISW>,<
+	RETSKP				; Allow all prints at LOTS
+>;IFN STANSW&<LOTSW!CSLISW>
+	STKVAR <<TEMP,25>>
+	HRROI A,TEMP
+	SETZM TEMP
+	MOVEI B,25-1(A)
+	HRLI A,1(A)
+	MOVSS A
+	BLT A,(B)		;clear out temp string space
+	HRROI A,TEMP		;point at temporary string space
+	HRROI B,[ASCIZ/PS:</]	;>
+	CALL CPYSTR
+	HRROI B,HSTNAM		;PS:<FUJI
+	CALL CPYSTR			
+	MOVEI B,">"		;PS:<FUJI>
+	IDPB B,A
+	SETZ B,			
+	IDPB B,A
+	MOVX A,RC%EMO		;exact match only, please
+	HRROI B,TEMP
+	RCDIR%			;is there is a valid acct. for site?
+	TXNE A,RC%NOM
+	 RET
+	RETSKP
+	ENDSV.
+
+; getjob - read a job from the remote lpd
+
+; returns +1 always, with the connection closed
+
+GETJOB:	MOVX A,REQINT			; get input timeout interval
+	CALL ALARM			; set up timer interrupt
+	IFNSK.
+	 LOG <GETJOB: input taking too long>
+	 CALLRET NETCLS			;go flush net connection and return
+	ENDIF.
+	MOVE A,NETJFN			; get the requested function
+	BIN%				; ...
+	 ERJMP NETCLS			; connection must have gone away
+	CAIL B,1
+	CAILE B,NLPREQ			; within range of legal lpd requests?
+	 FATAL (Illegal request code %d%n,b) ; no, fail
+	CALL @LPREQS(B)			; call the requested function
+	 RET				; it failed, return now
+	SKIPE NETJFN			; still have a connection?
+	 CALL NETCLS			; yes, close it now
+	RETSKP
+
+; dispatch table for top-level requests
+
+LPREQS:	IFIW NETEOF			; shouldn't get here
+	IFIW PRODLP			; prod the printer along
+	IFIW LPQJOB			; receive and queue a job
+	IFIW LPQSHT			; return a short queue listing
+	IFIW LPQLNG			; return a long queue listing
+	IFIW LPQRM			; remove a file from the queue
+NLPREQ==.-LPREQS
+
+
+; prodlp - prod the printer along
+
+PRODLP:	CALL GETLPN			; get the printer name
+	 RET				; failed
+	LOG <%s: wakeup request>,<lpname>
+	CALL ACK			; pretend we did something
+	 RET
+	RETSKP
+
+; lpqjob - receive and queue a job
+
+LPQJOB:	CALL ACK			; tell lpd we're here
+	 RET
+	CALL GETLPN			; get the printer name
+	 RET
+	LOG <%s: create request>,<lpname>
+LPQJLP:	CALL ACK			; send an ack
+	 RET				; failed, just returns
+	CALL TMROFF			; reset the timer
+	MOVX A,JOBINT
+	CALL TMRON			; set new timeout interval
+	MOVE A,NETJFN			; get the jfn
+	BIN%				; get the function code
+	 ERJMP RSKP			; on eof, return
+	CAIL B,1
+	CAILE B,NLJREQ			; within range of job requests?
+	 FATAL (Illegal job request %d,b) ; no fail
+	CALL @LPJREQ(B)			; call the requested function
+	 RET				; failed, propagate fail return
+	JRST LPQJLP			; loop for another job request
+
+; dispatch table for job requests
+
+LPJREQ:	IFIW NETEOF			; shouldn't get here
+	IFIW LPDFIN			; clean up - bad data was sent
+	IFIW LPDRCF			; read a cf (control file)
+	IFIW LPDRDF			; read a df (data file)
+NLJREQ==.-LPJREQ
+
+
+; lpdfin - flush queue files (bad data was sent)
+
+LPDFIN:	LOG <%s: cleanup (bad data sent)>,<lpname>
+	RETSKP
+
+; lpdrcf - read an lpd control file
+
+LPDRCF:	CALL GETFIL			; read the file
+	 RET
+	LOG <%s: control file %s>,<lpname,lpdfil>
+	CALL ACK
+	 RET
+	AOS SCNFLG			; say we should scan the queue
+	RETSKP
+
+LPDRDF:	CALL GETFL8			; read an 8-bit file data file
+	 RET
+	LOG <%s: data file %s>,<lpname,lpdfil>
+	CALL ACK
+	 RET
+	RETSKP
+
+; lpqsht and lpqlng - return a queue listing
+
+; since the remote lpq issues only one command at a time, we fake an error
+; so the command loop doesn't try to read another command.  for now, only
+; one kind of listing.
+
+LPQLNG:
+LPQSHT:	STKVAR <TEMP>
+	CALL GETLPN
+	 RET
+	LOG <%s: short queue list request>,<LPNAME>
+	HRROI A,LPNAME			; point at the printer name
+	CALL LISTQ			; get the queue listing
+	 FATAL <listq failed%n>
+	CALL SNDQSR			; 
+	 FATAL <sndqsr failed, last error: %e%n>
+	JUMPE A,RSKP			; if no message text, return now
+	PRINTF <%p%s: %s:
+>,<NETJFN,OURNAM,LPNAME>
+
+LSTQLP:	MOVEM B,TEMP			; save "more" indicator from sndqsr
+	HRRO B,A			; get queue listing text in b
+	MOVE A,NETJFN			; connection jfn
+	SETZM C				; stop on null
+	SOUTR%				; send the queue listing
+	 ERJMP NETEOF
+	SKIPN A,TEMP			; any more messages coming?
+	IFSKP.
+	  CALL RCVQSR			; get the next message
+	   RET				; failed, return now
+	  JRST LSTQLP
+	ENDIF.
+;	MOVE A,NETJFN			; after last message, send a
+;	HRROI B,[BYTE (7) .CHLFD]	;  linefeed
+;	MOVNI C,1
+;	SOUTR%
+;	 ERJMP NETEOF
+	RETSKP
+
+; lpqrm - remove a queue entry from a file
+
+; returns +1 always (lprm only submits one request at a time)
+; note: requests are canceled based on the remote userid, which
+; requires a simple binary patch to quasar (see lpdqsr.mac).
+; if lpdqsr isn't configured for this, the call to cancel will fail,
+; and an appropriate message is sent to the remote user.
+
+LPQRM:	SETZM REQNO
+	SETZM REQUSR
+	SETZM CNBLK
+	MOVE A,[CNBLK,,CNBLK+1]
+	BLT A,CNBLK+CN.MAX		;clear arg block for cancel
+	CALL GETLPN
+	 RET
+	LOG <%s: rm "%s">,<LPNAME,LINE>
+	HRROI A,REMUSR			; point to the remote user name
+	CALL GETWRD
+	 RET
+	HRROI A,REQUSR			; remote requestor (can pr */user:foo)
+	CALL GETWRD
+	 NOP
+	HRROI A,REQNO
+	CALL GETWRD
+	 NOP
+	SKIPN REQNO
+	IFSKP.				;got both foreign requestor and req no
+	 HRROI A,REQNO
+	 MOVX C,^D10
+	 NIN%
+	 IFNSK.
+	  SETZM REQNO			;pretend we never saw req. no
+	 ELSE.
+	  MOVEM B,REQNO			;else save it away
+	 ENDIF.
+	ELSE.				;only got one thing, is it a username or a request number?
+	 HRROI A,REQUSR
+	 MOVX C,^D10
+	 NIN%
+	  JRST LPQRM1			;assume it is username
+	 LDB D,A			;get next character in string
+	 SKIPE D			;is it a terminating null?
+	  JRST LPQRM1			;no, again assume it was username
+	 MOVEM B,REQNO			;save number
+	 SETZM REQUSR			;don't think we have username in future
+	ENDIF.
+LPQRM1:	HRROI A,SUSRNM
+	HRROI B,HSTNAM
+	CALL CPYSTR
+	MOVEI B,"."
+	IDPB B,A
+	HRROI B,REMUSR
+	CALL CPYSTR
+	SETZ B,
+	IDPB B,A
+	LOG <CANCEL PRINT */USER:%s>,<SUSRNM>
+	HRROI A,SUSRNM
+	MOVEM A,CNBLK+CN.RON		;user name
+	HRROI A,[ASCIZ//]		;no job name or mask
+	MOVEM A,CNBLK+CN.JN
+	MOVEM A,CNBLK+CN.JNM
+	MOVE A,REQNO		;request number
+	MOVEM A,CNBLK+CN.REQ
+	HRROI A,SUSRNM
+	SKIPN REQUSR
+	IFSKP.
+	 SETZM PXYUSR
+	 HRROI A,PXYUSR
+	 HRROI B,HSTNAM
+	 CALL CPYSTR
+	 MOVEI B,"."
+	 IDPB B,A
+	 HRROI B,REQUSR
+	 CALL CPYSTR		;remotesite.proxyuser
+	 HRROI A,PXYUSR
+	ENDIF.	
+	MOVEM A,CNBLK+CN.FON	;/user:
+	HRROI A,LPNAME		;printer name
+	MOVEM A,CNBLK+CN.LPT
+	MOVEI A,CNBLK		;address of argument block
+	CALL CANCEL
+	IFSKP.
+	 CALL SNDQSR
+	 IFSKP.
+	  LOG <%s>,<@a>
+	  PRINTF <%p%s
+>,<netjfn,@a>
+	 ELSE.
+	  LOG <cancel/sndqsr failed, last jsys error %e>
+	 ENDIF.
+	ELSE.
+	 PRINTF <%plpd: sorry, I can't do that for you
+>,<netjfn>
+	 LOG <failed to set up cancel request block>
+	ENDIF.
+	RETSKP
+
+; scan - scan the spool are for lpd jobs
+
+SCAN:	SETZM SCNFLG			; clear the flag
+	STKVAR <WLDJFN>
+	MOVX A,GJ%SHT!GJ%IFG
+	HRROI B,SCNFLN
+	GTJFN%				; see if any control files exist
+	 RETSKP				; no, just return
+	MOVEM A,WLDJFN			; save the jfn
+BIGLP:	SETZM MBXHST			; CLEAR JOB-SPECIFIC VARIABLES
+	SETZM MBXUSR
+	SETZM NOTE
+	SETZM LPNAME
+	SETZM SPLFNM
+	SETZM CANFLG
+	SETZM MAIFLG
+	SETZM TRFFLG
+	SETZM DITFLG
+	SETZM PRFLG
+	MOVE A,[SPLFNM,,SPLFNM+1]
+	BLT A,SPLFNM+LINLEN-1
+	HRRZ A,WLDJFN			; CLEAR OUT THE FLAGS
+	MOVX B,OF%RD+FLD(7,OF%BSZ)
+	OPENF%				; OPEN THE NEXT FILE
+	IFJER.
+	 HRRZ A,WLDJFN
+	 RLJFN%				; FAILED, RELEASE THE JFN
+	  ERJMP .+1
+	 RET
+	ENDIF.
+	MOVX C,JS%NAM
+	HRRZ B,A
+	HRROI A,FILNAM
+	JFNS%				; GET THE NAME FIELD OF THE FILENAME
+	 ERJMP R			; (CONTAINS THE UNIX REQUEST NUMBER
+	setz b,
+	idpb b,a
+	HRROI A,LPNAME			;  AND HOST LPR WAS DONE ON)
+	HRRZ B,WLDJFN
+	MOVX C,JS%TYP
+	JFNS%				; GET THE FILE TYPE (WHICH IS THE
+	 ERJMP R			;  PRINTER NAME)
+	HRRZ A,WLDJFN
+	DELF%				; DELETE THE INPUT FILE NOW
+	 ERJMP R
+	
+SCANLP:	HRRZ A,WLDJFN			; GET THE JFN
+	BIN%				; READ A CHARACTER
+	 ERJMP SCNLP9			; FINISH UP ON EOF
+	MOVE D,[XWD -NCMDS,CMDTAB]
+	DO.				; SEARCH TABLE FOR COMMAND HANDLER
+	 HLRZ C,(D)			; GET THE NEXT CHARACTER
+	 CAIE C,(B)			; FOUND A MATCH?
+	 AOBJN D,TOP.
+	 MOVE D,(D)
+	 CALL (D)			; CALL HANDLER WITH JFN IN A
+	  RET				; ROUTINE FAILED?
+	OD.
+	JRST SCANLP
+
+SCNLP9: CALL PRINT			; PRINT LAST FILE IN GROUP
+	 LOG <Print after cf end-of-file failed>
+	HRRZ A,WLDJFN			; GET THE JFN
+	TXO A,CO%NRJ
+	CLOSF%				; CLOSE IT, BUT DON'T RELEASE IT
+	IFJER.
+	  LOG <Couldn't CLOSF% WLDJFN in SCAN, last error:  %e>
+	ENDIF.
+	MOVE A,WLDJFN			; GET THE JFN
+	GNJFN%				; STEP IT
+	 RETSKP				; NO MORE FILES, SO RETURN SUCCESS
+	JRST BIGLP			; MORE TO GO, SO PRINT THEM
+
+
+;expunge spool directory
+EXPSPL:	SKIPN B,SPLDIR
+	IFNSK.
+	 MOVX A,RC%EMO
+IFE STANSW&LOTSW,<
+	 HRROI B,[ASCIZ/PS:<SPOOL>/]
+>;IFE STANSW&LOTSW
+IFN STANSW&LOTSW,<
+	 HRROI B,[ASCIZ/SPOOL:/]
+>;IFN STANSW&LOTSW
+	 RCDIR%
+	 TXNE A,RC%NOM
+	  RET				;PUNT IF COULDN'T FIND IT
+	 MOVEM C,SPLDIR
+	 MOVE B,C
+	ENDIF.
+	SETZM A
+	DELDF%				;EXPUNGE!
+	RET
+
+
+;Dispatch table for control file commands
+
+DEFINE CMD (CHAR,ADDR) <XWD "CHAR",ADDR>
+
+CMDTAB:	PHASE 0
+;	CMD J,GETJNM		; J - "job name" on banner page
+	CMD H,SETHST		; H - "host name" of machine where lpr was done
+	CMD P,SETUSR		; P - "person" user's login name
+	CMD f,GETFNM		; f - "file name" name of text file to print
+	CMD l,GETFNM		; l - "file name" text file with control chars
+	CMD p,GTFNPR		; p - "file name" text file to print with pr(1)
+	CMD N,DONOTE		; N - "name" of file (used by lpq)
+	CMD T,PRTITL		; T - "title" for pr
+	CMD M,SETMAI		; M - "mail" to user when done printing
+	CMD d,FLUSH		; d - "file name" dvi file to print - NOP as LSRSPL handles correctly and other case is too hard
+	CMD D,FLUSH		; D - "document control" passed to filter
+	CMD C,FLUSH		; C - "class name" on banner page
+	CMD L,FLUSH		; L - "literal" user's name to print on banner
+	CMD I,FLUSH		; I - "indent" amount to indent output
+	CMD t,FLUSH		; t - "file name" troff(1) file to print
+	CMD n,FLUSH		; n - "file name" ditroff(1) file to print
+	CMD g,FLUSH		; g - "file name" plot(1G) file to print
+	CMD v,FLUSH		; v - "file name" plain raster file to print
+	CMD c,FLUSH		; c - "file name" cifplot file to print
+	CMD 1,FLUSH		; 1 - "R font file" for troff
+	CMD 2,FLUSH		; 2 - "I font file" for troff
+	CMD 3,FLUSH		; 3 - "B font file" for troff
+	CMD 4,FLUSH		; 4 - "S font file" for troff
+	CMD U,FLUSH		; U - "unlink" name of file to remove (after printing)
+NCMDS:!	XWD 0,FLUSH		; default is ignore the line
+	DEPHASE
+
+FILTAB:	PHASE 0
+	"p",,PRFILT	;run pr(1)
+	"t",,TRFILT	;run troff(1)
+	"n",,DTRFLT	;run ditroff(1)
+	"g",,PLFILT	;run plot(1g)
+	"v",,RSTFLT	;raster file
+	"c",,CIFFLT	;cifplot file
+NFILTS:!0
+	DEPHASE
+
+
+; PRINT - PRINT A FILE
+
+; This routine is called whenever we encounter a l,p, or f command while
+; scanning the cf file, and we already have a file to be printed in SPLFNM, and
+; after we have read all of the CF file, to handle the last file in the CF
+; file.  The reason it's done this way, rather than from the more intuitive
+; f,l, or p commands in the table above, is because LPD passes the original
+; name of the spool file *after* it tells us which file we should be printing.
+; LPD makes two passes over the control file, so it's less sensitive to the
+; order in which the CF commands are given.
+
+PRINT:	STKVAR <<TEMP,25>,JFN>
+	SKIPE SPLFNM			; ANY FILE TO PRINT?
+	IFSKP.
+	 LOG <PRINT called and no spool file present>
+	 RET
+	ENDIF.
+	MOVX A,GJ%SHT+GJ%OLD
+	HRROI B,SPLFNM
+	GTJFN%				; TRY TO GET A JFN ON THE FILE
+	IFNSK.
+	 LOG <Couldn't find %S (%E)>,<SPLFNM>
+	 JRST PRINT2
+	ENDIF.
+	MOVEM A,JFN			; SAVE IT
+	SETZM USRNAM
+	MOVE A,[POINT 7,USRNAM]
+	MOVE B,[POINT 7,REMUSR]
+PRINT0:	ILDB C,B
+	CAIE C,"!"			;IS IT A "!"?
+	IFSKP.
+	 CALL CPYSTR			;YES, REST MUST BE USERNAME, COPY IT
+	 SETZ B,
+	 IDPB B,A			;TIE OFF WITH NULL
+	ELSE.
+	 SKIPE C			;END OF STRING
+	 IFSKP.				;YES
+	  LOG <Couldn't find username in REMUSR> ;OOPS, TROUBLE
+	  RET
+	 ENDIF.
+	 JRST PRINT0			;NO, GET NEXT CHARACTER
+	ENDIF.
+	HRROI A,SUSRNM			;ASSEMBLE FUJI.SATZ IN SUSRNM
+IFE STANSW&<LOTSW!CSLISW>,<
+	HRROI B,HSTNAM			;JUST LOOK FOR THE SAME USER AT LOTS
+	CALL CPYSTR
+	MOVEI B,"."
+	IDPB B,A
+>;IFE STANSW&<LOTSW!CSLISW>
+	HRROI B,USRNAM
+	CALL CPYSTR			
+	SETZ B,
+	IDPB B,A
+	HRROI A,TEMP			;MAKE PS:<FUJI.SATZ> IN TEMP
+	HRROI B,[ASCIZ/PS:</]		;>
+	CALL CPYSTR
+	HRROI B,SUSRNM
+	CALL CPYSTR			;<
+	MOVEI B,">"
+	IDPB B,A
+	SETZ B,
+	IDPB B,A
+IFE NICSW,<
+	MOVX A,RC%EMO
+	HRROI B,TEMP
+	RCDIR%				;IS THERE IS A VALID ACCT. FOR SITE?
+	JRST PRINT1
+	TXNE A,RC%NOM
+	 JRST CANPRT			;NO, CAN IT
+>;IFE NICSW
+PRINT1:	CALL MNGNOT			;MUNG NOTE FIELD INTO TRFLNM
+	SKIPN PRFLG			;NEED TO RUN pr(1)?
+	IFSKP.
+	 MOVE A,JFN			;get the jfn for swapping trickery
+	 CALL DOPR			;run pr(1) over the file
+	  CALL CANPRT			;some error, cancel this
+	 MOVEM A,JFN			;stash new jfn
+	ENDIF.
+ifn nicsw,<
+;check if file is postscript, if so set it's file class field
+;jfn on file is JFN, filename is TRFLNM
+	move a,[point 7,trflnm]
+ckifpl:	ildb b,a
+	jumpe b,notps
+	caie b,"."
+	 jrst ckifpl
+	ildb b,a
+	caie b,"p"
+	 jrst ckifpl
+	ildb b,a
+	caie b,"s"
+	 jrst ckifpl
+	ildb b,a
+	jumpe b,setfps		; ahh, plain old postscript extension
+	caie b,"."		; maybe has a generation number too?
+	 jrst ckifpl		; no, skip it then
+
+setfps:	move a,jfn
+	hrli a,.fbctl		; change that word
+	movx b,fb%fcf		; change the file class field
+	movx c,fld(.fbps,fb%fcf)	; ...
+	chfdb%
+notps:	
+	move a,[point 7,temp]
+	movei b,175
+	idpb b,a
+	move b,[point 7,trflnm]
+	setz c,
+	SOUT%
+	move a,jfn
+	hrli a,.sflwr
+	hrroi 2,temp
+	SFUST%			;set for spoolers to get file name
+	 erjmp .+1
+>
+	MOVE A,JFN
+IFE NICSW,<
+	HRROI B,SUSRNM			; USE "FUJI.SATZ" AS REQUEST OWNER
+>
+IFN NICSW,<
+	HRROI B,MBXUSR			; USE USER NAME AS OWNER, DUH.
+>
+	HRROI C,LPNAME			; GET PRINTER NAME
+	HRROI D,TRFLNM			; USE TRUNCATED FILENAME AS NOTE
+	CALL CREATE			; SEND IT ALL OFF TO QUASAR
+	IFSKP.
+	 LOG <Print %S for %S@%S on %S printer, job note "%S">,<LINE,MBXUSR,MBXHST,LPNAME,TRFLNM>
+	 AOS (P)
+	ENDIF.
+	MOVE A,JFN
+	RLJFN%			; RELEASE THE FILE HANDLE IN ANY CASE
+	 ERJMP .+1
+PRINT2:	SKIPE MAIFLG		;WANT MAIL SENT?
+	CALL DOMAIL		;YES, SEND IT
+	SETZM SPLFNM		; FLUSH THE SPOOL FILE NAME
+	SETZM NOTE		; AND THE NOTE
+	RET			; AND RETURN ACCORDING TO CREATE
+
+
+;HERE TO CAN A PRINT REQUEST 
+CANPRT:	MOVE A,JFN
+	RLJFN%
+	 ERJMP .+1
+IFN DEBUG,<	
+	LOG <CANPRT: canning print request for file %s%n last error: %e>,<SPLFNM>
+>;IFN DEBUG
+	SETOM CANFLG
+	SKIPE MAIFLG		;Want to send mail?
+	CALL DOMAIL		;Do it, tell bad news
+	SETZM SPLFNM
+	SETZM NOTE
+	RET
+	ENDSV.
+
+
+;HERE TO RUN pr(1) OVER FILES
+;TAKES A/JFN of input file
+;RETURNS A/JFN of output file, input jfn has been closed and discarded
+
+DOPR:	STKVAR <JFN1,JFN2,PRFORK,PRJFN,PRIJFN,PROJFN,<NMBUF,40>>
+	MOVEM A,JFN1			;save input jfn
+	MOVX A,CR%CAP			;make a fork with our caps
+	SETZ B,
+	CFORK%
+	IFJER.				;mutant!
+	 LOG <CFORK% in DOPR failed, last error: %e>
+	 RET
+	ENDIF.
+	MOVEM A,PRFORK			;save handle on child
+	MOVX A,GJ%SHT!GJ%OLD		;file must exist
+	HRROI B,[ASCIZ/SYS:PR.EXE/]	;program to run
+	GTJFN%
+	IFJER.				;it didn't, oh well
+	 LOG <Couldn't find SYS:PR.EXE in DOPR, last error: %e>
+	 RET
+	ENDIF.
+	HRRZM A,PRJFN
+	HRL A,PRFORK
+	GET%				;put it in child's address space
+	IFJER.
+	 LOG <GET% in SYS:PR.EXE failed, last error: %e>
+	 RET
+	ENDIF.
+	HRROI A,NMBUF			;copy name from jfn here
+	MOVE B,JFN1
+	MOVX C,FLD(.JSAOF,JS%DEV)!FLD(.JSAOF,JS%DIR)!FLD(.JSAOF,JS%NAM)!FLD(.JSAOF,JS%TYP)!JS%PAF			;<SPOOLING-DIRECTORY>FOOBAR.BAZ
+	JFNS%
+	IFJER.
+	 LOG <Couldn't form filename for output file in DOPR, last error: %e>
+	 RET
+	ENDIF.
+	MOVE A,JFN1
+	HRLI A,.FBBYV
+	MOVX B,FLD(-1,FB%RET)
+	MOVX C,FLD(1,FB%RET)		;force gen retent. count to 1
+	CHFDB%
+	IFJER.
+	 LOG <Couldn't CHFDB% input file in DOPR, last error: %e> ;cont., non-fatal
+	ENDIF.
+	MOVX A,GJ%SHT!GJ%FOU!GJ%NEW
+	HRROI B,NMBUF
+	GTJFN%
+	 RET
+	MOVX B,FLD(^D7,OF%BSZ)!OF%WR
+	OPENF%
+	 RET
+	MOVEM A,JFN2
+	MOVE A,JFN1
+	MOVX B,FLD(^D8,OF%BSZ)!OF%RD
+	OPENF%
+	 RET
+DOPR1:	MOVE A,JFN1
+	MOVE B,[POINT 8,FCPYBF]
+	MOVNI C,FCPLEN*4-1
+	SIN%
+	 ERJMP CPEOF
+	MOVE A,JFN2
+	MOVE B,[POINT 8,FCPYBF]
+	MOVNI C,FCPLEN*4-1
+	SOUT%
+	JRST DOPR1
+CPEOF:	ADDI C,FCPLEN*4-1		;assume EOF
+	MOVNS C
+	MOVE B,[POINT 8,FCPYBF]
+	MOVE A,JFN2
+	SOUT%
+	CLOSF%
+	IFJER.
+	  LOG <Couldn't CLOSF% JFN2 in DOPR, last error:  %e>
+	ENDIF.
+	MOVE A,JFN1
+	CLOSF%
+	IFJER.
+	  LOG <Couldn't CLOSF% JFN1 in DOPR, last error:  %e>
+	ENDIF.
+IFN 0,<
+	CALL POPEN			;get a pipe
+	IFNSK.				;oops, got lung cancer!
+	 LOG <POPEN called in DOPR failed, last error %e> ;our dying gasp...
+	 RET
+	ENDIF.
+	MOVEM A,PROJFN
+	MOVEM B,PRIJFN
+	MOVE A,PRFORK
+	HRLO B,PRIJFN			;input from pipe, output to cntr. term
+	SPJFN%
+	IFJER.
+	 LOG <Couldn't SPJFN% inferior in DOPR, last error: %e>
+	 RET
+	ENDIF.
+>;IFN 0
+	HRROI A,RSBUF
+	HRROI B,[ASCIZ/PR </]	;>
+	SETZB C,D
+	SOUT%
+	HRROI B,NMBUF
+	SOUT%				;<
+	HRROI B,[ASCIZ/ >/]
+	SOUT%
+	HRROI B,NMBUF
+	SOUT%
+	SKIPN TITLE
+	IFSKP.
+	 HRROI B,[ASCIZ/ -h /]
+	 SOUT%
+	 MOVEI B,42		;"
+	 IDPB B,A
+	 HRROI B,TITLE
+	 SOUT%
+	 MOVEI B,42
+	 IDPB B,A
+	ENDIF.
+	MOVEI B,.CHCRT
+	IDPB B,A
+	MOVEI B,.CHLFD
+	IDPB B,A
+	MOVEI B,0
+	IDPB B,A
+IFN 0,<
+	MOVE A,PROJFN
+	HRROI B,RSBUF
+	SETZB C,D
+	SOUTR%
+	IFJER.
+	 LOG <SOUTR% in DOPR failed, last error: %e>
+	 RET
+	ENDIF.
+	CLOSF%
+	IFJER.
+	  LOG <Couldn't CLOSF% PROJFN in DOPR, last error:  %e>
+	ENDIF.
+>;IFN 0
+IFE 0,<
+	HRROI A,RSBUF
+	RSCAN%
+	IFJER.
+	 LOG <RSCAN to PR failed, last error: %e>
+	 RET
+	ENDIF.
+	MOVX A,.RSINI
+	RSCAN%
+	IFJER.
+	 LOG <RSCAN .RSINI failed, last error: %e>
+	 RET
+	ENDIF.
+>;IFE 0
+	MOVE A,PRFORK
+	SETZ B,
+	SFRKV%				;start it up
+	IFJER.
+	 LOG <Couldn't SFRKV% inferior in DOPR, last error: %e>
+	 RET
+	ENDIF.
+	WFORK%				;wait for it to finish
+	KFORK%				;terminate
+	MOVX A,GJ%SHT!GJ%OLD
+	HRROI B,NMBUF
+	GTJFN%				;get jfn on file
+	IFJER.
+	 LOG <Couldn't re-GTJFN% output file in DOPR, last error: %e>
+	 RET
+	ENDIF.
+	HRRZS A				;return it, success return
+	RETSKP
+
+
+;POPEN - create and open a pipe
+;Returns +1 failure, T1/ error code
+;        +2 success, T1/ JFN on write side
+;                    T2/ JFN on read side
+
+POPEN:  STKVAR <<PIPSTR,10>,WRTJFN,REDJFN>      ;Local storage
+        MOVX T1,GJ%SHT          ;Using short form
+        HRROI T2,[ASCIZ/PIP:/]  ;A pipe with default size buffers
+        GTJFN%                  ;Create an instance of a pipe device
+         ERJMP R
+        MOVEM T1,WRTJFN         ;Save JFN, use it for the write side
+        HRROI T1,PIPSTR         ;Write string into this buffer
+        MOVE T2,WRTJFN          ;Get back the first JFN
+        MOVE T3,[1B2!1B8!JS%PAF] ;Output device and filename w/punc
+        JFNS%                   ;Build a second string for GTJFN%
+        MOVEI T3,"."            ;Get dot to separate name and extension
+        IDPB T3,T1              ;Tack on the dot
+        MOVE T2,WRTJFN          ;Get back that JFN
+        MOVX T3,1B8             ;Output filename again, no punc.
+        JFNS%                   ;Create "PIP:#.#"
+        SETZ T3,                ;Get a null byte
+        IDPB T3,T1              ;Tie off the second GTJFN% string
+        MOVX T1,GJ%SHT          ;Using short form
+        HRROI T2,PIPSTR         ;Point to string we just built
+        GTJFN%                  ;Get a JFN on the other side of pipe
+         ERJMP R
+        MOVEM T1,REDJFN         ;Use that as the read side
+        MOVE T1,WRTJFN          ;Get the JFN to use for the write side
+        MOVE T2,[FLD(7,OF%BSZ)!OF%WR]   ;7-bits, write access
+        OPENF%                  ;Create write side
+         ERJMP R
+        MOVE T1,REDJFN          ;Get the JFN to use for the read side
+        MOVE T2,[FLD(7,OF%BSZ)!OF%RD]   ;7-bits, read access
+        OPENF%                  ;Create read side
+         ERJMP R
+        MOVE T1,WRTJFN          ;Return write JFN (input side)
+        MOVE T2,REDJFN          ;Return read JFN (output side)
+        RETSKP                  ;Skip return to caller
+
+
+
+;DOMAIL - SEND MAIL TO USER
+;Offsets for argument block
+.QMLEN==:0			;Length of block (including this word)
+.QMFRM==:1			;Pointer to FROM field
+.QMTO==:2			;Pointer to TO field
+.QMSUB==:3			;Pointer to SUBJECT field
+.QMMSG==:4			;Pointer to message body
+.QMSND==:5			;Pointer to Sender field
+.QMMAX==:6			;Maximum length of argument block
+
+DOMAIL:	HRROI A,MAILDS		;point at buffer for destination
+	SKIPN MBXUSR		;do we have a user?
+	 RET			;nope, quit now
+	HRROI B,MBXUSR
+	SETZM C
+	SOUT%
+	SKIPN MBXHST
+	 RET
+	HRROI B,MBXHST
+	MOVEI C,"@"		;USER@
+	IDPB C,A
+	SETZM C
+	SOUT%			;USER@HOST
+	MOVEI B,0
+	IDPB B,A
+	HRROI A,MAILDS
+	MOVEM A,MAIARG+.QMTO	;stuff argument block (to)
+	SETZM A,MAIARG+.QMFRM	;let SNDMAI fill this in
+	MOVEI A,5
+	MOVEM A,MAIARG+.QMLEN	;length
+	HRROI A,MSGBUF
+	HRROI B,[ASCIZ/Your print request /]
+	SETZM C
+	SOUT%
+	SKIPN TRFLNM
+	IFSKP.
+	 HRROI B,TRFLNM
+	 SOUT%
+	ENDIF.
+	HRROI B,[ASCIZ/ has been cancelled.
+/]
+	SKIPN CANFLG
+	 HRROI B,[ASCIZ/ has been queued for printing.
+/]
+	SOUT%
+	MOVEI B,0
+	IDPB B,A
+	HRROI A,MSGBUF
+	MOVEM A,MAIARG+.QMMSG
+	MOVEI A,MAIARG
+	CALL SNDMAI
+	 LOG <Failed to send mail to %s@%s>,<MBXUSR,MBXHST>
+	RET
+
+;Mung note field into truncated filename
+MNGNOT:	STKVAR <SAVPOS>
+	MOVE B,[POINT 7,NOTE]		;POINT AT ORIGINAL NOTE FIELD
+	MOVEM B,SAVPOS			;SAVE THAT AS 
+MNGNT0:	ILDB A,B			;GET A CHARACTER
+	CAIN A,"/"			;IS IT A "/"?
+	 MOVEM B,SAVPOS			;SAVE THIS POSITION
+	SKIPE A				;EOS?
+	 JRST MNGNT0			;NOPE, LOOP BACK
+	SETZM TRFLNM		
+	MOVE A,[TRFLNM,,TRFLNM+1]
+	BLT A,TRFLNM+20-1		;CLEAR IT OUT TO AVOID LOSSAGE
+	HRROI A,TRFLNM			;THIS IS WHERE WE WANT TRUNC'D FILENAME
+	MOVE B,SAVPOS			;GET WHERE WE SAW LAST "/"
+	CAME B,[POINT 7,NOTE]		;WHAT WE STARTED WITH?
+	 IBP B				;NOPE, ADVANCE OVER "/"
+	CALLRET CPYSTR			;JUMP INTO STRING COPY ROUTINE, RETURN
+	ENDSV.
+	
+
+
+; GETFNM - READ THE REMOTE FILENAME AND BUILD THE SPOOL FILE NAME
+
+; A/ JFN
+
+GETFNM:	ACVAR <JFN>			; SAVE JFN IN CASE WE CALL PRINT
+	MOVE JFN,A			; ...
+	SKIPN SPLFNM			; DO WE ALREADY HAVE A SPOOL FILE?
+	IFSKP.
+	 PUSH P,A			; SAVE THE JFN
+	 CALL PRINT			; YES, PRINT IT
+	  LOG <Print failed within multiple file group>
+	 POP P,A
+	ENDIF.
+	PRINTF <%=%S!%S>,<REMUSR,MBXHST,MBXUSR>	; CREATE OWNER STRING
+	MOVE A,JFN			; RESTORE THE JFN
+	HRROI B,LINE			; SET UP DESTINATION
+	CALL CMDLIN			; GET THE COMMAND LINE
+	 RET				; FAILED?
+	HRROI A,LINE			; POINT TO FILENAME
+	CALL QUOTE			; QUOTE CHARS FOR CASE INSENSITIVITY
+IFE STANSW&LOTSW,<
+	PRINTF <%=PS:<SPOOL>%S.%S>,<SPLFNM,LINE,LPNAME>
+>;IFE STANSW&LOTSW
+IFN STANSW&LOTSW,<
+	PRINTF <%=SPOOL:%S.%S>,<SPLFNM,LINE,LPNAME>
+>;IFN STANSW&LOTSW
+	ENDAV.				; FLUSH THE ASUBR SYMBOL
+	RETSKP				; ALL DONE
+
+
+; GTFNPR - GET FILE NAME FOR PR AND GO THROUGH GETFNM STUFF
+
+; A/JFN
+
+GTFNPR:	SETOM PRFLG
+	CALLRET GETFNM
+
+; PRTITL - SET UP TITLE FOR PR
+
+; A/JFN
+
+PRTITL:	SKIPE TITLE		; DO WE ALREADY HAVE A TITLE?
+	 LOG <Second T command found - this shouldn't happen>
+	HRROI B,TITLE		;SET DESTINATION
+	CALLRET CMDLIN		;GET COMMAND LINE
+
+
+; SETMAI - SEND MAIL AFTER PRINTING (QUEUEING, ACTUALLY)
+
+;A/JFN
+
+SETMAI:	SETOM MAIFLG		;WANT TO SEND MAIL WHEN DONE
+	HRROI B,LINE
+	CALLRET CMDLIN			;into the bitbucket with them bits!
+
+
+; DONOTE - SET UP THE NOTE STRING
+
+; A/ JFN
+
+DONOTE:	SKIPE NOTE			; DO WE ALREADY HAVE A NOTE?
+	 LOG <Second N command found - this shouldn't happen>
+	HRROI B,NOTE			; SET UP DESTINATION
+	CALLRET CMDLIN			; GET THE COMMAND LINE
+
+; SETHST - SET UP HOSTNAME FOR SENDING MAIL
+
+; A/ JFN
+
+SETHST:	HRROI B,MBXHST
+	CALLRET CMDLIN
+
+; SETUSR - SET UP USERNAME FOR SENDING MAIL
+
+; A/ JFN
+
+SETUSR:	HRROI B,MBXUSR
+	CALLRET CMDLIN
+
+; FLUSH - IGNORE THE CURRENT INPUT LINE
+
+; A/ JFN
+IFE DEBUG,<
+FLUSH:	HRROI B,LINE
+	CALLRET CMDLIN
+>;IFE DEBUG
+IFN DEBUG,<
+FLUSH:	LSH C,^D<36-7>
+	MOVEM C,SAVCHR
+	HRROI B,LINE
+	CALL CMDLIN
+	 LOG <failure return from CMDLIN in FLUSH - %e>
+	LOG <flushing control card %s %s>,<SAVCHR,LINE>
+	RETSKP
+>;IFN DEBUG
+
+	SUBTTL MISCELLANEOUS ROUTINES
+
+; ACK - TELL REMOTE LPD WE'RE STILL WITH HIM
+;
+; RETURNS:
+;	+1 FAILURE, CONNECTION CLOSED
+;	+2 SUCCESS
+
+ACK:	MOVE A,NETJFN			; TELL LPD WE'RE HERE
+	HRROI B,[0]			; SEND A NULL BYTE
+	MOVNI C,1
+	SOUTR%				; SEND A NULL
+	 ERJMP NETEOF			; CLOSE CONNECTION ON ERROR
+	RETSKP				; OTHERWISE, RETURN SUCCESS
+
+; NAK - SEND NEGATIVE ACKNOWLEDGEMENT AND FAIL RETURN
+;
+; RETURNS +1 ALWAYS, CONNECTION CLOSED
+
+NAK:	SKIPE NETJFN			; HAVE A JFN?
+	 PRINTF <%p
+%s: LPD: fatal error
+>,<netjfn,ournam>
+	CALLRET NETCLS
+
+; NETEOF - PRINT ERROR MESSAGE AND CLOSE THE NETWORK CONNECTION
+;
+; RETURNS +1 ALWAYS
+
+NETEOF:	LOG <NETEOF: %E>
+	CALLRET NETCLS
+
+; NETCLS - CLOSE THE CONNECTION
+;
+; RETURNS +1 ALWAYS
+
+NETCLS:	SKIPN A,NETJFN			; HAVE A JFN?
+	 JRST NETCL1
+	LOG <Closing connection from %H>,<HOSTNO>
+	MOVX A,CLSINT			; GET TIMEOUT INTERVAL FOR NET CLOSE
+	CALL ALARM			; SET UP NEW TIMER INTERRUPT
+	IFNSK.
+	 LOG <Close timed out>
+	 JRST NETCL1
+	ENDIF.
+	MOVE A,NETJFN			; GET THE JFN
+IFDEF TCOPR%,<
+	MOVEI B,.TCSFN
+	TCOPR%				; SEND A FIN
+	IFJER.
+	 LOG <Can't send FIN: %E>,.+1
+	ENDIF.
+	MOVE A,NETJFN			; GET THE JFN
+>;IFDEF TCOPR%
+	TXO A,CZ%ABT			; ALREADY SENT FIN, DON'T WAIT
+	CLOSF%				; YES, CLOSE IT
+	IFJER.
+	 LOG <close failed, last error: %E>
+	ENDIF.
+NETCL1:	SETZM NETJFN			; CLEAR JFN CELL
+	SETZM HOSTNO			; CLEAR HOST NUMBER
+	SETZM LPNAME			; CLEAR PRINTER NAME
+	RET
+
+
+; GETLPN - READ THE REMOTE PRINTER NAME
+
+GETLPN:	CALL GETLIN			; READ IN CURRENT LINE
+	 RET
+	HRROI A,LPNAME
+	HRROI B,LINE
+	CALL GETWRD			; EXTRACT LINE PRINTER NAME
+	 RET
+	RETSKP				; ALL DONE
+
+; GETFIL - COPY A FILE FROM THE REMOTE LPD TO DISK
+;
+; RETURNS:
+;	+1 FAILED
+;	+2 FILE READ AND WRITTEN TO DISK
+;
+; COUNT/ NEGATIVE COUNT OF REMAINING CHARACTERS 
+;
+; GETFL8 IS AN ALTERNATE ENTRY POINT WHICH SPECIFIES THAT
+; THE FILE IS TO BE OPENED IN 8-BIT MODE.
+
+GETFL8:	SKIPA A,[8]
+GETFIL: MOVEI A,7
+	ACVAR <COUNT,XFRSIZ,FILBSZ>
+	MOVEM A,FILBSZ		; Save the byte size
+	MOVE A,NETJFN		; source is net connection
+	MOVEI C,^D10		; radix is decimal
+	NIN%			; read length of file in chars
+	 ERJMP NETEOF
+	MOVEM B,COUNT		; save it
+	CALL GETLIN		; read rest of current line
+	 RET
+	SETZM LPDFIL
+	MOVE A,[LPDFIL,,LPDFIL+1]
+	BLT A,LPDFIL+LINLEN-1
+	HRROI A,LPDFIL		; destination is filnam
+	HRROI B,LINE		; source is line we just read
+	CALL GETWRD		; extract the filename
+	 RET
+	HRROI A,LPDFIL
+	CALL QUOTE		;quote letters with ^V for case (in)sensitivity
+IFE STANSW&LOTSW,<
+	PRINTF <%=PS:<SPOOL>%S.%S>,<FILNAM,LPDFIL,LPNAME>
+>;IFE STANSW&LOTSW
+IFN STANSW&LOTSW,<
+	PRINTF <%=SPOOL:%S.%S>,<FILNAM,LPDFIL,LPNAME>
+>;IFN STANSW&LOTSW
+	MOVX A,GJ%SHT
+	HRROI B,FILNAM
+	GTJFN%			; get a handle on the spool file
+	 FATAL (Can't get a JFN for %S - %E,FILNAM)
+	MOVEM A,DSKJFN
+	MOVX B,OF%WR		; get the write-access bit
+	MOVE C,FILBSZ		; get the bytesize
+	STOR C,OF%BSZ,B		; store it
+	OPENF%			; open the file for write
+	IFNSK.			;
+	 FATAL (Can't open %S - %E,FILNAM,.+1)
+	 MOVE A,DSKJFN
+	 RLJFN%
+	  ERJMP .+1
+	 SETZM DSKJFN
+	 RET
+	ENDIF.
+FILELP:	MOVE A,NETJFN
+	MOVE B,[POINT 8,BUFFER]	; make an 8-bit byte pointer
+	MOVE C,COUNT		; get the number of characters left
+	MOVEI D,BUFLEN*5-1	; assume 7 bit chars
+	CAIE FILBSZ,^D7		;
+	 MOVEI D,BUFLEN*4-1	; except if 8 bit
+	CAMLE C,D		; greater than buffer length?
+	 MOVEI C,(D)		; yes, subsitute buffer length
+	MOVEM C,XFRSIZ		; remember transfer size we asked for
+	MOVEI D,.CHLFD
+	SIN%			; read some input
+	 ERJMP NETEOF		; connection went away
+	SUB XFRSIZ,C		; update count of characters read
+	MOVE A,DSKJFN		; get destination file jfn
+	MOVE B,[POINT 8,BUFFER]	;
+	MOVN C,XFRSIZ		;
+	SOUT%			;
+	SUB COUNT,XFRSIZ	; update count of remaining characters
+	JUMPN COUNT,FILELP	; if more to read, loop
+	MOVE A,NETJFN		; get the network jfn again
+	BIN%			; get the null we should see here
+	 ERJMP NETEOF		; connection gone?
+	SKIPE B
+	 FATAL (DIDN'T FIND EXPECTED NULL IN STREAM)
+	MOVE A,DSKJFN		; else close the output file
+	CLOSF%			; ...
+	 FATAL (CAN'T CLOSE %S - %E,FILNAM)
+	SETZM DSKJFN
+	ENDAV.			; flush acvar symbols
+	RETSKP			; all done
+
+; GETWRD - EXTRACT A SPACE-DELIMITED TOKEN FROM A LINE
+
+; ACCEPTS:
+;	A/ DESTINATION STRING POINTER
+;	B/ SOURCE STRING POINTER
+; RETURNS:
+;	+1 NO WORD FOUND BEFORE EOL
+;	+2 SUCCESS, WITH IPDATED STRING POINTER IN B
+
+GETWRD:	TLC A,-1		; convert -1,,addr to point 7,addr
+	TLCN A,-1
+	 HRLI A,(POINT 7,)
+	TLC B,-1
+	TLCN B,-1
+	 HRLI B,(POINT 7,)
+	DO.
+	 ILDB C,B		; get a byte
+	 CAIE C,.CHLFD
+	 CAIN C,.CHNUL
+	  RET
+	 CAIE C,.CHTAB			; NULL?
+	 CAIN C,.CHSPC			; SPACE?
+	  LOOP.
+	OD.
+	DO.
+	 IDPB C,A		; got a good byte, deposit it
+	 ILDB C,B		; get another one
+	 CAIE C,.CHNUL		; end of the token?
+	 CAIN C,.CHSPC
+	  EXIT.			; yes, exit loop
+	 CAIE C,.CHLFD		; linefeed?  shouldn't find one
+	 CAIN C,.CHTAB		; tab?  not likely
+	  EXIT.			; one or the other, exit loop
+	 LOOP.			; and loop
+	OD.
+	SETZ C,			; found end of word, make it asciz
+	IDPB C,A
+	RETSKP			; all done
+				
+; GETLIN - GET A LINE FROM THE NETWORK CONNECTION
+
+GETLIN:	MOVE A,NETJFN		; source is the network
+	SETZM LINE
+	MOVE B,[LINE,,LINE+1]
+	BLT B,LINE+LINLEN-1	;clear out line before reading into it
+	HRROI B,LINE
+;	callret cmdlin			; fall through to cmdlin
+
+; CMDLIN - READ A LINE (TERMINATED BY A LINEFEED)
+
+; A/ JFN
+; B/ DESTINATION BYTE POINTER
+
+CMDLIN:	MOVEI C,LINLEN*5-1	; max length (in 7 bit chars)
+	MOVEI D,.CHLFD		; break on linefeed
+	SIN%			; read the printer name
+	 ERJMP R		; failed?
+	LDB D,B			; get the last character
+	CAIE D,.CHLFD		; linefeed?
+	 FATAL (LINE TOO LONG)	; no, forget it
+	SETZ D,				; REMOVE THE TRAILING LINEFEED
+	DPB D,B				; ...
+	RETSKP				; ALL DONE
+
+; LC - LOWERCASE A STRING IN PLACE
+
+LC:	TLC A,-1			; CONVERT -1,,ADDR TO POINT 7,ADDR
+	TLCN A,-1
+	 HRLI A,(POINT 7,)
+LCLP:	ILDB B,A		; get a byte
+	JUMPE B,R		; if null, all done
+	CAIL B,"A"		; uppercase?
+	CAILE B,"Z"		; ...
+	 JRST LCLP		; no, loop
+	ADDI B,"a"-"A"		; yes, convert to lowercase
+	DPB B,A			; and put it back
+	JRST LCLP		; loop for more
+
+; QUOTE - Quote a line with ^V's in place
+; Takes A/ pointer to string
+; Returns: +1 always, 
+QUOTE:	SAVEAC<C>		;save C since we step on it
+	STKVAR <<TEMP,40>>	;big temporary buffer
+	MOVE C,A		;save user's pointer
+	MOVE B,A		;copy from user buffer into our buffer
+	HRROI A,TEMP
+	CALL CPYSTR		;we now have a copy in TEMP
+	MOVE A,C
+	TLC A,-1		;fix up -1,,ADDR into POINT 7,ADDR
+	TLN A,-1		;if needed
+	 HRLI A,(POINT 7,)
+	MOVE B,[POINT 7,TEMP]	;point to our buffer
+QUOTLP:	ILDB C,B		;get a character
+	CAIN C,"."		;a dot?
+	 JRST QUOTL0		;yes, quote it so it isn't filename punc.
+	CAIL C,"a"		;lowercase?
+	 CAILE C,"z"
+	  JRST QUOTL1		;no, just copy it
+QUOTL0:	MOVEI D,""		;get quoting character
+	IDPB D,A		;save in user buffer
+QUOTL1:	IDPB C,A		;save char in user buffer
+	JUMPE C,R		;null, all done, return
+	JRST QUOTLP		;loop back
+
+	ENDSV.
+
+
+; ALARM - TIMER COROUTINE
+;
+; ACCEPTS:
+;	A/	TIME IN MILLISECONDS TO WAIT
+;
+; RETURNS:
+;	+1 CALLER TIMED OUT
+;	+2 TIMER INTERRUPT SET
+;
+; THIS COROUTINE SETS UP A TIMER INTERRUPT AND THEN CALLS IT'S
+; CALLER (WITH WHAT LOOKS LIKE A +2 RETURN).  IF THE CALLER RETURNS
+; BEFORE THE SPECIFIED TIME HAS ELAPSED, THIS ROUTINE JUST RETURNS
+; +1 OR +2 TO THE CALLER'S CALLER, DEPENDING ON HOW THE CALLER RETURNED.
+; IF THE TIMER INTERRUPT OCCURS BEFORE THE CALLER RETURNS, THEN WE
+; RESTORE THE STACK POINTER TO WHAT IT WAS ON ENTRY, AND RETURN +1
+; TO THE CALLER.  THE STACK POINTER IS CHANGED, SO THIS MUST BE CALLED
+; BEFORE ANYTHING THAT DEPENDS ON THAT (LIKE STKVAR), BUT AFTER ROUTINES
+; WHICH RESTORE ACS LIKE SAVEAC, TRVAR, ETC.
+;
+; THE CONTENTS OF THE ACS ARE UNCHANGED AFTER A +2 ROUTINE (EXCEPT FOR
+; CX AND P), BUT INDETERMINATE (EXCEPT FOR P) AFTER A +1 RETURN.
+;
+; N.B. THIS ROUTINE PRECLUDES THE USE OF TIMER INTERRUPTS FOR ANY OTHER
+; PURPOSE. TO BE MORE GENERAL, THIS ROUTINE SHOULD SAVE AND RESTORE ALL ACS,
+; AND MAINTAIN A STACK OF TIMEOUT INTERVALS SO ALARMS CAN BE NESTED AND USED
+; INTERACTIVELY WITH OTHER TIMERS.
+
+ALARM:	CALL TMROFF			; FLUSH ANY OLD TIMERS
+	MOVEM P, TIMERP			; SAVE STACK POINTER FOR TMRINT
+	PUSH P, (P)			; PUSH CURRENT STACK TOP DOWN
+	AOS (P)				; CALCULATE NEW "RETURN ADDRESS"
+	CALL TMRON			; SET UP THE TIMER INTERRUPT
+	CALL @(P)			; CALL OUR CALLER
+	 SKIPA				; PROPOGATE ANY SKIP RETURN
+	  AOS -2(P)			;  BY BUMPING CALLER'S RETURN PC
+	CALL TMROFF			; DISABLE THE TIMER INTERRUPT
+	ADJSP P, -2			; FORGET DUMMY RETURNS ADDR'S
+	RET				; RETURN TO CALLER'S CALLER
+
+
+; TIMER INTERRUPT HANDLER
+
+TMRINT:	MOVE P, TIMERP			; RESTORE STACK POINTER
+	POP P, LEV1PC			; SET UP RETURN TO TIMEIT'S CALLER
+	DEBRK%
+	 ERMSG (CAN'T DISMISS TIMER INTERRUPT)
+
+; TMRON - TURN ON TIMER INTERRUPT
+
+; A/ MILLISECONDS UNTIL TIMER INTERRUPT
+
+TMRON:	SAVEAC <A,B,C>			; SAVE AC'S WE NEED
+	MOVEI C, TMRCHN			; C/ CHANNEL TO INTERRUPT ON
+	MOVE B, A			; B/ TIMEOUT INTERVAL
+	MOVE A, [XWD .FHSLF,.TIMEL]	; A/ FORK,,FUNCTION CODE
+	TIMER%				; SET UP TIMER INTERRUPT
+	 ERMSG (CAN'T SET UP TIMER INTERRUPT)
+	RET				; RETURN
+
+; TMROFF - TURN OFF TIMER INTERRUPT
+
+TMROFF:	SAVEAC <A,B,C>			; SAVE AC'S WE NEED
+	MOVE A, [XWD .FHSLF,.TIMAL]	; A/ FORK.,,FUNCTION CODE
+	SETZB B, C			; NO INTERVAL OR CHANNEL
+	TIMER%				; REMOVE ALL PENDING INTERRUPTS
+	 ERMSG (CAN'T REMOVE PENDING TIMER INTERRUPTS)
+	RET				; RETURN
+
+.ENDPS
+
+
+
+; Storage Definitions
+
+;Per-subfork data
+
+.PSECT IDATA
+PDL:	BLOCK PDLEN
+INITF:	0			;0 if never run before, -1 if initialized
+SUPERF:	0			;0 if inferior, -1 if top level
+SCNFLG:	0
+TIMERP:	0
+LEV1PC:	0			;level 1 pc save location
+LEV2PC:	0			;level 2 pc save location
+LEV3PC:	0			;level 3 pc save location
+SPLDIR:	0			;dir. no. of spooling directory
+HOSTNO:	0			;remote host addr
+NETJFN:	0			;network jfn
+LOGJFN: 0			;logfile jfn
+DSKJFN: 0			;cfa* or dfa* jfn (disk file)
+PRFLG:	0			;use pr for this guy
+DITFLG:	0			;use ditroff for this guy
+TRFFLG:	0			;use troff for this guy
+MAIFLG:	0			;send user mail when done
+CANFLG:	0			;cancelling this guy
+IFN DEBUG,<
+SAVCHR:	0			;character of command card being flushed
+>;IFN DEBUG
+LINE:	BLOCK LINLEN		;line of network input
+BUFFER:	BLOCK BUFLEN		;file buffer
+LPDFIL:	BLOCK LINLEN		;current file name from remote lpd
+FILNAM:	BLOCK LINLEN		;name field of TOPS-20 file name
+SPLFNM:	BLOCK LINLEN		;spool file name
+LPNAME:	BLOCK 20		;name of printer to use
+OURNAM:	BLOCK 20		;our host name
+HSTNAM:	BLOCK 20		;originator's host name
+USRNAM:	BLOCK 20		;originator's user name
+NOTE:	BLOCK 20		;note field for listing
+TITLE:	BLOCK 20		;title for PR
+MBXHST:	BLOCK 20		;mail host (NYI)
+MBXUSR:	BLOCK 20		;mail user (NYI)
+REMUSR:	BLOCK 40		;host!user
+REMHST:	BLOCK 20		;remote internet host name (needed?)
+SUSRNM:	BLOCK 20		;"host.user"
+TRFLNM:	BLOCK 20		;/a/b/c/d -> d
+REQNO:	BLOCK 2			;request number (both text and number)
+REQUSR:	BLOCK 20		;request for this user (/user:)
+PXYUSR: BLOCK 40		;used with REQUSR in LPQRM
+CNBLK:	BLOCK CN.MAX+1		;arg block for cancel (lpdqsr)
+MSGBUF:	BLOCK 20		;message buffer
+MAILDS:	BLOCK 20		;destination of message (foo@site)
+MAIARG:	BLOCK 6			;argument block for SNDMAI
+RSBUF:	BLOCK 50			;rscan buffer for PR and friends
+FCPLEN==5000			;5 pages for copying files from 8 to 7 bits
+FCPYBF:	BLOCK FCPLEN		;buffer for doing so
+.ENDPS
+
+;Main fork data locations
+.PSECT SDATA
+
+NRUN:	0			;active fork count
+NFORKS:	0			;subfork count
+NJFNS:	0			;connection count
+FKSTAT:	BLOCK NFKS		;fork status
+IFN DEBUG,<
+FKTIM1:	BLOCK NFKS		;fork clock time
+FKTIM2:	BLOCK NFKS		;fork cpu time
+>;IFN DEBUG
+FRKACS:	BLOCK 20		;fork acs on inferior startup
+.ENDPS
+
+.PSECT PURE
+IFN DEBUG,<
+CHNTAB:	2,,TMRINT
+	2,,STSINT
+	REPEAT <.ICIFT-<.-CHNTAB>>,<EXP 0>
+	2,,FRKINT
+	REPEAT <^D36-<.-CHNTAB>>,<EXP 0>
+>;IFN DEBUG
+IFE DEBUG,<
+CHNTAB:	2,,TMRINT
+	REPEAT <.ICIFT-<.-CHNTAB>>,<EXP 0>
+	2,,FRKINT
+	REPEAT <^D36-<.-CHNTAB>>,<EXP 0>
+>;IFE DEBUG
+
+LEVTAB:	LEV1PC
+	LEV2PC
+	LEV3PC
+
+EVEC:	JRST START
+	JRST LPD
+	BYTE (3)VWHO(9)VMAJOR(6)VMINOR(18)VEDIT	
+EVECL==.-EVEC
+.ENDPS
+
+END <EVECL,,EVEC>
+

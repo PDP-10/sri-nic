@@ -1,0 +1,3310 @@
+;[SRI-NIC]SRC:<5-GALAXY>PPNSPL.MAC.26, 21-Dec-89 15:11:31, Edit by MKL
+; turn this into PPNSPL
+;[SRI-NIC]SRC:<5-GALAXY>SPDSPL.MAC.17, 10-Oct-89 13:47:15, Edit by MKL
+; modify to let unix host do header page
+;[SRI-NIC]SRC:<5-GALAXY>SPDSPL.MAC.4, 17-Aug-89 22:27:42, Edit by MKL
+; make new PPNSPL into SPDSPL
+;[SRI-NIC]SRC:<5-GALAXY>PPNSPL.MAC.15,  9-Jun-89 13:37:37, Edit by MKL
+; add timeouts and make PLPT: format be "host.printer"
+;[SRI-NIC]SRC:<5-GALAXY>PPNSPL.MAC.2,  2-Jun-89 15:49:28, Edit by MKL
+; make PPNSPL spool to Unix LPD instead of tty
+
+;[SRI-NIC]SRC:<5-GALAXY>PPNSPL.MAC.144, 22-Sep-88 16:01:45, Edit by MKL
+; seperate pippin and speedy into seperate spoolers (ppnspl and psspl)
+;[SRI-NIC]SRC:<5-GALAXY>PSSPL.MAC.140, 31-May-88 14:21:45, Edit by MKL
+; add gross hack at JOBTRL to display file name if came from LPD server
+;[SRI-NIC]XS:<5-GALAXY>PSSPL.MAC.139, 17-Feb-88 11:51:00, Edit by MKL
+;only send control-t's every 7 seconds
+;[SRI-NIC]XS:<5-GALAXY>PSSPL.MAC.137, 19-Nov-87 14:55:37, Edit by MKL
+; at SETPFT, pretend 36 bit files are 7 bit
+;[SRI-NIC]XS:<5-GALAXY>PSSPL.MAC.131,  3-Aug-87 16:20:14, Edit by MKL
+; print header page from papertray 0, fix JFNS% output on header page
+; make userid bigger (usize) and not inversed.
+;XS:<5-GALAXY>PSSPL.MAC.127, 19-May-87 12:27:14, Edit by KNIGHT
+;XS:<5-GALAXY>PSSPL.MAC.125, 19-May-87 10:39:15, Edit by KNIGHT
+;XS:<5-GALAXY>PSSPL.MAC.124, 19-May-87 09:37:52, Edit by KNIGHT
+; Add support for 2up, book and landscape.  Slurp prepend files from SYSTEM:
+;[SRI-NIC]XS:<5-GALAXY>PSSPL.MAC.120, 10-Feb-87 14:47:50, Edit by VIVIAN
+; Up I/O timeout from 5min to 10min
+;[SRI-NIC]XS:<5-GALAXY>PSSPL.MAC.118,  3-Feb-87 13:05:39, Edit by MKL
+; only do one header page per print job
+;XS:<5-GALAXY>PSSPL.MAC.117, 22-Jan-87 11:26:34, Edit by KNIGHT
+; Always output CR's before LF's.
+;[SRI-NIC]XS:<5-GALAXY>PSSPL.MAC.116,  2-Dec-86 17:06:08, Edit by MKL
+; Change SOUTR% to SOUT% because it seems to work a lot faster.
+;[SRI-NIC]XS:<5-GALAXY>PSSPL.MAC.109, 24-Nov-86 13:49:23, Edit by MKL
+; inhibit non-job output for device
+;[SRI-NIC]XS:<5-GALAXY>PSSPL.MAC.106, 21-Nov-86 15:02:46, Edit by MKL
+; send control-D after we hit EOF in PS routine
+;[SRI-NIC]XS:<5-GALAXY>PSSPL.MAC.105, 20-Nov-86 16:31:42, Edit by MKL
+; when printing errors in header, check if 2nd line is really an error
+;[SRI-NIC]XS:<5-GALAXY>PSSPL.MAC.103, 20-Nov-86 15:23:21, Edit by MKL
+; add a missing ENDIF. in IDLCHK
+;[SRI-NIC]XS:<5-GALAXY>PSSPL.MAC.101, 20-Nov-86 14:02:23, Edit by MKL
+; fixed random bugs in header page routine
+;;SRC:<5-GALAXY>PSSPL.MAC.80, 23-Sep-86 09:09:26, Edit by KNIGHT
+;SRC:<5-GALAXY>PSSPL.MAC.77, 15-Aug-86 14:43:31, Edit by KNIGHT
+
+	TITLE	PPNSPL - PostScript printer spooler
+
+COMMENT \
+	This program augments the standard LPTSPL as the lineprinter
+	spooler. It features a number of functions in addition to the
+	normal ones. It handles any number of devices (streams) up to
+	maximum NPRINT which may be changed. Each stream executes in its
+	own subfork. Also, by specifying TCP instead of a TTY as the
+	printing devices PLPTx:, files will be spooled over the
+	net using TCP. 
+
+	Physical LPTs and spooling to mag tape are NOT supported.
+
+	The Forms parameter file SYS:LPFORM.TXT also has a different
+	format as compared to LPFORM.INI, see below.
+
+	This stuff was written in the Fall of 1984 by
+	Bjorn Lindskog, Computer Science Lab, U of W, Seattle
+
+	Well, this sort of came to me by a roundabout route, and I won't
+	claim a lot of responsibility except to say that it seems to work
+	for me. 
+
+	I've added compatibility for PostScript printers and for named units
+	ala Columbia.
+
+	Bob Knight
+	\
+	
+	SEARCH GLXMAC,QSRMAC,ORNMAC,MACSYM,MONSYM
+	PROLOGUE(PPNSPL)
+	.DIRECT	FLBLST
+	.REQUIRE SYS:MACREL
+	SALL				;SUPPRESS MACRO EXPANSIONS
+
+debug==0
+ifndef debug,<debug==0>
+
+;VERSION INFORMATION
+	LPTVER==1			;MAJOR VERSION NUMBER
+	LPTMIN==0			;MINOR VERSION NUMBER
+	LPTEDT==0			;EDIT LEVEL
+	LPTWHO==0			;WHO LAST PATCHED
+	%LPT==<BYTE (3)LPTWHO(9)LPTVER(6)LPTMIN(18)LPTEDT>
+
+;STORE VERSION NUMBER IN JOBVER
+	LOC 137
+.JBVER::EXP %LPT
+	RELOC
+	SUBTTL AC definitions
+
+;Accumulator definitions
+	M==13		;IPCF message address, used by top fork only
+	S==13		;Status flags, used by inferiors only
+	E==14		;Points to current file
+	J==15		;Stream context pointer
+	C==16		;Holds a 'character' i.e. 7 to 36 bits
+
+;Status Flags used in S reg of inferior process
+	ARROW==1B0		;ARROW MODE IN EFFECT
+	SUPFIL==1B1		;NO USER FORM CONTROL
+	ERRFIL==1B3		;Error in file, skip it
+;	CHRCNT==1B4		;Dummy transfer to count characters.
+	TIMCKP==1B5		;Timed checkpoints enabled
+	FCONV==1B6		;THE NEXT CHAR IS FORTRAN FORMAT DATA
+	NEWLIN==1B7		;FLAG FOR THE BEGINING OF LINE
+	FILXFR==1B9		;Xferring a user file i.e. enable page skipping
+	FRMFND==1B10		;Forms found in LPFORM.TXT
+	MINUS==1B11		;Reading a neg. number from LPFORM.TXT
+
+; File types (flags in S):
+	F%PL7==:1B18			; 7-bit plaintext
+	F%PL8==:1B19			; 8-bit plaintext
+	F%PS7==:1B20			; 7-bit PostScript
+	F%PS8==:1B21			; 8-bit PostScript
+	F%PLH7==:1B22			; 7-bit plaintext with page headers
+	F%PLH8==:1B23			; 8-bit plaintext with page headers
+	F%IM7==:1B24			; 7-bit Impress files
+	F%IM8==:1B25			; 8-bit Impress files
+	F%CRSN==:1B26			; Last char seen was a CR
+	F%2UP==:1B27			; Two-up format
+	F%BOOK==:1B28			; Book format
+	F%LAND==:1B29			; Landscape format
+	F%36==:1B30			; was a 36-bit file
+
+	SUBTTL	Parameters
+;Parameters which may be changed at assembly time
+	ND CKPTIM,^D30		;Seconds between checkpoints
+	ND DISTIM,^D600		;Time-out in secs. when dismissed for I/O
+	ND OPBFSZ,^D2000	;Size of output buffer in 8 bit bytes
+	ND IPBFSZ,^D2000	;Size of input (file) buffer in 7 bit bytes
+	ND LGBFSZ,^D5000	;Size of log buffer in 7 bit bytes
+	ND NPRINT,^D5		;Number of devices this spooler handles
+	ND FATERT,%RSUNA	;Bit to set if fatal error (formerly %RSUDE)
+
+;Constant parameters
+	XP MSBSIZ,30		;Size of a message block
+	XP STKSIZ,^D100		;Size of stacks
+	XP DDTSEC,37		;section in which DDT resides
+	SUBTTL	MACROS
+;Macros to generate stream data area
+DEFINE LP(SYM,VAL,FLAG),<
+	IF1,<
+		XLIST
+		IFNDEF J...X,<J...X==PAGSIZ>
+		IFDEF SYM,<PRINTX  ?PARAM SYM USED TWICE>
+		SYM==J...X
+		J...X==J...X+VAL
+		IFNDEF ...BP,<...BP==1B0>
+		IFNDEF ...WP,<...WP==0>
+		REPEAT VAL,<
+		IFIDN <FLAG><Z>,<LPZ(\...WP,...BP)>
+			...BP==...BP_<-1>
+			IFE ...BP,<
+				...BP==1B0
+				...WP==...WP+1
+			>  ;;END IFE ...BP
+		>  ;;END REPEAT VAL
+		LIST
+		SALL
+	>  ;END IF1
+
+	IF2,<
+	.XCREF
+	J...X==SYM
+	.CREF
+	SYM==J...X
+	>  ;END IF2
+>  ;END DEFINE LP
+
+
+DEFINE LPZ(A,B),<
+	IFNDEF ...Z'A,<...Z'A==B>
+	IFDEF ...Z'A,<...Z'A==...Z'A!B>
+>  ;END DEFINE LPZ
+
+
+;Macros used to build dispatch tables
+
+DEFINE	BDTB,<
+	...ST==.
+		EXP 0		;;We don't want to use the 0 entry
+>
+
+DEFINE	DTE(ADDR,CONST),<
+	IF1,<IFDEF CONST,<PRINTX  ?Constant used twice>>
+	CONST==.-...ST
+	EXP	ADDR
+>
+
+DEFINE	EDTB(LEN),<
+	LEN==.-...ST
+>
+
+
+;Macros used in inferiors's code
+
+;The TXT macro is a poor man's implementation of the $TEXT macro. It is
+;used by the inferiors since the original $TEXT in GLXLIB uses
+;non reentrant code.
+;This one uses the reentrant routines TXT.xx for the different functions.
+;It takes three arguments: TXT(type,address,string)
+;Type indicates whether address is the address of routine that outputs the
+;char in C or the address of buffer. <> 0 is buffer.
+;The string accepted has the following format:
+;^<function character><argument>^<function character><argument>...^
+;See macro TFUNC for a listing of the functions.
+;The first function of the string is defaulted to ^! i.e. no function.
+;Note that S1 and S2 are not preserved and cannot be referenced in the
+;string.
+
+;Macros used to build the argument strings
+;Use CLSTR to init, APPSTR(TXT) to add TXT at the end and
+;EXPSTR to get the string back.
+
+DEFINE CLSTR <
+    DEFINE APPSTR (FTXT) <
+	DEFINE APPSTR (TXT) <
+	    APP1 (<TXT>,<FTXT>)
+	>
+	DEFINE EXPSTR <FTXT>
+    >
+    DEFINE EXPSTR <>
+> ;End def of CLSTR
+
+
+DEFINE APP1 (NTXT,OTXT) <
+    DEFINE APPSTR (TXT) <
+	APP1 (<TXT>,<OTXT'NTXT>)
+    >
+    DEFINE EXPSTR <OTXT'NTXT>
+> ;End def of APP1
+
+
+;Macro used to build the definitions. Two macros TFBx and TFAx are
+;created for each function character. TFBX is expanded when the 
+;function character is detected. It is used to init the argument
+;string if necessary. TFAx is expanded when the 
+;argument has been collected i.e. at next ^ or at end of input.
+
+DEFINE	TF(FUNCT,BEFORE,AFTER) <
+    IFNB <BEFORE> <DEFINE TFB'FUNCT BEFORE>
+    IFNB <AFTER> <DEFINE TFA'FUNCT AFTER> > ;End of TF macro
+
+
+;Macro to expand the collected argument into code
+
+DEFINE EXPAND <MOVEI S2,EXPSTR>
+
+
+;The following are definitions of the function characters
+;accepted by the TXT macro.
+
+DEFINE TFUNC <
+	TF(T,	<APPSTR (<[ASCIZ ~>)>,		;;Insert string prefix
+		<APPSTR (<~]>)			;;Insert right delimiter
+		EXPAND				;;Make argument into code
+		$CALL	TXT.AS>)
+	TF(A,,	<EXPAND				;;Arg. points to ASCIZ string
+		$CALL	TXT.AS>)
+	TF(D,,	<EXPAND				;;Arg. points to decimal number
+		$CALL	TXT.DN>)
+	TF(S,,	<EXPAND				;;Arg. points to SIXBIT word
+		$CALL	TXT.SX>)
+	TF(C,,	<EXPAND				;;Arg points to int. time
+		$CALL	TXT.DT>)
+	TF(H,,	<$CALL	TXT.TI>)		;;Time output as HH:MM:SS
+	TF(E,,	<$CALL	TXT.ER>)		;;Last error is output
+
+	TF(7,,	<EXPAND				;;Arg. points to one char word
+		$CALL	TXT.CH>)
+	TF(M,	<APPSTR (<.CHCRT>)		;;Insert a ^M (CR)
+		EXPAND
+		$CALL	TXT.CH>,)
+	TF(J,	<APPSTR (<.CHLFD>)		;;Insert a ^J (LF)
+		EXPAND
+		$CALL	TXT.CH>,)
+	TF(^,	<APPSTR (<"^">)			;;Insert a ^
+		EXPAND
+		$CALL	TXT.CH>,)
+	TF(0,	<APPSTR (<0>)			;;Insert a NUL
+		EXPAND
+		$CALL	TXT.CH>,)
+	TF(!,,)					;;No function
+>;DEFINE TFUNC
+
+	TFUNC				;Generate them
+
+
+;This macro does the work
+
+DEFINE TX(C)<
+    TXF=="!"				;;Current function is 'no function'
+    TXD==0				;;And no new function seen
+    CLSTR				;;Clear our argument string
+    IRPC C <				;;Parse the arg. one char at a time
+	IFE TXD <IFDIF <C><^> <		;;Nothing special, append char
+		APPSTR <C>>>	
+
+	IFN TXD <CLSTR			;;We saw ^ prev. char, clear string
+		TXD==0			;;No ^ seen anymore
+		TXF=="C"		;;Save current function
+		TPRE (\"TXF)>		;;Do pre-processing
+
+	IFIDN <C><^> <
+		TPST (\"TXF)		;;A ^: post process current function
+		IFDIF <TXF><^> <
+			TXD==1>>	;;Flag a ^ (unless funct was ^)
+    > ;;End of IRPC
+    TPST (\"TXF)			;;Post process last function
+>;DEFINE TX
+
+;Macros to call appropr. handler. Doesn't call if not defined.
+;TPRE calls pre-processor, TPST post-processor.
+
+DEFINE TPRE (FUNCT) <
+	IFDEF TFB'FUNCT <TFB'FUNCT>>
+DEFINE TPST (FUNCT) <
+	IFDEF TFA'FUNCT  <TFA'FUNCT>>
+
+
+;This is the macro that should be called to do all this stuff.
+
+DEFINE TXT (TYPE,ADDR,STR) <
+	JRST	[IFE TYPE,<MOVEI S1,ADDR>	;;Address of routine
+		IFN TYPE,<MOVE S1,[POINT 7,ADDR]>	;;Address of buffer
+		TX	(<STR>)
+		JRST	.+1]
+>;DEFINE TXT
+
+
+;Slightly higher level string macros
+;The text strings accepted are in TXT style
+
+DEFINE OPRMSG (STR) <
+  JRST	[MOVE	S1,[POINT 7,J$SMOP(J)]
+	TX (<^T'STR'^0>)		;;Generate code for string (NUL at end)
+	MOVX	S1,SIG.MS		;;Tell superior we have a message
+	$CALL	SIGNAL
+	JRST	.+1]
+>;DEFINE OPRMSG
+
+DEFINE ERROR (STR) <
+   JRST	[MOVE	S1,[POINT 7,J$SMOP(J)]
+	TX (<^T'STR'^0>)		;;Generate code for string (NUL at end)
+	MOVX	S1,SIG.ER		;;Tell superior we have a message
+	$CALL	SIGNAL
+	JRST	.+1]
+>;DEFINE ERROR
+
+DEFINE FATAL (STR) <
+   JRST	[MOVE	S1,[POINT 7,J$SMOP(J)]
+	TX (<^T'STR'^0>)		;;Generate code for string (NUL at end)
+	MOVX	S1,SIG.FT		;;Tell superior we have a message
+	$CALL	SIGNAL
+	JRST	.+1]
+>;DEFINE FATAL
+
+DEFINE LOGMSG (STR) <
+	TXT (0,LOGCHR,<^H^T  'STR'^M^J>)	;;Generate code for string
+> ;End of define LOGMSG
+	SUBTTL	Special Forms Handling Parameters
+
+; Forms switches as used in LPFORM.TXT
+; Note that the switches recognized are different from those used in
+; the LPFORM.INI together with LPTSPL.
+;
+;	BANNER:NN	Number of job headers
+;	TRAILER:NN	Number of job trailers
+;			A negative value gives that number of BANNER pages
+;	HEADER:NN	Number of file headers (picture pages)
+;	LINES:NN	Number of lines per page
+;	WIDTH:NN	Number of characters per line
+;	FF:NN		When to send FF. NN = <FF before banners> +
+;			2*<FF before files> + 4*<FF before trailers> +
+;			8*<FF after trailers> + 16*<FF for pagination>
+;	TABS:NN		If 0, send TAB as is, else use spaces and NN
+;			between stops
+;	NAME:AA		Name of printer on remote system
+;	TYPE:NORMAL/SCRZAP/8BIT/RAW Type of file being sent. SCRZAP and 8BIT
+;			overrides the switches given with PRINT
+;			Also tells UNIX which filter to use, see UXT.1
+;			
+
+; What the abbreviations mean:
+;	NN	is a decimal number
+;	AA	is a string of 1 to 20 ASCII characters
+
+; Location specifiers
+;	ALL		all lineprinters
+;	LOCAL		all lineprinters at the central site
+;	REMOTE		all remote lineprinters
+;	LPTOOO		lineprinter OOO only
+
+;NOTE:  PPNSPL will use the first entry which meets the location
+;	specification for its lineprinter.
+
+DEFINE F,<
+	FS	BANNER,0
+	FS	TRAILER,0
+	FS	HEADER,0
+	FS	LINES,^D60
+	FS	WIDTH,^D80
+	FS	FF,^D16
+	FS	NAME,0
+	FS	TABS,0
+	FS	TYPE,<SIXBIT /RAW/>
+>
+
+;Generate table of default parameters
+DEFINE FS(X,Y),<
+	XLIST
+D$'X:	EXP	Y
+	LIST
+	SALL
+>
+
+FFDEFS:	F
+	F$NSW==.-FFDEFS
+
+	F$WCL1==^D60		;Width class one is 1 to F$WCL1
+	F$WCL2==^D100		;Width class two is F$WCL1 TO F$WCL2
+	F$LCL1==^D41		;Length class one is 1 to F$LCL1
+	F$LCL2==^D55		;Length class two is F$LCL1 to F$LCL2
+
+
+;/FF switch bits
+	F$FFBB==1		;FF before banner
+	F$FFBF==2		;FF before file
+	F$FFBT==4		;FF before trailer
+	F$FFAT==8		;FF after trailer
+	F$FFPG==16		;Do pagination
+
+	SUBTTL	Stream Data Area
+
+;The area between J$$BEG and J$$END is allocated when the stream is
+;started and the inferior is spawned. Deallocated when shutdown and
+;inferior killed.
+
+;The LP macro will reserve one page right here to store the 
+;request (NEXTJB message)
+	LP J$$BEG,0			;Beginning of parameter area
+
+;General stream params
+	LP J$SSTK,STKSIZ		;Stack
+	LP J$SFRK,1			;Handle on fork
+	LP J$PLIST,1			;Printer list entry
+	LP J$SDPC,1			;PC where last dismissed for I/O
+	LP J$SDTM,1			;Time when last dismissed
+	LP J$SIST,1			;Stream stat, set by inferior at end
+					; See ISTTAB for values.
+	LP J$SMOP,^D<15>		;Buffer for message passed to top fork
+	LP J$SICD,1			;Stream command
+					;Right half is set when inf. is started
+					;See ICDTAB for values.
+					;Left half holds cancel command bits
+		ICD.AB==1B0		;Abort bit
+		ICD.RQ==1B1		;Requeue bit
+	LP J$SMLG,^D<15>		;Buffer for message when inferior abort
+	LP J$SOBJ,OBJ.SZ		;Object (Printer) parameters
+	LP J$SCKP,1			;Time for next checkpoint
+	LP J$SPTL,1			;Protocol, see below in PTLTAB
+	LP J$SSTG,^D<15>		;Translated device name string
+
+;Current request parameters
+	LP J$RFLN,1			;Number of files in request
+	LP J$RLIM,1			;Job limit in pages
+	LP J$RTIM,1			;Start time of job
+	LP J$RLFS,1,Z			;Adr of log file spec
+	LP J$RHNM,5,Z			;Name of remote host if used
+	LP J$RRST,1			;Status of job in remote queue
+	LP J$RLPT,10			;Name of remote printer
+
+;Parameters saved in checkpoints.
+;All protocols don't use all fields. PTLTTY uses all fields.
+;PTLUNX ignores everything except the flags and device.
+	LP J$CBEG,0			;Start of checkpoint params
+	LP J$CNFT,1,Z			;Number of files transferred
+	LP J$CNCT,1,Z			;Copies of last file transferred
+	LP J$CNPT,1,Z			;Pages of last copy transferred
+	LP J$CFLG,1,Z			;Status of checkpoint
+		CFGCKP==1B0		;Checkpoint taken
+		CFGREM==1B1		;Job sits in remote queue
+		CFGREQ==1B2		;Job is requeued
+	LP J$CEND,1			;End of checkpoint params
+	CHKLEN==J$CEND-J$CBEG		;Length of area
+	LP J$CMSG,1			;Pointer to routine to generate CKP
+					; message output in queue listing
+
+;Output parameters
+	LP J$OBFR,OPBFSZ/<36/8>+1	;Output buffer
+	LP J$OBPT,1			;Byte pointer
+	LP J$OBCT,1			;Byte count
+	LP J$OBTZ,1			;Output byte size
+	LP J$OJFN,1			;JFN
+
+;Current forms parameters
+DEFINE	FS(X,Y),<
+	LP J$F'X,1
+>
+
+	LP J$FCUR,0			;Start of forms params
+	F				;Current forms params
+	LP J$LDEV,1			;Actual output device name
+	LP J$FORM,1			;Current forms type
+	LP J$FWCL,1			;Current width class
+	LP J$FLCL,1			;Current length class
+	LP J$FJFN,1			;JFN of LPFORM.TXT
+
+;Parameters related to currently printing file
+	LP J$ITNM,5			;Temp file name used for UNIX
+	LP J$INAM,10			;Filename in recognizable form
+	LP J$IEXT,10			;Extension and version no
+	LP J$IIPG,1			;Pages to skip if > 0, don't if <=0
+	LP J$IJFN,1			;The JFN
+	LP J$IFNM,1			;Points to 'real' filename string
+	LP J$IBFR,IPBFSZ/<36/7>+1	;Input buffer
+	LP J$IBPT,1			;Byte pointer
+	LP J$IBCT,1			;Byte count
+	LP J$IICT,1			;Max no of bytes in curr size in buffer
+	LP J$IIBP,1			;Byte pointer to start of buffer
+
+;Miscellaneous
+	LP J$XTOP,1			;Set if at top of form
+	LP J$XVPS,1			;Current vertical position
+	LP J$XHPS,1			;Current horizontal pos
+	LP J$XHBF,^D<20>		;Buffer for banner/header/trailer line
+	LP J$XCOD,^D<55>		;/REPORT check routine
+	LP J$XFRC,1			;Fortran character repeat count
+	LP J$XCNT,1			;Count of chars output with OUTBUF
+	LP J$XTMP,^D<25>		;Temporary buffer (strings, param blks)
+
+;Log file parameters
+	LP J$LBFR,LGBFSZ/<36/7>+1	;Log buffer
+	LP J$LBPT,1			;Byte pointer
+	LP J$LBCT,1			;Byte count
+
+;Accounting params
+	LP J$ANPT,1,Z			;Total no of pages printed
+
+	TRLBFL==:10000			;Length of buffer for trailer info
+	LP TRLBUF,TRLBFL		;Buffer for trailer info
+	LP TRLCNT,1
+	LP TRLPTR,1
+	NERBUF==:100			;Buffer for error information
+	LP ERRBUF,NERBUF		;Allocate it
+	LP ERRFLG,1			;The error flag
+
+	LP FOOBUF,1000
+	LP PRNAME,40
+	LP HSTNAM,40
+	LP UNIQNM,40
+	LP UNIQHN,40
+	LP TIMADR,1
+	LP PRENAM,1
+	LP PREJFN,1
+	LP PLAINP,1
+	LP FILCNT,1
+	LP TCPJFN,1
+	LP CFBUF,1000
+	LP CFPTR,1
+	LP CFCNT,1
+
+	LP J$$END,1			;End of parameter area
+	J$$LEN==J$$END-J$$BEG		;Length of parameter area
+
+;Now generate a bit table of which words in the stream data area to zero
+;on a new job
+
+ZTABLE:					;Put table here
+
+DEFINE ZTAB(A),<
+	IFNDEF ...Z'A,<...Z'A==0>
+	EXP	...Z'A
+>  ;END DEFINE ZTAB
+
+	ZZ==0
+REPEAT <J$$LEN+^D35>/^D36,<
+	XLIST
+	ZTAB(\ZZ)
+	ZZ==ZZ+1
+	LIST
+>  ;END REPEAT
+
+
+	SUBTTL	Random Impure Storage used by top fork
+
+STACK:	BLOCK STKSIZ		;Top's stack
+MESSAG:	BLOCK 1			;Address of message just received
+BLKADR:	BLOCK 1			;IPCF message block addr save area
+SAB:	BLOCK SAB.SZ		;A send argument block
+MSGBLK:	BLOCK 2*MSBSIZ		;A block to build long messages in
+STREAM:	BLOCK 1			;Number of current stream, index in STRPAR
+INTFLG:	BLOCK 1			;Set to -1 on interrupts, 0 before
+RSTFLG:	BLOCK 1			;-1 if main loop may be restarted, 0 otherwise
+TMPBUF:	BLOCK ^D20		;Temp. buffer
+SYSNAM:	BLOCK ^D15		;Sysname 
+
+;Permanent stream parameters
+STRPAR:	BLOCK NPRINT		;Address of the stream's (inferior fork's)
+				; parameter Area. 0 if not allocated
+	SUBTTL	Message blocks and other constants
+
+	INTVEC==:LEVTAB,,CHNTAB
+
+IB:	$BUILD IB.SZ
+	 $SET(IB.PRG,,%%.MOD)			;Program name
+	 $SET(IB.INT,,INTVEC)			;Interrupt vector address
+	 $SET(IB.PIB,,PIB)			;PIB address
+	 $SET(IB.FLG,IP.STP,1)			;Stopcodes to ORION
+	$EOB
+
+PIB:	$BUILD PB.MNS
+	 $SET(PB.HDR,PB.LEN,PB.MNS)		;PIB length,,0
+	 $SET(PB.FLG,IP.PSI,1)			;PSI on
+	 $SET(PB.INT,IP.CHN,1)			;Interrupt on channel 1
+	$EOB
+
+HELLO:	$BUILD HEL.SZ
+	  $SET(.MSTYP,MS.TYP,.QOHEL)		;Message type
+	  $SET(.MSTYP,MS.CNT,HEL.SZ)		;Message length
+	  $SET(HEL.NM,,<'PPNSPL'>)		;Program name
+	  $SET(HEL.FL,HEFVER,%%.QSR)		;QUASAR version
+	  $SET(HEL.NO,HENNOT,1)			;Number of obj types
+	  $SET(HEL.NO,HENMAX,NPRINT)		;Max number of jobs
+	  $SET(HEL.OB,,.OTLPT)			;LPT object type
+	$EOB
+	SUBTTL 	PPNSPL - Multiple PostScript Printer Spooler.
+
+;All code between here and INFST is only executed by the top fork.
+
+PPNSPL:	RESET%				;As usual.
+	MOVE P,[IOWD STKSIZ,STACK]	;Set up the stack.
+	MOVEI S1,IB.SZ			;Get the IB size.
+	MOVEI S2,IB			;Address of the IB.
+	$CALL I%INIT			;Set up GALAXY
+	MOVX S1,.FHSLF			;Load my fork handle
+	MOVX S2,<1B1!1B19>		;1:IPCF, 19:Inf. term.
+	AIC%				;Activate the channels
+	MOVX S1,.FHSLF			;Enable privileges
+	SETOB S2,T1			;All!
+	EPCAP%
+	 ERJMP	[$STOP (NEP,Could not enable privileges)]
+	MOVX S1,.MSIIC			;Get 'ignore str accting' function
+	MSTR%				;We want to ignore structure accounting
+	 ERJMP	.+1			;Ignore any error
+	MOVX S1,'SYSVER'		;Name of gettab for sysname
+	SYSGT%				;Get it
+	HRLZ T1,S2			;Get table#,,0
+	MOVEI T2,^D14			;And load loop counter
+	DO.
+	  MOVS S1,T1			;Get n,,table#
+	  GETAB%			;Get the entry
+	   MOVEI S1,0			;Use zero if losing
+	  MOVEM	S1,SYSNAM(T1)		;Store the result
+	  CAILE	T2,(T1)			;Done enuf?
+	   AOJA	T1,TOP.			;No, loop
+	ENDDO.
+	PUSHJ P,P%LPIN##		;Get LPFORM.INI
+	MOVEI T1,HELLO			;Get address of hello message.
+	$CALL SNDQSR			;Say hi to QUASAR.
+	$CALL I%ION			;Turn on interrupts
+	;Fall through
+	SUBTTL	Main Loop
+;Restarted at MAIN on interrupts or after 30 secs
+MAIN:	DO.
+	  SETZM RSTFLG			;Don't restart us now
+	  SETZM INTFLG			;and no interrupts seen yet
+	  MOVX P1,NPRINT-1		;Max number of streams
+	  DO.
+	    SKIPN J,STRPAR(P1)		;Is data area allocated?
+	     JRST MAI.9			;No, nothing interesting
+	    MOVEM P1,STREAM		;Set STREAM also
+	    MOVE S1,J$SFRK(J)		;Get its fork handle
+	    RFSTS%			;and its status
+	     ERJMP [$STOP (NFS,Can't get fork status)]
+	    HLRZ S1,S1			;Get interesting part of status word
+	    CAIE S1,.RFSLP		;Is it sleeping?
+	    CAIN S1,.RFRUN		;Is it running?
+	     JRST MAI.8			;Yes, leave it alone
+	    CAIE S1,.RFHLT		;Is it halted?
+	    IFSKP.
+	      SKIPE S1,J$SIST(J)	;Yes, did it signal?
+	       $CALL INFTRM		;Yup, go check the message
+	      JRST MAI.8		;No, I guess it's just idle
+	    ENDIF.
+;Now check for hung streams
+	    CAIE S1,.RFIO		;Dismissed for I/O?
+	    IFSKP.
+	      CAME S2,J$SDPC(J)		;Compare PCs
+	      IFSKP.
+;	        GTAD%			;Get time
+;	        SUBX S1,3*DISTIM	;Subtract max I/O wait time
+;	        CAMGE S1,J$SDTM(J)	;Compare with prev. check time
+;	         JRST MAI.9		;No time-out yet
+;	        $WTO (PPNSPL - Stream I/O wait time-out,,J$SOBJ(J))
+;	        MOVX S1,%RSUNA		;Shut it down temporarily
+;	        $CALL SUPMSG
+	        JRST MAI.9		;Check next stream
+	      ENDIF.
+	      MOVEM S2,J$SDPC(J)	;Save PC
+	      GTAD%
+	      MOVEM S1,J$SDTM(J)	;and time
+	      JRST MAI.9		;Check next stream
+	    ELSE.			;Involuntary termination
+	      HRRZ T2,S2		;Save PC
+	      MOVE S1,J$SFRK(J)		;Get handle on process
+	      $CALL ERRSTR		;and get the error string
+	      $WTO (PPNSPL - Inferior abnormal termination,^T/TMPBUF/ at ^O/T2/,J$SOBJ(J))
+	      MOVX S1,FATERT		;Shut it down properly
+	      $CALL SUPMSG
+	    ENDIF.
+MAI.8:	    SETZM J$SDPC(J)		;Indicate no I/O wait
+MAI.9:	    SOJGE P1,TOP.		;Loop over all streams
+	  ENDDO.	
+	  $CALL CHKQUE			;Take care of any messages
+	  SKIPE INTFLG			;Have we been interrupted?
+	   LOOP.			;Yes, do another pass
+	  SETOM RSTFLG			;We allow restarts now
+	  MOVX S1,^D30000		;Sleep for 30 secs
+	  DISMS%			;..or until restarted
+	  LOOP.
+	ENDDO.
+
+;ERRSTR - Puts the errormessage for the most recent error
+;into TMPBUF.
+;S1 should contain the fork handle for the process.
+
+ERRSTR:	HRLO S2,S1			;Get handle
+	HRROI S1,TMPBUF			;Point to the buffer
+	SETZ T1,
+	ERSTR%
+	 JFCL
+	  JFCL
+	$RETT
+	SUBTTL	Interrupt Routines
+
+LEVTAB:	EXP LEV1PC			;Where to store level 1 int PC
+	EXP LEV2PC			;Level 2 in case we need it
+	EXP LEV3PC			;and 3
+
+CHNTAB:	BLOCK 1				;Don't use channel 0
+	XWD 1,INTIPC			;Chn 1, IPCF message - level 1
+	BLOCK 1				;not used
+	XWD 2,TIMEUP			;Chn 3, timeouts
+	BLOCK ^D15			;We don't use these
+	XWD 1,INTINF			;Chn 19, Inferior termination
+	BLOCK ^D17			;Rest of the table
+
+LEV1PC:	BLOCK 1				;Where to store the PCs
+LEV2PC:	BLOCK 1
+LEV3PC:	BLOCK 1
+
+;ADR IN 1, TIME IN 2
+TIMSET:	Movem	1,TimAdr
+	Move	1,[.FHSLF,,.TIMEL]
+	MOVEI	3,3		;channel 3
+	TIMER%
+	 Erjmp	.+1
+	RET
+
+TIMCLR:	Move	1,[.FHSLF,,.TIMAL]
+	Setz	2,
+	TIMER%
+	 Erjmp	.+1
+	RET
+
+TimeUp:
+ifn debug,<
+	tmsg <timezup
+>
+>
+	Move	1,TimAdr
+	Txo	1,1B5		;turn on user mode bit
+	Movem	1,LEV2PC
+	DEBRK%
+	 Erjmp	.+1
+	HALTF%
+
+;INTIPC - Interrupt routine for IPC message
+INTIPC:	$CALL C%INTR			;Flag the interrupt for GLXLIB
+	JRST INTALL			;Jump to common code
+
+;INTINF - Interrupt routine for Inferior termination
+INTINF:
+;	JRST INTALL			;Jump to common code
+
+;INTALL - Common part of interrupt handlers
+;Sets the interrupts flag INTFLG and restarts the main loop at MAIN
+;if restarting is allowed.
+INTALL:	SETOM INTFLG			;Flag the interrupt
+	SKIPN RSTFLG			;Should we restart?
+	 DEBRK%				;NO!!!
+	MOVEI S1,MAIN			;Restart at MAIN
+	IORX S1,1B5			;Indicate user mode
+	MOVEM S1,LEV1PC
+	DEBRK%				;Return to MAIN
+	SUBTTL	CHKQUE -- Routine to receive and process IPCF messages
+
+CHKQUE:	$SAVE <P1>
+	DO.
+	  $CALL C%RECV			;Receive a message
+	  JUMPF .POPJ			;Return,,nothing there.
+	  SETZM BLKADR			;Clear the IPCF msg blk addr save area
+	  LOAD S2,MDB.SI(S1)		;Get special index word
+	  IFXN. S2,SI.FLG		;Is there an index there?
+	    ANDX S2,SI.IDX		;And out the index
+	    CAIE S2,SP.OPR		;Is it from OPR?
+	    CAIN S2,SP.QSR		;Is it from QUASAR?
+	    IFNSK.
+	      LOAD M,MDB.MS(S1),MD.ADR	;Get the message address
+  	      LOAD S2,.MSTYP(M),MS.TYP	;Get the message type
+	      MOVSI S1,-NMSGT		;Make AOBJN pointer for msg types
+	      DO.
+	        HRRZ T1,MSGTAB(S1)	;Get a message type
+	        CAME S2,T1		;Match?
+	        IFSKP.			;Yes
+	          HLRZ P1,MSGTAB(S1)	;Pick up the address
+	          $CALL CHKOBJ		;Check if the printer exists
+	          SKIPE			;It doesn't, forget all this
+	           $CALL @P1		;All OK, dispatch
+	        ELSE.
+	          AOBJN S1,TOP.		;No, loop
+	        ENDIF.
+	      ENDDO.
+	    ENDIF.
+	  ENDIF.
+	  $CALL C%REL			;Release the message
+	  LOOP.
+	ENDDO.
+
+MSGTAB:	XWD KILL,.QOABO			;Abort message
+	XWD CHKPNT,.QORCK		;Request-for-checkpoint
+	XWD NXTJOB,.QONEX		;NEXTJOB
+	XWD SETUP,.QOSUP		;Setup/shutdown
+	XWD OACCON,.OMCON		;Operator continue request.
+	XWD OACRSP,.OMRSP		;Operator WTOR response.
+	XWD OACREQ,.OMREQ		;Operator requeue request.
+	XWD OACCAN,.OMCAN		;Operator cancel request.
+	XWD OACPAU,.OMPAU		;Operator pause/stop request.
+	XWD OACFWS,.OMFWS		;Operator forward space request.
+	XWD OACALI,.OMALI		;Operator align request.
+	XWD OACSUP,.OMSUP		;Operator suppress request.
+	XWD OACBKS,.OMBKS		;Operator backspace request.
+	XWD QSRNWA,.QONWA		;QUASAR node-went-away message
+	XWD OPRD60,.OMDSP		;DN60 operator response message
+	XWD FORFOR,.QOFCH		;Force forms message
+	NMSGT==.-MSGTAB
+	SUBTTL	INFTRM - Called when inferior terminates
+
+;Dispatch table for message (termination reason)
+ITMTAB:	BDTB
+	 DTE (ITM.0,IST.DN)		;Processing completed
+	 DTE (ITM.1,IST.ER)		;Error, message in J$SMOP
+	 DTE (ITM.2,IST.FT)		;Fatal error, message in J$SMOP
+	 DTE (ITM.3,IST.MS)		;Message, in J$SMOP
+	 DTE (ITM.4,IST.CP)		;Request for checkpoint
+	 DTE (ITM.5,IST.CR)		;Cancel request and get next
+	EDTB (ITMLEN)
+
+;J and STREAM should be set properly before this routine is called.
+INFTRM:	MOVE S1,J$SIST(J)		;Get message type
+	SKIPL S1			;Make sure it's legal
+	 CAIL S1,ITMLEN
+	  $STOP	(IMI,Illegal Message from Inferior)
+	PJRST @ITMTAB(S1)		;Dispatch
+
+;Processing done (SIG.DN)
+ITM.0:	HRRZ S2,J$SICD(J)		;Get last command
+	HLLZ S1,J$SICD(J)		;and abort flags
+	SETZM J$SICD(J)			;and indicate we're idle
+	CAXE S2,ICD.SU			;Was it a set up?
+	IFSKP.
+	  $WTO (PPNSPL - Stream Started,,J$SOBJ(J))
+	  MOVX S1,%RSUOK		;Send a response to setup message
+	  PJRST SUPMSG
+	ELSE.
+	  CAXE S2,ICD.NJ		;Or a new job?
+	  IFSKP.
+	    PUSH P,S1			;Save the abort flags
+	    ANDX S1,ICD.RQ		;Only keep requeue flag
+	    $CALL QRELEA		;Release/requeue the job
+	    POP P,S1			;Restore flags
+	    $CALL FILDIS		;and go clean up
+	  ELSE.
+	    CAXE S2,ICD.CF		;Or new forms?
+	    IFSKP.
+	      MOVX S1,%RESET		;Default to reset
+	      MOVEI T1,MSGBLK		;Get the message block address
+	      MOVEM S1,STU.CD(T1)	;Save the status
+	      HRLI S1,J$SOBJ(J)		;Get the object block address
+	      HRRI S1,STU.RB(T1)	;Get destination address
+	      BLT S1,STU.RB+OBJ.SZ-1(T1) ;Copy the obj blk over to the msg
+	      MOVX S1,STU.SZ		;Get the message length
+	      STORE S1,.MSTYP(T1),MS.CNT	;Save it
+	      MOVX S1,.QOSTU		;Get the message type
+	      STORE S1,.MSTYP(T1),MS.TYP	;Save it
+	      PJRST SNDQSR		;Send it off to QUASAR
+	    ENDIF.
+	  ENDIF.
+	ENDIF.
+	$RETT				;Neither, just return
+
+;Error (SIG.ER)
+ITM.1:	$WTO (PPNSPL - Error in Stream:,^T/J$SMOP(J)/,J$SOBJ(J))
+	MOVX S1,%RSUNA			;Say device is temporarily unavailable
+	PJRST SUPMSG			;and shut it down
+
+;Fatal error (SIG.FT)
+ITM.2:	$WTO (PPNSPL - Fatal Error in Stream:,^T/J$SMOP(J)/,J$SOBJ(J))
+	MOVX S1,FATERT			;Say device permanently gone
+	PJRST SUPMSG			;and shut it down
+
+;Message to OPR (SIG.MS)
+ITM.3:	$WTO (PPNSPL - Message from Stream:,^T/J$SMOP(J)/,J$SOBJ(J))
+	SKIPA
+
+;Request for checkpoint (SIG.CP)
+ITM.4:	 $CALL CHKPNT			;Take the checkpoint
+	MOVE S1,J$SFRK(J)		;Get inferior's fork handle
+	IORX S1,SF%CON			;Set continue bit
+	SFORK%				;and continue it
+	IFJER.
+	  MOVX S1,.FHSLF
+	  $CALL ERRSTR			;Get error string
+	  $WTO (PPNSPL - Could not continue inferior,^T/TMPBUF/,J$SOBJ(J))
+	  MOVX S1,%RSUNA		;Shut down for a while
+	  PJRST SUPMSG
+	ENDIF.
+	$RETT
+
+;Cancel request and continue (SIG.CR)
+; We got here because file was unprintable for some reason (did not exist)
+ITM.5:	SETZ S1,			;Cancel request
+	$CALL QRELEA
+	$CALL FILDIS			;Go clean up any files
+	$RETT
+	SUBTTL	Status and checkpoint routines
+
+;CHKPNT -- Request for Checkpoint
+;This routine is to checkpoint the job whose data area is pointed to by J.
+;A stream should only be checkpointed when the inferior fork has requested
+;it.
+
+;Dispatch table for J$CMSG
+CHKDTB:	BDTB
+	 DTE (CHK.0,MSG.NOR)		;Standard message
+	 DTE (CHK.1,MSG.XFR)		;Message when transferring files
+	 DTE (CHK.2,MSG.RQU)		;Message when in remote queue
+	EDTB (CKTLEN)
+
+CHKPNT:	$SAVE <P1>			;Save P1
+	MOVEI P1,MSGBLK			;And let it point to the block
+	MOVX S1,CH.FCH!CH.FST		;Get checkpoint and status flags
+	STORE S1,CHE.FL(P1)		;And store them
+	LOAD S1,.EQITN(J)		;Get job's ITN
+	MOVEM S1,CHE.IT(P1)		;And store it
+	MOVX S1,CFGCKP
+	ORM S1,J$CFLG(J)
+	HRRI S1,CHE.IN(P1)		;Set up for BLT, ?,,dest
+	HRLI S1,J$CBEG(J)		;Source,,dest
+	BLT S1,J$CEND-J$CBEG+CHE.IN-1(P1)	;Move it
+	SKIPN S1,J$CMSG(J)		;Get message type
+	 $RETT				;Hasn't been set yet, so forget it
+	SKIPL S1			;Make sure type is legal
+	 CAIL S1,CKTLEN
+	  $STOP (ICM,Illegal Checkpoint Message Specified)
+	$CALL @CHKDTB(S1)		;Dispatch
+	MOVE S1,[POINT 7,CHE.ST(P1)]	;Point to string just created
+	ILDB S2,S1			;Get a byte
+	JUMPN S2,.-1			;Get to last NUL
+	HRRZ S1,S1			;Just keep address i.e. length
+	AOJ S1,				;Add one word
+	STORE S1,.MSTYP(P1),MS.CNT	;and save it
+	MOVX S1,.QOCHE			;Set the function
+	STORE S1,.MSTYP(P1),MS.TYP
+	MOVE T1,P1			;Point to the message
+	PJRST SNDQSR			;and send it
+
+;Standard checkpoint message
+CHK.0:	$TEXT (<-1,,CHE.ST(P1)>,<Started at ^C/J$RTIM(J)/, printed ^D/J$ANPT(J)/ of ^D/J$RLIM(J)/ pages^0>)
+	$RETT
+
+;Message when transferring files
+CHK.1:	LOAD T1,.EQSPC(J),EQ.NUM	;Get no of files in request
+	AOJ T1,				;Add one control file
+	SKIPE J$FBAN(J)			;Banner file?
+	 AOJ T1,			;Yes, another file
+	SKIPE	J$FTRA(J)		;Trailer file?
+ 	 AOJ T1,			;Yes, another file
+	$TEXT (<-1,,CHE.ST(P1)>,<Started at ^C/J$RTIM(J)/, transferred ^D/J$CNFT(J)/ of ^D/T1/ files to ^T/J$RHNM(J)/^0>)
+	$RETT
+
+;Message when job is in queue on remote system
+CHK.2:	SKIPE T1,J$RRST(J)		;Get position in remote queue
+	IFSKP.
+	  $TEXT (<-1,,CHE.ST(P1)>,<Now printing on ^T/J$RHNM(J)/^0>)
+	ELSE.
+	  $TEXT (<-1,,CHE.ST(P1)>,<Number ^D/J$RRST(J)/ in queue on ^T/J$RHNM(J)/^0>)
+	ENDIF.
+	$RETT
+	SUBTTL	Requeue/Release routines
+
+;QRELEASE -- Routine to send a release/requeue msg to QUASAR.
+;If S1 = 0 it's a release else a requeue.
+QRELEA:	PUSH P,S1			;Save param for a while
+	$WTOJ (PPNSPL - End,<^R/.EQJBB(J)/>,J$SOBJ(J)) ;TELL THE OPERATOR.
+	$LOG (PPNSPL - Printed ^D/J$ANPT(J)/ pages,,J$SOBJ(J)) ; Log it
+	MOVEI S1,MSBSIZ			;Get block length
+	MOVEI S2,MSGBLK			;And the address
+	$CALL .ZCHNK			;Zero the block
+	POP P,S1			;Restore parameter
+	IFE. S1				;No requeue
+	  MOVEI T1,MSGBLK		;GET ADDRESS OF THE BLOCK
+	  LOAD S1,.EQITN(J)		;GET THE ITN
+	  STORE S1,REL.IT(T1)		;STORE IT
+	  MOVX S1,REL.SZ		;GET RELEASE MESSAGE SIZE
+	  MOVX S2,.QOREL		;AND FUNCTION
+	ELSE.
+	  MOVEI T1,MSGBLK		;Address of the block
+	  LOAD S1,.EQITN(J)		;Get the ITN
+	  STORE S1,REQ.IT(T1)		;and save it away
+	  MOVE S1,J$CFLG(J)		;Set Requeue flag in checkpoint data
+	  TXO S1,CFGREQ
+	  MOVEM S1,J$CFLG(J)
+	  SETZM J$CNFT(J)		;Say no files printed
+	  SETZM J$CNCT(J)		;Say no copies of last one printed
+	  SETZM J$CNPT(J)		;Say no pages of last copy printed
+ 	  HRRI S1,REQ.IN(T1)		;set up for BLT, ?,,dest
+	  HRLI S1,J$CBEG(J)		;source,,dest
+	  BLT S1,J$CEND-J$CBEG+CHE.IN-1(T1)	;and move it
+	  MOVX S1,RQ.HBO		;Set hold by operator
+	  STORE S1,REQ.FL(T1)
+	  MOVX S1,REQ.SZ		;Size
+	  MOVX S2,.QOREQ		;and function
+	ENDIF.
+	STORE S1,.MSTYP(T1),MS.CNT	;STORE SIZE
+	STORE S2,.MSTYP(T1),MS.TYP	;AND CODE
+	PJRST SNDQSR			;SEND IT TO QUASAR
+
+;FILDIS -- Routine to keep/delete printed files.
+;Called when a job is released
+;Whether the user has delete access or not to the file has
+;already been checked in INPOPN.
+;S1 is <> 0 if job was aborted, 0 if normal termination.
+
+FILDIS:	$SAVE <P1,P2>
+	MOVE P2,S1			;Save the param
+	LOAD E,.EQLEN(J),EQ.LOH		;Get the header length
+	ADD E,J				;Point to first file
+	LOAD P1,.EQSPC(J),EQ.NUM	;Get the number of files
+	DO.
+	  LOAD T1,.FPLEN(E),FP.LEN	;Get the FP length
+	  ADD T1,E			;Compute the FD address
+	  MOVEI S2,.FDSTG		;File name offset
+	  ADD S2,T1			;S2 points to file name string
+	  MOVE T2,.FPINF(E)		;Get the file info word
+	  LOAD E,.FPLEN(E),FD.LEN	;Get the FD length
+	  ADD E,T1			;Point E at next FP block
+	  HRRO S2,S2			;Make a pointer to file name
+	  MOVX S1,<GJ%SHT!GJ%OLD>	;Short form and file must exist
+	  GTJFN%			;Get a handle
+	  IFNJE.
+	    IFXE. T2,FP.SPL		;Is this file spooled?
+	      IFE. P2			;Normal termination?
+	        IFXN. T2,FP.DEL		;Yes, do we want it deleted?
+	  	  DELF%			;Delete it
+	  	   ERJMP .+1
+	        ENDIF.
+	      ENDIF.
+	    ELSE.
+	      IORX S1,DF%EXP		;Delete and expunge
+	      DELF%
+	       ERJMP .+1
+	    ENDIF.
+	    RLJFN%			;Release JFN (just to be sure)
+	     ERJMP	.+1		;We get a lot of errors
+	  ENDIF.
+	  SOJG P1,TOP.			;Go process the next file
+	ENDDO.
+	$RETT
+	SUBTTL	CHKOBJ -- Routine to validate QUASAR/ORION/OPR msg obj blks.
+
+;CALL:  S1/OFFSET INTO MSGTAB
+;	S2/MESSAGE TYPE
+
+;RET:	J/Points to stream's data area
+;	STREAM/Set to stream number
+CHKOBJ:	CAIE S2,.OMRSP			;Is this an operator response?
+	 CAIN S2,.QOSUP			;Is this a setup/shutdown message?
+	  $RETT				;Yes, just return now.
+	CAIN S2,.OMDSP			;Is this a DN60 operator response?
+	 $RETT				;Yes, just return now.
+	CAIE S2,.QOFCH			;Is it forms change message?
+	CAIL S2,.OMOFF			;Is this an OPR/ORION message?
+	IFNSK.
+	  DO.
+	    $CALL GETBLK		;Get a message block
+	    JUMPF .RETF			;No more, that's an error
+	    CAIE T1,.OROBJ		;Is this the object block?
+	     LOOP.
+	  ENDDO.
+	  MOVE S1,T3			;Get the block data address in S1.
+	ELSE.
+	    XCT [MOVEI S1,ABO.TY(M)	;Get abort msg obj address.
+		 MOVEI S1,RCK.TY(M)	;Get checkpoint msg obj address.
+	  	 MOVEI S1,.EQROB(M)](S1) ;Get nextjob msg obj address.
+	ENDIF.
+	$CALL FNDOBJ			;Go find the object block.
+	JUMPF .RETF			;Not there, that's an error.
+	$RETT				;Return.
+;GETBLK -- Routine to break down an IPCF message into its data blocks
+;Call:	M/ Message address
+;
+;Ret:	T1/ Block type
+;	T2/ Block length
+;	T3/ Block data address
+
+GETBLK:	SOSGE	.OARGC(M)		;Subtract 1 from the block count
+	 $RETF				;No more, return
+	SKIPN	S1,BLKADR		;Get the previous block address
+	 MOVEI	S1,.OHDRS+ARG.HD(M)	;None there,,get first block address
+	LOAD	T1,ARG.HD(S1),AR.TYP	;Get the block type
+	LOAD	T2,ARG.HD(S1),AR.LEN	;Get the block length
+	MOVEI	T3,ARG.DA(S1)		;Get the block data address
+	ADD	S1,T2			;Point to the next message block
+	MOVEM	S1,BLKADR		;Save it for the next call
+	$RETT				;Return to the caller
+
+;FNDOBJ -- Check if the specified object (printer) exists
+;Returns true with J pointing to parameter area and STREAM set
+;to stream number if it does. Otherwise false.
+
+FNDOBJ:	MOVE T1,.ROBTY(S1)		;Get object type
+	MOVE T2,.ROBAT(S1)		;Get unit number
+	MOVE T3,.ROBND(S1)		;And node number
+	SETZ T4,			;Clear an index register
+	DO.
+FNDO.1:	SKIPN S1,STRPAR(T4)		;Stream allocated?
+	IFSKP.
+	  MOVEI S2,J$SOBJ(S1)		;Get address of object block
+	  CAMN T1,OBJ.TY(S2)		;Compare
+	  CAME T2,OBJ.UN(S2)		;Compare
+	  IFSKP.
+	    CAMN T3,OBJ.ND(S2)		;Compare
+	     JRST ENDLP.
+	  ENDIF.
+	ENDIF.
+	  AOJ T4,			;Increment
+	  CAIL T4,NPRINT		;The end of the line?	
+	   $RETF			;Yes, return 'object not there'
+	  LOOP.
+	ENDDO.
+	MOVE J,STRPAR(T4)		;Return pointer to parameter area
+	MOVEM T4,STREAM			;and which stream it is
+	$RETT
+	SUBTTL	SNDQSR -- Routine to send a message to QUASAR.
+
+;T1 should point to the message block
+SNDQSR:	MOVX S1,SP.QSR			;Get QUASAR flag
+	TXO S1,SI.FLG			;Set special index flag
+	STORE S1,SAB+SAB.SI		;And store it
+	SETZM SAB+SAB.PD		;Clear the PID word
+	LOAD S1,.MSTYP(T1),MS.CNT	;Get the message length
+	STORE S1,SAB+SAB.LN		;Save it
+	STORE T1,SAB+SAB.MS		;Save the message address
+	MOVEI S1,SAB.SZ			;Load the size
+	MOVEI S2,SAB			;And the address
+	$CALL C%SEND			;Send the message
+	JUMPT .RETT			;And return
+	$STOP (QSF,Send to QUASAR FAILED)
+	SUBTTL	SETUP/SHUTDOWN Message processing
+
+;M contains a pointer to the message
+;J is not defined yet
+SETUP:	$SAVE <P1,P2>			;Save temp regs
+	LOAD S1,SUP.FL(M)		;Get the flags
+	IFXN. S1,SUFSHT			;Is it a shutdown?
+	  CALL SHUTDN			;Yes, do it
+	ELSE.
+	  SETZ T2,			;Clear a loop reg
+	  DO.
+	    SKIPN STRPAR(T2)		;A free stream?
+	    IFSKP.
+	      CAIGE T2,NPRINT-1		;No, loop thru them all?
+	       AOJA T2,TOP.		;No, keep going
+	      $STOP (TMS,Too many setups)
+	    endif.
+	  ENDDO.
+	  MOVEI S1,J$$END+PAGSIZ-1	;Get LPT DB length rounded up a page
+	  IDIVI S1,PAGSIZ		;Get number of pages in S1
+	  $CALL M%AQNP			;Allocate them
+	  PG2ADR S1			;Convert to an address
+	  MOVEM S1,STRPAR(T2)		;And save it
+	  MOVE J,S1			;Put it in J
+	  MOVEM T2,STREAM		;Set STREAM also
+	  SETZM J$SFRK(J)		;We don't have the inferior yet
+	  MOVEI S2,J$SOBJ(J)		;Save object block
+	  HRLI S2,SUP.TY(M)
+	  BLT S2,OBJ.SZ+J$SOBJ-1(J)	;Get it
+	  LOAD S2,SUP.FL(M),SPLTAP	;Are we trying to spool to tape?
+	  IFN. S2
+	    $WTO (PPNSPL - Not started,spooling to tape not supported,J$SOBJ(J))
+	    MOVX S1,FATERT		;Signal does not exist
+	    JRST SUPMSG
+	  ENDIF.
+	  MOVEI P1,J$SOBJ(J)		;Get our object block address
+	  SETZ S1,			;Default node name of LOCAL
+	  MOVE S2,OBJ.UN(P1)		;Get the unit number
+	  $CALL P%FUNI##		;Find the printer entry
+	  SKIPE
+	  IFSKP.			;On failure...
+	    $WTOJ (<Setup error>,<Printer not defined for this system>,J$SOBJ(J))
+	    MOVX S1,FATERT		;Signal does not exist
+	    JRST SUPMSG
+	  ENDIF.
+	  MOVEM S2,J$PLIST(J)		;Store printer list
+	  MOVE S1,OBJ.UN(P1)		;Get unit number
+	  IDIVI S1,^D10
+	  LSH S1,6			;[wew] Shift top digit one char
+	  ADDI S1,(S2)			;[wew] Add in lower digit
+	  ADD S1,[SIXBIT/LPT000/]	;Create physical name
+	  MOVEM S1,J$LDEV(J)		;Save it
+	  $TEXT (<-1,,J$XTMP(J)>,<PLPT^D/OBJ.UN(P1)/^0>) ;create unit name
+	  MOVX S1,.LNSSY		;Transl. from logical to physical
+	  HRROI S2,J$XTMP(J)		;Point to logical name
+	  HRROI T1,J$SSTG(J)		;and where to store translation
+	  LNMST% 
+	  IFJER.
+	    $TEXT (<-1,,J$SSTG(J)>,<PLPT^D/OBJ.UN(P1)/:^0>)
+	  ENDIF.
+
+	  MOVX S1,CR%MAP!CR%CAP!CR%ACS	;Same address space and priv's
+	  SETZ S2,			;Let it have these ACs to start with
+	  CFORK%
+	  IFJER.
+	    MOVX S1,.FHSLF		;Get handle on myself
+	    $CALL ERRSTR		;Get error string
+	    $WTO (PPNSPL - Not started,<Can't create inferior, ^T/TMPBUF/>,J$SOBJ(J))
+	    MOVX S1,FATERT
+	    JRST SUPMSG
+	  ENDIF.
+	  MOVEM S1,J$SFRK(J)		;Save fork handle
+	  HRL S2,S1			
+	  HRRI S2,DDTSEC		;source
+	  MOVSI S1,.FHSLF		;destination
+	  MOVX T1,SM%RD!SM%WR!SM%EX!1	;one section, full access
+	  SMAP%				;copy DDT
+	   ERJMP .+1
+	  MOVE S1,J$SFRK(J)		;get fork handle back
+	  MOVX S2,ICD.SU		;Tell her we're starting up
+	  MOVEM S2,J$SICD(J)
+	  MOVEI S2,INFST		;Get start address
+	  SFORK%			;Here we go
+	  IFJER.
+	    MOVX S1,.FHSLF
+	    $CALL ERRSTR
+	    $WTO (PPNSPL - Not started,<Can't start inferior, ^T/TMPBUF/>,J$SOBJ(J))
+	    MOVX S1,FATERT
+	    JRST SUPMSG
+	  ENDIF.
+	ENDIF.
+	$RETT
+	SUBTTL	Routines to signal startup OK and errors to QUASAR
+
+;SUPMSG - Startup message. Sends a response to setup message to
+;QUASAR. The message type is passed in S1 and is one of %RSUOK,
+;%RSUDE or %RSUNA. It is also called on errors, in which case the
+;stream is shut down.
+SUPMSG:	$CALL RSETUP			;Send the response to setup msg.
+	CAXE S1,%RSUOK			;Was it OK
+	 CALL SHUTIN			;No, restore everything
+	$RETT				;Yes, return
+
+;RSETUP -- Routine to send a response-to-setup msg to QUASAR
+; S1 contains condition code
+RSETUP:	$SAVE S1			;Save the setup condition code.
+	MOVE T2,S1
+	MOVEI S1,RSU.SZ			;Get message length
+	MOVEI S2,MSGBLK			;And the address of the block
+	$CALL .ZCHNK			;Zero it out
+	MOVEI T1,MSGBLK			;Get the block address
+	MOVX S1,RSU.SZ			;Get message size
+	STORE S1,.MSTYP(T1),MS.CNT	;Store it
+	MOVX S1,.QORSU			;Get function code
+	STORE S1,.MSTYP(T1),MS.TYP	;Store it
+	HRLI S1,J$SOBJ(J)		;Get OBJADR,,0
+	HRRI S1,RSU.TY(T1)		;And place to move it to
+	BLT S1,RSU.TY+OBJ.SZ-1(T1)	;And move the object block
+	STORE T2,RSU.CO(T1)		;Store the response code
+	MOVX S1,%LOWER			;Some device attributes
+	STORE S1,RSU.DA(T1),RO.ATR	;Store the device attributes
+	PJRST SNDQSR			;And send the message
+	SUBTTL	SHUTDN -- Routine to shut down stream
+
+;This routine has two entry points. SHUTDN is called when the QUASAR
+;message is received and has FNDOBJ set the J reg and STREAM.
+;SHUTIN is an internal shutdown and assumes that J and STREAM are already
+;properly set.
+SHUTDN:	MOVEI S1,SUP.TY(M)		;Get the object block address
+	$CALL FNDOBJ			;Find the object block
+	JUMPF .RETT			;No object,,then nothing to shut down
+
+SHUTIN:	MOVE S1,J$SFRK(J)		;Get handle
+	IFN. S1
+	  KFORK%			;and kill it
+	  IFJER.
+	    $STOP (CKI,Could not kill inferior)
+	  ENDIF.
+	  SETO S1,			;Release all loose handles
+	  RFRKH%
+	  IFJER.
+	    $STOP (CRF,Could not release fork handle)
+	  ENDIF.
+	ENDIF.
+
+	CALL TCPCLS
+
+	MOVE S1,STREAM			;Get our stream number
+	SETZM STRPAR(S1)		;Indicate no allocated Job Area
+	MOVEI S1,J$$END+PAGSIZ-1	;Get the lpt data base length
+	IDIVI S1,PAGSIZ			;Get number of pages in S1
+	MOVE S2,J			;Get the STRPAR address
+	ADR2PG S2			;Convert to a page number
+	$CALL M%RLNP			;Return them
+	$CALL M%CLNC			;GET RID OF UNWANTED PAGES.
+	$WTO (PPNSPL - Stream Shutdown,,J$SOBJ(J))
+	$RETT
+	SUBTTL	NXTJOB -- NEXTJOB Message from QUASAR
+
+;J points to the stream data area
+;M points to the message
+NXTJOB:	HRR S1,J			;Move the request block into job area
+	HRL S1,M			;Get source,,dest
+	LOAD S2,.MSTYP(M),MS.CNT	;Get length of message
+	ADDI S2,-1(J)			;Get adr of end of blt
+	BLT S1,(S2)			;Blt the data
+	SKIPN J$SICD(J)			;Is inferior idle?
+	IFSKP.
+	  $WTO (PPNSPL - QUASAR error,New job received for already busy stream,J$SOBJ(J))
+	  MOVX S1,FATERT
+	  JRST SUPMSG
+	ENDIF.
+	MOVX S1,ICD.NJ			;Tell her it's a new job
+	MOVEM S1,J$SICD(J)
+	MOVE S1,J$SFRK(J)		;Get process handle
+	MOVEI S2,INFST			;Get start address
+	SFORK%				;Here we go
+	IFJER.
+	  MOVX S1,.FHSLF		;Get handle on myself
+	  $CALL ERRSTR			;and error string
+	  $WTO (PPNSPL - New request failed,<Can't restart inferior, ^T/TMPBUF/>,J$SOBJ(J))
+	  MOVX S1,FATERT
+	  JRST SUPMSG
+	ENDIF.
+	$WTOJ (PPNSPL - Start,<^R/.EQJBB(J)/>,J$SOBJ(J)) ;Tell OPR
+	$RETT
+	SUBTTL	FORFOR -- Force Forms change mess.
+
+; This routine causes a forms change to occur even if there is no
+; job currently scheduled for the printer.
+;
+;  Assumes J contains the pointer to the job data base
+;	   M contains a pointer to the message
+;	   The object block has already been parsed correctly
+FORFOR:	MOVE S1,.OFLAG(M)		;Get the forms type
+	MOVEM S1,.EQLIM(J)		;Save it where NXTJOB does
+	SKIPN J$SICD(J)			;Is inferior idle?
+	IFSKP.
+	 $WTO (PPNSPL - QUASAR error,Forms request received for already busy stream,J$SOBJ(J))
+	  MOVX S1,%RSUNA
+	  JRST SUPMSG
+	ENDIF.
+	MOVX S1,ICD.CF			;Tell her we want new forms
+	MOVEM S1,J$SICD(J)
+	MOVE S1,J$SFRK(J)		;Get process handle
+	MOVEI S2,INFST			;Get start address
+	SFORK%				;Here we go
+	IFJER.
+	  MOVX S1,.FHSLF
+	  $CALL ERRSTR
+	  $WTO (PPNSPL - Setting forms failed,<Can't restart inferior, ^T/TMPBUF/>,J$SOBJ(J))
+	  MOVX S1,FATERT
+	  JRST SUPMSG
+	ENDIF.
+	$RETT
+	SUBTTL Job Cancel and Requeue requests
+
+;KILL - User CANCEL Request
+KILL:	MOVE S1,J$SICD(J)		;Have we already told inf. to abort?
+	IFXE. S1,ICD.AB
+	  $TEXT(<-1,,J$SMLG(J)>,<Job canceled by user ^U/ABO.ID(M)/^0^A>)
+	  TXO S1,ICD.AB			;Tell her it's time to stop
+	  MOVEM S1,J$SICD(J)
+	  $WTOJ (<Canceled by User ^U/ABO.ID(M)/>,<^R/.EQJBB(J)/>,J$SOBJ(J))
+	ENDIF.
+	$RETT
+
+;CANCEL - Operator Cancel request
+OACCAN:	DO.
+	  $CALL GETBLK			;Get a message block
+	  IFN.
+	    CAIE T1,.CANTY		;Is this the cancel type block?
+	     LOOP.
+	    MOVE S1,0(T3)		;Load the cancel type.
+	    CAIE S1,.CNPRG		;Is it /purge?
+	     LOOP.
+	    MOVE S1,J$SFRK(J)		;Get handle
+ 	    HFORK%			;and stop it
+	    IFJER.
+	      $STOP (CKA,Could not halt inferior in purge request)
+	    ENDIF.
+	    MOVX S1,SIG.DN		;Fake a DONE message from inferior
+	    MOVEM S1,J$SIST(J)
+	  ELSE.
+	    $TEXT(<-1,,J$SMLG(J)>,Job aborted by OPERATOR^0^A) ;Log message
+	    MOVX S1,ICD.AB		;Tell her it's time to stop
+	    IORM S1,J$SICD(J)
+	  ENDIF.
+	  $ACK (PPNSPL - Aborting,<^R/.EQJBB(J)/>,J$SOBJ(J),.MSCOD(M))
+	  $RETT
+	ENDDO.
+
+;OACREQ -- Operator REQUEUE request.
+;Jobs are always requeued to start from the beginning.
+OACREQ:	$TEXT(<-1,,J$SMLG(J)>,Job requeued by OPERATOR^0^A) ;Log message
+	MOVX S1,ICD.RQ			;Tell her it's time to stop
+	IORM S1,J$SICD(J)
+	$ACK (PPNSPL - requeued,<^R/.EQJBB(J)/>,J$SOBJ(J),.MSCOD(M))
+	$RETT
+	SUBTTL	Dummy routines for not implemented OPR commands
+
+OACPAU:	$ACK (PPNSPL - ignored,PAUSE not supported,J$SOBJ(J),.MSCOD(M))
+	$RETT
+
+OACCON:	$ACK (PPNSPL - ignored,CONTINUE not supported,J$SOBJ(J),.MSCOD(M))
+	$RETT
+
+OACSUP:	$ACK (PPNSPL - ignored,SUPPRESS not supported,J$SOBJ(J),.MSCOD(M))
+	$RETT
+
+OACALI:	$ACK (PPNSPL - Ignored,ALIGN not supported,J$SOBJ(J),.MSCOD(M))
+	$RETT
+
+OACFWS:	$ACK (PPNSPL - Ignored,<FORWARD unsupported, use ABORT>,J$SOBJ(J),.MSCOD(M))
+	$RETT
+
+OACBKS:	$ACK (PPNSPL - Ignored,<BACKSPACE unsupported, use REQUEUE>,J$SOBJ(J),.MSCOD(M))
+OACRSP:	$RETT				;Simply return
+QSRNWA:	$RETT				;Not used here, just return
+OPRD60:	$RET				;Should not happen
+	SUBTTL	Code for inferior forks
+
+;The following code is executed only by the inferior forks.
+;It cannot use the GLXLIB since some parts of it are not reentrant.
+;In particular, the $TEXT macro must not be used.
+;
+;The inferior is always started and restarted at INFST.
+;The function depends on the value of the left half of J$SICD.
+;The inferior always terminates with a HALTF% prior to which it
+;puts the termination reason into J$SIST.
+;The right half of J$SICD is used to pass commands while running such
+;as abort and requeue.
+
+;Dispatch table for the different functions
+ICDTAB:	BDTB
+	 DTE (INF.0,ICD.SU)		;Inferior runs first time (Startup)
+	 DTE (INF.1,ICD.NJ)		;New job present in message area
+	 DTE (INF.2,ICD.CF)		;Change forms command
+	EDTB (ICDLEN)
+
+INFST:	RESET%				;Clean up
+	MOVX S1,<IOWD STKSIZ,J$SSTK>	;Set up the stack
+	ADD S1,J			;Add data area offset to stack pointer
+	MOVE P,S1			;and init it
+
+	MOVEI 1,.GTHNS
+	HRROI 2,HSTNAM
+	SETO 3,
+	GTHST%
+	 ERJMP [FATAL <Cant get local host name>]
+
+	MOVEI S1,.FHSLF			;Set up the interrupt system
+	MOVE S2,[LEVTAB,,CHNTAB]	;Point to the tables
+	SIR%
+	EIR%
+	MOVX S2,<1B2!1B3>		;2:  Watchdog channel, 3: timeouts
+	AIC%
+	SETZM J$SIST(J)			;Reset termination status
+	HRRZ S1,J$SICD(J)		;Get command
+	SKIPLE S1			;Make sure it's legal
+	 CAIL S1,ICDLEN
+	  FATAL	(Illegal Command to Inferior)
+	JRST @ICDTAB(S1)		;Dispatch
+
+;Stream startup
+INF.0:	MOVX S1,SIG.DN			;Quit right away
+	PJRST SIGNAL
+
+;New job request in message area
+INF.1:	MOVEI S1,J$$BEG(J)		;Start address
+	MOVSI S2,-<J$$LEN+^D35>/^D36	;AOBJN pointer to bit table
+	DO.
+	  MOVEI T1,^D36			;Bit counter for this word
+	  MOVE T2,ZTABLE(S2)		;Get a word from bit table
+	  DO.
+	    IFN. T2
+	      JFFO T2,.+1		;Find the first 1 bit
+	      ADD S1,T3			;Move up to the corresponding word
+	      SETZM 0(S1)		;And zero it
+	      SUB T1,T3			;Reduce bits left in this word
+	      LSH T2,0(T3)		;Shift offending bit to bit 0
+	      TXZ T2,1B0		;And get rid of it
+	      LOOP.
+	    ENDIF.
+	  ENDDO.
+	  ADD S1,T1			;Account for the rest of the word
+	  AOBJN S2,TOP.			;And loop
+	ENDDO.
+	LOAD S1,.EQSPC(J),EQ.NUM	;Get number of files
+	MOVEM S1,J$RFLN(J)		;Store it
+	GETLIM T1,.EQLIM(J),OLIM	;Get page limit
+	MOVEM T1,J$RLIM(J)		;Save it
+	GTAD%				;Get time of day
+	MOVEM S1,J$RTIM(J)		;Save it away
+	MOVX S1,<POINT 8,0>		;Set byte pointer for output buffer
+	MOVEM S1,J$OBTZ(J)
+	$CALL OUTRES			;Init output buffer
+	MOVX S1,LGBFSZ			;Log buffer
+	MOVEM S1,J$LBCT(J)
+	MOVE S1,[POINT 7,J$LBFR(J)]
+	MOVEM S1,J$LBPT(J)
+	SETZ S,				;Reset all flags
+	MOVEI T1,LPTVER			;Get version number
+	MOVEI T2,LPTMIN
+	LOGMSG (PPNSPL version ^DT1^T.^DT2^T on ^ASYSNAM)
+	LOAD T1,.EQSEQ(J),EQ.SEQ	;Get sequence number
+	MOVE T2,OBJ.UN+J$SOBJ(J)	;Get unit number
+	LOGMSG (Job ^S.EQJOB(J)^T sequence #^DT1^T on Printer ^DT2^T)
+	SKIPN T1,J$CFLG-J$CBEG+.EQCHK(J)	;Job previously checkpointed?
+	IFSKP.
+	  HRRI S1,J$CBEG(J)		;Yes, get checkpoint info: ??,,dest
+	  HRL S1,.EQCHK(J)		;source,,dest
+	  BLT S1,J$CEND-1(J)		;get it
+	  MOVE S1,J$CFLG(J)		;Get checkpoint flags
+	  IFXE. S1,CFGREQ		;Job requeued or crashed?
+	    LOGMSG (Job Restarted after Failure)
+	  ELSE.
+	    LOGMSG (Job Restarted after Requeuing)
+	  ENDIF.
+	ENDIF.
+	$CALL DONOR
+	MOVX S1,SIG.DN			;Tell superior we're done
+	PJRST SIGNAL
+
+;Take care of change forms command
+INF.2:	SETZ S,				;Reset all flags
+	$CALL FORMS			;Set the forms
+	MOVX S1,SIG.DN			;Tell superior we're done
+	PJRST SIGNAL
+
+;SIGNAL -- Passes messages to superior by setting the J$SIST var
+;and halting. Some of the messages expect the superior to continue
+;this fork after processing, others generate error if continued.
+
+;Dispatch table
+;The .CC function only generates a signal if it's time to checkpoint, returns
+;directly normally. .CP always requests a checkpoint
+SIGTAB: BDTB
+	 DTE (SIG.0,SIG.DN)		;Done with processing
+	 DTE (SIG.1,SIG.ER)		;Error (called by ERROR macro)
+	 DTE (SIG.2,SIG.FT)		;Fatal error (called by FATAL macro)
+	 DTE (SIG.3,SIG.MS)		;Message (called by OPRMSG macro)
+	 DTE (SIG.4,SIG.CP)		;Request for checkpoint
+	 DTE (SIG.5,SIG.CC)		;Check if checkpoint needed
+	 DTE (SIG.6,SIG.CR)		;Cancel request and go to nxt
+	EDTB (SIGLEN)
+
+SIGNAL:	SKIPLE S1			;Make sure command is legal
+	 CAIL S1,SIGLEN
+	  FATAL	(Illegal Signal Requested)
+	JRST @SIGTAB(S1)		;Dispatch
+
+;Processing done
+SIG.0:	MOVX S1,IST.DN
+	JRST SIG.22
+
+;Error
+SIG.1:	MOVX S1,IST.ER
+	JRST SIG.22
+
+;Fatal Error
+SIG.2:	MOVX S1,IST.FT
+SIG.22:	SKIPE J$SIST(J)			;Must be reset
+	 FATAL (Inferior's Status not Reset)
+	MOVEM S1,J$SIST(J)		;Set new value
+	HALTF%				;Stop and tell superior
+	FATAL (Illegal Attempt to Continue Inferior)	;Not continuable
+
+;Message to OPR
+SIG.3:	MOVX S1,IST.MS
+	JRST SIG.42
+
+;Request for checkpoint
+SIG.4:	GTAD%				;Get time
+	ADDX S1,3*CKPTIM		;Add time until next
+	HRRZM S1,J$SCKP(J)		;Out with it, without date
+	MOVX S1,IST.CP			;Checkpoint message
+SIG.42:	SKIPE J$SIST(J)			;No prev. status set, please
+	 FATAL (Inferior's status not reset)
+	MOVEM S1,J$SIST(J)
+	HALTF%				;Stop and tell superior
+	SETZM J$SIST(J)			;We're continuable
+	$RETT
+
+;Check if time for a timed checkpoint
+SIG.5:	TXNN	S,TIMCKP		;Timed checkpoints enabled?
+	 $RETT				;No, forget this
+	GTAD%				;Get time
+	HRRZ S1,S1			;Remove date
+	SUB S1,J$SCKP(J)		;Subtract set time
+	JUMPGE S1,SIG.4			;It's time: request one
+	$RETT				;Not time yet
+
+;Cancel request and get next (file unprintable or something)
+SIG.6:	MOVX S1,IST.CR
+	JRST SIG.22
+
+;CHKABT -- Checks if superior wants to abort the processing.
+;Returns true if time to abort, false otherwise.
+CHKABT:	MOVE S1,J$SICD(J)		;Get command word
+	TXNN S1,<ICD.AB!ICD.RQ>		;Abort or requeue
+	 $RETF				;None, return false
+	$RETT				;Say it's time to quit
+
+;The TXT.xx routines are called by code generated by the
+;TXT macro.
+;S1 contains a byte pointer which must be updated, or the
+;address of routine which outputs one char from C.
+;S2 points to the argument.
+;All ACs are preserved (except S1 if byte pointer)
+
+;TXT.AS - S2 points to an ASCIZ string
+TXT.AS:	$SAVE <S2,T1>			;Save some regs
+	MOVE T1,S2			;Get the address
+	ADD T1,[POINT 7,0]		;Make it a byte pointer
+	DO.
+	  ILDB S2,T1			;Incr. the byte pointer
+	  SKIPN S2			;Check if end of string
+	   $RETT			;Yupp, return
+	  CAIE S2,^D22			;Hairy patch to remove ctl-Vs
+	   $CALL TXT.CH			;Output the char in S2
+	  LOOP.
+	ENDDO.
+
+;TXT.DN - S2 points to a word to be output as a decimal number
+TXT.DN:	$SAVE <S2,T1>
+	PUSH P,S1			;Save S1 temporarily
+	MOVE S2,@S2			;Get the number
+	HRRO S1,J$XTMP(J)		;Point to temp buffer
+	MOVX T1,<FLD ^D10,NO%RDX>	;Decimal radix
+	NOUT%
+	 ERJMP .+1
+TXT.D1:	SETZ S2,			;Put a NUL last in buffer
+	IDPB S2,S1
+	POP P,S1			;Get destination back
+	MOVEI S2,J$XTMP(J)		;Point to buffer
+	$CALL TXT.AS			;And output string
+	$RETT
+
+
+;TXT.SX - S2 points to a SIXBIT word
+TXT.SX:	$SAVE <S2,T1,T2,T3>
+	MOVE T1,@S2			;Get the word
+	MOVE T2,[POINT 6,T1]		;Make  a byte pointer
+	MOVEI T3,^D6			;Loop counter
+	DO.
+	  ILDB S2,T2			;Get a byte
+	  SKIPN S2			;Is it zero (=space)?
+	   $RETT			;Yes, return
+	  ADDI S2,40			;Make it ASCII
+	  $CALL TXT.CH			;Out with it
+	  SOJG T3,TOP.			;Loop
+	ENDDO.
+	$RETT				;All 6 chars translated
+
+;TXT.DT - S2 points to a word in internal time format
+TXT.DT:	$SAVE <S2,T1>
+	MOVE S2,@S2			;Get the time
+	SETZ T1,
+	JRST TXT.T1
+
+;TXT.TI - Outputs current time
+TXT.TI:	$SAVE	<S2,T1>
+	SETO S2,
+	MOVX T1,<OT%NDA>		;Only time
+TXT.T1:	PUSH P,S1			;Save dest for a while
+	HRROI S1,J$XTMP(J)		;Point to temp buffer
+	ODTIM%
+	PJRST TXT.D1			;Finish up
+
+
+;TXT.ER - Outputs the most recent error
+TXT.ER:	$SAVE <S2,T1>
+	MOVX S2,<.FHSLF,,-1>		;Most recent error
+	MOVX T1,^D30			;Max number of chars
+	PUSH P,S1			;Save dest for a while
+	HRROI S1,J$XTMP(J)		;Point to temp buffer
+	ERSTR%
+	  TRN
+	  TRN
+	PJRST TXT.D1			;Finish up
+
+;TXT.CH - Outputs the right adjusted char in S2
+;Also handles the source designator in S1 properly.
+TXT.CH:	$SAVE	<T1,C>
+	HLRZ T1,S1			;Get left half of source design.
+	IFN. T1
+	  IDPB S2,S1			;Out with it
+	ELSE.
+	  PUSH P,S1			;Save our address
+	  MOVE C,S2			;Get the char into right reg
+	  $CALL @S1			;Dispatch
+	  POP P,S1			;Restore address
+	ENDIF.
+	$RETT
+	SUBTTL	Common routines used by the different DOxxxx handlers
+
+;FINISH -- Does the accounting and other misc stuff.
+;Called immediately before outputting the trailer.
+FINISH:	MOVE S1,J$SICD(J)		;Were we aborted or requeued?
+	TXNE S1,<ICD.AB!ICD.RQ>
+	 LOGMSG (^AJ$SMLG(J))		;Yes, insert message into log
+	LOGMSG (Total ^DJ$ANPT(J)^T Pages of Output)
+	$RETT
+	SUBTTL	DONOR -- Print on a normal TTY-LPT
+
+DONOR:	$SAVE <P1>
+	$CALL FORMS			;Get forms mounted
+
+	LOGMSG (Printing to local device ^AJ$SSTG(J)^T, Protocol PTLTTY)
+	MOVX T1,MSG.NOR			;Normal checkpoint messages
+	MOVEM T1,J$CMSG(J)
+	MOVE P1,J$CFLG(J)		;Get old flags before they're changed
+	TXO S,TIMCKP			;Enable timed checkpoints
+	MOVX S1,SIG.CP			;We want a checkpoint now
+	$CALL SIGNAL
+	LOAD E,.EQLEN(J),EQ.LOH		;Point to first file in request
+	ADD E,J
+	IFXN. P1,CFGCKP			;Job restarted?
+	  MOVE S2,J$CNFT(J)		;Get no of files prev. sent
+	  DO.
+	    SOJL S2,ENDLP.		;Skip already printed files
+	    $CALL NXTFIL		;Bump E to next spec
+	    JUMPF DONO.7		;All already printed
+	  ENDDO.
+	  MOVE T1,J$CNPT(J)		;Get no of pages prev. printed
+	  SUBI T1,3			;We want some overlap
+	  SKIPGE T1
+	   SETZ T1,			;Lowest page no is zero
+	ELSE.
+	  LOAD T1,.FPFST(E)		;Get /START param
+	  SOJ T1,			;Subtract one
+	ENDIF.
+
+	CALL TCPOPN			;open TCP connection to LPD
+	CALL LPDPRT			;request remote printer
+	SETZM FILCNT
+
+	CALL CFINIT			;init Control File buffer
+
+	MOVEI 2,"H"			;host
+	CALL CFSCHR
+	HRROI 2,HSTNAM			;our host name
+	CALL CFSOUT
+	MOVEI 2,.CHLFD
+	CALL CFSCHR
+
+	MOVEI 2,"P"			;user name
+	CALL CFSCHR
+	HRROI 2,.EQOWN(J)		;user
+	CALL CFSOUT
+	MOVEI 2,.CHLFD
+	CALL CFSCHR
+
+	HRROI 2,FOOBUF
+	MOVEI 2,"J"			;job header
+	CALL CFSCHR
+	LOAD 2,.FPLEN(E),FP.LEN
+	ADD 2,E
+	ADDI 2,.FDSTG
+	HRRO 2,2			;pointer to filename 
+	CALL CFSOUT
+	MOVEI 2,.CHLFD
+	CALL CFSCHR
+
+	MOVEI 2,"C"			;host
+	CALL CFSCHR
+	HRROI 2,HSTNAM			;our host name
+	CALL CFSOUT
+	MOVEI 2,.CHLFD
+	CALL CFSCHR
+
+	MOVEI 2,"L"			;user name (and do job header)
+	CALL CFSCHR
+	HRROI 2,.EQOWN(J)		;user
+	CALL CFSOUT
+	MOVEI 2,.CHLFD
+	CALL CFSCHR
+
+	DO.
+	  MOVEM T1,J$IIPG(J)		;save as initial page
+	  $CALL NORFIL			;Print the file with all copies
+	  $CALL NXTFIL			;Get next file
+	  SKIPN				;Return true?
+	  IFSKP.
+	    LOAD T1,.FPFST(E)		;Get /START param
+	    SOJ T1,			;Subtract one
+	    LOOP.
+	  ENDIF.
+	ENDDO.
+
+	CALL CFSEND			;send LPD control file
+	CALL TCPCLS
+
+DONO.7:
+;	SKIPE E,J$RLFS(J)		;Any log file to print?
+;	 $CALL NORFIL			;Yes, do it
+	$CALL FINISH			;Do the accounting etc
+	$RETT
+
+;NORFIL -- Print a File on TTY-LPT
+;This routine is always called for each of the files in the request even
+;when the job has been canceled. (Although nothing is done in such case.)
+
+NORFIL:	STKVAR <DISPCH,PPNAME>
+	$CALL CHKABT			;Are we canceled?
+	JUMPT .RETT			;Yes, return
+	$CALL LIMCHK			;Are we over limit?
+	 $RETIF				;Yes, just return
+
+	$CALL SETPFT			;Setup file type
+	MOVEM T1,DISPCH			;Save processing routine address
+	MOVEM T2,PPNAME			;Save pointer to prepend file name
+	$CALL INPOPN			;Open the input file up
+	 $RETIF				;Fail, return
+	LOGMSG (Starting File ^A@J$IFNM(J))
+	DO.
+	  $CALL LIMCHK			;Check if we're over page limit
+	  MOVX S1,SIG.CP		;Want a checkpoint now
+	  $CALL SIGNAL
+	  $CALL CHKABT			;Are we aborted?
+	   JUMPT ENDLP.			;Yes
+	  MOVE T1,DISPCH		;Get dispatch address
+	  MOVE T2,PPNAME		;Get pointer to prepend file name
+	  $CALL FILOUT			;Print the file
+	  TXNN S,ERRFIL			;Was there an error in the file?
+	   $CALL CHKABT			;Are we aborted?
+	    JUMPT ENDLP.		;Yes
+	  LOAD T1,.FPFST(E)		;Get /START param
+	  SOJ T1,			;adjust it
+	  MOVEM T1,J$IIPG(J)		;and save for next copy
+	  AOS J$CNCT(J)			;Bump copy count
+	  LOAD T1,.FPINF(E),FP.FCY
+	  CAMLE T1,J$CNCT(J)		;All copies printed?
+	   LOOP.
+	  $CALL OUTBUF			;Empty buffer
+	  AOS J$CNFT(J)			;Yes, bump file count
+	  SETZM J$CNCT(J)		;and reset copy count
+	  MOVX S1,SIG.CP		;Checkpoint now
+	  $CALL SIGNAL
+	  LOGMSG (Finished File ^A@J$IFNM(J)) ;Finished OK
+	ENDDO.
+	$CALL HEADER			;Output header information
+	$CALL INPCLS			;Close the file
+	TXNE S,SUPFIL			;Are we suppressing forms/file?
+	 SETZM J$XTOP(J)		;Yes, set we are not at top of page.
+	TXZ S,SUPFIL+ERRFIL		;Clear lots of bits
+	$RET				;And return
+	SUBTTL  CHKPS -- Check if file is a valid PostScript file
+; Return false ($RETF) if not valid PostScript
+; Return true ($RETT) if valid PostScript
+
+CHKPS:	STKVAR <PSJFN>
+	MOVX S1,GJ%SHT!GJ%OLD
+	LOAD S2,.FPLEN(E),FP.LEN
+	ADD S2,E
+	ADDI S2,.FDSTG
+	HRRO S2,S2			;Now have pointer to filename 
+	GTJFN%
+	IFNJE.
+	  MOVEM S1,PSJFN
+	  MOVE S2,[1,,.FBCTL]		;Get the control/flags word
+	  MOVEI T1,S2			;Return the information in S2
+	  GTFDB%
+	  IFJER.			;JSYS error...
+	    SETZ S2,			;Zero S2 for later
+	  ENDIF.
+	  LOAD S2,S2,FB%FCF		;Get the file class field
+	  CAIE S2,.FBPS			;This a PostScript file?
+	  IFSKP.	    
+	    RLJFN%			;Flush the JFN
+	     TRN			;Jeez, can't win
+	    $RETT			;Indeed
+	  ELSE.
+	    HRRZ S2,S1
+	    SETZM TRLBUF(J)
+	    HRROI S1,TRLBUF(J)		;Check for extension of PS
+	    MOVX T1,FLD(.JSAOF,JS%TYP)	;Just output the extension
+	    SETZ T2,
+	    JFNS%
+	     ERJMP .+1
+	    MOVE S1,[ASCIZ/PS/]		;Get what was returned
+	    CAME S1,TRLBUF(J)		;Is it?
+	    IFSKP.			;Yes...
+	      MOVE S1,PSJFN		;Get the JFN
+	      RLJFN%
+	       TRN
+	      $RETT			;PS file found
+	    ENDIF.
+	  ENDIF.
+	ENDIF.
+	$RETF
+	SUBTTL	NXTFIL -- Find and return the next file in the nextjob msg
+
+;E points to current file descriptor
+NXTFIL:	DO.
+	  SOSG J$RFLN(J)		;Decrement number of files in request
+	   $RETF
+	  LOAD T1,.FPLEN(E),FP.LEN	;Get the FP length
+	  ADD E,T1			;Bump to the FD
+	  LOAD T1,.FDLEN(E),FD.LEN	;Get the fd length
+	  ADD E,T1			;Bump to the next FP
+	  LOAD T1,.FPINF(E),FP.FLG	;Get log file flag
+	  JUMPE T1,.RETT		;Return if not the log file
+	  MOVEM E,J$RLFS(J)		;Save address of log file spec
+	  LOOP.
+	ENDDO.
+	SUBTTL	Routines to handle the input files
+
+;INPOPN  --  Routine to open the input file
+;Called with E pointing to the file parameter (FP) area for the file
+;to be opened.
+;J$IFNM is set to point to the file name string.
+INPOPN:	SETZM J$IJFN(J)			;No file opened yet
+	LOAD S2,.FPLEN(E),FP.LEN	;Get the FP length
+	ADD S2,E			;Compute the FD address
+	ADDI S2,.FDSTG			;Point to file name string
+	HRRZM S2,J$IFNM(J)		;Save the address
+	HRRO S2,S2			;Make it a generic byte pointer
+	MOVX S1,GJ%SHT!GJ%OLD		;GTJFN flags: file must exist
+	GTJFN%
+	IFNJE.
+	  MOVEM S1,J$IJFN(J)		;Success, save the JFN
+	  LOAD S1,.EQSEQ(J),EQ.PRV	;Get the users priv's
+	  IFE. S1
+	    LOAD S1,.FPINF(E),FP.SPL	;Is the file spooled?
+	    IFN. S1			;Yes
+	      MOVX S1,FP.DEL		;Set the file to be deleted
+	      ORM S1,.FPINF(E)
+	    ELSE.
+	      HRROI S1,.EQOWN(J)	;Point to owner's name
+	      MOVEM S1,.CKALD+J$XTMP(J)	;Put it into arg block
+	      HRROI S1,.EQCON(J)	;Point to connected directory
+	      MOVEM S1,.CKACD+J$XTMP(J)	;and store it
+	      SETZM .CKAEC+J$XTMP(J)	;Indicate no priv's (already checked)
+	      MOVE S1,J$IJFN(J)		;JFN
+	      MOVEM S1,.CKAUD+J$XTMP(J)
+	      MOVX S1,.CKARD		;Only interested in read access
+	      MOVEM S1,.CKAAC+J$XTMP(J)
+	      MOVX S1,CK%JFN!5		;We pass JFN and 5 words of args
+	      MOVEI S2,J$XTMP(J)	;Arg. block
+	      CHKAC%
+	       SETZ S1,
+	      IFE. S1			;Sorry
+		LOGMSG (Can't Access File ^A@J$IFNM(J)^T, ^E)
+		ZERO .FPINF(E),FP.DEL	;Clear the 'delete file' bit
+		SETZM J$IJFN(J)		;and the JFN to indicate no file
+		$RETF			;And return
+	      ENDIF.
+	      MOVX S1,.CKAWR		;Write access this time
+ 	      MOVEM S1,.CKAAC+J$XTMP(J)
+	      MOVX S1,CK%JFN!5		;JFN and 5 words of arg
+	      CHKAC%
+	       SETZ S1,
+	      IFE. S1
+	        ZERO .FPINF(E),FP.DEL	;Zero the delete bit if no access
+	      ENDIF.
+	    ENDIF.
+	  ENDIF.
+	ENDIF.
+	MOVEI S2,7			;Assume 7 bit bytes
+	TXNE S,F%PL8!F%PS8!F%PLH8!F%IM8	;Any eight bit bytes?
+	 MOVEI S2,8			;Yes, then use 8
+	MOVX	T1,^D36			;Bits per word
+	IDIV	T1,S2			;Get number of bytes per word to T1
+	IMULI	T1,IPBFSZ/<36/7>	;Multiply by # of words in buffer
+	MOVEM	T1,J$IICT(J)		;Save count 
+	MOVE	T1,S2			;Get bits per byte again
+	LSH	T1,^D24			;Build a byte pointer to start of buff.
+	IORX	T1,<^D36>B5		;Initial position
+	IORI	T1,J$IBFR(J)		;address
+	MOVEM	T1,J$IIBP(J)		;and save it
+	LSH	S2,^D30			;Get size into position
+	IORX	S2,OF%RD		;Only read access
+	MOVE	S1,J$IJFN(J)
+	OPENF%
+	IFNJE.
+	  SETZM	J$IBCT(J)		;Indicate input buffer is empty	
+	  $CALL	GETNAM			;Get a recognizable file name
+	  $RETT
+	ELSE.
+	  LOGMSG (Can't Access File ^A@J$IFNM(J)^T, ^E)
+	  ZERO .FPINF(E),FP.DEL		;Clear the 'delete file' bit
+	  SETZM J$IJFN(J)		;and the JFN to indicate no file
+	  $RETF				;And return
+	ENDIF.
+
+; CHKSIZ - Look at file to find its real byte size
+; Returns S2/ byte-size
+;	Returns false if bad page or byte count
+CHKSIZ:	STKVAR <SIZJFN>
+	MOVX S1,GJ%SHT+GJ%OLD
+	LOAD S2,.FPLEN(E),FP.LEN
+	ADD S2,E
+	ADDI S2,.FDSTG
+	HRRO S2,S2			;Now have pointer to filename 
+	GTJFN%
+	 ERJMP .RETF
+	MOVEM S1,SIZJFN			;Save JFN
+	SIZEF%				;Get byte size
+	IFNJE.
+	  IFG. S2			;Good byte count?
+	    IFG. T1			;Good page count?
+	      MOVE S1,SIZJFN
+	      MOVE S2,[1,,.FBBYV]	;Read byte size from FDB
+	      MOVEI T1,T1		;Put it in T1
+	      GTFDB%
+	      IFNJE.
+		MOVE S1,SIZJFN
+		RLJFN%			;Now flush the JFN
+		 ERJMP .RETF
+	 	LOAD S2,T1,FB%BSZ	;Get byte size into S2
+		$RETT
+	      ENDIF.
+	    ENDIF.
+	  ENDIF.
+	ENDIF.
+	MOVE T1,SIZJFN			;Get back the file JFN
+	RLJFN%				;Release it
+	 ERJMP .+1			;Some error
+	$RETF				;Take failure return
+
+;INPBYT  --  Read a byte from the input buffer. Fills the
+;buffer if necessary.
+;Returns the character in C. Returns False on EOF.
+
+INPBYT:	$CALL CHKABT			;Are we canceled?
+	JUMPT .RETF			;Yes, signal EOF
+	SKIPLE J$IBCT(J)		;Any chars in buffer?
+	IFSKP.
+	  $CALL INPBUF			;No, get a bufferful
+	  JUMPF .RETF			;Return false if EOF
+	ENDIF.
+	ILDB C,J$IBPT(J)		;Get the byte
+	SOS J$IBCT(J)			;and decrement count
+	$RETT
+
+;INPBUF - Inputs a bufferful
+;Returns false if attempt to read past EOF
+INPBUF:	MOVE S1,J$IJFN(J)		;JFN
+	MOVE S2,J$IIBP(J)		;Byte pointer to start of buffer
+	MOVEM S2,J$IBPT(J)		;Save as current pos too
+	MOVN T1,J$IICT(J)		;Max count
+	SIN%
+	IFJER.
+	  GTSTS%			;Get status
+	  IFXE. S2,GS%EOF		;Check if EOF
+	    LOGMSG (<Error Reading Input File, ^E>)
+	    TXO S,ERRFIL		;Skip the rest of the file
+	  ENDIF.
+	ENDIF.
+	ADD T1,J$IICT(J)		;Get total number read
+	MOVEM T1,J$IBCT(J)		;and save as current count
+	SKIPE T1			;If 0 we have EOF
+	 $RETT
+	$RETF
+
+;INPCLS -- Close the input file
+INPCLS:	MOVE S1,J$IJFN(J)
+	CLOSF%
+	 ERJMP .+1			;Forget errors
+	SETZM J$IJFN(J)			;Indicate file is closed
+	$RETT
+
+;INPREW  --  Rewind the input file
+; I.e. position the file pointer at the beginning of the file
+INPREW:	SKIPN S1,J$IJFN(J)
+	 $RETF				;Don't do it if file not open
+	SETZ S2,
+	SFPTR%
+	IFJER.
+	  FATAL (<Could not Rewind File, ^E>)
+	ENDIF.
+	SETZM J$IBCT(J)		;Indicate buffer empty
+	$RETT
+
+;GETNAM -- Figures out a 'real' name for the just opened file
+;E should point to the FP block and J$IFNM to the 'real' file name
+;The name is put in J$INAM and extension + version in J$IEXT
+GETNAM:	LOAD S1,.FPINF(E)		;Get flags for file
+	IFXE. S1,FP.SPL			;Is it a spooled file?
+	  IFXE. S1,FP.FLG		;No, is it also the log file?
+	    MOVE S2,J$IJFN(J)		;No, get JFN
+	    HRROI S1,J$INAM(J)		;Filename first
+	    MOVX T1,<FLD .JSAOF,JS%NAM>
+	    JFNS%
+	    HRROI S1,J$IEXT(J)		;Now extension
+	    MOVX T1,<FLD .JSAOF,JS%TYP>
+	    JFNS%
+	    MOVX T2,"."			;Insert a period
+	    IDPB T2,S1
+	    MOVX T1,<FLD .JSAOF,JS%GEN>	;and generation
+	    JFNS%
+	    LOAD S1,.FPINF(E),FP.SPL	;Get the spool bit
+	    IFN. S1
+	      MOVE T1,[POINT 7,J$INAM(J)]	;Restore the filename byte ptr.
+	      MOVEI T2,3	;How many dashes to look for
+	      MOVE T3,T1	;And an input pointer
+	      DO.
+	        ILDB S1,T3		;Get a character
+		JUMPE S1,ENDLP.
+	        CAIE S1,"-"		;A dash?
+	         LOOP.			;No, loop
+	        SOJG T2,TOP.		;Yes, loop until 4th field
+	      ENDDO.
+	      IFN. S1	    
+	        DO.
+		  ILDB S1,T3		;Get a character
+		  IDPB S1,T1		;Deposit it
+		  JUMPN S1,TOP.		;And loop until a null
+	        ENDDO.
+	        MOVEI T2,6		;Load a counter
+	        IDPB S1,T1		;And deposit more nulls
+	        SOJG T2,.-1		;For width calculation
+	        MOVE T1,J$INAM(J)	;Get the first word
+	        TLNE T1,774000		;Is there at least one character?
+	         $RETT			;Yes
+	      ENDIF.	 
+	    ENDIF.
+	    TXT (1,J$INAM(J),^TSpooled^0)
+	    TXT (1,J$IEXT(J),^TPrinter File^0)
+	  ELSE.
+	    TXT (1,J$INAM(J),^TBatch^0)	;Spooled logs have no reasonable name
+	    TXT (1,J$IEXT(J),^TLog File^0) 	;So use something descriptive
+	  ENDIF.
+	ELSE.
+	  TXT (1,J$INAM(J),^TBatch^0)	;Spooled logs have no reasonable name
+	  TXT (1,J$IEXT(J),^TLog File^0) 	;So use something descriptive
+	ENDIF.
+	$RETT
+	SUBTTL	FORMS change routines
+
+;FORMS   --  Setup Forms for a job
+FORMS:	GETLIM S1,.EQLIM(J),FORM	;Get the forms type
+	CAMN S1,J$FORM(J)		;Are forms exactly the same?
+	 $RETT				;Yes, return immediately
+	MOVE S2,J$FORM(J)		;Get current forms type
+	MOVEM S1,J$FORM(J)		;Save new form
+	XOR S1,S2			;Get common part
+	AND S1,[EXP FRMSK1]		;And it with the important part
+	IFE. S1
+	  OPRMSG (Forms Changed to ^SJ$FORM(J))	;Tell opr
+	ELSE.
+	  HRLZI S1,-F$NSW		;Get negative switch table length
+	  MOVEI T1,J$FCUR(J)		;Point to curr forms params
+	  DO.
+	    MOVE S2,FFDEFS(S1)		;Get a default
+	    CAME S2,[-1]		;Is this supposed to be defaulted?
+	     MOVEM S2,(T1)		;Yes, save it
+	    AOJ T1,			;Increment new param store ctr
+	    AOBJN S1,TOP.		;And loop
+	  ENDDO.
+	  SETZM J$RLPT(J)		;No name on remote printer yet
+	  $CALL FRMINI			;Read the LPFORM.TXT file.
+	  SKIPN
+	   OPRMSG (<Forms not found in LPFORM.TXT, Defaults Being Used>)
+	  MOVEI S1,3			;Start at three for both
+	  MOVEM S1,J$FWCL(J)		;Store it
+	  MOVEM S1,J$FLCL(J)		;Store it again
+	  MOVE S1,J$FWID(J)		;Get the width
+	  CAIG S1,F$WCL2		;LE class 2 limit?
+	   SOS J$FWCL(J)		;Yes, SOS once
+	  CAIG S1,F$WCL1		;LE class 1 limit
+	   SOS J$FWCL(J)		;Yes, SOS again
+	  MOVE S1,J$FLIN(J)		;Get the length
+	  CAIG S1,F$LCL2		;LE class 2 limit?
+	   SOS J$FLCL(J)		;Yes, sos once
+	  CAIG S1,F$LCL1		;LE class 1 limit?
+	   SOS J$FLCL(J)		;Yes, sos again
+	ENDIF.
+	$RETT
+	SUBTTL	Search for form in LPFORM.TXT
+
+FRMINI:	SKIPGE	S1,J$PLIST(J)		;Get pointer to printer list
+	JRST .RETT			;None there,,don't bother
+	MOVE S2,J$FORM(J)		;Get FORMS name
+	PUSHJ P,P%FFRM##		;Find the FORMS entry
+	JUMPF .RETT			;Not there,,return with defaults
+	MOVE P1,S2			;Save the FORMS entry address
+	LOAD S1,FF.LEN(P1),FF.WID	;Get width
+	SKIPE S1			;Skip if nothing there
+	 MOVEM S1,J$FWID(J)		;Save the width
+	LOAD S1,FF.LEN(P1),FF.LIN	;Get page size
+	SKIPE S1			;None there
+	 MOVEM S1,J$FLIN(J)		;Save the page length
+	$RETT				;Return true
+	SUBTTL	Routines for the logging
+;LOGCHR - Puts the char in C in the log buffer
+;No return if buffer overflows.
+LOGCHR:	SOSL	J$LBCT(J)		;Decrement the byte cout
+	IFSKP.
+	  OPRMSG (Aborted - Log File too Big)
+	  MOVX S1,SIG.DN		;Tell superior we're done
+	  $CALL	SIGNAL
+	ENDIF.
+	IDPB	C,J$LBPT(J)		;Deposit a byte
+	$RETT
+	SUBTTL	Routines to handle output
+
+;OUTCHR puts the char in reg C in the outbuffer and dumps it if necessary
+;It also keeps track of the horizontal position for simulated TABs and
+;skips the output if we're skipping pages.
+OUTCHR:	IFXN. S,FILXFR			;Transfering a file?
+	  SKIPLE J$IIPG(J)		;Yes, Any pages to skip?
+	   $RETT			;Yes, don't output anything
+	ENDIF.
+	CAIL C," "			;Is it a printable char?
+         AOSA J$XHPS(J)			;Yes, increment horz counter
+          SETZM J$XHPS(J)               ;No (probably CR or FF), zero counter
+	SETZM J$XTOP(J)			;Clear the top-of-form flag
+	CAIN C,.CHFFD			;Is it a formfeed?
+	 SETOM J$XTOP(J)		;Yes, set it
+	DO.
+	  SOSGE J$OBCT(J)		;Decrement the byte cout
+	  IFSKP.
+	    IDPB C,J$OBPT(J)		;Deposit a byte
+	    $RETT			;And return
+	  ENDIF.
+	  $CALL OUTBUF			;Dump the buffer
+	  LOOP.
+	ENDDO.
+
+;OUTBUF  --  Routine to output a buffer
+;Also checks if it's time for a checkpoint.
+OUTBUF:	$CALL .SAVET			;Save the 't' acs
+	MOVX S1,SIG.CC			;Check if we need a timed CKP
+	$CALL SIGNAL
+	SKIPGE T1,J$OBCT(J)		;Get bytes remaining in buffer
+	 SETZ T1,			;If less,,make it zero
+	SUBI T1,OPBFSZ			;Chars in buffer negated
+	SKIPN T1			;Is the buffer empty?
+	 $RETT				;Yes, forget this
+	MOVN T2,T1			;Incr char count
+	ADDM T2,J$XCNT(J)
+	MOVE S1,J$OJFN(J)		;JFN
+	MOVEI S2,J$OBFR(J)		;Get address of buffer
+	ADD S2,J$OBTZ(J)		;and make it a byte pointer
+	SOUT%				;Output it
+	IFJER.
+	  ERROR (<SOUTR Failed, ^E>)
+      	ENDIF.
+
+; Routine to reset the buffer
+OUTRES:	MOVEI S1,OPBFSZ			;Get characters per buffer
+	MOVEM S1,J$OBCT(J)		;Save as buffer byte count
+	MOVEI S1,J$OBFR(J)		;Get the buffer address
+	ADD S1,J$OBTZ(J)		;Add the byte ptr (left half)
+	MOVEM S1,J$OBPT(J)		;Save as buffer byte pointer
+	$RETT				;And return
+	SUBTTL Device independent routine to output a file
+
+;Call with E pointing to the FP block for the open file
+;	   J pointing to the Stream data area
+;	   T1 pointing to the routine to output the file
+FILOUT:	PUSH P,T1			;Save the dispatch address
+	PUSH P,T2			;Save pointer to prepend filename
+	TXO S,FILXFR			;Say we're transferring a file
+	$CALL INPREW			;Rewind the input file
+	MOVE T1,J$FLIN(J)		;Start at top of page
+	MOVEM T1,J$XVPS(J)		;Save it
+	POP P,T2			;Get pointer to prepend filename
+	POP P,T1			;Get dispatch address
+	$CALL (T1)			;Dispatch
+;	$CALL JOBTRL			;Print a trailer page
+	$CALL OUTBUF			;Empty buffer
+	TXZ S,FILXFR			;Finished with the file
+	SKIPE J$XTOP(J)			;Are we at TOF?
+	IFSKP.
+	  AOS J$ANPT(J)			;No, charge him for rest of page
+	ENDIF.
+	$RET
+	SUBTTL	SETPFT  --  Setup file processing type
+
+;Called to determine which type of processing should be done on the
+;input file.
+;
+;Returns with T1 containing  address of processing routine as follows:
+;					Sets flag in S:
+;	PLAIN: 7-bit plaintext		F%PL7
+;	PLAIN: 8-bit plaintext		F%PL8
+;	PS:	7-bit PostScript	F%PS7
+;	PS:	8-bit PostScript	F%PS8
+;  The following are printed with headers ala IM.EXE:
+;	PLH:	7-bit plaintext		F%PLH7
+;	PLH:	8-bit plaintext		F%PLH8
+;These will be implemented later:
+;	IMP:	7-bit Impress		F%IM7
+;	IMP:	8-bit Impress		F%IM8
+SETPFT:	STKVAR <BYTSIZ>
+	$CALL CHKSIZ			;Get the byte size for the file.
+	SKIPN
+	 MOVEI S2,7			;Invalid page count or byte size
+	cain s2,^d36		;if 36 bit file
+	 TXO S,F%36
+	cain s2,^d36		;if 36 bit file
+	 movei s2,7		;then pretend 7 bit
+	MOVEM S2,BYTSIZ		;Save the byte size for later
+	$CALL CHKPS		;Is this a PostScript file?
+	MOVE S2,BYTSIZ		;Get the bytesize
+	SKIPN
+	IFSKP.				;Yes, then determine 8 bitness
+	  CAIE S2,7			;Seven bit?
+	  IFSKP.
+	    TXO S,F%PS7			;Yes, lite that flag
+	  ELSE.
+	    TXO S,F%PS8			;No, eight bit...
+	  ENDIF.
+	  MOVEI T1,PS			;PostScript processor
+	ELSE.				;We're looking at a plaintext file
+	  CAIE S2,7			;Seven bit?
+	  IFSKP.			;Yes...
+	    TXO S,F%PL7
+	  ELSE.
+	    TXO S,F%PL8
+	  ENDIF.
+	  MOVEI T1,PLAIN		;This routine will be called any case
+	  HRROI T2,[ASCIZ/PLAINTEXT/]	;Assume this prepend file
+	  LOAD S1,.FPINF(E),FP.2PG	;Get flag for landscape/book/2up
+	  HLRZ S2,.FPFR1(E)		;Get formwidth
+	  IFN. S1			;Flag set?
+	    HRROI T2,[ASCIZ/BOOK/]	;Yes, assume we're booking
+	    SKIPE S2			;This guy zero?
+	     HRROI T2,[ASCIZ/2UP/]	;No, then 2up
+	  ELSE.
+	    CAIN S2,^D132		;Form width large?
+	     HRROI T2,[ASCIZ/LANDSCAPE/]	;Yes, then landscape it
+	  ENDIF.
+	ENDIF.
+	$RETT
+
+	SUBTTL Routines to send stuff to printers	
+
+; Send a PostScript file to the printer
+PLAIN:	MOVEM T2,PRENAM		;save prepend file name
+	SETOM PLAINP
+	SKIPA
+PS:	 SETZM PLAINP
+	CALL LPDUNQ		;generate unique names for LPD transfer
+
+	MOVE 1,J$IJFN(J)
+	SIZEF%
+	 ERJMP TCPDIE
+
+	;only do if 36 bit file
+	TXNN S,F%36
+	IFSKP.
+	 movei 1,5
+	 TXNE S,F%PL8!F%PS8!F%PLH8!F%IM8	;Any eight bit bytes?
+	  movei 1,4
+	 imul 2,1
+	ENDIF.
+
+	ADDI 2,2		;plus "%!"
+	SKIPE PLAINP		;plaintext?
+	 JRST [PUSH P,2		;yes do this stuff
+	       CALL PLNSIZ	;gtjfn on prepend file, return size
+	       POP P,2
+	       ADD 2,1
+	       JRST .+1]
+	MOVE 1,[POINT 7,FOOBUF]
+	MOVEI 3,.CHCNC
+	IDPB 3,1
+	MOVEI 3,^D10
+	NOUT%
+	 JFCL
+	MOVEI 2,.CHSPC	
+	IDPB 2,1
+	MOVE 2,[POINT 7,UNIQNM]
+	ILDB 3,2
+	SKIPE 3
+	 IDPB 3,1
+	JUMPN 3,.-3
+	MOVEI 2,.CHLFD
+	IDPB 2,1
+	SETZ 2,
+	IDPB 2,1
+	HRROI 2,FOOBUF
+	CALL LPDOUT
+	CALL LPDACK		;get an ack
+
+;send file here
+	Move 1,TCPJFN
+	Hrroi 2,[asciz /%!/]	;make sure its always postscript!
+	Setz 3,
+	SOUTR%
+	 ERJMP .+1
+
+	SKIPE PLAINP		;plaintext?
+	 CALL PLNSND		;send prepend file first
+
+	PUSH P,5
+SNDFIL:	MOVE 1,J$IJFN(J)
+	Hrroi 2,FOOBuf
+	Movni 3,1000*5
+	SIN%
+	 Erjmp .+1
+	Move 5,3
+	Move 1,TCPJFN
+	Hrroi 2,FooBuf
+	Movni 3,1000*5
+	sub 3,5
+	SOUT%
+	jumpe 5,sndfil
+	POP P,5
+ifn debug,<
+ tmsg <s:(file):
+>
+>
+
+	CALL LPDNUL
+	CALL LPDACK
+
+	MOVEI 2,"f"		;print this file
+	CALL CFSCHR
+	HRROI 2,UNIQNM
+	CALL CFSOUT
+	MOVEI 2,.CHLFD
+	CALL CFSCHR
+
+	MOVEI 2,"U"		;delete file after printing
+	CALL CFSCHR
+	MOVE 2,[POINT 7,UNIQNM]
+	CALL CFSOUT
+	MOVEI 2,.CHLFD
+	CALL CFSCHR
+
+	MOVEI 2,"N"
+	CALL CFSCHR
+	HRROI 1,FOOBUF
+	MOVE S2,J$IJFN(J)
+	MOVE T1,[111110,,000001]
+	JFNS%
+	 ERJMP .+1
+	SETZ 3,
+	IDPB 3,1
+	HRROI 2,FOOBUF
+	CALL CFSOUT
+	MOVEI 2,.CHLFD
+	CALL CFSCHR
+
+	$RETT				;Done here
+
+;gtjfn on prepend file, return size in t1
+PLNSIZ:	HRROI S1,PREBUF			;Place to build prepend file name
+	HRROI S2,[ASCIZ/SYSTEM:/]	;First part of name
+	SETZ T1,
+	SOUT%
+	MOVE S2,PRENAM			;Prepend filename
+	SOUT%
+	HRROI S2,[ASCIZ/.PS/]		;Extension
+	SOUT%
+	IDPB T1,S1			;Tie it off with zip
+	MOVX S1,GJ%SHT!GJ%OLD		;Old file
+	HRROI S2,PREBUF			;Point to the finished filename
+	GTJFN%				;Get a JFN for it
+	IFJER.				;Oops...
+	 TMSG <?PPNSPL: Prepend file not found.
+>
+	 JRST TCPDIE
+	ENDIF.
+	MOVEM S1,PREJFN		;Stash the JFN
+	SIZEF%
+	 ERJMP TCPDIE
+	MOVE 1,2		;ret byte count in ac1
+	RET
+
+PLNSND:	MOVE 1,PREJFN
+	MOVX S2,OF%RD!FLD(7,OF%BSZ)	;Else slurp this dude
+	OPENF%
+	 ERJMP TCPDIE
+
+	PUSH P,5
+SNDPRE:	MOVE 1,PREJFN
+	Hrroi 2,FOOBuf
+	Movni 3,1000*5
+	SIN%
+	 Erjmp .+1
+	Move 5,3
+	Move 1,TCPJFN
+	Hrroi 2,FooBuf
+	Movni 3,1000*5
+	sub 3,5
+	SOUTR%
+	JUMPE 5,SNDPRE
+	POP P,5
+	MOVE 1,PREJFN
+	CLOSF%
+	 ERJMP .+1
+	RET
+
+
+;PostScript text to prepend to a plaintext file
+PREPND: ASCIZ ^
+/in. {72 mul} def
+/line 1024 string def
+/leftmargin where not{/leftmargin .75 in. def}{pop}ifelse
+/topmargin where not{/topmargin 10.5 in. def}{pop}ifelse
+/newppsn {leftmargin topmargin moveto} bind def
+/newpage {showpage newppsn} bind def
+/printfile{
+	newppsn
+	{currentfile cvlit line readline not{exit}if
+		 (\f) search{show newpage pop}if
+		 show
+	 	 leftmargin currentpoint exch 
+		 pop 12 sub dup .5 in. le{pop pop newpage}{moveto}ifelse
+	}loop
+	showpage
+}bind def
+/Courier findfont 11 scalefont setfont
+printfile
+^;End of prepended PostScript text
+	SUBTTL ERRCHK - Check for error from the printer
+
+ERRCHK: SETZM ERRFLG(J)			;Assume no errors
+	MOVE S1,J$OJFN(J)		;Get the JFN
+	SIBE%				;Is there anything there?
+	IFNSK.
+	  SETZM ERRBUF(J)
+	  MOVEI S1,ERRBUF(J)		;Get pointer to the buffer
+	  HRLS S1
+	  AOS S1			;ERRBUF,,ERRBUF+1
+	  MOVEI T1,ERRBUF+NERBUF-1(J)
+	  BLT S1,T1			;Zero it
+	  PUSH P,S2			;Save the count
+	  MOVN T1,S2			;Get count of bytes there
+	  MOVE S2,[POINT ^D8,ERRBUF+1(J)]	;Point to the input buffer
+	  PUSH P,S2			;Save this pointer
+	  MOVE S1,J$OJFN(J)
+	  SIN%				;Get the junk
+	   ERJMP .+1			;Ignore an error, sort of
+	  MOVE S1,[POINT 7,ERRBUF(J)]
+	  POP P,T2			;Get back 8 bit byte pointer
+	  MOVE T1,(P)			;Get the counter
+	  DO.				;Convert 8 bit chars to 7 bit
+	    ILDB S2,T2			;Get a character
+	    IFN. S2
+	      IDPB S2,S1		;Stash it back
+	      SOJG T1,TOP.
+	    ENDIF.
+	  ENDDO.
+	  POP P,T1			;Get the count back
+	  $CALL GETERR			;Get the error type
+	  JUMPF .RETT			;None???
+	  CAIE S1,1			;PostScript interpreter error?
+	  IFSKP.
+	    SETOM ERRFLG(J)		;Yes, blow the sucker out of the water
+	    $RETF
+	  ENDIF.
+	ENDIF.
+	$RETT
+	SUBTTL IDLCHK - Check for printer in idle state
+; Check for printer idle
+IDLCHK:	STKVAR <NCHARS,DOWAIT,DOBUSY>
+	$CALL OUTBUF
+	SETZM DOWAIT			;No check for waiting, yet
+	SETOM DOBUSY			;Check for busy
+	DO.
+	  DO.
+	    MOVE S1,J$OJFN(J)		;Get the JFN
+	    MOVEI S2,.TICCT		;Send a Control-T
+	    BOUT%
+	    MOVEI S1,^D7000		;Wait a second (seven)
+	    DISMS%
+	    MOVE S1,J$OJFN(J)		;Get the JFN
+	    SIBE%
+	    TRNA			;Now it's got something  
+	     LOOP.
+	  ENDDO.
+	  MOVEM S2,NCHARS		;Save number of characters
+	  MOVN T1,S2			;Get negative count of characters
+	  MOVE S2,[POINT 8,TRLBUF(J)]	;Buffer where they go.
+	  SIN%
+	   ERJMP .+1			;Should NEVER happen!
+	  SKIPN DOBUSY			;Do busy?
+	  IFSKP.
+	    MOVE S1,[POINT 8,[BYTE(8) ":"," ","b","u","s","y"]]
+	    MOVE S2,NCHARS		;Number of characters in the buffer
+	    $CALL FNDSTR		;Go look for it
+	    IFNSK.
+	      SETZM DOBUSY		;Not found, look for waiting state
+	      SETOM DOWAIT
+	    ENDIF.
+	    LOOP.			;Loop while engine busy
+	  ELSE.
+	    SKIPN DOWAIT		;Look for waiting status?
+	    IFSKP.			;Yes
+	      MOVE S1,[POINT 8,[BYTE(8) ":"," ","w","a","i","t"]]
+	      MOVE S2,NCHARS		;Number of characters in the buffer
+	      $CALL FNDSTR		;Go look for it
+	      IFSKP.			;Then we found it
+		MOVE S1,J$OJFN(J)	;Get the JFN
+		MOVEI S2,.TICCD		;Send a control-D
+		BOUT%
+	      ENDIF.
+	      SETZM DOWAIT		;No longer looking for waiting state
+	      LOOP.
+	    ELSE.
+	      MOVE S1,[POINT 8,[BYTE(8) ":"," ","i","d","l","e"]]
+	      MOVE S2,NCHARS		;Number of characters in the buffer
+	      $CALL FNDSTR		;Go look for it
+	       LOOP.			;Loop if we didn't find it
+	    ENDIF.
+	  ENDIF.
+	ENDDO.
+	$RETT				;The printer's idle
+
+; FNDSTR - Find the string pointed to by S1, in buffer length S2.  Buffer is
+; TRLBUF(J).  This goes from the end of the buffer to the beginning, since
+; we're more interested in recency than anything else
+FNDSTR:	PUSH P,S1
+	SUBI S2,6
+	IFL. S2				;At least six characters there?
+	  POP P,S1			;No, then get back S1
+	  POPJ P,			;If not, then return +1
+	ENDIF.
+	MOVE T1,S2			;Save counter of characters left left
+	MOVE S1,[POINT 8,TRLBUF(J)]	;Point to buffer
+	ADJBP S2,S1			;Go almost to the end of the buffer
+	POP P,S1
+	DO.
+	  PUSH P,S1			;Save test string pointer
+	  PUSH P,T1			;Save that counter
+	  PUSH P,S2			;Save that pointer
+	  MOVEI T2,6			;Compare six characters
+	  DO.
+	    ILDB T1,S1			;Get a test character
+	    ILDB C,S2			;Get a buffer character
+	    CAMN C,T1			;Equal?
+	     SOJG T2,TOP.		;Yes, continue
+	  ENDDO.
+	  SKIPE T2			;If we exhausted the count,
+	  IFSKP.			;...then we're done, having found the
+	    POP P,(P)			;...string...Skip return.
+	    POP P,(P)			;clean up stack, too
+	    POP P,(P)			;clean up stack, too
+	    AOS (P)
+	    POPJ P,
+	  ENDIF.
+	  POP P,S1			;Get buffer pointer
+	  POP P,T1			;Get count
+	  SETO S2,			;Back up buffer pointer
+	  ADJBP S2,S1
+	  POP P,S1			;Get back test string pointer
+	  SOJG T1,TOP.			;Loop some more
+	ENDDO.
+	POPJ P,				;Non-skip return
+	SUBTTL GETERR - Get error type
+; We look for the first occurrence of the following in ERRBUF.  We return 
+; False if neither found, True if either found
+; String		Contents of S1 on return
+; %%[PrinterError:	0
+; %%[Error:		1
+; T1 contains the byte count in ERRBUF upon entry
+GETERR:	STKVAR <BUFPTR>
+	MOVE S2,[POINT 7,ERRBUF(J)]	;Point to the error buffer
+	DO.	
+	  MOVEM S2,BUFPTR		;Save this pointer
+	  HRROI S1,[ASCIZ/%%[ PrinterError:/]	;Was there this kind?
+	  STCMP%
+	  IFXN. S1,SC%SUB		;Do we have a match?
+	    SETZ S1,			;Set return code...
+	    $RETT
+	  ENDIF.
+	  HRROI S1,[ASCIZ/%%[ Error:/]	;Was there this kind?
+	  MOVE S2,BUFPTR		;Get the pointer
+	  STCMP%
+	  IFXN. S1,SC%SUB		;Do we have a match?
+	    MOVEI S1,1			;Set return code...
+	    $RETT
+	  ENDIF.
+	  MOVE S2,BUFPTR
+	  IBP S2			;Increment to the next character
+	  SOJG T1,TOP.			;Continue on...
+	ENDDO.
+	$RETF				;No errors found in this crop
+	SUBTTL	LIMCHK -- Check on page limits
+
+Comment\
+  The purpose of this routine is to check and see if the current page limit
+for the job has been exceeded.
+Not implemented since we use unlimited limits at UWCSL.\
+
+LIMCHK: $RETT
+
+	SUBTTL HEADER - prepare to print a file
+
+HEADER: ret
+
+	CALL TRLINI
+	HRROI S2,PH1			;Point to initial PostScript text
+	CALL TRLOUT
+	GTAD%
+	CALL CVINET			;Output standard date/time
+	HRROI 1,FOOBUF
+	MOVEI 3,^D10
+	NOUT%
+	 JFCL
+	SETZ 3,
+	IDPB 3,1
+	HRROI 2,FOOBUF
+	CALL TRLOUT
+
+	HRROI S2,PH1.5
+	CALL TRLOUT
+	HRROI S2,.EQOWN(J)
+	CALL TRLOUT
+
+	HRROI S2,PH2
+	CALL TRLOUT
+	HRROI 1,FOOBUF
+	SETOB S2,T1
+	ODTIM%
+	 ERJMP .+1
+	SETZ 3,
+	IDPB 3,1
+	HRROI 2,FOOBUF
+	CALL TRLOUT
+
+	HRROI S2,PH3
+	CALL TRLOUT
+	HRROI 1,FOOBUF
+	MOVE S2,J$IJFN(J)
+	MOVE T1,[111110,,000001]
+	JFNS%
+	 ERJMP .+1
+	SETZ 3,
+	IDPB 3,1
+	HRROI 2,FOOBUF
+	CALL TRLOUT
+
+	HRROI S2,PH4
+	CALL TRLOUT
+	HRROI S2,PH6
+	CALL TRLOUT
+
+;NOW SEND IT
+	MOVE 1,[POINT 7,FOOBUF]
+	MOVEI 3,.CHCNC
+	IDPB 3,1
+	MOVE 2,TRLCNT
+	MOVEI 3,^D10
+	NOUT%
+	 JFCL
+	MOVEI 2,.CHSPC	
+	IDPB 2,1
+	MOVE 2,[POINT 7,UNIQHN]
+	ILDB 3,2
+	SKIPE 3
+	 IDPB 3,1
+	JUMPN 3,.-3
+	MOVEI 2,.CHLFD
+	IDPB 2,1
+	SETZ 2,
+	IDPB 2,1
+	HRROI 2,FOOBUF
+	CALL LPDOUT
+	CALL LPDACK		;get an ack
+	CALL TRLSND
+
+	MOVEI 2,"f"		;print this file
+	CALL CFSCHR
+	HRROI 2,UNIQHN
+	CALL CFSOUT
+	MOVEI 2,.CHLFD
+	CALL CFSCHR
+
+	MOVEI 2,"U"		;delete file after printing
+	CALL CFSCHR
+	MOVE 2,[POINT 7,UNIQHN]
+	CALL CFSOUT
+	MOVEI 2,.CHLFD
+	CALL CFSCHR
+
+	$RETT
+
+
+;Return RFC738 time format in S2
+TMBDIF==^D<365*41+55>		;1858 BASE VS 1900 BASE, IN DAYS
+
+CVINET:	MOVEI T1,(S1)		;TOPS20 FRACTION OF A DAY
+	HLRZ S2,S1		;DAYS SINCE NOV 1858
+	SUBI S2,TMBDIF		;BRING DOWN TO 1900
+	MULI T1,^D<24*60*60>	;CONVERT TO SECONDS FROM 1/3 SEC
+	DIV T1,[1,,0]		; ..
+	CAIL T2,400000		;ROUND TO NEAREST SECOND
+	ADDI T1,1		;ROUND UP
+	CAIGE T1,^D<24*60*60>	;WENT TO WHOLE DAY?
+	IFSKP.
+	  SETZ T1,		;YES, COUNT A DAY
+	  AOJA S2,.+1
+	ENDIF.
+	IMULI S2,^D<24*60*60>	;SECONDS FROM DAYS
+	ADDI S2,(T1)		;SECONDS WITHIN TODAY
+	RET			;RETURN RFC738 FORMAT TIME IN B
+
+
+;TCP routines
+TCPOPN:	MOVE 1,[POINT 7,FOOBUF]
+	HRROI 2,[ASCIZ /TCP:/]
+	SETZ 3,
+	SOUT%
+	PUSH P,1
+	GTAD%
+	IDIVI 1,^D424
+	POP P,1
+	ADDI 2,^D600
+	MOVEI 3,^D10
+	NOUT%
+	 JFCL
+	HRROI 2,[ASCIZ /./]
+	SETZ 3,
+	SOUT%
+	MOVE 2,[POINT 7,J$SSTG(J)]	;Point to the string (host.printer)
+	ILDB 3,2
+	CAIN 3,"."
+	 JRST HITDOT
+	IDPB 3,1
+	JRST .-4
+HITDOT:	PUSH P,2
+	HRROI 2,[ASCIZ /-515;CONNECTION:ACTIVE;TIMEOUT:60;PERSIST:60/]
+	SETZ 3,
+	SOUT%
+	POP P,2
+	MOVE 1,[POINT 7,PRNAME]
+PRLOOP:	ILDB 3,2
+	CAIL 3,"A"
+	 CAILE 3,"Z"
+	  SKIPA
+	   ADDI 3,40		;lowercase it
+	IDPB 3,1
+	JUMPN 3,PRLOOP
+
+	SETZM TCPJFN
+	MOVX 1,GJ%SHT			;Load gtjfn flags
+	HRROI 2,FOOBUF			;Point to the string
+	GTJFN%				;Get JFN of the device
+	IFJER.
+	 TMSG <?PPNSPL: Can't get JFN for TCP connection
+>
+	 JRST TCPORT	 
+	ENDIF.
+	MOVEM 1,TCPJFN
+	MOVX 2,<OF%WR!OF%RD!<FLD 8,OF%BSZ>>	;Write 8 bit bytes
+	OPENF%
+	IFJER.
+	 TMSG <?PPNSPL: Can't open TCP connection
+>
+	 JRST TCPORT	 
+	ENDIF.
+	RET
+
+;error.  delay and try again.
+TCPORT:	SKIPE 1,TCPJFN
+	 RLJFN%
+	  ERJMP .+1
+	MOVEI 1,^D2*^D60*^D1000	;wait 2 minutes
+	DISMS%
+	JRST TCPOPN		;try again
+
+TCPERR:	TMSG <?PPNSPL: TCP connection error
+>
+TCPDIE:	CALL TIMCLR
+	CALL TCPCLS
+	ERROR (<TCP connection problem>)
+	HALTF%
+	JRST .-1
+	
+TCPCLS:	MOVEI 1,TCPCTO
+	MOVEI 2,^D60*^D1000
+	CALL TIMSET
+	MOVE 1,TCPJFN
+	CLOSF%
+	 ERJMP .+1
+	CALL TIMCLR
+	SETZM TCPJFN
+	RET
+TCPCTO:	MOVE 1,TCPJFN
+	TXO 1,CZ%ABT
+	CLOSF%
+	 ERJMP .+1
+	SETZM TCPJFN
+	RET
+
+
+;LPD control file handler routines
+
+;init CF file buffer
+CFINIT:	MOVE 1,[POINT 7,CFBUF]
+	MOVEM 1,CFPTR
+	SETZM CFCNT
+	RET
+
+;output string t2 to CFBUF
+CFSOUT:	MOVE 1,CFPTR
+	HLRZ 3,2
+	CAIE 3,-1
+	  SKIPN 3
+	    HRLI 2,440700
+CFSOU1:	ILDB 3,2
+	JUMPE 3,CFSOUX
+	IDPB 3,1
+	AOS CFCNT
+	JRST CFSOU1
+CFSOUX:	MOVEM 1,CFPTR
+	IDPB 3,1	
+	RET
+
+;output chr in ac2 to CFBUF
+CFSCHR:	IDPB 2,CFPTR
+	AOS CFCNT
+	RET
+
+;send CF file
+CFSEND: MOVE 1,[POINT 7,FOOBUF]
+	MOVEI 2,.CHCNB
+	IDPB 2,1
+	MOVE 2,CFCNT
+	MOVEI 3,^D10
+	NOUT%
+	 JFCL
+	MOVEI 2,.CHSPC
+	IDPB 2,1
+	MOVEI 2,"c"
+	IDPB 2,1
+	MOVE 2,[POINT 7,UNIQNM]
+	IBP 2
+	ILDB 3,2
+	SKIPE 3
+	 IDPB 3,1
+	JUMPN 3,.-3
+	MOVEI 2,.CHLFD
+	IDPB 2,1
+	SETZ 2,
+	IDPB 2,1
+	HRROI 2,FOOBUF
+	CALL LPDOUT
+	CALL LPDACK		;get an ack
+
+ifn debug,<
+tmsg <s:>
+	MOVEI 1,.PRIOU
+	HRROI 2,CFBUF
+	MOVN 3,CFCNT
+	SOUT%
+tmsg <:
+>
+>
+	MOVE 1,TCPJFN
+	HRROI 2,CFBUF
+	MOVN 3,CFCNT
+	SOUTR%
+	SETZM CFBUF
+
+	CALL LPDNUL		;send trailing null
+	CALL LPDACK		;and wait for an ack
+	RET
+
+
+; unix LPD protocol stuff
+
+;make LPD unique name into UNIQNM
+LPDUNQ:	MOVE 1,[POINT 7,UNIQNM]
+	MOVEI 2,"d"
+	IDPB 2,1
+	MOVEI 2,"f"
+	IDPB 2,1
+	MOVE 2,FILCNT
+	IDIVI 2,^d26
+	MOVE 2,3
+	ADDI 2,"A"
+	IDPB 2,1
+	LOAD 2,.EQSEQ(J),EQ.SEQ
+	ADD 2,FILCNT
+	IDIVI 2,^d1000
+	MOVE 2,3
+	MOVE 3,[NO%LFL+NO%ZRO+FLD(3,NO%COL)+^D10]
+	NOUT%
+	 JFCL
+	MOVE 2,[POINT 7,HSTNAM]
+	ILDB 3,2
+	IDPB 3,1
+	JUMPN 3,.-2
+
+	HRROI 1,UNIQHN
+	HRROI 2,UNIQNM
+	SETZ 3,
+	SOUT%
+	MOVE 1,[POINT 7,UNIQHN]
+	IBP 1
+	IBP 1
+	MOVE 2,FILCNT
+	IDIVI 2,^d26
+	MOVE 2,3
+	ADDI 2,"a"
+	AOS FILCNT
+	IDPB 2,1
+	RET
+
+;get ack/nack from remote host
+LPDACK:	MOVEI 1,LPDATO
+	MOVE 2,[^D2*^D60*^D1000]
+	CALL TIMSET
+	MOVE 1,TCPJFN
+	BIN%
+	 ERJMP TCPERR
+ifn debug,<
+tmsg <r:>
+movei 1,.priou
+movei 3,10
+NOUT%	
+ jfcl
+tmsg <:
+>
+>
+	PUSH P,2
+	CALL TIMCLR
+	POP P,2
+	CAIN 2,0		;ack?
+	 RET			;ok
+	CAIN 2,1		;protocol error?
+	 JRST [TMSG <?PPNSPL: LPD protocol error (LPDACK called from >
+	       MOVEI 1,.PRIOU
+	       HRRZ 2,(P)
+	       MOVEI 3,10
+	       NOUT%
+		JFCL
+	       TMSG <)
+>
+	       JRST TCPDIE]
+	TMSG <?PPNSPL: remote error:>
+LPDERL:	MOVE 1,TCPJFN
+	BIN%
+	 ERJMP LPDERX
+	MOVEI 1,.PRIOU
+	BOUT%
+	JRST LPDERL
+LPDERX:	TMSG <
+>
+	JRST TCPDIE
+LPDATO:	TMSG <?PPNSPL: Timeout waiting for ACK
+>
+	JRST TCPDIE
+
+;request this printer
+LPDPRT:	MOVE 1,[POINT 7,FOOBUF]
+	MOVEI 2,.CHCNB
+	IDPB 2,1
+	HRROI 2,PRNAME
+	SETZ 3,
+	SOUT%
+	MOVEI 2,.CHLFD
+	IDPB 2,1
+	SETZ 2,
+	IDPB 2,1
+	HRROI 2,FOOBUF
+	CALL LPDOUT
+	CALL LPDACK
+	RET
+
+; send string t2 to LPD
+LPDOUT:	
+ifn debug,<
+push p,2
+tmsg <s:>
+movei 1,.priou
+move 2,(p)
+setz 3,
+SOUT%	
+tmsg <:
+>
+pop p,2
+>
+	MOVE 1,TCPJFN
+	SETZ 3,
+	SOUTR%
+	RET
+
+; send a null to LPD
+LPDNUL:
+ifn debug,<
+tmsg <s:(null):
+>
+>
+	MOVE 1,TCPJFN
+	HRROI 2,[0]
+	MOVNI 3,1
+	SOUTR%
+	RET
+
+
+
+TRLINI:	MOVE 1,[POINT 8,TRLBUF(J)]	;Point to trailer buffer
+	MOVEM 1,TRLPTR
+	SETZM TRLCNT
+	RET
+
+;output string t2 to TRLBUF
+TRLOUT:	MOVE 1,TRLPTR
+	HLRZ 3,2
+	CAIE 3,-1
+	  SKIPN 3
+	    HRLI 2,440700
+TRLOU1:	ILDB 3,2
+	JUMPE 3,TRLOUX
+	IDPB 3,1
+	AOS TRLCNT
+	JRST TRLOU1
+TRLOUX:	MOVEM 1,TRLPTR
+	IDPB 3,1	
+	RET
+
+;output chr in ac2 to TRLBUF
+TRLCHR:	IDPB 2,TRLPTR
+	AOS TRLCNT
+	RET
+
+;Send TRLBUF to net
+TRLSND:	MOVE 1,TCPJFN
+	MOVE 2,[POINT 8,TRLBUF(J)]	;Point to trailer buffer
+	MOVN 3,TRLCNT
+	SOUTR%
+	 ERJMP .+1
+	CALL LPDNUL
+	CALL LPDACK
+	RET
+
+
+;PostScript program for the trailer page
+PH1:	ASCIZ	|%! NIC header page
+/phoon
+{
+/MD exch def
+/Mr exch def
+/My exch def
+/Mx exch def
+/pi 3.1415926535 def
+/ANM 2497886484 def
+/SP 2551443 def
+/temp MD ANM sub def
+/IP temp temp SP div truncate SP mul sub def
+/AP IP SP div 2 mul pi mul def
+/MCAP AP pi div 180 mul cos neg def
+Mx Mr sub 10 sub My Mr sub 10 sub moveto Mr 2 mul 20 add dup box 0 setgray fill
+AP 0 ge AP pi lt and {RHM} {LHM} ifelse
+} def
+/RHM
+{ Mx My moveto Mx My Mr 270 90 arc 1 setgray fill
+MCAP 0 le {0 RE} {1 LE} ifelse
+} def
+/LHM
+{ Mx My moveto Mx My Mr 90 270 arc 1 setgray fill
+MCAP 0 le {0 LE} {1 RE} ifelse
+} def
+/RE
+{ Mx My Mr MCAP abs mul Mr 270 90 E setgray fill } def
+/LE
+{ Mx My Mr MCAP abs mul Mr 90 270 E setgray fill} def
+
+/Edict 8 dict def
+Edict /mtrx matrix put
+/E
+{Edict begin
+/endangle exch def
+/startangle exch def
+/yrad exch def
+/xrad exch def
+/y exch def
+/x exch def
+/savematrix mtrx currentmatrix def
+x y translate
+xrad yrad scale
+0 0 1 startangle endangle arc
+savematrix setmatrix
+end
+}def
+
+/box
+{currentpoint
+newpath
+moveto
+/y exch def
+/x exch def
+x 0 rlineto
+0 y rlineto
+x neg 0 rlineto
+closepath
+} def
+
+/PF
+{pop pop pop pop} def
+
+/inch {72 mul} def
+/usize 40 def
+
+/curvedbox
+{/r exch def
+/y exch def
+/x exch def
+currentpoint
+/cy exch def
+/cx exch def
+newpath
+cx x 2 div add cy moveto
+cx x add cy cx x add cy y add r arcto PF
+cx x add cy y add cx cy y add r arcto PF
+cx cy y add cx cy r arcto PF
+cx cy cx x 2 div add cy r arcto PF
+closepath
+stroke
+} def
+
+/font
+{exch
+findfont
+exch scalefont
+setfont
+} def
+
+statusdict /setpapertray known
+{
+statusdict begin
+0 setpapertray
+statusdict end
+} if
+
+1 inch 7 inch moveto 6.5 inch 3 inch 25 curvedbox
+494 674 16 |
+
+PH1.5:	ASCIZ | phoon
+
+.5 setgray
+newpath
+.5 inch 1 inch moveto
+.5 inch 10 inch lineto
+.75 inch 10 inch lineto
+.75 inch 1 inch lineto
+closepath
+fill
+
+newpath
+7.75 inch 1 inch moveto
+7.75 inch 10 inch lineto
+8 inch 10 inch lineto
+8 inch 1 inch lineto
+closepath
+fill
+
+0 setgray
+
+/Helvetica 14 font
+1.5 inch 9.5 inch moveto (User:) show
+/Helvetica-Bold usize font 2.2 inch 9.5 inch moveto (|
+
+PH2:	ASCIZ |) show /Helvetica 14 font
+1.5 inch 9.0 inch moveto (Date:) show 2.2 inch 9.0 inch moveto (|
+
+PH3:	ASCIZ |) show
+1.5 inch 8.5 inch moveto (File:) show 2.2 inch 8.5 inch moveto (|
+
+PH4:	ASCIZ |) show
+|
+
+PH5:	ASCIZ | /Helvetica-Bold 14 font 1.5 inch 8.0 inch moveto
+(ERRORS:) show /Helvetica 14 font 1.75 inch 7.75 inch moveto (|
+
+PH6:	ASCIZ | showpage
+|
+	LIT
+	VAR
+PREBUF:	BLOCK ^D<512*10>		;The rest of our world is this buffer
+	END PPNSPL

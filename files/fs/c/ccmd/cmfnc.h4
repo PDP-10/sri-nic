@@ -1,0 +1,298 @@
+define(`_',`dnl')_ Use this to prevent extra newlines in the output...
+_ ... and for comments!
+_
+_ Author: Andrew Lowry
+_
+_ Columbia University Center for Computing Activities, July 1986.
+_ Copyright (C) 1986, 1987, Trustees of Columbia University in the
+_ City of New York.  Permission is granted to any individual or
+_ institution to use, copy, or redistribute this software so long as
+_ it is not sold for profit, provided this copyright notice is
+_ retained.
+_
+_
+_ * This M4 source is designed to generate two header files for the
+_ * ccmd package, based on information for specific parsing functions.
+_ * The actual output stream from M4 contains lines of the form:
+_ *     #file xxx
+_ * flush to the left margin, signaling the beginning of the text for
+_ * file xxx.  This output stream can be passed to the split program
+_ * in order to distribute the text to the various files.
+_ *
+_ * The first output file is called cmfnc.h, and contains symbols and
+_ * definitions required by application programs that use the ccmd
+_ * package.  The second file, cmfncs.h, contains system symbols and
+_ * definitions required primarily by the ccmd package modules.
+_ *
+_ * The last line in this file is an include statement to read in and
+_ * process the file cmconf.h4, which should generally be a series of
+_ * fndecl statements for bringing in the files describing the various
+_ * functions.  For example, the line:
+_ *     fndecl(cfm)
+_ * in cmconf.h4 would cause the system to be configured with the cmcfm
+_ * parsing function.  The line fndecl(xxx) causes an automatic include
+_ * of the file cmxxx.h4.
+_ *
+_ * The files for the individual parse functions generally include the
+_ * following items:
+_ *
+_ *    fnerror(XXX,`error message')
+_ *      Causes a symbol such as CFMxXXX to be defined, and causes the
+_ *      given error message to be entered into an error table.  The
+_ *      prefix is formed from the upper-cased fndecl argument.
+_ *
+_ *    fnflag(XXX,x)
+_ *      Causes a symbol such as CFM_XXX to be defined, with the value x.
+_ *      If x is omitted, the value from the prior fnflag invocation is
+_ *      doubled.  If this is the first invocation and x is omitted, 1
+_ *      is used.  The prior value is cleared by the fndecl macro.
+_ *
+_ *    fnconst(XXX,x)
+_ *      Causes a symbol such as _CFMXXX to be defined, with the value x.
+_ *      If x is omitted, the value from the prior fnconst invocation is
+_ *      bumped by 1.  If this is the first invocation and x is omitted, 0
+_ *      is used.  The prior value is cleared by the fndecl macro.
+_ *
+_ *    pvtype(type expression)
+_ *      Adds a component to the pval union for returned parse values.
+_ *      The component will be named something like _pvxxx, where xxx
+_ *      is the parse function name.  The component's type will be
+_ *      whatever is specified by the type expression.  Parse functions
+_ *      that return integers, strings, characters, or floats need not
+_ *      include a pvtype line, as components of these types are preloaded.
+_ *
+_ *    toapplic(`arbitrary text')
+_ *      Causes the given text to be included verbatim in the cmfnc.h file.
+_ *      Useful for defining special structures and the like.
+_ *
+_ *    tosystem(`arbitrary text')
+_ *      Causes the given text to be included verbatim in the cmfncs.h file.
+_ *
+_ *    Anything else
+_ *      Goes to the cmfnc.h file.
+_ *
+_
+_ Load initial text for each file before defining any macros that might
+_ interfere with their contents
+_
+divert(1)include(`cmfnc.top')
+divert(2)include(`cmfncs.top')
+_
+_ cat returns its arguments concatenated together
+_
+define(`cat',$1$2$3$4$5$6$7$8$9)_
+_
+_ nl - represents a newline
+_
+define(`nl',``
+'')_
+_
+_ quote - Returns its argument with quotes around it
+_
+define(`quote',`changequote([,])`$1'changequote(`,')')_
+_
+_ upper and lower convert letters to upper and lower case, resp.
+_
+define(`lower',`translit($1,`ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+			  `abcdefghijklmnopqrstuvwxyz')')_
+define(`upper',`translit($1,`abcdefghijklmnopqrstuvwxyz',
+			  `ABCDEFGHIJKLMNOPQRSTUVWXYZ')')_
+_
+_ fndecl - set up to configure a named parse function (use the 3-char ending
+_   from the function name as the argument)
+_
+define(`fndecl',cat(``divert(1)'',
+		   ``fnini($1)'',
+		   ``fncomment()'',
+		   ``fncode()'',
+		   ``fnstub()'',
+		   ``cat(`include(cm',lname,`.cnf)')'',
+		   ``outerrs()''))_
+_
+_ fnini - Set variables for a new function configuration
+_
+define(`fnini',cat(``define(`lname',lower($1))'',
+		   ``define(`uname',upper($1))'',
+		   ``define(`lastval',-1)'',
+		   ``define(`lastflag',0)'',
+		   ``define(`lasterr',-1)'',
+		   ``define(`lastfunc',incr(lastfunc))'',
+		   ``define(`ftlist',
+		      cat(quote(ftlist),`ftxxx(',lname,`,',lastfunc,`)'))''))_
+_
+_ fncomment - Output an appropriate comment to each file
+_
+define(`fncomment',cat(``cat(nl`/* Configuration information for cm',
+			    lname,` */',nl,nl)'',
+		       ``divert(2)'',
+		       ``cat(nl,`/* Error table and other configuration data',
+			    ` for cm',lname,` */',nl,nl)'',
+		       ``divert(1)''))_
+_
+_ fncode - Output the function code symbol definition
+_
+define(`fncode',`cat(``#define _CM'',uname,` ',lastfunc,nl)')_
+_
+_ fnstub - Output a macro definition to stub out this parse function
+_
+define(`fnstub',cat(``cat(nl,`/* Macro to prevent loading of cm',
+			 lname,` support */',nl,nl)'',
+		    ``cat(`#define ',uname,`_STUB ftspec ft_',lname,
+			  ` = { NULL, NULL, NULL, 0, NULL }; \',nl)'',
+		    ``cat(`    fnerr fe_',lname,` = { 0, NULL };',nl,nl)''))_
+_
+_ fnerror - Used to declare function-specific error messages
+_
+define(`fnerror',cat(``define(`lasterr',incr(lasterr))'',
+	         ``divert(3)'',
+		 ``ifelse(lasterr,0,`',`,')'',
+	         ``cat(nl,`        "',$2,")'',
+	         ``divert(1)'',
+	         ``cat(`#define ',uname,`x',$1,
+	            cat(`	CMERR(',lastfunc,`,',lasterr,`)'))''))_
+_
+_ outerrs - Output the error table declaration and initializer
+_
+define(`outerrs',cat(``divert(2)'',
+		     ``define(`lasterr',incr(lasterr))'',
+		     ``cat(nl,`#ifdef ',uname,`ERR',nl)'',
+		     ``ifelse(lasterr,0,`outerr1()',`outerr2()')'',
+		     ``cat(`#else',nl,`extern fnerr fe_',lname,`;',nl)'',
+		     ``cat(`#endif',nl)'',
+		     ``divert(1)'',
+	             ``_''))_
+define(`outerr1',`cat(nl,`fnerr fe_',lname,` = { 0, NULL };',nl)')_
+define(`outerr2',cat(nl,
+		   ``cat(`static char *(',lname,`err[',lasterr,`]) = {')'',
+		   ``undivert(3)'',
+		   ``cat(nl,`};',nl)'',
+		   ``cat(`fnerr fe_',lname,` = { ',
+		     lasterr,`, ',lname,`err };',nl)''))_
+_
+_ fnflag - output a flag symbol definition to the cmfnc.h file
+_
+define(`fnflag',cat(``cat(``#define '',uname,`_',$1,` ')'',
+		  ``ifelse($2,,
+		      ifelse(lastflag,0,
+			`define(`lastflag',1)',
+			`define(`lastflag',eval(2*lastflag))'),
+		      `define(`lastflag',$2)')'',
+		   ``hex(lastflag)''))_
+_
+_ hex - takes a decimal string and outputs it as a four-digit hex value
+_ preceded by "0x"
+_
+define(`hex',`cat(0x,hexx($1))')_
+define(`hexx',`cat(hex1(eval($1/4096)),
+		   hex1(eval(($1-($1/4096)*4096)/256)),
+		   hex1(eval(($1-($1/256)*256)/16)),
+		   hex1(eval($1-($1/16)*16)))')_
+define(`hex1',`substr(`0123456789abcdef',$1,1)')_
+_
+_ fnconst - output a constant symbol definition to the cmfnc.h file
+_
+define(`fnconst',cat(``cat(``#define _'',uname,$1,` ')'',
+		   ``ifelse($2,,
+		       `define(`lastval',incr(lastval))',
+		       `define(`lastval',$2)')'',
+		    ``cat(lastval)''))_
+_
+_ pvtype - adds a component to the pval union declaration.  All additions
+_ accumulate in diversion 4.
+_
+define(`pvtype',cat(``divert(4)'',
+		    ``cat(`        ',$1,` _pv',lname,`;',nl)'',
+		    ``divert(1)''))_
+_
+_ toapplic - Output the argument to the cmfnc.h file
+_
+define(`toapplic',cat(``divert(1)'',`$1'))_
+_
+_ tosystem - Output the argument to the cmfncs.h file
+_
+define(`tosystem',cat(``divert(2)'',`$1 ',``nl()'',``divert(1)''))_
+_
+_ generic - Outputs the generic error codes and error message table.
+_ Mostly just a big kludge to invoke the macros called by fndecl after
+_ faking the variables.
+_
+define(`generic',cat(``define(`uname',`CM')'',
+		     ``define(`lasterr',-1)'',
+		     ``divert(1)'',
+		     ``include(cmgnrc.cnf)'',
+		     ``define(`uname',`GEN')'',
+		     ``define(`lname',`gen')'',
+		     ``tosystem(`/* Generic ccmd error messages */')'',
+		     ``outerrs()''))_
+_
+_ outlist - Output the function types in ftlist, each prefixed by the
+_ first argument and with the column position initialized to the second
+_ argument
+_
+define(`outlist',cat(``define(`ftprefix',$1)'',
+		     ``define(`ftcolumn',$2)'',
+		     ``ftlist()''))_
+_
+_ Initialize function code counter so first code is 1, and set empty fn list
+define(`lastfunc',0)_
+define(`ftlist',`')_
+_
+_ OK, here we go...
+_
+generic
+include(cmconf.h4)_
+_
+_ Now define the ftxxx macro so ftlist will expand correctly into a list
+_ of parse function names, each prefixed by the value of ftprefix. 
+_ Newlines are inserted when the column counter exceeds 70, with new
+_ lines indented two spaces.
+_
+define(`ftxxx',cat(``define(`ftxxxx',
+		       cat(ftprefix,$1,ifelse($2,lastfunc,` ',``| '')))'',
+		   ``define(`ftcolumn',eval(ftcolumn+len(ftxxxx)))'',
+		   ``translit(ftxxxx,`|',`,')'',
+		   ``ifelse(eval(ftcolumn > 70),eval(1 > 0),
+			   cat(nl,`  ',``define(`ftcolumn',2)''))''))_
+divert(0)_
+#file cmfnc.h
+undivert(1)_
+
+/* Union declaration for parse return values */
+
+typedef union PVAL {
+	int _pvint;
+	float _pvflt;
+	char _pvchr;
+	char *_pvstr;
+	char **_pvstrvec;
+undivert(4)_
+} pval;
+#file cmfncs.h
+undivert(2)_
+
+#ifdef STORAGE
+
+/* Function handler table */
+
+extern ftspec
+  outlist(`ft_',2);
+
+ftspec *(cmfntb[lastfunc]) = {
+  outlist(`&ft_',2)
+};
+
+/* Error table table */
+
+fnerr *(fnetab[eval(lastfunc+1)]) = {
+  &fe_gen, outlist(`&fe_',11)
+};
+
+/* Number of defined functions */
+
+int cmfmax = eval(lastfunc+1);
+
+#else
+extern ftspec *(cmfntb[]);
+extern fnerr *(fnetab[]);
+extern int cmfmax;
+#endif

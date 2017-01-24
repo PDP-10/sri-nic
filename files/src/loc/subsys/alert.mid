@@ -1,0 +1,3594 @@
+;;
+;; Alert - an alert hacking program
+;;	8/27/79 by EBM
+;;	Revised 1/7/80, to improve robustness of command parsing
+;;	Revised 2/8/80, to add mail and shutdown watch features,
+;;		and writing of alerts into a file
+;;	Revised 2/19/80, to add user, line, site watch features
+;;	Revised 2/26/80, to add watching multiple mail dirs
+;;	Revised 3/13/80, to add user messages to alarm clock alerts
+;;	Revised 4/8/80, to use image output and parameterize time zone
+;;	Revised 5/2/80, minor improvements in command file treatment
+;;	Revised 6/14/80, JOB-WATCH command added, SITE-WATCH improved
+;;	Revised 6/23/80, interrupt handling improved
+;;	Revised 6/24/80, REPEAT command added, HELP improved
+;;	Revised 6/26/80, add UUOs, persistent watching of lines, sites, users
+;;	Revised 7/80 - various big fixes, improvements
+;;	Revised 7/21/80, remove FROM-NOW (folded into SET, REPEAT);
+;;		added detached state to user-watch
+;;	Revised 7/22/80, remove REPEAT (folded into SET)
+;;	Revised 7/23/80, added .deflt and .help to simplify parsing	
+;;	Revised 8/1/80, added first time ALERT bell-ring suppression
+;;	Revised 8/2/80, added first time "uninteresting" persistent
+;;		watch message suppression
+;;	Revised 8/6/80, added SUPPRESS command
+;;	Revised 8/7/80, rearranged jcl, xfile processing
+;;	Revised 8/13/80, removed non-persistent options from
+;;		persistent wait items; fixed TIMER timing bug;
+;;		added mail and shutdown SHOW printouts, better time format
+;;	Revised 8/15/80, removed toggling, added NO command
+;;	Revised 8/19/80, added tim.ns and used it several places
+;;	Revised 8/24/80, fixed tim.dl so seconds not printed if big delta
+;;	Revised 12/7/80, fixed tim.dl messages ("one minute", etc.)
+;;	Revised 12/8/80, fixed timer calls to work with buggy TOPS-20 release 3
+;;	Revised 1/17/82, increased Arpa table size
+;;	Revised 1/23/84, increased ARPA and CHAOS sizes to 10000. (huge)
+;;
+
+	title	ALERT -- an alarm clock/watchdog program
+
+.symtab	4000.,4000.
+.decsav
+
+f=:	0		;; flag register
+a=:	1		;; registers a to d for jsys's, etc.
+b=:	2
+c=:	3
+d=:	4
+e=:	5
+t1=:	6		;; temporaries
+t2=:	7
+t3=:	10
+t4=:	11
+t5=:	12
+u1=:	13		;; UUO registers
+u2=:	14
+u3=:	15
+x=:	16
+p=:	17		;; stack pointer
+
+;;
+;; Flag bit definitions -- right half of f
+;;
+
+f.al==:	1		;; any alerts ?
+f.mw==:	2		;; any mail watches ?
+f.md==: 4		;; watching default mail dir ?
+f.dw==:	10		;; shutdown watching ?
+f.uw==:	20		;; any user watches ?
+f.sw==:	40		;; any site watches ?
+f.lw==:	100		;; any line watches ?
+f.jw==: 200		;; any job watches ?
+
+;;
+;;	Flags in left half of f
+;;
+
+f.jcl==:	1	;; had jcl ?
+f.cmd==:	2	;; doing xfile ?
+f.set==:	4	;; table value replace OK ?  (see tabins)
+
+;;
+;;	Watching option flag bits
+;;
+
+opt.v1==:	1
+opt.v2==:	2
+opt.v3==:	4
+opt.v==:	7
+opt.d==:	10	;; Delete entry flag -- for command processing
+opt.n1==:	100	;; New value bits (see ckuser)
+opt.n2==:	200
+opt.n3==:	400
+opt.n==:	700
+
+;;
+;;	Symbolic names for uses of above values in specific code
+;;
+
+opt.li==:	opt.v1		;; user logged in
+opt.dt==:	opt.v2		;; user detached
+opt.lo==:	opt.v3		;; user logged out
+
+opt.ni==:	opt.n1		;; corresponding n bits
+opt.nd==:	opt.n2
+
+opt.up==:	opt.v1		;; site up
+opt.dn==:	opt.v2		;; site down
+
+opt.us==:	opt.v1		;; line used
+opt.fr==:	opt.v2		;; line free
+
+;;
+;;	site option flag -- normally the current site
+;;
+	ifndef	runsite,runsite== .site 0,
+;;
+;;	site dependent options
+;;
+.internet==	1	;; internet format ARPA host #s ?
+			;; set to 0 if HAVE ARPAnet, but old format host #s
+timzon==	-5	;; number of hours to add to GMT to get local time
+
+	ife	runsite-sixbit "SRI-KL",[
+		timzon==-8. ]
+
+;;
+;; Macro to help generate command state blocks
+;;
+
+define	comand	[op,flags,next=0,data=0,]&help,deflt&
+	word1==	op_27.
+	irp	flag,,[flags]
+		word1==	word1#flag
+		termin
+	lhelp==	.length help
+	ldeflt==.length deflt
+	ifn	lhelp,word1==word1#cm%hpp#cm%sdh
+	ifn	ldeflt,word1==word1#cm%dpp
+	<word1&<-1,,0>>\<next&<0,,-1>>
+	data
+	ifn	lhelp,[440700,,[asciz help]]
+	.else	0
+	ifn	ldeflt,[440700,,[asciz deflt]]
+	.else	0
+	termin
+	
+;;
+;; Macro to type string on primary output
+;;
+
+define	type	&output&
+	strout	[asciz output]
+	termin
+
+;;
+;; Some instruction shorthands
+;;
+
+call==	pushj	p,
+return==popj	p,
+define	fail
+	jsp	x, fatal
+	termin
+
+;; some debugging hooks
+
+define	xgtjfn
+	gtjfn
+	termin
+define	xopenf
+	openf
+	termin
+define	xclosf
+	closf
+	termin
+define	xrljfn
+	rljfn
+	termin
+
+;;
+;; Macro to define a UUO
+;;
+
+uuonum==0
+define	.uuo	name,handle
+	uuonum==uuonum+1
+	name=:	uuonum_27.
+	handle
+	termin
+
+;;
+;; Variables, including UUO location 40, 41
+;;
+
+save==	.
+.==	40
+uuoins:	block	1		;; uuo instruction
+	call	uuoh		;; call handler
+.==	save
+
+pdlsiz==:100.		;; stack stuff
+
+pdl:	-pdlsiz,,.	;; initial stack pointer
+	block	pdlsiz
+
+iopsiz==:10.
+iopptr:	-iopsiz,,iopdl		;; input jfn stack (xfile/jcl hacking)
+iopdl:	-iopsiz,,iopdl
+	block	iopsiz
+
+;;
+;; command state block
+;;
+
+cmdsta:	cm%xif\rparse		;; .cmflg word (flags, reparse address)
+	.priin,,.priou		;; .cmioj word (I/O jfns)
+	440700,,prompt		;; .cmrty word (prompt)
+	440700,,txtbuf		;; .cmbfp word (text buffer pointer)
+	440700,,txtbuf		;; .cmptr word (next thing to be parsed)
+	txtsiz			;; .cmcnt word (size of space remaining)
+	0			;; .cminc word (count of chars left in buffer)
+	440700,,atmbuf		;; .cmabp word (pointer to atom buffer)
+	atmsiz			;; .cmabc word (size of atom buffer)
+	0			;; .cmgjb word (address of gtjfn arg block)
+
+txtsiz==:500.
+txtbuf:	block	txtsiz/5
+
+atmsiz==:100.
+atmbuf:	block	atmsiz/5
+	0			;; make sure terminated with 0
+
+hstsiz==:100
+hstbuf:	block	hstsiz/5
+
+;; gtjfn info for alert.times (if old)
+
+.ojfn:	gj%old			;; flags ,, generation = 0
+	.nulio,,.nulio		;; src ,, dest
+	[asciz "ps"]		;; default device
+	usrnam			;; default directory
+	0			;; name
+	0			;; extension
+	0			;; protection
+	0			;; account
+	0			;; jfn to use
+	0			;; extended flags
+
+;; gtjfn info for alert.times (if new)
+
+.njfn:	gj%new			;; flags ,, generation = 0
+	.nulio,,.nulio		;; src ,, dest
+	[asciz "ps"]		;; default device
+	usrnam			;; default directory
+	0			;; name
+	0			;; extension
+	0			;; protection
+	0			;; account
+	0			;; jfn to use
+	0			;; extended flags
+
+;; gtjfn info for alert.xfile
+
+.xjfn:	gj%old			;; flags ,, generation = 0
+	.nulio,,.nulio		;; src ,, dest
+	[asciz "ps"]		;; default device
+	usrnam			;; default directory
+	[asciz "alert"]		;; name
+	[asciz "xfile"]		;; extension
+	0			;; protection
+	0			;; account
+	0			;; jfn to use
+	0			;; extended flags
+
+cmdblk:	block	4		;; command function block for .comnd
+comdef:	block	1		;; pointer to default for next call
+comhlp:	block	1
+
+dirnam:	block	20.
+usrnam:	block	20.
+mfname:	block	20.
+mdname:	block	20.
+writer:	block	20.
+
+netmax==10.		;; max number of nets
+nettab:	netmax
+	block	netmax
+
+netfun:	comand .cmkey,[cm%sdh],,nettab,"network name:",""
+arpfun: comand .cmkey,,,arphst,"ARPAnet host name:",""
+arpfn1: comand .cmkey,[cm%sdh],,arphst,"ARPAnet host name:",""
+chsfun:	comand .cmkey,,,chshst,"CHAOSnet host name:",""
+chsfn1:	comand .cmkey,[cm%sdh],,chshst,"CHAOSnet host name:",""
+
+dirnum:	block	1		;; number of logged in directory
+dtime:	block	1		;; last shutdown time
+dper:	block	1		;; period of down time
+dptime:	block	1		;; time before shutdown to print next message
+filjfn:	block	1		;; alert file jfn
+now:	block	1		;; current time
+mwrite:	block	1		;; mail file write time
+mread:	block	1		;; mail file access time
+ttype:	block	1		;; terminal type
+tspeed:	block	1		;; terminal speed
+netjfn:	block	1		;; jfn for cksite
+;sndjfn:	block	1		;; jfn for cksite
+;lclskt:	block	1		;; socket temps for cksite
+;forskt:	block	1
+netnam:	block	10.		;; socket name storage
+tcpcnb:	block	6		;tcp connection block
+myjob:	block	1		;my job number (used by tcp stuff)
+
+arpflg:	block	1		;; network existence flags
+chsflg:	block	1
+arpnum:	block	1		;; network numbers
+chsnum:	block	1
+
+li.sup:	0			;; line-watch initial message suppression
+si.sup:	0			;; ditto for sites, users
+us.sup:	0			;; must be in this order ...
+
+pclev1:	block	1		;; interrupt PC save words
+pclev2:	block	1
+pclev3:	block	1
+
+timtim:	block	1		;; timer value for timchn, 0 if none
+tcktim:	block	1		;; likewise for other timers
+sittim:	block	1
+dwntim:	block	1
+
+nalert:	block	1
+al.max==:	15.
+al.fre:	block	1		;; index of next free slot
+al.que:	block	1		;; index of first used slot (or -1)
+al.nxt:	block	al.max		;; NOTE: al.que must be just before this
+				;; chaining words
+al.tab:	block	al.max		;; alert time table
+al.rpt:	block	al.max		;; repeat counts
+al.int:	block	al.max		;; intervals
+msgsiz==:	<atmsiz/5>+1
+al.msg:	block	al.max*msgsiz	;; message table
+extra:	block	1		;; extra message text buffer
+
+ml.max==:	10.
+	2
+	ml.max
+nmail:	block	1
+ml.tab:	block	ml.max		;; mail dir nums
+ml.tim:	block	ml.max		;; last write time
+
+us.max==:	20.
+	2
+	us.max
+nuser:	block	1
+us.tab:	block	us.max		;; users to watch for
+us.val:	block	us.max		;; flags
+
+si.max==:	15.
+	2
+	si.max
+nsite:	block	1
+si.tab:	block	si.max		;; sites to watch for
+			;; LH = pointer to official ASCIZ name
+			;; RH = pointer to net address block
+si.val:	block	si.max		;; flags
+
+li.max==:	10.
+	2
+	li.max
+nline:	block	1
+li.tab:	block	li.max		;; lines to watch for
+li.val:	block	li.max		;; flags
+
+jb.max==:	10.
+	2
+	jb.max
+njob:	block	1
+jb.tab:	block	jb.max		;; jobs to watch for
+jb.tim:	block	jb.max		;; last login time
+
+narpa==	10000.
+arpall:	block	1		;; alloc index for arphst
+arphst:	narpa
+	block	narpa		;; entries
+
+nchaos==10000.
+chsall:	block	1		;; alloc index for chshst
+chshst:	nchaos
+	block	nchaos		;; entries
+
+;;
+;; UUO Branch Tables
+;;
+
+uuo1:	.uuo	output,.outh	;; output calls, decoded by AC
+	.uuo	timout,.timh	;; date/time output calls, decoded by AC
+	.uuo	parse,.parse	;; comnd calls, decoded by AC
+	.uuo	append,.appnd	;; string append
+uuotab==: uuo1-1
+
+;;
+;; output UUO sub-commands
+;;
+
+outnum==0
+define	outcmd	name,handle
+	name=:	output outnum,
+	outnum==outnum+1
+	handle
+	termin
+
+outtab:	outcmd	strout,.stro	;; type asciz string
+	outcmd	octout,.octo	;; octal number
+	outcmd	decout,.deco	;; decimal number
+	outcmd	usrout,.usro	;; user name
+	outcmd	dirout,.diro	;; directory name
+omax==	outnum-1		;; maximum ac value
+
+timnum==0
+define	timcmd	name,handle
+	name=:	timout timnum,
+	handle==:timnum
+	timnum==timnum+1
+	termin
+
+	timcmd	tim.sc,.tsecs	;; time given as seconds
+	timcmd	tim.dl,.tdelt	;; time as delta
+	timcmd	tim.da,.tdate	;; time of day, maybe including date
+	timcmd	tim.ns,.td.ns	;; .tdate, but no seconds
+tmax==	timnum-1		;; maximum ac value
+
+crlfs:	asciz "
+"
+crlf==	strout	crlfs
+retcr==	jrst [	crlf
+		return ]
+
+;;
+;; parsing UUO sub-commands
+;;
+
+parnum==0
+define	parcmd	name,handle
+	name==	parse parnum,
+	parnum==parnum+1
+	handle
+	termin
+
+partab:	parcmd	init,.init	;; init
+	parcmd	key,.key	;; parse keyword	
+	parcmd	octin,.octi	;; octal number in
+	parcmd	decin,.deci	;; decimal number in
+	parcmd	userin,.usri	;; user in
+	parcmd	dirin,.diri	;; directory in
+	parcmd	timein,.timi	;; time in
+	parcmd	datein,.dati	;; date in
+	parcmd	sitein,.sitei	;; site in
+	parcmd	noise,.noise	;; guide word in
+	parcmd	confrm,.cnfrm	;; confirm
+	parcmd	deflt,.deflt	;; set default value for next call
+	parcmd	help,.help	;; set help for next call
+	parcmd	shelp,.shelp	;; set help and show default help
+pmax==	parnum-1		;; maximum ac value
+
+;;
+;; Program starts here
+;;
+
+start:	reset			;; cleans up everything
+	move	p, pdl		;; restore stack
+	move	a, iopdl	;; restore I/O stack
+	movem	a, iopptr
+	move	a, [.priin,,.priou]	;; set command reading jfns
+	movem	a, cmdsta+.cmioj
+	call	ialert		;; init alert table chaining
+	call	ihosts		;; init host tables
+	movei	f, f.dw\f.md	;; start with default mail and shutdown watches
+	setzm	nalert		;; no alerts
+	setzm	nmail		;; no mail watches
+	setzm	nuser		;; no user watches
+	setzm	nline		;; no line watches
+	setzm	njob		;; no job watches
+	setzm	nsite		;; no site watches
+	setzm	dtime		;; no shutdowns noticed
+	gtad			;; get current time
+	movem	a, now
+	;;
+	;; initialize directory name
+	;;
+	movni	a, 1		;; get logged-in directory number
+	hrroi	b, dirnum	;; store in dirnum
+	movei	c, .jilno
+	getji
+	 fail
+	move	b, dirnum
+	hrroi	a, dirnam
+	dirst
+	 fail
+	gjinf			;; set up default dir name
+	movem	c,myjob		;save my job number for later
+	move	b, a
+	hrroi	a, usrnam
+	dirst
+	 fail
+	;;
+	;; check for JCL, and reprocess to nicer format, pushing old
+	;; command jfns
+	;;
+	movei	a, .rsini	;; get rscan input
+	rscan
+	 jrst	nojcl
+	jumpe	a, nojcl
+	;; skip program name
+scnlup:	pbin
+	cain	a, ^J			;; end ?
+	 jrst	nojcl
+	caie	a, 40			;; space ?
+	 jrst	scnlup
+scnlp1:	pbin				;; skip spaces
+	cain	a, ^J
+	 jrst	nojcl
+	cain	a, 40
+	 jrst	scnlp1
+	tlo	f, f.jcl		;; have some!
+	move	b, iopdl
+	push	b, [.priin,,.priou]
+	movem	b, iopptr
+	move	b, [.priin,,.nulio]
+	movem	b, cmdsta+.cmioj
+	movei	b, error
+	hrrm	b, cmdsta		;; reparse address
+	move	b, [440700,,jclbuf]
+scnlp3:	idpb	a, b
+scnlp2:	pbin
+	cain	a, "/			;; / is changed to CRLF
+	 jrst [	movei	a, ^M
+		idpb	a, b
+		movei	a, ^J
+		jrst	scnlp3 ]
+	idpb	a, b
+	caie	a, ^J
+	 jrst	scnlp2
+	move	a, b
+	append	[asciz "EXIT
+"]
+	move	a, [440700,,jclbuf]	;; do the rscan
+	rscan
+	 fail
+	movei	a, .rsini
+	rscan
+	 fail
+	movni	a, 1			;; free the page
+	move	b, [.fhslf,,<jclbuf/1000>]
+	movei	c, 0
+	pmap
+
+	;;
+	;; check for old alert file
+	;;
+nojcl:	movei	a, .ojfn	;; get jfn first
+	hrroi	b, filenm	;; get string
+	xgtjfn
+	 jrst	nofile		;; no file -- skip processing
+	hrrzm	a, filjfn	;; save jfn
+	type	"ALERT: Reading old alert file.
+"
+	move	a, filjfn	;; read old alerts
+	movei	b, of%rd	;; read words
+	xopenf
+	 erjmp [type	"ALERT: Couldn't open alert file.
+"
+		fail ]
+rdloop:	move	a, filjfn
+	bin
+	jumpe	b, rddone
+	move	d, b		;; save time, and read message
+	bin			;; get interval
+	 erjmp [ fail ]
+	push	p, b
+	bin			;; and count
+	 erjmp [ fail ]
+	push	p, b
+	move	b, [444400,,atmbuf]
+	movei	c, 0
+	sin
+	 erjmp [ fail ]
+	pop	p, b
+	pop	p, a
+	camg	d, now			;; only future times are interesting
+	 jrst [	type	"ALERT: Old alert at time "
+		tim.da	d
+		crlf
+		move	a, atmbuf	;; any message ?
+		tlnn	a, 774000	;; test first char
+		 jrst	rdloop
+		type	"  Message was: "
+		strout	atmbuf
+		crlf
+		jrst	rdloop ]
+	skipe	c, atmbuf			;; any message at all ?
+	 move	c, [440700,,atmbuf]
+	call	stime	;; set one alert
+	 trna
+	  jrst	rdloop
+	type	"ALERT: Too many old alerts!
+"
+
+rddone:	hrli	a, (co%nrj)	;; don't release jfn
+	xclosf
+	 fail
+	hrli	a, (df%exp)	;; delete and expunge it
+	delf
+	 fail
+nofile:	trnn	f, f.md		;; watch default mail file ?
+	 jrst	nodflt
+	push	p, [0]
+	push	p, dirnum	;; search table
+	movei	b, ml.tab
+	call	tabins
+	 jrst [	type	"ALERT: Mail table full!
+"
+		jrst	nodflt ]
+	tro	f, f.mw
+nodflt:
+
+;;
+;; Here to start parsing a new command line
+;;
+
+rstart:	movei	a, cmdsta
+	init
+
+rparse:	move	p, pdl
+	setzm	comdef	;; reset COMND default and help stuff
+	setzm	comhlp
+	movei	a, cmdsta
+	key	keytab
+	hrrz	b, (b)	;; get subroutine address
+	call	(b)	;; go to correct subroutine
+	jrst	rstart	;; loop forever, parsing commands
+
+;; here if COMND fails in normal code (VERY RARE),
+;; or parsing fails on jcl or an xfile
+
+error:	tlne	f, f.jcl\f.cmd
+	 jrst	error1
+	movei	a, .priou	;; primary output
+	hrloi	b, .fhslf	;; self
+	movei	c, 0		;; no limit
+	erstr			;; output error message
+	 haltf
+	 haltf
+	jrst	rstart
+
+;; here if parsing fails on jcl or an xfile
+
+error1:	call	bellcr
+	tlnn	f, f.cmd
+	 jrst [	type	"ALERT: error in jcl -- flushing and doing EXIT
+"
+		jrst	error3 ]
+	type	"ALERT: error in "
+	move	d, iopptr
+	camg	d, iopdl
+	 jrst [	type	"???"
+		tlz	f, f.cmd
+		jrst	error2 ]
+	hlrz	b, (d)
+	cain	b, .priin
+	 jrst [	type	"jcl"
+		jrst	error2 ]
+	type	"xfile "
+	movei	a, .priou
+	movei	c, 0
+	jfns			;; print file name
+error2:	type	" -- aborting.
+"
+error3:	type	"Error was: "
+	movei	a, .priou
+	move	b, [.fhslf,,-1]
+	movei	c, 0
+	erstr
+	 jfcl
+	 jfcl
+	crlf
+	tlnn	f, f.cmd
+	 jrst [	movei	a, .priou
+		cfibf
+		hrroi	a, [asciz "EXIT
+"]
+		rscan
+		 fail
+		movei	a, .rsini
+		rscan
+		 fail
+		jrst	rstart ]
+	hlrz	a, (d)		;; close xfile jfn
+	closf
+	 jfcl
+	call	iopop
+	jrst	rstart
+
+;;
+;; EXIT command
+;;
+
+ex.hlp:	asciz "EXIT leaves ALERT.  It does a C,B if ALERT was not given
+JCL; otherwise it just halts.  Use EXIT when you
+are done setting things up.  EXIT is implicit after jcl.
+Use QUIT at the end of a command file, or EXIT, if you
+want (EXIT closes all open xfile's and ignores further jcl)."
+
+ex.cmd:	noise	[asciz "and start watching"]
+	confrm
+	tlne	f, f.cmd
+	 jrst [	call	iopop		;; close all xfile's
+		jrst	.-1 ]
+ex.cm1:	move	a, [.fhslf,,.timal]	;; remove all TIMERs for this fork
+	movei	c, 0			;; stupid release 3 monitor
+	timer
+	 jfcl				;; ignore failure
+	setzm	timtim			;; zap timer locs
+	setzm	tcktim
+	setzm	sittim
+	setzm	dwntim
+	movei	a, .fhslf		;; set up for interrupts
+	move	b, [levtab,,chntab]
+	sir
+	eir
+	movsi	b, (i.time\i.tick\i.site\i.down\i.ctla)	;; activate channels
+	aic
+	move	a, [.ticca,,ctachn]	;; set up control-A
+	ati
+	move	a, [rt%dim\.fhslf]	;; make control-A deferred interrupt
+	rtiw
+	tlo	c, 200000
+	stiw
+	tlze	f, f.jcl		;; don't do c,b if had jcl
+	 jrst [	movei	a, .priin	;; but flush any extra jcl
+		cfibf
+		call	iopop		;; flush it, reset reparse address
+		jrst	ex.cm2 ]
+	hrroi	a, [asciz "c,b
+"]
+	rscan
+	 fail
+	movei	a, 0
+	rscan
+	 fail
+ex.cm2:	haltf				;; wait for c,b by exec, or RSCAN
+	movei	a, .fhslf		;; start ball rolling ...
+	movei	b, 0
+	trne	f, f.al			;; any alerts ?
+	 tlo	b, (i.time)
+	trne	f, f.sw			;; site checking ?
+	 tlo	b, (i.site)
+	trne	f, f.mw\f.dw\f.uw\f.lw\f.jw	;; other stuff ?
+	 tlo	b, (i.tick)
+	ior	f, b			;; set first time bits
+	iic				;; will call right routines
+	wait				;; hang forever
+
+;;
+;;	Actual interrupt handlers
+;;
+
+tcksrv:	call	regsav		;; 1 minute tick -- check stuff
+	setzm	tcktim		;; clear timer loc
+	call	ckrest
+	tlza	f, (i.tick)
+timdun:	 tlz	f, (i.time)
+intdun:	call	regres		;; here to return from interrupt
+	debrk
+
+timsrv:	call	regsav
+	setzm	timtim
+	skipge	b, al.que
+	 jrst	timdun		;; punt if none set (shouldn't happen any more)
+timslp:	gtad			;; loop until no more to talk about
+	camge	a, al.tab(b)
+	 jrst [	call	stalrm	;; set new timer maybe ?
+		jrst	timdun ]
+	tlnn	f, (i.time)
+	 call	bell		;; alarm went off
+	type	"
+[Alert at "
+	tim.da	al.tab(b)
+	type	".]
+"
+	move	b, al.que
+	imuli	b, msgsiz
+	skipe	al.msg(b)
+	 jrst [	type	"[Message:  "
+		strout	al.msg(b)
+		type	"]
+"
+		jrst	.+1 ]
+	movei	a, .priou
+	dobe
+	call	rem.al		;; resets for us ...
+	skipl	b, al.que	;; any more alerts ?
+	 jrst	timslp		;; yes -- loop
+	jrst	intdun		;; no -- just punt
+
+sitsrv:	call	regsav
+	setzm	sittim
+	call	cksite
+	tlz	f, (i.site)
+	jrst	intdun
+
+ctasrv:	call	regsav
+	movei	a, .fhslf	;; have TTY ?
+	gpjfn
+	aojn	b, intdun	;; no -- ignore interrupt
+	movei	a, .priin
+	rfmod			;; yes -- save terminal mode across reset
+	reset			;; get rid of everything and start fresh
+	sfmod
+	cfibf
+	move	a, iopdl	;; reset I/O situation
+	movem	a, iopptr
+	move	a, [.priin,,.priou]
+	movem	a, cmdsta+.cmioj
+	tlz	f, f.jcl\f.cmd
+	jrst	rstart		;; go read commands
+
+dwnsrv:	call	regsav
+	dmove	c, dtime	;; merely set up and join ckdown code
+	move	b, dwntim
+	subm	c, b		;; change to delta
+	call	retim4
+	jrst	intdun
+
+;;
+;; Interrupt data tables and flags
+;;
+
+levtab:	pclev1
+	pclev2
+	pclev3
+
+chntab:	2,,timsrv	;; alarm interrupt
+	2,,tcksrv	;; periodic tick interrupt
+	3,,sitsrv	;; another tick -- for site watch
+	2,,dwnsrv	;; time for message related to system going down
+	1,,ctasrv	;; ^A interrupt
+	block	31.
+
+;; Note: all timer interrupt channels must be together starting at 0,
+;; and must be in the same order as timtim, etc.  Also, dwnchn must be
+;; last.
+
+timchn==:0		;; alarm channel
+i.time==:1_<35.-timchn>
+tckchn==:1		;; tick channel
+i.tick==:1_<35.-tckchn>
+sitchn==:2		;; site watch channel
+i.site==:1_<35.-sitchn>
+dwnchn==:3		;; downtime message timer interrupt channel
+i.down==:1_<35.-dwnchn>
+ctachn==:4		;; control-A channel
+i.ctla==:1_<35.-ctachn>
+
+;;
+;;	Subroutines for saving/restoring registers in interrupts
+;;	Also saves/restores uuoins
+;;
+;;	Note: F is specifically NOT preserved, so flags can be
+;;	communicated.
+;;
+
+nsaved==x-a+1
+regsav:	exch	x, (p)			;; get retn addr, save x
+	adjsp	p, nsaved-1		;; get room
+	push	p, uuoins		;; save special loc
+	push	p, x			;; get retn addr on top
+	hrri	x, -nsaved(p)		;; get set to blt all but x
+	hrli	x, a
+	blt	x, -2(p)		;; save registers
+	move	x, -<nsaved+1>(p)	;; get x back
+	return
+
+regres:	pop	p, x			;; get retn addr
+	pop	p, uuoins		;; special loc
+	exch	x, -<nsaved-1>(p)	;; retn addr to 1st slot
+	push	p, x			;; old x to top of stack
+	hrli	x, -<nsaved-1>(p)	;; restore regs, incl x
+	hrri	x, a
+	blt	x, x
+	adjsp	p, -nsaved		;; flush unneeded stuff
+	return				;; retn addr now on top
+
+;;
+;;	Subroutine for calculating even times, and setting timer interrupt
+;;
+;;	Expects interval in D; units are seconds
+;;	E has number of channel to interrupt
+;;
+
+timrnd:	gtad
+	muli	a, 24.*60.*60.	;; get as seconds and fraction
+	dadd	a, [0 ? 400000]	;; round
+	ashc	a, -18.		;; eliminate fraction
+	idivi	b, (d)		;; get number of increments
+	addi	b, 1		;; go one ahead
+	imuli	b, (d)		;; fix back
+	ashc	a, 18.		;; back to seconds and fraction
+	divi	a, 24.*60.*60.
+	move	b, a
+	movem	b, timtim(e)	;; indicate value set
+	move	a, [.fhslf,,.timdt]
+	movei	c, (e)
+	timer
+	 trna
+	  return
+	cain	a, timx6	;; ok if "time has passed"
+	 jrst	timrnd		;; screwed -- try again
+	fail
+
+;;
+;;	Subroutine for checking/setting ALERTs
+;;
+
+stalrm:	trnn	f, f.al			;; any alerts ?
+	 jrst [	movei	a, .ojfn	;; no -- delete save file
+		hrroi	b, filenm	;; get string
+		xgtjfn
+		 return			;; no file -- skip deletion
+		delf			;; delete the file
+		 fail
+		return ]
+	gtad				;; next alert already passed ?
+	move	b, al.que
+	caml	a, al.tab(b)
+	 jrst [	tlnn	f, f.cmd\f.jcl	;; no type out if from jcl or file
+		 call [	tlnn	f, (i.time)
+			 call	bell
+			type	"
+[ALERT: Alert at "
+			move	b, al.que
+			tim.da	al.tab(b)
+			type	" already passed.]
+"
+			move	c, al.que
+			imuli	c, msgsiz
+			skipe	al.msg(c)	;; any message ?
+			 call [	type	"[Message was:  "
+				strout	al.msg(c)
+				type	"]"
+				retcr ]
+			movei	a, .priou
+			dobe
+			return ]
+		call	rem.al	;; remove from list
+		jrst	stalrm ]	;; try again
+	movei	a, .ojfn	;; see if we can just rewrite old file
+	hrroi	b, filenm
+	xgtjfn
+	 jrst [	movei	a, .njfn	;; no -- create new file
+		hrroi	b, filenm
+		xgtjfn
+		 jrst [	type	"
+[ALERT: Couldn't write save file.]
+"
+			fail ]
+		jrst	.+1 ]
+	movei	b, of%wr
+	xopenf
+	 jrst [	type	"
+[ALERT: Couldn't open save file to write.]
+"
+		fail ]
+	move	t1, al.que
+wrloop:	move	b, al.tab(t1)		;; write one time
+	bout
+	move	b, al.int(t1)		;; write interval
+	bout
+	move	b, al.rpt(t1)		;; write count
+	bout
+	movei	t2, (t1)
+	imuli	t2, msgsiz
+	movei	b, al.msg(t2)
+	hrli	b, 444400
+	movei	c, 0
+	sout
+	movei	b, 0
+	bout			;; make sure 0 is there!
+	skipl	t1, al.nxt(t1)
+	 jrst	wrloop
+	bout				;; terminate with 0
+	movei	a, (a)
+	xclosf				;; close new file
+	 fail
+	move	a, [.fhslf,,.timdt]	;; set timer interrupt
+	move	b, al.que
+	move	b, al.tab(b)
+	movei	c, timchn
+	timer
+	 jrst [	type	"
+[ALERT: Timer failed; time was "
+		tim.da	b
+		type	".]
+"
+		call	rem.al	;; remove from list
+		jrst	stalrm ]	;; try again
+	movem	b, timtim
+	return
+
+;;
+;;	Subroutine for checking mail, shutdowns, etc.
+;;
+
+deltat==60.	;; time between checks, in seconds
+
+ckrest:	trne	f, f.mw
+	 call	ckmail
+	trne	f, f.dw
+	 call	ckdown
+	trne	f, f.uw
+	 call	ckuser
+	trne	f, f.lw
+	 call	ckline
+	trne	f, f.jw
+	 call	ckjob
+	trnn	f, f.mw\f.dw\f.uw\f.lw\f.jw
+	 return
+	movei	d, deltat			;; round time to next minute
+	movei	e, tckchn
+	jrst	timrnd				;; set timer
+
+;;
+;; Subroutine to check for new mail, and print message
+;;
+
+ckmail:	gjinf					;; punt if detached
+	aoje	d, cpopj
+	movei	t1, ml.tab			;; check each in list
+	movn	t2, nmail
+	hrli	t1, (t2)
+cmail:	call	mtest				;; does it have mail ?
+	 jrst [	skipge	ml.tim-ml.tab(t1)	;; OK before ?
+		 jrst	cmail1			;; no -- suppress message
+		setom	ml.tim-ml.tab(t1)
+		call	bellcr
+		type	"[ALERT: Problems accessing "
+		strout	mfname
+		type	".]
+"
+		jrst	cmail1 ]
+	 jrst [	call	bellcr
+		move	b, (t1)
+		came	b, dirnum
+		 call [	type	"["
+			strout	mdname
+			type	" has"
+			jrst	spopj ]
+		 type	"[You have"
+		type	" mail from "
+		strout	writer
+		type	" at "
+		tim.ns	mwrite
+		type	".]
+"
+		jrst	.+1 ]
+cmail1:	aobjn	t1, cmail
+	return
+
+;;
+;;	Mail checking subroutine
+;;		Args: t1 should point to ml.tab slot of interest
+;;	returns:
+;;		+1 if had problems
+;;		+2 if mail
+;;		+3 if no mail
+;;	If there was mail:
+;;	write time in mwrite, writer's name in writer
+;;	mdname has dir name without structure or <, >.
+
+mtest:	hrroi	a, mfname
+	move	b, (t1)
+	dirst
+	 fail
+	append	mailnm				;; append "mail.txt"
+	movsi	a, (gj%del\gj%old\gj%sht)	;; try to get jfn
+	hrroi	b, mfname
+	xgtjfn
+	 return
+	move	b, [1,,.fbbyv]	;; any pages in file ?
+	movei	c, d
+	gtfdb
+	 erjmp	[ fail ]
+	trnn	d, -1
+	 jrst	mtest1
+	move	b, [2,,.fbwrt]			;; get write and access times
+	movei	c, mwrite			;; address of variable
+	gtfdb
+	 erjmp	[ fail ]
+	move	b, mwrite			;; written since last looked ?
+	camg	b, ml.tim-ml.tab(t1)
+	 jrst	mtest1				;; no -- go to next
+	movem	b, ml.tim-ml.tab(t1)		;; update write time
+	camg	b, mread			;; written since read ?
+	 jrst	mtest1				;; no -- go to next
+	hrli	a, .gflwr			;; get last writer
+	hrroi	b, writer
+	gfust
+	 erjmp	[ fail ]
+	movei	b, (a)				;; get dir name by itself
+	hrroi	a, mdname
+	movsi	c, 010000
+	jfns
+	 erjmp	[ fail ]
+	movei	a, (b)
+	xrljfn					;; release jfn
+	 fail
+	jrst	spopj
+
+mtest1:	movei	a, (a)				;; here if no mail
+	rljfn
+	 return
+	jrst	spopj2
+
+;;
+;; Subroutine to check for shutdown -- merely schedules/reschedules
+;;	interrupts on another channel, which cause the actual printing
+;;	of message for the user.  Because the system is stupid about
+;;	multiple timers set for the same time, we occasionally must
+;;	clear all timers and re-set them (blech).  Further, we must be
+;;	able to recover if some time limits go by in the meantime (we do
+;;	so by remembering the interrupt channels and doing an IIC).
+;;
+
+ckdown:	setz	b,		;; b gets time until shutdown
+	setzb	c, d		;; c gets shutdown time, d gets period
+	move	a, [0,,.dwnti]	;; get time of next shutdown
+	getab
+	 fail
+	jumpe	a, ckdwn1	;; none scheduled
+	move	b, a		;; will subtract current time off
+	move	c, a		;; the place it should be
+	move	d, a		;; will contain period
+	move	a, [1,,.dwnti]		;; get up time
+	getab
+	 fail
+	subm	a, d		;; shutdown period in d
+	gtad			;; compute time until shutdown
+	sub	b, a		;; in b
+ckdwn1:	came	c, dtime	;; shutdown same as old ?
+	 jrst	retime		;; no -- set up again
+	skipn	dwntim		;; make sure timer set if required
+	 jumpn	c,retim1	;; go straight to relevant code
+	came	d, dper		;; and period same ?
+	 jrst	prdown		;; nope -- print message to show it
+	return
+
+retime:	skipn	dwntim		;; if not currently set, then
+	 jrst	retim0		;; no need to clear out
+	push	p, b
+	push	p, c
+	push	p, d
+	push	p, e
+	move	a, [.fhslf,,.timal]	;; remove all timers (sigh)
+	movei	c, 0			;; stupid release 3 monitor
+	timer
+	 fail
+	setzm	dwntim			;; has been removed
+	hrri	a, .timdt		;; start resetting
+	movei	e, 2			;; scan downwards
+	movei	d, 0
+retim2:	skipe	b, timtim(e)		;; one to do ?
+	 jrst [	move	a, [.fhslf,,.timdt]	;; yep, try timer
+		movei	c, 0			;; stupid release 3 monitor
+		timer
+		 trna
+		  jrst	.+1
+		caie	a, timx6	;; only ok failing case
+		 fail
+		movni	b, (e)		;; get 1 into right position
+		movei	a, 400000	;; remember it - will iic below
+		lsh	a, b
+		tlo	d, (a)
+		jrst	.+1 ]
+	sojge	e, retim2
+	movei	a, .fhslf
+	skipe	b, d
+	 iic				;; do interrupts for passed ones
+	pop	p, e
+	pop	p, d
+	pop	p, c
+	pop	p, b
+retim0:	jumpe	c, [
+		dmovem	c, dtime	;; clear record
+		call	bellcr
+		type	"[Shutdown cancelled.]"
+		retcr ]
+retim1:	caile	b, <<12.,,0>/24.>	;; punt if > 12 hours away
+	 jrst [	setzm	dtime
+		setzm	dper
+		return ]
+retim4:	jumple	b, tmpast
+	call	prdown			;; print the message
+	movei	c, dtimes		;; find next time
+	camg	b, (c)
+	 aoja	c, .-1
+retim3:	move	b, dtime		;; set interrupt
+	sub	b, (c)
+	movem	b, dwntim
+	move	a, [.fhslf,,.timdt]
+	movei	c, dwnchn
+	timer
+	 trna
+	  return
+	caie	a, timx6
+	 fail
+	aoja	c, retim3		;; try again
+tmpast:	setzm	dwntim			;; in case come here from dwnint
+	call	bellcr
+	type	"[System should be down NOW, back up at "
+	dmove	b, dtime
+	add	b, c
+	tim.da	b
+	type	".]"
+	retcr
+
+;; Table of times before shutdown to print messages
+
+dtimes:	<2,,0>/24.		;; 2 hours
+	<1,,0>/24.		;; 1 hour
+	<30.,,0>/<24.*60.>	;; 30 minutes
+	<15.,,0>/<24.*60.>	;; 15 minutes
+	<10.,,0>/<24.*60.>	;; 10 minutes
+	<5.,,0>/<24.*60.>	;; 5 minutes
+	<1,,0>/<24.*60.>	;; 1 minute
+	0			;; now
+
+;;
+;; Common subroutine for printing shutdown message
+;;
+;;	     b has time until shutdown
+;;	     c has shutdown time
+;;	     d has length of shutdown
+;;
+
+prdown:	call	bellcr
+	type	"[System going down in "
+	tim.dl	b
+	type	" at "
+	tim.da	c
+	type	" for "
+	jumple	d, [
+		type	"an unknown period.]"
+		jrst	.+2 ]
+	  tim.dl d
+	type	".]"
+	dmovem	c, dtime
+	retcr
+
+;;
+;; subroutine to check for sites up
+;;
+
+cksite:	move	t1, nsite
+cslup1:	movei	e, opt.dn		;; say is down
+	hrrz	a, si.tab-1(t1)		;; get host number
+	move	a, (a)
+	call	arpcnv
+	 jrst	ckschs
+	move	d, a
+;
+;  Build a TCP connection block
+;
+OPEN%=104000,,742
+CLOSE%=104000,,743
+ABORT%=104000,,747
+tcp%js==400000,,0	; JCN Supplied in RH instead of connection block adr
+			; This bit must be zero for OPEN
+tcp%wt==200000,,0	; Wait for completion
+tcp%fs==010000,,0	; Force Synchronization (active OPEN)
+
+	setzm	tcpcnb		;let system fill local host number
+	aos	a,tcpcnb+1	;get local port (increment it)
+	skipn	b,myjob		;get my job number, check for 0
+	movei	b,-2		;use -2 if job 0
+	lsh	b,8.		;position it
+	andi	a,377		;keep 8 bits
+	add	a,b		;combine them
+	andi	a,177777	;keep 16 bits
+	movem	a,tcpcnb+1	;save in connection block
+	movem	d,tcpcnb+2	;save foreign host number
+	movei	a,23.		;new telnet port
+	movem	a,tcpcnb+3	;save in connection block
+	setzm	tcpcnb+4	;clear last two words
+	setzm	tcpcnb+5	; of connection block
+	move	a,[tcp%wt+tcp%fs+tcpcnb]	;wait for open, force sync,
+						; persistent, address of block
+	movei	b,15.		;timeout, seconds
+	setz	c,		;retransmission parameter word
+	OPEN%			;open the connection
+	 jrst	[hlrz a,a	;failed, get jcn from lh
+		 hrli a,(tcp%js) ;say this is a jcn
+		 ABORT%		;get rid of this jcn
+		  trn		;ignore errors here
+		 jrst cksend]	;continue with site down
+	movei	e,opt.up	;site is up, say so
+	hrli	a,(tcp%js)	;say we have a jcn
+	push	p,a		;save it for a bit
+	CLOSE%			;close the connection
+	 fail			;fatal.
+	movei	a,10000.	;wait ten seconds
+	disms
+	pop	p,a		;restore jcn
+	ABORT%			;abort jcn and tcb
+	 fail			;fatal.
+
+;	hrroi	a, netnam
+;	append	[asciz "NET:."]		;; to OLD TELNET server socket
+;	move	b, d
+;	movei	c, 8.
+;	nout
+;	 fail
+;	append	[asciz "-1"]
+;	movsi	a, (gj%phy\gj%sht)
+;	hrroi	b, netnam
+;	xgtjfn
+;	 fail
+;	hrrzm	a, netjfn		;; save jfn
+;	move	b, [403000,,of%rd]	;; 32 bit, immediate return
+;	xopenf
+;	 jrst	ntrlj1			;; release jfn
+;	call	anwait
+;	 jrst	cslup1			;; jfn zapped return
+;	 jrst	ntcls1			;; fail return
+;	hrrz	a, netjfn		;; complete ICP and close connections
+;	bin
+;	 erjmp	ntcls1			;; show failure
+;	xclosf
+;	 jrst	ntrlj1
+;	addi	a, 1
+;	lsh	a, 1
+;	movem	a, lclskt
+;	movem	b, forskt
+;	hrroi	a, netnam
+;	append	[asciz "NET:"]
+;	move	b, lclskt
+;	movei	c, 8.
+;	nout
+;	 fail
+;	append	[asciz "."]
+;	push	p, a
+;	hrrz	a, si.tab-1(t1)
+;	move	a, (a)
+;	call	arpcnv
+;	 fail
+;	move	b, a
+;	pop	p, a
+;	movei	c, 8.
+;	nout
+;	 fail
+;	movn	b, forskt
+;	nout
+;	 fail
+;	movsi	a, (gj%phy\gj%sht)
+;	hrroi	b, netnam
+;	xgtjfn
+;	 fail
+;	hrrzm	a, sndjfn
+;	movsi	a, (gj%phy\gj%sht)
+;	hrroi	b, netnam
+;	xgtjfn
+;	 fail
+;	hrrzm	a, netjfn
+;	move	b, [103000,,of%rd]
+;	xopenf
+;	 jrst	ntrljb
+;	call	anwait
+;	 jrst	cslup1			;; jfn zapped
+;	 jrst	ntrlj2			;; fail
+;	move	a, netjfn
+;	exch	a, sndjfn
+;	movem	a, netjfn
+;	move	b, [103000,,of%wr]
+;	xopenf
+;	 jrst	ntrlj2
+;	call	anwait
+;	 jrst [	move	a, sndjfn	;; jfn zapped
+;		xclosf
+;		 skipa	a, sndjfn
+;		  jrst	cslup1
+;		xrljfn
+;		 jfcl
+;		jrst	cslup1 ]
+;	 trna
+;	  movei	e, opt.up
+;ntcls2:	hrrz	a, sndjfn
+;	xclosf
+;	 trna
+;	  jrst	ntcls1
+;ntrlj2:	hrrz	a, sndjfn
+;	xrljfn
+;	 jfcl
+ntcls1:	hrrz	a, netjfn
+	xclosf
+	 jrst	ntrlj1
+	jrst	cksend
+;ntrljb:	hrrz	a, sndjfn
+;	xrljfn
+;	 jfcl
+ntrlj1:	hrrz	a, netjfn
+	xrljfn
+	 jfcl
+cksend:	move	d, si.val-1(t1)
+	trnn	d, opt.v		;; first time ?
+	 tdnn	e, si.sup		;; and being suppressed ?
+	  trna
+	   tro	d, (e)			;; make it look unchanged
+	trcn	d, (e)			;; message if setting new bit
+	 jrst [	tlnn	f, (i.site)
+		 call	bell		;; notify user of change
+		type	"
+[Site "
+		hlro	a, si.tab-1(t1)	;; get official name
+		psout
+		type	" is now "
+		movei	a, [asciz "down"]
+		trne	e, opt.up
+		 movei	a, [asciz "up"]
+		strout	(a)
+		type	" via "
+		hrrz	a, si.tab-1(t1)
+		move	a, (a)
+		call	arpcnv
+		 skipa	b, [[asciz "CHAOS"]]
+		  movei	b, [asciz "ARPA"]
+		strout	(b)
+		type	"net.]
+"
+		jrst	.+1 ]
+	trz	d, opt.v		;; store new value back
+	tro	d, (e)
+	movem	d, si.val-1(t1)
+	sojg	t1, cslup1
+
+	trnn	f, f.sw			;; need to set timer ?
+	 return
+	movei	d, 5*60.		;; every even 5 minutes
+	movei	e, sitchn
+	jrst	timrnd			;; set timer
+;;
+;; subroutine to watch an ARPAnet connection for open-ness
+;;	netjfn has jfn, should be open in immediate return mode
+;;	returns .+1 if jfn zapped
+;;		.+2 if timeout or loss
+;;		.+3 if open within 15 seconds
+
+anwait:	movei	t2, 15.			;; go 15 seconds max
+anwlup:	hrrz	a, netjfn
+	gdsts
+	 erjmp [call	bellcr
+		type	"[ALERT: somebody zapped my ARPA jfn!]
+"
+		return ]
+	rot	b, 4			;; check connection state
+	andi	b, 17
+	cain	b, 6			;; 6 = RFC sent
+	 jrst [	sojle	t2, spopj	;; timeout, no skip
+		movei	a, 1000.
+		disms
+		jrst	anwlup ]
+	cain	b, 7			;; 7 = open
+spopj2:	 aos	(p)			;; open ==> skip
+spopj:	aos	(p)
+cpopj:	return
+
+;;
+;; code for probing on CHAOS net
+;;
+
+ckschs:	call	chscnv
+	 fail		;; impossible
+	move	d, a
+	hrroi	a, netnam		;; cons string for JFN
+	append	[asciz "CHA:"]		;; to site.STATUS contact
+	move	b, d
+	movei	c, 8.
+	nout
+	 fail
+	append	[asciz ".STATUS"]
+	movsi	a, (gj%phy\gj%sht)
+	hrroi	b, netnam
+	xgtjfn
+	 fail
+	hrrzm	a, netjfn		;; save jfn
+	move	b, [103000,,of%rd]	;; 8 bit, immediate return
+	xopenf
+	 jrst	ntrlj1			;; release jfn
+	call	chwait
+	 jrst	cslup1
+	 trna
+	  movei	e, opt.up
+	jrst	ntcls1
+
+;;
+;; subroutine to watch a CHAOSnet connection for open-ness
+;;	netjfn has jfn, should be open in immediate return mode
+;;	returns .+1 if jfn zapped
+;;		.+2 if timeout or loss
+;;		.+3 if open within 15 seconds
+
+chwait:	movei	t2, 15.			;; go 15 seconds max
+chwlup:	hrrz	a, netjfn
+	gdsts
+	 erjmp [call	bellcr
+		type	"[ALERT: somebody just zapped my CHAOS jfn!]
+"
+		return ]
+	andi	b, 17			;; check state
+	cain	b, 0			;; 0 = closed
+	 jumpn	c, spopj2		;; packets waiting ?
+	cain	b, 3			;; 3 = RFC sent
+	 jrst [	sojle	t2, spopj	;; timeout, no skip
+		movei	a, 1000.
+		disms
+		jrst	chwlup ]
+	cain	b, 4			;; 4 = open
+	 aos	(p)			;; open ==> skip
+	jrst	spopj
+
+;;
+;; subroutine to check for lines free
+;;
+
+ckline:	move	t1, nline
+cllup1:	movei	a, .ttyjo		;; look up the line
+	hrl	a, li.tab-1(t1)
+	getab
+	 fail			;; shouldn't happen (checked by lw.cmd)
+	movei	e, opt.fr
+	hlre	a, a
+	aose	a		;; skip if free
+	 movei	e, opt.us
+	move	d, li.val-1(t1)
+	trnn	d, opt.v		;; first time ?
+	 tdnn	e, li.sup		;; and being suppressed ?
+	  trna
+	   tro	d, (e)			;; make it look unchanged
+	trcn	d, (e)			;; message if setting new bit
+	 jrst [	tlnn	f, (i.tick)
+		 call	bell		;; notify user of change
+		type	"
+[Line "
+		move	b, li.tab-1(t1)
+		octout
+		type	" is now "
+		movei	a, [asciz "free"]
+		trne	e, opt.us
+		 movei	a, [asciz "used"]
+		strout	(a)
+		type	".]
+"
+		jrst	.+1 ]
+	trz	d, opt.v
+	tro	d, (e)
+	movem	d, li.val-1(t1)
+	sojg	t1, cllup1
+	return			;; done
+
+;;
+;; subroutine to check for jobs done
+;;
+
+ckjob:	move	t1, njob
+cjlup1:	movei	a, .jobrt		;; job exist ?
+	hrl	a, jb.tab-1(t1)
+	getab
+	 fail		;; shouldn't happen (checked by jo.cmd)
+	jumpl	a, jdone
+	move	a, jb.tab-1(t1)		;; re-used ?
+	hrroi	b, d
+	movei	c, .jilln
+	getji
+	 jrst	jdone
+	skipe	c, jb.tim-1(t1)		;; init ?
+	 camn	c, d			;; same as before ?
+	  jrst [movem	d, jb.tim-1(t1)
+		jrst	cjlup2 ]
+jdone:	push	p, t1
+	push	p, jb.tab-1(t1)
+	push	p, (p)
+	movei	b, jb.tab
+	call	tabdel
+	 fail			;; impossible!
+	 trz	f, f.jw		;; no more jobs
+	tlnn	f, (i.tick)
+	 call	bell		;; free:  notify user
+	type	"
+[Job "
+	pop	p, b
+	decout
+	type	" is finished.]
+"
+	pop	p, t1
+cjlup2:	sojg	t1, cjlup1
+	return		;; done
+
+;;
+;; subroutine to check for users logged in
+;;
+
+ckuser:	hrroi	a, .jobtt		;; get number of jobs
+	getab
+	 fail
+	movn	t2, a			;; run through marking logged in users
+	jrst	culup1
+culup2:	movei	a, (t2)			;; job number
+	move	b, [-2,,d]		;; store tty number in d, user in e
+	movei	c, .jitno		;; user number
+	getji
+	 jrst	culup1			;; ignore problems
+	move	t1, nuser		;; scan for match
+	camn	e, us.tab-1(t1)
+	 jrst [	movei	e, opt.ni	;; set bits
+		aosn	d
+		 movei	e, opt.nd	;; detached
+		iorm	e, us.val-1(t1)
+		jrst	culup1 ]
+	sojg	t1, .-2
+culup1:	sojge	t2, culup2
+
+	move	t1, nuser		;; scan table for changes
+culup3:	move	d, us.val-1(t1)
+	ldb	e, [.bp	opt.ni\opt.nd,d]
+	move	e, (e)[opt.lo ? opt.li ? opt.dt ? opt.li]
+	trnn	d, opt.v		;; first time ?
+	 tdnn	e, us.sup		;; and being suppressed ?
+	  trna
+	   tro	d, (e)			;; make it look unchanged
+	trcn	d, (e)			;; message if setting new bit
+	 jrst [	tlnn	f, (i.tick)
+		 call	bell		;; notify user of change
+		type	"
+[User "
+		move	b, us.tab-1(t1)
+		usrout
+		type	" is now "
+		movei	a, [asciz "logged out"]
+		trne	e, opt.li
+		 movei	a, [asciz "logged in"]
+		trne	e, opt.dt
+		 movei	a, [asciz "detached"]
+		strout	(a)
+		type	".]
+"
+		jrst	.+1 ]
+	trz	d, opt.n\opt.v
+	tro	d, (e)
+	movem	d, us.val-1(t1)
+	sojg	t1, culup3
+	return
+
+;;
+;; SHOW command
+;;	print a line for each alert set
+;;	and every other thing being watched
+;;
+
+sh.hlp:	asciz "SHOW displays the entire status of ALERT -
+all the alerts set, with their messages, mail-watching,
+shutdown-watching, etc.  You can select a single thing,
+too.  Do SHOW ? to see the options."
+
+sh.cmd:	noise	[asciz "info about"]
+	deflt	[asciz "everything"]
+	shelp	[asciz "SHOW option,"]
+	key	sh.opt
+	hrrz	e, (b)		;; get flags
+	confrm
+
+	trnn	e, s.alrt	;; show alerts ?
+	 jrst	sh.mw
+	trne	e, s.all
+	 crlf
+	trnn	f, f.al
+	 jrst [	type	"No alerts set.
+"
+		jrst	sh.mw ]
+	move	t1, al.que
+	type	"Alerts set:
+"
+	movei	t2, 1			;; counter
+sh.lup:	movei	a, .priou
+	movei	b, (t2)
+	move	c, [no%lfl\<2,,0>\10.]	;; leading fill, two cols, base 10.
+	nout
+	 fail
+	type	":	"
+	tim.da	al.tab(t1)
+	movei	t3, (t1)
+	imuli	t3, msgsiz
+	skipn	al.msg(t3)		;; any message ?
+	 jrst [	type	"  No message."
+		jrst	sh.lp1 ]
+	type	"  Message:  "
+	strout	al.msg(t3)
+sh.lp1:	crlf
+	move	b, al.rpt(t1)
+	skipe	c, al.int(t1)		;; repeater ?
+	 cain	b, 1			;; more than 1 time ?
+	  jrst	sh.lp2
+	type	"	Repeated "
+	jumpg	b, [
+		decout
+		type	" times, every "
+		jrst	.+2 ]
+	 type	"forever, every "
+	tim.sc	c
+	type	".
+"
+sh.lp2:	skipl	t1, al.nxt(t1)
+	 aoja	t2, sh.lup
+
+sh.mw:	trnn	e, s.mail
+	 jrst	sh.dwn
+	trne	e, s.all
+	 crlf
+	type	"Mail watching is "
+	trnn	f, f.mw
+	 jrst [	type	"off.
+"
+		jrst	sh.dwn ]
+	type	"on:
+"
+	movn	t1, nmail
+	hrli	t1, (t1)
+	hrri	t1, ml.tab
+sh.mw1:	type	 "	"
+	move	b, (t1)
+	dirout
+	type	" -- "
+	setzm	ml.tim-ml.tab(t1)	;; force message
+	call	mtest			;; see if mail there ---
+	 jrst [	type	"problems accessing mail file!"
+		jrst	sh.mw2 ]
+	 jrst [	type	"mail from "
+		strout	writer
+		type	" at "
+		tim.ns	mwrite
+		jrst	sh.mw2 ]
+	 type	"no new mail"
+sh.mw2:	crlf
+	aobjn	t1, sh.mw1
+
+sh.dwn:	trnn	e, s.down
+	 jrst	sh.lin
+	trne	e, s.all
+	 crlf
+	type	"Downtime watching is "
+	trne	f, f.dw
+	 jrst [	type	"on; "
+		skipn	b, dtime
+		 jrst [	type	"no shutdowns scheduled.
+"
+			jrst	.+2 ]
+		type	"system going down at "
+		tim.da	b
+		type	" for "
+		skipg	a, dper
+		 jrst [	type	"an unknown period.
+"
+			jrst	.+2 ]
+		 tim.dl	a
+		type	".
+"
+		jrst	.+2
+		]
+	type	"off.
+"
+
+sh.lin:	trnn	e, s.line
+	 jrst	sh.job
+	skipn	t1, nline		;; any lines ?
+	 jrst [	trne	e, s.all	;; SHOW ALL does not print this line
+		 jrst	sh.job
+		type	"No lines watched.
+"
+		jrst	sh.job ]
+	trne	e, s.all
+	 crlf
+	type	"Watching these lines:
+"
+sh.li1:	type	"	"
+	move	b, li.tab-1(t1)
+	octout
+	move	b, li.val-1(t1)
+	andi	b, opt.v1\opt.v2	;; depends on encoding of options
+	move	a, (b)[
+		[asciz ", not tested yet."]
+		[asciz ", recently used."]
+		[asciz ", recently free."]
+		[asciz ", impossible state!"]]
+	strout	(a)
+	crlf
+	sojg	t1, sh.li1
+
+sh.job:	trnn	e, s.job
+	 jrst	sh.usr
+	skipn	t1, njob		;; any jobs ?
+	 jrst [	trne	e, s.all	;; SHOW ALL does not print this line
+		 jrst	sh.usr
+		type	"No jobs watched.
+"
+		jrst	sh.usr ]
+	trne	e, s.all
+	 crlf
+	type	"Watching for these jobs to finish:
+"
+	skipa	a, [[asciz "	"]]
+sh.jb1:	 movei	a, [asciz "  "]
+	strout	(a)
+	move	b, jb.tab-1(t1)
+	decout
+	sojg	t1, sh.jb1
+	crlf
+
+sh.usr:	trnn	e, s.user
+	 jrst	sh.sit
+	skipn	t1, nuser		;; any users ?
+	 jrst [	trne	e, s.all	;; SHOW ALL does not print this line
+		 jrst	sh.sit
+		type	"No users watched.
+"
+		jrst	sh.sit ]
+	trne	e, s.all
+	 crlf
+	type	"Watching these users:
+"
+sh.us1:	type	"	"
+	move	b, us.tab-1(t1)
+	usrout
+	move	b, us.val-1(t1)
+	andi	b, opt.v			;; depends on option encoding
+	move	a, (b)[
+		[asciz ", not tested yet."]
+		[asciz ", recently logged in."]
+		[asciz ", recently detached."]
+		[asciz ", impossible state!"]
+		[asciz ", recently logged out."]
+		[asciz ", impossible state!"]
+		[asciz ", impossible state!"]
+		[asciz ", impossible state!"]]
+	strout	(a)
+	crlf
+	sojg	t1, sh.us1
+
+sh.sit:	trnn	e, s.site
+	 jrst	sh.sup
+	skipn	t1, nsite		;; any sites ?
+	 jrst [	trne	e, s.all	;; SHOW ALL does not print this line
+		 jrst	sh.sup
+		type	"No sites watched.
+"
+		jrst	sh.sup ]
+	trne	e, s.all
+	 crlf
+	type	"Watching these sites:
+"
+sh.si1:	type	"	"
+	hlro	a, si.tab-1(t1)		;; get official name
+	strout	(a)
+	type	" via "
+	hrrz	a, si.tab-1(t1)
+	move	a, (a)
+	call	arpcnv
+	 skipa	a, [[asciz "CHAOS"]]
+	  movei	a, [asciz "ARPA"]
+	strout	(a)
+	type	"net, "
+	move	b, si.val-1(t1)
+	andi	b, opt.v1\opt.v2		;; depends on option encoding
+	move	a, (b)[
+		[asciz "not tested yet."]
+		[asciz "recently up."]
+		[asciz "recently down."]
+		[asciz "impossible state!"]]
+	strout	(a)
+	crlf
+	sojg	t1, sh.si1
+
+sh.sup:	trnn	e, s.supp
+	 jrst	sh.dun
+	trne	e, s.all
+	 crlf
+	type	"Initial messages will be suppressed in these cases:
+"
+	type	"	users:  "
+	move	d, us.sup
+	andi	d, opt.v
+	move	d, (d)[			;; depends on option encoding
+		[asciz "never"]
+		[asciz "logged in"]
+		[asciz "detached"]
+		[asciz "logged in, or detached"]
+		[asciz "logged out"]
+		[asciz "Impossible case!"]
+		[asciz "logged out, or detached"]
+		[asciz "always"]
+		]
+	strout	(d)
+	type	"
+	sites:  "
+	move	d, si.sup
+	andi	d, opt.up\opt.dn
+	move	d, (d)[
+		[asciz "never"]		;; depends on option encoding
+		[asciz "up"]
+		[asciz "down"]
+		[asciz "always"]
+		]
+	strout	(d)
+	type	"
+	lines:  "
+	move	d, li.sup
+	andi	d, opt.fr\opt.us
+	move	d, (d)[
+		[asciz "never"]		;; depends on option encoding
+		[asciz "used"]
+		[asciz "free"]
+		[asciz "always"]
+		]
+	strout	(d)
+	crlf
+
+sh.dun:	return
+
+s.alrt==1	;; SHOW option flag definitions
+s.job==	2
+s.line==4
+s.mail==10
+s.down==20
+s.site==40
+s.user==100
+s.supp==200
+s.all==	400
+
+sh.opt:	sh.siz,,sh.siz
+	[asciz "alerts"],,s.alrt
+	[asciz "everything"],,s.all+<s.all-1>
+	[asciz "jobs"],,s.job
+	[asciz "lines"],,s.line
+	[asciz "mail"],,s.mail
+	[asciz "shutdowns"],,s.down
+	[asciz "sites"],,s.site
+	[asciz "suppression"],,s.supp
+	[asciz "users"],,s.user
+sh.siz==.-sh.opt-1
+
+;;
+;; subroutine to remove and possibly reset first alert
+;;
+
+rem.al:	skipge	t1, al.que		;; get number
+	 jrst [	type	"ALERT: error when removing alert!
+"
+		fail ]
+	push	p, t1			;; remember
+	movei	c, 1
+	call	rem.a2			;; unchain (does not zap it)
+	pop	p, t1
+	sosn	al.rpt(t1)		;; reset, or just remove ?
+	 return				;; remove, so ignore
+	move	t2, al.tab(t1)		;; convert fraction to seconds
+	muli	t2, 24.*60.*60.
+	dadd	t2, [0 ? 400000]	;; round
+	ashc	t2, -18.		;; just seconds
+	add	t3, al.int(t1)		;; increment
+	ashc	t2, 18.			;; convert back
+	divi	t2, 24.*60.*60.
+	movem	t2, al.tab(t1)
+
+;; fall through
+
+;;
+;; subroutine to insert next alert at right place in chain
+;; it is already stored in the first free entry
+;;
+
+ins.al:	move	t1, al.fre	;; index of one to insert
+	movni	t2, 1		;; index of one before interesting one
+	skipa	t4, al.tab(t1)	;; time of one being inserted
+ins.a2:	 movei	t2, (t3)
+	skipl	t3, al.nxt(t2)	;; index of interesting one -- end ?
+	 camge	t4, al.tab(t3)	;; before next ?
+	  jrst [movem	t1, al.nxt(t2)	;; insert
+		exch	t3, al.nxt(t1)
+		movem	t3, al.fre
+		aos	nalert
+		tro	f, f.al
+		return ]
+	came	t4, al.tab(t3)	;; same time ?
+	 jrst	ins.a2
+	move	t5, al.rpt(t1)	;; same repeat ?
+	came	t5, al.rpt(t3)
+	 jrst	ins.a2
+	move	t5, al.int(t1)	;; interval ?
+	came	t5, al.int(t3)
+	 jrst	ins.a2
+	movei	t5, (t1)
+	imuli	t5, msgsiz
+	addi	t5, al.msg
+	push	p, t5		;; push pointer to one string
+	movei	t5, (t3)
+	imuli	t5, msgsiz
+	addi	t5, al.msg
+	push	p, t5		;; push pointer to other string
+	push	p, [msgsiz]
+ins.a3:	move	t5, @-2(p)	;; compare strings
+	camn	t5, @-1(p)
+	 cain	t5, 0			;; end ?
+	  jrst [adjsp	p, -3		;; flush items on stack
+		jrst	ins.a2 ]	;; and keep going
+	sosle	(p)
+	 jrst	ins.a3
+	adjsp	p, -3
+	return
+
+;;
+;; SET command - takes a specific time
+;;
+
+se.hlp:	asciz $SET <time> "msg" sets an alert at time <time>,
+and will print the optional message "msg" when the alert
+goes off.  <time> can be a date and time, or just a time,
+taken to mean the current day, or +<time>, meaning that
+amount ahead from now.  Any date/time format accepted by the
+system can be used.  More than one alert may be set for the
+same time; there may be many alerts at different times.
+--------------------------------------------------------
+The form SET <time> <delta> <count> "msg" may be used to
+set a repeating alert at the given time.  It will go off
+<count> times (forever if count is less than or equal to
+0), at interval separated by <delta>.  <delta> is a time
+in HH:MM:SS or HH:MM format.  As in the other form, "msg"
+is optional.
+--------------------------------------------------------
+NO ALERT <num> removes alert number <num>.  You can use
+the SHOW command to get a numbered list of alerts.
+Removing one alert renumbers the following ones.  The
+default number is 1, so NO ALERT removes the next alert.$
+
+se.cmd:	noise	[asciz "alert at time"]
+	datein
+	push	p, b
+	noise	[asciz "with interval"]
+	push	p, [0]		;; no repeat
+	push	p, [1]		;; do only once
+	movei	b, se.fun
+	comnd
+	tlne	a, (cm%nop)
+	 jrst	error
+	movei	c, (c)
+	cain	c, se.fn2
+	 jrst	se.cm1		;; CR -- go finish
+	cain	c, se.fn1
+	 jrst	se.cm2		;; message -- go finish
+	movei	b, (t3)
+	movem	b, -1(p)	;; save interval
+	noise	[asciz "with repeat count"]
+	deflt	[asciz "1"]
+	decin	[asciz "repeat count; <= 0 means forever"]
+	movem	b, (p)
+	noise	[asciz 'with message (inside " marks)']
+	movei	b, se.fn1
+	comnd
+	tlne	a, (cm%nop)
+	 jrst	error
+	movei	c, (c)
+	cain	c, se.fn2
+	 jrst	se.cm1		;; no message
+se.cm2:	confrm
+	skipa	c, [440700,,atmbuf]
+se.cm1:	 movei	c, 0
+	pop	p, b
+	pop	p, a
+	pop	p, d
+	call	stime
+	 jrst [	type	"Too many alerts!"
+		retcr ]
+	return
+
+se.fun:	comand .cmtad,,se.fn1,<cm%itm\cm%nci\t1>,"repeat interval (HH:MM:SS or HH:MM)",""
+se.fn1:	comand .cmqst,,se.fn2,,'message to type with alert, inside " marks',""
+se.fn2:	comand .cmcfm,,,,"confirm (no message)",""
+
+no.al:	noise	[asciz "alert numbered"]
+	deflt	[asciz "1"]
+	decin	[asciz "number of alert to remove"]
+	confrm
+	move	t2, nalert
+	cail	b, 0
+	 caile	b, (t2)
+	  jrst [type	"
+No such alert!"
+		retcr ]		;; crlf again, and return
+	movei	c, (b)
+rem.a2:	skipa	b, [-1]		;; -1 entry is queue head
+	 move	b, al.nxt(b)
+	sojg	c, .-1
+	move	c, al.nxt(b)	;; here B has index of previous entry
+	move	d, al.fre	;; move it from used to free
+	exch	d, al.nxt(c)
+	movem	d, al.nxt(b)
+	movem	c, al.fre
+	sosg	nalert
+	 trz	f, f.al
+	return
+
+;;
+;; DAYTIME command (for convenience)
+;;
+
+da.hlp:	asciz	"DAYTIME prints the current date and time, for convenience."
+
+da.cmd:	confrm
+	movei	a, .priou
+	movni	b, 1		;; current date and time
+	movei	c, 0
+	odtim
+	retcr			;; crlf and return
+
+;;
+;; HELP command
+;;
+
+hp.hlp:	asciz "Use HELP <topic> for help on a specific
+command or topic; HELP ALL for entire summary."
+
+hp.cmd:	noise	[asciz "on topic"]
+	deflt	[asciz "help"]
+	shelp	[asciz "Help for"]
+	key	hlptab
+	confrm
+	hrrz	a, (b)
+	strout	(a)
+	retcr
+
+;; the HELP ALL message:
+
+al.hlp:	asciz $
+ALERT is a program that will set alerts, watch for new mail,
+shutdowns, sites coming up, lines becoming free, users
+logging in, and jobs finishing.  The commands are parsed in
+the normal system manner.  Current commands are:
+
+	HELP - to print this
+	SET <time> "message" - set an alert at the given time,
+		and print the given message at that time.  The
+		message (which MUST be in quotes) may be omitted.
+		SET 7:00pm sets an alert to 7pm today, and
+		SET 12:00pm, "Lunchtime!" will cause a lunchtime
+		message to be printed at noon.
+	SET <time> <interval> <count> "message" - set an
+		alert at the stated time, to be repeated at
+		interval <interval> (hours:minutes:seconds).
+		The alert will go off a total of <count> times.
+		The "message" part of the command may be omitted.
+		If count is less than or equal to 0, the alert
+		repeats indefinitely.  SET <t> "msg" is
+		equivalent to SET <t> <anything> 1 "msg".
+	NO ALERT <n> - removes the n'th alert.
+	DAYTIME - prints current date and time
+	SHOW - prints a list of the currently set alerts
+	EXIT - exits ALERT.  It does C,B, and hangs waiting for stuff to do;
+		also pops all xfiles and flushes remaining jcl.
+	QUIT - pops out of an xfile; no effect if not in an xfile.
+	MAIL-WATCH <opt-dir> - sets mail watching on the given
+		directory.  The logged in directory is the default.
+		Initially MAIL-WATCH is set only for the logged
+		in directory.
+	NO MAIL-WATCH <opt-dir> - unsets mail watching on the
+		given directory; default same as mail-watch.
+	DOWN-WATCH - sets shutdown watching; initially it is on.
+	NO DOWN-WATCH - turns off shutdown watching.
+	LINE-WATCH <num> - sets watching of line <num>.
+	NO LINE-WATCH <num> - removes it.
+	SITE-WATCH <site> - sets watching of site <site>.  <site> is
+		either a host name (ARPAnet preferred over CHAOSnet
+		if the same name is on both), or ARPA <site-name>, or
+		CHAOS <site-name>, forcing use of particular net.
+	NO SITE-WATCH <site> - removes watching of <site>.
+	USER-WATCH <user> - sets watching of user <user>.
+	NO USER-WATCH <user> - removes it.
+	JOB-WATCH <job> - sets watching for job <job> to finish.
+	NO JOB-WATCH <job> - removes it.
+	SUPPRESS <watch kind> <case> - ALERT defaultly suppresses the
+		message concerning the first test of a persistently
+		watched item if the result of the test is "uninteresting".
+		The SUPPRESS command allows you to describe what is or
+		is not interesting to you.  HELP SUPPRESS gives details;
+		SHOW SUPPRESSION displays the current modes.
+	XFILE <file-name> - read commands from the named file until
+		a QUIT command is encountered.  Xfile's may be nested
+		to a pre-defined number of levels (currently 10).
+
+When ALERT is exited, if there are any alerts set, it writes them to
+the file PS:<USER>ALERT.TIMES; it also reads them back on start up.
+This way, the system can crash, and you can log in and out several
+times during the day, and still get a reminder if you are logged in
+at the time.  It will also tell you if the file contains alerts that
+have passed.  It remembers the repeat counts and intervals, too.
+
+If there is new mail, a shutdown scheduled, etc., ALERT will type a
+message.  It checks these things at a standard interval, if asked.
+The current interval is one minute.  ALERT will also give you multiple
+warnings of a shutdown, one warning each time the time until the shutdown
+is reduced by half.  Further, it will notify you if a shutdown is cancelled.
+
+When ALERT is re-entered after being exited, type two ^A's to get its
+attention if it does not respond with a prompt.  It will ignore ^A
+interrupts if you have not continued it.  Unfortunately, there is no
+way to suppress the ^A interrupts, though.  (Problems in the monitor
+and EXEC.)
+
+ALERT will accept jcl input, and try to parse it as commands.
+It removes the leading filename (e.g., "ALERT") and any
+immediately following spaces.  The remainder of the line is
+processed as if you typed it, except that each '/' character is
+converted to a carriage-return/line-feed sequence, and an EXIT
+command is appended.  If an error is encountered, remaining jcl
+is flushed and an EXIT performed.
+
+If ALERT is given no jcl, it will "valret" c,b; if it is given jcl,
+it will halt, waiting for you (or your CMD file) to do a c,b.  Thus, you
+can put the following in your LOGIN.CMD:
+
+	ALERT xfile alert.xfile
+	C,B
+
+where alert.xfile contains arbitrary commands, but ends with EXIT.
+Just putting ALERT in your command file will not work well, because
+the valretted c,b is not read until the end of LOGIN.CMD.
+$
+
+;; the HELP JCL message
+
+jc.hlp:	asciz $ALERT will accept jcl input, and try to parse it as commands.
+It removes the leading filename (e.g., "ALERT") and any
+immediately following spaces.  The remainder of the line is
+processed as if you typed it, except that each '/' character is
+converted to a carriage-return/line-feed sequence, and an EXIT
+command is appended.  If an error is encountered, remaining jcl
+is flushed and an EXIT performed.
+
+If ALERT is given no jcl, it will "valret" c,b; if it is given jcl,
+it will halt, waiting for you (or your CMD file) to do a c,b.  Thus, you
+can put the following in your LOGIN.CMD:
+
+	ALERT xfile alert.xfile
+	C,B
+
+where alert.xfile contains arbitrary commands, but ends with EXIT.
+Just putting ALERT in your command file will not work well, because
+the valretted c,b is not read until the end of LOGIN.CMD.
+
+For the typical use of ALERT, something like this is fine in
+your LOGIN.CMD:
+	alert mail/down
+(Mail- and down-watching are already on, but ALERT must see the
+jcl, or it will not continue itself.)
+
+For more info on commands, do HELP ALL.$
+
+;;
+;; MAIL-WATCH command
+;;
+
+mw.hlp:	asciz "MAIL-WATCH <dir> sets mail watching on the
+given directory.  The default directory is your
+logged in directory.  You may watch several directories.
+ALERT claims there is mail when the write date of
+the file MAIL.TXT is more recent than the read date,
+and the file not empty.  Mail checking is done
+at the standard interval.  Initially, your logged
+in directory will be MAIL-WATCH'ed.  NO MAIL-WATCH
+turns this off for a given directory; its default
+argument is your logged in directory, too."
+
+mw.cmd:	noise	[asciz "of MAIL.TXT in directory"]
+	dirin	[asciz "directory to watch"]
+	confrm
+	push	p, b		;; save
+	push	p, [0]
+	push	p, b
+	movei	b, ml.tab
+	call	tabins
+	 jrst [	type	"Mail table full!
+"
+		jrst	bret ]
+	tro	f, f.mw
+	pop	p, c
+	camn	c, dirnum
+	 tro	f, f.md
+	return
+
+no.mw:	noise	[asciz "of MAIL.TXT in directory"]
+	dirin	[asciz "directory to stop watching"]
+	confrm
+	push	p, b		;; save it, and see if present
+	push	p, b
+	movei	b, ml.tab
+	call	tabdel
+	 jrst	bret		;; not present -- skip rest
+	 trz	f, f.mw		;; now empty
+	pop	p, c		;; was it default ?
+	camn	c, dirnum
+	 trz	f, f.md
+	return
+
+;;
+;; DOWN-WATCH command
+;;
+
+dw.hlp:	asciz "DOWN-WATCH sets watching for shutdowns.
+Shutdown watching is done at the standard interval.
+Shutdowns more than 12 hours ahead are ignored.  A message
+will be printed at specific times in advance of the shutdown,
+if the shutdown time or period is changed, or if the shutdown
+is cancelled.  Changes are noted only at the standard interval.
+NO DOWN-WATCH shuts this off.  DOWN-WATCH is initially set."
+
+dw.cmd:	confrm
+	tro	f, f.dw		;; flip the flag
+	return
+
+no.dw:	confrm
+	trz	f, f.dw
+	return
+
+;;
+;; SITE-WATCH command
+;;
+
+sw.hlp:	asciz "SITE-WATCH <network> <site-name> sets
+of <site-name>.  The <network> field is optional.
+If present, it forces watching over the specified
+network.  SITE-WATCH ? will display the available networks.
+SITE-WATCH <network> ? will display a list of legal site-names
+for the given network.  All nicknames are converted to official
+names upon input, so you don't have to type the name the same
+way to remove it (see below for removing sites).  Site
+watching is comparatively expensive, so it is not done
+as often as mail-watching, etc.  The current setting
+is once every 5 minutes.  The method is particular to
+the network, but always involves opening a connection.
+NO SITE-WATCH <opt-net> <site> will remove a site from
+the watch list.  In some cases <opt-net> must be supplied,
+since some sites can be watched via more than one net."
+
+sw.cmd:	sitein
+	confrm
+	push	p, [0]
+	push	p, b
+	movei	b, si.tab
+	call	tabins
+	 jrst [	type	"Site table full!"
+		retcr ]		;; crlf and return
+	 tro	f, f.sw
+	return
+
+no.sw:	sitein
+	confrm
+	push	p, b
+	movei	b, si.tab
+	call	tabdel
+	 trna
+	 trz	f, f.sw
+	return
+
+;;
+;; LINE-WATCH command
+;;
+
+lw.hlp:	asciz "LINE-WATCH <line> sets watching
+of the specified line number (octal).  ALERT will
+watch for any change in the line's status (free
+to used, or used to free), at the standard interval.
+NO LINE-WATCH can be used to stop matching a line."
+
+lw.cmd:	noise	[asciz "octal line number"]
+	octin	[asciz "Octal line number"]
+	confrm
+	hrroi	a, .ttyjo		;; make sure is reasonable
+	getab
+	 fail
+	movn	c, a
+	cail	b, (c)
+	 jrst [	type	"Bad line number."
+		retcr ]		;; punt
+	push	p, [0]
+	push	p, b
+	movei	b, li.tab		;; present ?
+	call	tabins
+	 jrst [	type	"Line table full!"
+		retcr ]		;; crlf and return
+	 tro	f, f.lw
+	return
+
+no.lw:	noise	[asciz "octal line number"]
+	octin	[asciz "Octal line number"]
+	confrm
+	push	p, b
+	movei	b, li.tab		;; present ?
+	call	tabdel
+	 trna
+	 trz	f, f.lw
+	return
+
+;;
+;; JOB-WATCH command
+;;
+
+jb.hlp:	asciz "JOB-WATCH <job> sets watching for job number
+<job> (decimal) to finish.  ALERT will notice
+that the job is done even if it goes away
+and is re-logged in between the times ALERT looks at it.
+Job watching is done at the standard interval.
+NO JOB-WATCH can be used to remove a job from the
+watch list."
+
+jb.cmd:	noise	[asciz "decimal job number"]
+	decin	[asciz "Decimal number of job to watch"]
+	confrm
+	push	p, a
+	hrroi	a, .jobrt		;; make sure is reasonable
+	getab
+	 fail
+	movn	c, a
+	pop	p, a
+	cail	b, (c)
+	 jrst [	type	"Bad job number."
+		retcr ]		;; punt
+	push	p, [0]
+	push	p, b
+	movei	b, jb.tab
+	call	tabins
+	 jrst [	type	"Job table full!"
+		retcr ]		;; crlf and return
+	tro	f, f.jw
+	return
+
+no.jw:	noise	[asciz "decimal job number"]
+	decin	[asciz "Decimal number of job to remove"]
+	confrm
+	push	p, b
+	movei	b, jb.tab
+	call	tabdel
+	 trna
+	 trz	f, f.jw
+	return
+
+;;
+;; USER-WATCH command
+;;
+
+uw.hlp:	asciz $USER-WATCH <user> sets watching of
+<user>.  ALERT will watch for any change in the
+user's status among "logged-in", "logged-out", and
+"detached".  If the user has more than one job,
+then the user is considered "detached" only if
+all the jobs are detached.  <user> is anything
+acceptable to the system as a user name.  User
+watching is done at the standard interval.
+NO USER-WATCH <user> may be used to stop watching
+a user.$
+
+uw.cmd:	noise	[asciz "user name"]
+	userin
+	confrm
+	push	p, [0]
+	push	p, b
+	movei	b, us.tab
+	call	tabins
+	 jrst [	type	"User table full!"
+		retcr ]		;; crlf and return
+	 tro	f, f.uw
+	return
+
+no.uw:	noise	[asciz "user name"]
+	userin
+	confrm
+	push	p, b
+	movei	b, us.tab
+	call	tabdel
+	 trna
+	 trz	f, f.uw
+	return
+
+;;
+;;	SUPPRESS command
+;;
+
+su.hlp:	asciz "SUPPRESS allows you to specify the conditions under
+which the printing of certain messages is not to be done.
+The ONLY messages to which this applies are those relating
+to the first time a persistently watched item is tested.
+(A persistently watched item is a line, site, or user.)
+The default is not to suppress any messages.
+The SHOW SUPPRESSION command will display the current
+suppression modes."
+
+su.cmd:	noise	[asciz "message from watching a"]
+	shelp	[asciz "persistent watch item type,"]
+	key	su.opt
+	hrrz	d, (b)
+	noise	[asciz "if initial state is"]
+	shelp	[asciz "watch item state,"]
+	key	(d)
+	confrm
+	hrrz	b, (b)		;; format is table offset, bits, 9 bits each
+	ldb	c, [.bp 777000,b]
+	dpb	b, [.bp 777,li.sup(c)]
+	return
+
+su.opt:	su.siz,,su.siz
+	[asciz "line"],,su.opl
+	[asciz "site"],,su.ops
+	[asciz "user"],,su.opu
+su.siz==.-su.opt-1
+
+su.ofl==0_9.
+su.opl:	su.sil,,su.sil
+	[asciz "any"],,opt.v\su.ofl
+	[asciz "free"],,opt.fr\su.ofl
+	[asciz "none"],,0\su.ofl
+	[asciz "used"],,opt.us\su.ofl
+su.sil==.-su.opl-1
+
+su.ofs==1_9.
+su.ops:	su.sis,,su.sis
+	[asciz "any"],,opt.v\su.ofs
+	[asciz "down"],,opt.dn\su.ofs
+	[asciz "none"],,0\su.ofs
+	[asciz "up"],,opt.up\su.ofs
+su.sis==.-su.ops-1
+
+su.ofu==2_9.
+su.opu:	su.siu,,su.siu
+	[asciz "any"],,opt.v\su.ofu
+	[asciz "detached"],,opt.dt\su.ofu
+	[asciz "logged-in"],,opt.li\su.ofu
+	[asciz "logged-in-or-detached"],,opt.li\opt.dt\su.ofu
+	[asciz "logged-out"],,opt.lo\su.ofu
+	[asciz "logged-out-or-detached"],,opt.lo\opt.dt\su.ofu
+	[asciz "none"],,0\su.ofu
+su.siu==.-su.opu-1
+
+;;
+;;	QUIT command - pop one xfile, no action if not in xfile
+;;
+
+qu.hlp:	asciz "QUIT terminates the current xfile and pops back
+to the previous input stream.  If ALERT is not reading from
+an xfile, it has no effect.  Every xfile should end with
+a QUIT or EXIT command."
+
+qu.cmd:	noise	[asciz "end an xfile (if any), and pop to previous input"]
+	confrm
+	tlnn	f, f.cmd	;; pop only if in command file
+	 return
+
+;;
+;;	subroutine to pop the xfile stack
+;;
+
+iopop:	call [	tlne	f, f.jcl	;; message only if processing jcl
+		 tlnn	f, f.cmd	;; and in xfile
+		  return
+		hlrz	b, cmdsta+.cmioj
+		cain	b, .priin	;; and not reading from terminal
+		 return
+		type	"ALERT: End of xfile "
+		movei	a, .priou
+		movei	c, 0
+		jfns
+		 erjmp	[ fail ]
+		type	"."
+		retcr ]
+	move	b, iopptr
+	camg	b, iopdl
+	 jrst	iopop1
+	hlrz	a, cmdsta+.cmioj
+	closf
+	 fail
+	pop	b, cmdsta+.cmioj
+	movem	b, iopptr
+	camg	b, iopdl
+iopop1:	 tlz	f, f.cmd
+	tlne	f, f.jcl\f.cmd		;; restore normal reparse address
+	 return
+	movei	b, rparse
+	hrrm	b, cmdsta
+	return
+
+;;
+;;	XFILE command - start reading from an xfile
+;;
+
+xf.hlp:	asciz "XFILE takes a filename as argument, and tries
+to read that file as commands.  The file should have
+QUIT or EXIT as its last command.  If any errors are
+encountered, the xfile is aborted and commands are
+read from the previous input stream."
+
+xf.cmd:	noise	[asciz "to start reading from"]
+	help	[asciz "file from which to read commands"]
+	movei	b, .xjfn
+	movem	b, cmdsta+.cmgjb
+	movei	b, [comand .cmfil,,,,"file from which to read commands",""]
+	comnd
+	tlne	a, (cm%nop)
+	 jrst	error
+	confrm
+	movei	a, (b)
+	hrli	c, (b)
+	move	b, [070000,,of%rd]
+	openf
+	 jrst [	call	bellcr
+		type	"ALERT: could not open xfile "
+		hlrz	b, (c)
+		movei	a, .priou
+		movei	c, 0
+		jfns
+		movei	a, (b)
+		rljfn
+		 fail
+		retcr ]
+	skipl	d, iopptr	;; make sure have room
+	 jrst [	movei	a, (b)
+		closf
+		 fail
+		call	bellcr
+		type	"ALERT: xfiles nested too deeply"
+		retcr ]
+	hrri	c, .nulio
+	exch	c, cmdsta+.cmioj
+	push	d, c
+	movem	d, iopptr
+	tlo	f, f.cmd
+	movei	b, error	;; set new reparse address
+	hrrm	b, cmdsta
+	return
+
+;;
+;; NO command
+;;
+
+no.hlp:	asciz "NO takes a command, and is generally used to
+remove an item from a watch list.  The individual options
+can be seen by typing NO ?, etc."
+
+no.cmd:	key	notab
+	hrrz	b, (b)	;; get subroutine address
+	jrst	(b)	;; go to correct subroutine
+
+;;
+;; subroutine to set an alert;
+;; inserts it in right place in the table (increasing order)
+;;	time in d (internal format)
+;;	pointer to message in c (or 0, meaning no message)
+;;	repeat count in b
+;;	repeat interval in a
+;; skips if wins
+;;
+
+stime:	skipge	t1, al.fre
+	 return			;; no free slots ... give up
+	movem	d, al.tab(t1)
+	movem	b, al.rpt(t1)
+	movem	a, al.int(t1)
+	movei	t2, (t1)
+	imuli	t2, msgsiz
+	jumpe	c, [
+		movei	c, extra
+		setzm	extra
+		jrst	.+1 ]
+	hrli	b, (c)
+	hrri	b, al.msg(t2)
+	blt	b, al.msg+msgsiz-1(t2)
+	aos	(p)			;; will win ...
+	jrst	ins.al			;; that will finish
+
+;;
+;; Common table insertion subroutine
+;;	TABINS - inserts; leaves alone if exists
+;;	TABSET - inserts; sets to new value if exists
+;;
+;;	Args:	B - pointer to table
+;;		(p) - return address
+;;		-1(p), -2(p), etc., table values
+;;
+;;	Table format (offsets from B):
+;;		-3:	number of parallel tables
+;;		-2:	maximum number of entries
+;;		-1:	number of entries now
+;;		0:	table 1
+;;		max:	table 2
+;;		...
+;;
+;;	Returns:	+1: table overflow
+;;			+2: new value inserted, or already present (TABINS)
+;;			+3: already present (TABSET)
+;;
+
+tabset:	push	p, -1(p)
+	call	tabluk
+	 jrst	tabin1			;; not present -- insert
+	aos	(p)			;; extra skip
+	jrst	tabin2			;; copy new values
+
+tabins:	push	p, -1(p)		;; search table
+	call	tabluk
+	 jrst	tabin1			;; not found -- insert
+	aos	(p)			;; present -- skip return
+tabin4:	pop	p, t3			;; return addr to t3
+	movn	t2, -3(b)
+	adjsp	p, (t2)			;; fix stack
+	jrst	(t3)			;; return
+
+tabin1:	move	t1, -1(b)		;; not present -- insert
+	caml	t1, -2(b)		;; overflow ?
+	 jrst	tabin4			;; yes, no-skip return
+	aos	-1(b)			;; OK to increment
+	addi	t1, (b)			;; form pointer
+tabin2:	move	t2, -3(b)		;; counter
+	pop	p, t3			;; return address to t3
+tabin3:	pop	p, (t1)
+	add	t1, -2(b)
+	sojg	t2, tabin3
+	jrst	1(t3)			;; skip return
+
+;;
+;; Matching routine just to see if entry is in table
+;;	B has table address, (p) return address, -1(p) value
+;;	Returns:	+1 if not found
+;;			+2 if found, address in t1
+;;
+
+tabluk:	pop	p, t2			;; return address
+	exch	t2, (p)			;; value in t2
+	movn	t1, -1(b)
+	cain	t1, 0			;; empty?
+	 return				;; yes -- no-skip return
+	hrli	t1, (t1)		;; form aobjn
+	hrri	t1, (b)
+tablk1:	camn	t2, (t1)
+	 jrst	spopj			;; skip return
+	aobjn	t1, tablk1
+	return				;; no-skip return
+
+;;
+;; Matching routine to delete an entry
+;;	B has table address, (p) return address, -1(p) value
+;;	returns:	+1 if no such entry
+;;			+2 if found, and table now empty
+;;			+3 if found, and table still has entries
+;;
+
+tabdel:	pop	p, t2			;; return address
+	exch	t2, (p)			;; value
+	push	p, t2
+	call	tabluk			;; present ?
+	 return				;; no-skip return
+	move	t3, -3(b)		;; use t3 for counter
+	move	t2, -1(b)		;; get address of last
+	addi	t2, -1(b)
+tabdl3:	push	p, (t2)			;; move last to deleted
+	pop	p, (t1)
+	add	t1, -2(b)		;; increment to next table
+	add	t2, -2(b)
+	sojg	t3, tabdl3
+	sosle	-1(b)			;; decrement # entries
+	 aos	(p)			;; not empty, so skip one more
+	jrst	spopj
+
+;;
+;; subroutine to init alert tables
+;;
+
+ialert:	setom	al.que			;; no entries used
+	setzm	al.fre			;; 0 is first free entry
+	setom	al.nxt+al.max-1		;; -1 at end of chain
+	movei	a, al.max-1
+	movem	a, al.nxt-1(a)		;; chain previous to this
+	sojg	a, .-1
+	return
+
+;;
+;; subroutine to build host tables
+;;
+
+ntnmbp==331000				;; LH of byte pointer for net number
+
+ihosts:	movsi	a, (gj%old\gj%sht)	;; read in host table
+	hrroi	b, hst2nm
+	xgtjfn
+	 fail
+	movei	b, of%rd
+	xopenf
+	 fail
+	sizef
+	 fail
+	movsi	a, (a)
+	move	b, [.fhslf,,hosts2/1000]
+	hrli	c, (pm%cnt\pm%rd\pm%cpy)
+	pmap
+	hrrzs	nettab			;; re-init net table
+	hllzs	netfun			;; re-init net COMND block
+	setzm	arpflg			;; check for ARPAnet
+	movsi	a, (gj%phy\gj%sht)
+	hrroi	b, [asciz "NET:"]
+	xgtjfn
+	 jrst	ichaos
+	setom	arpflg
+	movei	a, (a)
+	xrljfn
+	 jfcl
+	call	rarpa		;; read in ARPA hosts
+ichaos:	setzm	chsflg
+	movsi	a, (gj%phy\gj%sht)
+	hrroi	b, [asciz "CHA:"]
+	xgtjfn
+	 return
+	setom	chsflg
+	movei	a, (a)
+	xrljfn
+	 jfcl
+	jrst	rchaos			;; let it popj for us
+
+;;
+;; subroutine to read in ARPA hosts, and add ARPA into net table
+;;
+
+rarpa:	movei	a, nettab
+	hrli	b, [asciz "arpanet"]
+	hrri	b, arpfn1
+	tbadd
+	hrrz	a, netfun		;; thread command blocks
+	hrrm	a, arpfun
+	movei	a, arpfun
+	hrrm	a, netfun
+	setzm	arpall			;; clear table allocation counter
+	move	a, hosts2+10.		;; get addr of net table
+	move	t1, hosts2(a)		;; # entries
+	move	t2, hosts2+1(a)		;; # words per entry
+	addi	a, 2			;; loop looking for ARPANET
+rarpa1:	hlrz	b, hosts2+1(a)
+	dmove	c, hosts2(b)
+	move	b, hosts2(a)
+	camn	c, [ascii "ARPAN"]
+	 jrst [	movem	b, arpnum
+		jrst	rarpa2 ]
+	addi	a, (t2)
+	sojg	t1, rarpa1
+	fail
+rarpa2:	move	t3, hosts2+8.		;; scan names table
+	move	t1, hosts2(t3)		;; # entries
+	move	t2, hosts2+1(t3)	;; size of each
+	addi	t3, 2
+rarpa3:	hlrz	d, hosts2(t3)		;; offset of site entry ==> d
+	hrrz	c, hosts2(d)		;; address chain
+rarpa4:	ldb	b, [<ntnmbp,,hosts2>(c)];; get net number
+	camn	b, arpnum
+	 jrst [	aos	a, arpall
+		caile	a, narpa
+		 fail
+		hrrz	b, hosts2(t3)	;; ptr to name in lh
+		hrli	b, hosts2(b)
+		hrri	b, hosts2(c)	;; addr of net entry in rh
+		movem	b, arphst(a)
+		jrst	rarpa5 ]
+	hrrz	c, hosts2+1(c)
+	jumpn	c, rarpa4		;; end of chain ?
+rarpa5:	addi	t3, (t2)
+	sojg	t1, rarpa3		;; do next name
+	move	a, arpall		;; set up table header
+	hrlm	a, arphst
+	return
+
+;;
+;; subroutine to read in CHAOS hosts, and add CHAOS into net table
+;;
+
+rchaos:	movei	a, nettab
+	hrli	b, [asciz "chaosnet"]
+	hrri	b, chsfn1
+	tbadd
+	hrrz	a, netfun		;; thread command blocks
+	hrrm	a, chsfun
+	movei	a, chsfun
+	hrrm	a, netfun
+	setzm	chsall			;; clear table allocation counter
+	move	a, hosts2+10.		;; get addr of net table
+	move	t1, hosts2(a)		;; # entries
+	move	t2, hosts2+1(a)		;; # words per entry
+	addi	a, 2			;; loop looking for ARPANET
+rchao1:	hlrz	b, hosts2+1(a)
+	dmove	c, hosts2(b)
+	move	b, hosts2(a)
+	camn	c, [ascii "CHAOS"]
+	 jrst [	movem	b, chsnum
+		jrst	rchao2 ]
+	addi	a, (t2)
+	sojg	t1, rchao1
+	fail
+rchao2:	move	t3, hosts2+8.		;; scan names table
+	move	t1, hosts2(t3)		;; # entries
+	move	t2, hosts2+1(t3)	;; size of each
+	addi	t3, 2
+rchao3:	hlrz	d, hosts2(t3)		;; offset of site entry ==> d
+	hrrz	c, hosts2(d)		;; address chain
+rchao4:	ldb	b, [<331000,,0> hosts2(c)];; get net number
+	camn	b, chsnum
+	 jrst [	aos	a, chsall
+		caile	a, nchaos
+		 fail
+		hrrz	b, hosts2(t3)	;; ptr to name in lh
+		hrli	b, hosts2(b)
+		hrri	b, hosts2(c)	;; addr of net entry in rh
+		movem	b, chshst(a)
+		jrst	rchao5 ]
+	hrrz	c, hosts2+1(c)
+	jumpn	c, rchao4		;; end of chain ?
+rchao5:	addi	t3, (t2)
+	sojg	t1, rchao3		;; do next name
+	move	a, chsall		;; set up table header
+	hrlm	a, chshst
+	return
+
+;;
+;; host number conversion subroutines -- skip if ok
+;;	initial value in A, result in A, no other regs disturbed
+;;
+
+arpcnv:	skipn	arpflg
+	 return
+	push	p, b
+	ldb	b, [ntnmbp,,a]
+	came	b, arpnum
+	 jrst	bret
+ifn	.internet,[
+	dpb	a, [311000,,a]	;; move host # to left of IMP #
+	lsh	a, -9.		;; get into right bits
+	move	b, arpnum
+	dpb	b, [301000,,a]	;; net number
+]
+.else,[
+	dpb	a, [171000,,a]	;; get host # just to left of IMP #
+	ldb	a, [111600,,a]	;; get whole thing in right place
+]
+	jrst	brets
+
+chscnv:	skipn	chsflg
+	 return
+	push	p, b
+	ldb	b, [ntnmbp,,a]
+	came	b, chsnum
+	 jrst	bret
+	movei	a, (a)
+brets:	aos	-1(p)
+bret:	pop	p, b
+	return
+
+;;
+;; bell followed by CRLF
+;;
+
+bellcr:	call	bell
+	retcr
+
+;;
+;; bell ringing subroutine
+;;
+
+bell:	push	p, a		;; save a, b, and c
+	push	p, b
+	push	p, c
+	movei	a, .priou	;; set CCOC words ...
+	rfcoc
+	push	p, b		;; save away
+	push	p, c
+	tlz	b, 600014	;; clear for ^@, ^G
+	tlo	b, 400010	;; actual code for them
+	sfcoc
+	gttyp			;; get terminal type
+	movem	b, ttype
+	movei	b, .morsp	;; get line speed
+	mtopr
+	hrrem	c, tspeed
+	move	a, ttype	;; c to get count of ^G's
+	movei	c, 10.		;; tenths of seconds to ring (approx.)
+	cain	a, 22		;; vt100's get 1 only
+	 movei	c, 1
+	movei	b, 0		;; b to get number of nulls between ^G's
+	skiple	a, tspeed
+	 jrst [	idivi	a, 300.	;; number of chars to equal .1 sec
+		movei	b, (a)
+		jrst	.+1 ]
+bell1:	type	""	;; do a ^G
+	sojle	c, [
+		pop	p, c
+		pop	p, b
+		movei	a, .priou
+		sfcoc		;; restore CCOC words ...
+		jrst	popcba ]
+	push	p, b		;; output nulls (count in b)
+	movei	a, 0
+bell2:	pbout
+	sojg	b, bell2
+	pop	p, b
+	jrst	bell1
+
+;;
+;; Here to die
+;;
+
+fatal:	call	bellcr
+	type	"[ALERT: cannot continue; last err msg = "
+	movei	a, .priou
+	hrloi	b, .fhslf
+	movei	c, 0
+	erstr
+	 jfcl
+	 jfcl
+	type	"]
+"
+	type	"[Fail address = "
+	movei	b, -1(x)
+	octout
+	type	"; Send mail with info to EBM @ XX.]
+"
+	haltf
+	jrst	.-1
+
+ifn	0,[		;; some old debugging code -- keep for a while
+logopn:	movsi	a, (gj%new\gj%fou\gj%sht)
+	hrroi	b, [asciz "ps:<ebm.temp>alert.log"]
+	gtjfn
+	 fail
+	hrrzm	a, logjfn
+	move	b, [070000,,of%wr]
+	openf
+	 fail
+	return
+
+xrljfn:	push	p, a
+	push	p, b
+	push	p, c
+	move	a, logjfn
+	hrroi	b, [asciz "RLJFN
+"]
+	movei	c, 0
+	sout
+	hlrz	b, -2(p)
+	movei	c, 8.
+	nout
+	 fail
+	hrroi	b, [asciz ",,"]
+	movei	c, 0
+	sout
+	hrrz	b, -2(p)
+	movei	c, 8.
+	nout
+	 fail
+	hrroi	b, [asciz "
+
+"]
+	movei	c, 0
+	sout
+	pop	p, c
+	pop	p, b
+	pop	p, a
+	camn	a, [-1]
+	 fail
+	rljfn
+	 return
+	jrst	spopj
+
+xclosf:	push	p, a
+	push	p, b
+	push	p, c
+	move	a, logjfn
+	hrroi	b, [asciz "CLOSF
+"]
+	movei	c, 0
+	sout
+	hlrz	b, -2(p)
+	movei	c, 8.
+	nout
+	 fail
+	hrroi	b, [asciz ",,"]
+	movei	c, 0
+	sout
+	hrrz	b, -2(p)
+	movei	c, 8.
+	nout
+	 fail
+	hrroi	b, [asciz "
+
+"]
+	movei	c, 0
+	sout
+	pop	p, c
+	pop	p, b
+	pop	p, a
+	closf
+	 return
+	jrst	spopj
+
+xopenf:	push	p, a
+	push	p, b
+	push	p, c
+	move	a, logjfn
+	hrroi	b, [asciz "OPENF
+"]
+	movei	c, 0
+	sout
+	hrrz	b, -2(p)
+	movei	c, 8.
+	nout
+	 fail
+	hrroi	b, [asciz " ("]
+	movei	c, 0
+	sout
+	hrrz	b, -2(p)
+	jfns
+	hrroi	b, [asciz ")
+"]
+	sout
+	hlrz	b, -1(p)
+	movei	c, 8.
+	nout
+	 fail
+	hrroi	b, [asciz ",,"]
+	movei	c, 0
+	sout
+	hrrz	b, -1(p)
+	movei	c, 8.
+	nout
+	 fail
+	hrroi	b, [asciz "
+
+"]
+	movei	c, 0
+	sout
+	pop	p, c
+	pop	p, b
+	pop	p, a
+	openf
+	 return
+	jrst	spopj
+
+xgtjfn:	push	p, a
+	push	p, b
+	push	p, c
+	move	a, logjfn
+	hrroi	b, [asciz "GTJFN
+"]
+	movei	c, 0
+	sout
+	hlrz	b, -2(p)
+	movei	c, 8.
+	nout
+	 fail
+	hrroi	b, [asciz ",,"]
+	movei	c, 0
+	sout
+	hrrz	b, -2(p)
+	movei	c, 8.
+	nout
+	 fail
+	hrroi	b, [asciz "
+"]
+	movei	c, 0
+	sout
+	hrro	b, -1(p)
+	sout
+	hrroi	b, [asciz "
+"]
+	sout
+	pop	p, c
+	pop	p, b
+	pop	p, a
+	gtjfn
+	 jrst [	push	p, a
+		push	p, b
+		push	p, c
+		move	a, logjfn
+		hrroi	b, [asciz "Failed, err code = "]
+		movei	c, 0
+		sout
+		move	b, -2(p)
+		jrst	xgtj2 ]
+	aos	(p)
+	push	p, a
+	push	p, b
+	push	p, c
+	move	a, logjfn
+	hrroi	b, [asciz "Result = "]
+	movei	c, 0
+	sout
+	hlrz	b, -2(p)
+	movei	c, 8.
+	nout
+	 fail
+	hrroi	b, [asciz ",,"]
+	movei	c, 0
+	sout
+	hrrz	b, -2(p)
+xgtj2:	movei	c, 8.
+	nout
+	 fail
+	hrroi	b, [asciz "
+
+"]
+	movei	c, 0
+	sout
+	pop	p, c
+	pop	p, b
+	pop	p, a
+	return
+]
+
+;;
+;; UUO handling code
+;;
+
+uuoh:	ldb	u1, [331100,,uuoins]	;; get UUO number
+	ldb	u2, [270400,,uuoins]	;; get ac field
+	caig	u1, uuonum
+	 jrst	@uuotab(u1)
+baduuo:	push	p, uuoins
+	type	"ALERT: Bad uuo "
+	pop	p, b
+	octout
+	type	" at "
+	pop	p, b
+	octout
+	fail
+
+.outh:	caile	u2, omax
+	 jrst	baduuo
+	jrst	@outtab(u2)
+
+.timh:	caile	u2, tmax
+	 jrst	baduuo
+	push	p, a		;; save registers
+	push	p, b
+	push	p, c
+	push	p, d
+	move	b, @uuoins
+	caige	u2, .tdate
+	 jrst [	caie	u2, .tdelt	;; delta requires conversion
+		 jrst	.timh1
+		muli	b, 24.*60.*60.
+		dadd	b, [0 ? 400000]
+		ashc	b, 17.
+		jrst	.timh1 ]
+	gtad			;; compare day
+	hrri	a, (b)
+	camn	a, b
+	 jrst	.timh2
+	movei	a, .priou	;; output date
+	movsi	c, (ot%ntm\ot%scl)
+	odtim
+	push	p, b
+	movei	b, <" >		;; output a space
+	bout
+	pop	p, b
+.timh2:	movei	d, 0
+	odcnv
+	movei	b, (d)		;; must have seconds in b at .timh1
+.timh1:	movei	a, .priou
+	idivi	b, 60.		;; minutes, seconds
+	push	p, c		;; save seconds
+	idivi	b, 60.		;; hours, minutes
+	push	p, c		;; save minutes
+	movei	d, [asciz ""]	;; no AM/PM
+	caige	u2, .tdate	;; check for "hours", "minutes", "seconds"
+	 jrst [	add	c, b
+		add	c, -1(p)
+		cain	c, (b)
+		 movei	d, [asciz "hour"]
+		camn	c, (p)
+		 movei	d, [asciz "minute"]
+		camn	c, -1(p)
+		 movei	d, [asciz "second"]
+		skipn	(d)
+		 jrst	.timh3
+		cain	b, 0
+		 skipe	b, (p)
+		cain	b, 0
+		 move	b, -1(p)
+		cain	b, 1
+		 jrst [	type	"one "
+			strout	(d)
+			jrst	pop6 ]
+		movei	c, 10.
+		nout
+		 fail
+		movei	b, <" >
+		bout
+		strout	(d)
+		movei	a, "s
+		pbout
+		jrst	pop6 ]
+	idivi	b, 12.
+	movei	d, (b)[asciz "am" ? asciz "pm"]
+	jumpe	c, [
+		movei	c, 12.
+		skipn	-1(p)		;; xx:00:00 ?
+		 skipe	(p)
+		  trna
+		movei	d, (b)[asciz "m" ? asciz "n"]
+		jrst	.+1 ]
+	movei	b, (c)
+.timh3:	jumpe	b, .timh4		;; if more than an hour,
+	cain	u2, .tdelt		;; and is delta, then
+	 setzm	-1(p)			;; ignore seconds
+.timh4:	movei	c, 10.			;; output hours
+	nout
+	 fail
+	movei	b, ":			;; colon, minutes
+	bout
+	move	b, (p)
+	tlo	c, 2(no%lfl\no%zro)	;; leading zero fill, 2 cols
+	nout
+	 fail
+	skipe	-1(p)
+	 cain	u2, .td.ns
+	  jrst	.timh5
+	movei	b, ":			;; colon, seconds
+	bout
+	move	b, -1(p)
+	nout
+	 fail
+.timh5:	strout	(d)
+pop6:	adjsp	p, -2
+	pop	p, d
+popcba:	pop	p, c
+	pop	p, b
+aret:	pop	p, a
+	return
+
+.parse:	caile	u2, pmax
+	 jrst	baduuo
+	jrst	@partab(u2)
+
+.appnd:	tlc	a, -1		;; fix up -1,,addr to 440700,,addr
+	tlcn	a, -1
+	 hrli	a, 440700
+	movei	b, 440700
+	hrlm	b, uuoins	;; use uuoins as "from" byte pointer
+	trna
+.app1:	 idpb	b, a
+	ildb	b, uuoins
+	jumpn	b, .app1
+	movem	a, uuoins	;; don't advance over last byte
+	idpb	b, uuoins
+	return
+
+;;
+;; Output UUO subroutines
+;;
+
+.stro:	hrro	a, uuoins	;; type asciz string
+	psout
+	return
+
+.deco:	push	p, [10.]
+	trna
+.octo:	 push	p, [8.]
+	exch	c, (p)
+.numo:	movei	a, .priou
+	nout
+	 fail
+cret:	pop	p, c
+	return
+
+.usro:
+.diro:	movei	a, .priou
+	dirst
+	 fail
+	return
+
+;;
+;; Command parsing subroutines
+;;
+
+.init:	movei	b, .cmini
+	setzm	comdef
+	setzm	comhlp
+	push	p, [[fail]]
+	jrst	.comnd
+
+.key:	hrrz	u3, uuoins
+	movei	b, .cmkey
+	push	p, [error]
+	jrst	.comn2
+
+.octi:	movei	u3, 8.
+	movei	b, .cmnum
+	push	p, [error]
+	jrst	.comn1
+
+.deci:	movei	u3, 10.
+	movei	b, .cmnum
+	push	p, [error]
+	jrst	.comn1
+
+.usri:	movei	b, .cmusr
+	push	p, [error]
+	jrst	.comnd
+
+.diri:	move	b, [440700,,dirnam]
+	movem	b, comdef
+	movei	b, .cmdir
+	push	p, [error]
+	jrst	.comnd
+
+.timi:	move	u3, [cm%itm\cm%nci\u1]
+	movei	b, .cmtad
+	call [	push	p, [error]
+		jrst	.comn1 ]
+	tlne	u3, (ic%dsa\ic%ads\ic%utz\ic%jud)
+	 jrst	error
+	movei	b, (u3)
+	return
+
+.dati:	movei	b, datfun
+	comnd
+	tlne	a, (cm%nop)
+	 jrst	error
+	movei	c, (c)			;; see if was +
+	caie	c, datfun
+	 return
+	timein
+	movsi	b, (b)			;; convert to fraction
+	addi	b, 12.*60.*60.
+	idivi	b, 24.*60.*60.
+	push	p, a
+	gtad				;; add in now
+	add	b, a
+	jrst	aret
+
+datfun:	comand .cmtok,,datfn1,<440700,,[asciz "+"]>,"+ followed by time from now at which to set alert",""
+datfn1:	comand .cmtad,,datfn2,<cm%ida\cm%itm>,"date and time at which to set alert",""
+datfn2:	comand .cmtad,,,cm%itm,"time at which to set alert",""
+
+.sitei:	noise	[asciz "on network"]
+	movei	b, netfun
+	comnd
+	tlne	a, (cm%nop)
+	 jrst	error
+	movei	c, (c)
+	cain	c, netfun
+	 jrst [	hrrz	b, (b)		;; get address of next COMND block
+		push	p, b
+		noise	[asciz "site"]
+		pop	p, b
+		comnd
+		tlne	a, (cm%nop)
+		 jrst	error
+		jrst	.+1 ]
+	move	b, (b)		;; get table entry (name,,net addr entry addr)
+	hlrz	c, 1(b)		;; get offset of site entry
+	hlrz	c, hosts2(c)	;; get offset of official name
+	hrli	b, hosts2(c)	;; put address in LH b
+	return
+
+.noise:	hrrz	u3, uuoins
+	hrli	u3, 440700
+	movei	b, .cmnoi
+	push	p, [error]
+	jrst	.comn2
+
+.cnfrm:	push	p, b
+	movei	b, .cmcfm
+	push	p, [bret]
+	push	p, [error]
+	jrst	.comnd
+
+.deflt:	hrrz	b, uuoins
+	hrli	b, 440700
+	movem	b, comdef
+	return
+
+.shelp:	skipa	b, uuoins
+.help:	 hrrz	b, uuoins
+	movem	b, comhlp
+	return
+;;
+;; COMND subroutine
+;;
+
+.comnd:	movei	u3, 0
+.comn1:	tlo	b, 1			;; set flag to look for help in instr
+.comn2:	movem	u3, cmdblk+.cmdat
+	rot	b, -9.
+	hrrz	u3, uuoins
+	trze	b, 1000			;; check uuoins ?
+	 cain	u3, 0
+	  move	u3, comhlp
+	jumpe	u3, .comnx
+	tlzn	u3, -1			;; LH bits means not to permit default
+	 tlo	b, (cm%sdh)
+	hrli	u3, 440700
+	movem	u3, cmdblk+.cmhlp
+	tlo	b, (cm%hpp)
+.comnx:	setzm	comhlp			;; zap it now
+	skipn	u3, comdef
+	 jrst	.comny
+	movem	u3, cmdblk+.cmdef
+	tlo	b, (cm%dpp)
+	setzm	comdef
+.comny:	movem	b, cmdblk
+	movei	b, cmdblk
+	comnd				;; attempt to parse
+	tlnn	a, (cm%nop)		;; win ?
+	 adjsp	p, -1			;; yes -- flush error return address
+	return
+
+;;
+;; Constants
+;;
+
+mailnm:	asciz "mail.txt"
+filenm:	asciz "alert.times"
+prompt:	asciz "ALERT> "
+hst2nm:
+ife	runsite-sixbit "SRI-KL",asciz "SYS:HOSTS2.BIN"
+	.else,asciz "PS:<SYSTEM>HOSTS3.BIN"
+
+keytab:	keysiz,,keysiz		;; size parms
+	[asciz "daytime"],,da.cmd
+	[asciz "down-watch"],,dw.cmd
+	[asciz "exit"],,ex.cmd
+	[asciz "help"],,hp.cmd
+	[asciz "job-watch"],,jb.cmd
+	[asciz "line-watch"],,lw.cmd
+	[asciz "mail-watch"],,mw.cmd
+	[asciz "no"],,no.cmd
+	[asciz "quit"],,qu.cmd
+	[asciz "set"],,se.cmd
+	[asciz "show"],,sh.cmd
+	[asciz "site-watch"],,sw.cmd
+	[asciz "suppress"],,su.cmd
+	[asciz "user-watch"],,uw.cmd
+	[asciz "xfile"],,xf.cmd
+keysiz==:.-keytab-1
+
+hlptab:	hlpsiz,,hlpsiz		;; size parms
+	[asciz "all"],,al.hlp
+	[asciz "daytime"],,da.hlp
+	[asciz "down-watch"],,dw.hlp
+	[asciz "exit"],,ex.hlp
+	[asciz "help"],,hp.hlp
+	[asciz "jcl"],,jc.hlp
+	[asciz "job-watch"],,jb.hlp
+	[asciz "line-watch"],,lw.hlp
+	[asciz "mail-watch"],,mw.hlp
+	[asciz "no"],,no.hlp
+	[asciz "quit"],,qu.hlp
+	[asciz "set"],,se.hlp
+	[asciz "show"],,sh.hlp
+	[asciz "site-watch"],,sw.hlp
+	[asciz "suppress"],,su.hlp
+	[asciz "user-watch"],,uw.hlp
+	[asciz "xfile"],,xf.hlp
+hlpsiz==:.-hlptab-1
+
+notab:	nosiz,,nosiz		;; size parms
+	[asciz "alert"],,no.al
+	[asciz "down-watch"],,no.dw
+	[asciz "job-watch"],,no.jw
+	[asciz "line-watch"],,no.lw
+	[asciz "mail-watch"],,no.mw
+	[asciz "site-watch"],,no.sw
+	[asciz "user-watch"],,no.uw
+nosiz==:.-notab-1
+
+	constants
+
+.==<.+777>&#777			;; up to next page boundary
+hosts2==:.			;; start of hosts table
+jclbuf==:777000			;; page for temp use
+	end	start

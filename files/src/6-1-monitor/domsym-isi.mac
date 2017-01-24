@@ -1,0 +1,398 @@
+	universal domsym	Domain block sizes and offsets
+	search	  monsym,macsym
+
+domsec==000000000020	; Domain section number         
+  dclb==000000000000	; Class lower bound             
+  dchb==000000000003	; Class upper bound             
+  dtlb==000000000000	; Type lower bound              
+  dthb==000000000020	; Type upper bound              
+ fname==000000000015	;                               
+pagema==000000000035	;                               
+filebk==000000000050	;                               
+zcdata==000000002656	;                               
+ dntbl==000000000377	;                               
+   plt==000000000401	;                               
+ rrtbl==000000000104	;                               
+ rdtbl==000000005000	;                               
+stgmap==000000000022	;                               
+poltbl==000000000002	;                               
+srvrty==000000000110	; single server definition      
+srvrdv==000000000442	; multiple servers definition   
+ maxdc==000000000400	; Max chars in a dname          
+ maxdl==000000000200	; Max labels in a dname         
+ maxlc==000000000077	; Max chars in a label          
+labelh==000000001761	; Hashing modulo                
+ maxsb==000000000012	; Number of search blocks       
+gtdfmx==000000000013	; Max GTDOM function            
+ rnfks==000000000500	; Putitive number of fork slots 
+dbvern==000005000001	; Justifiable paranoia          
+hslots==000000000062	; Host slots in tgraph          
+tslots==000000000310	; Time slots in tgraph          
+	page
+;	PASCAL structure definitions
+
+
+define record(rn) <
+	define	%%%rna <rn>	;;remember record name
+	loc 0>			;;start using fake location counter
+
+define rend <
+	%%%rna ==.		;;remember length
+	reloc>			;;restore location counter
+
+define rc(rcname,rctype<1>,rcrep<1>) <
+rcname:!block rctype*rcrep>	;;allocate (fake) space
+
+define ptr(x) <1>		;;all pointers are one word
+
+;
+;	encoded values
+;
+
+	record	dclass
+	rc	dclb	;low bound
+	rc	din	;Internet class
+	rc	dcs	;CSNET class
+	rc	dchb	;high bound
+	rend
+
+	record	dtype
+	rc	dtlb	;low bound
+	rc	da	;Address
+	rc	dns	;Name server
+	rc	dmd	;Mail destination
+	rc	dmf	;Mail forwarder
+	rc	dcname	;Canonical name pointer
+	rc	dsoa	;Start Of Authority
+	rc	dmb	;Mailbox
+	rc	dmg	;Mail group
+	rc	dmr	;Mail rename
+	rc	dnull	;Null RR
+	rc	dwks	;Well known service
+	rc	dptr	;Domain name pointer
+	rc	dhinfo	;host information
+	rc	dminfo	;Mailbox information
+	rc	dmx	;New mail agent RR
+	rc	dthb	;High bound
+	rend
+
+	daxfer==^d252	;Zone transfer request
+	dmailb==^d253	;Mailbox related info request
+	dmaila==^d254	;Mail agent request
+	dstar==^d255	;Everything
+
+	record	labels		;label string
+	rc	lstext,<<maxlc+4>/4>
+	rend
+
+	record	dnames		;dname string
+	rc	dntxt,<<maxdc+3>/4>
+	rend
+
+	record	dstbl		;dname string table
+	rc	dstcnt		;count of label pointers
+	rc	dstbp,maxdl	;global one word byte pointers to labels
+	rend
+
+	record	ulabel
+	rc	nodept		;pointer to first node with this label
+	rc	next		;pointer to next ulabel
+	rc	ultext,labels	;label string
+	rend
+
+	record	labuse
+	rc	labptr		;pointer to unique label
+	rc	casemo,2	;case modifier bits
+	rend
+
+	record 	dname
+	rc	dlabel,labuse
+	rc	more		;following labels in name
+	rc	dnamec		;next name this size
+	rend
+
+	record	rdchun		;rdchunk
+	rc	rdmore		;pointer next chunk this RR
+	rc	rdchai		;pointer next chunk this level
+	rc	ckind		;zero for litstring, 1 for dname
+	rc	litdat,0	;pointer to litstring
+	rc	rrname		;dname pointer
+	rend
+
+	record	node
+	rc	nodela,labuse	
+	rc	nodelc		;next node with same label
+	rc	upptr		;father pointer
+	rc	sidept		;side pointer
+	rc	downpt		;down node pointer
+	rc	downtb		;down table pointer
+	rc	rrptr,0		;rr pointer
+	rc	zonept		;zone entry pointer
+	rend
+
+	record	rr
+	rc	rrnext		;pointer to next rr this node
+	rc	rrnode		;pointer to node owning this RR
+	rc	rrttl		;time to live
+	rc	rrtc		;type and class
+	rc	rdata		;pointer to rdchunk
+	rc	rrchai		;pointer to next instance of this kind of RR
+	rend
+
+	dtl==^d36-^l<dthb>	;length in bits of a dtype
+	dcl==^d36-^l<dchb>	;length in bits of a dclass
+	defstr(rrtyp,rrtc,dtl-1,dtl)	;macro defs for subfields
+	defstr(rrcla,rrtc,dtl+dcl-1,dcl)
+
+	record	lock
+	rc	lockwd		;aoje lock
+	rc	share		;shared count
+	rc	exclus		;exclusive count
+	rend
+
+	record	zoneen
+	rc	zchain		;pointer to next zone at this name
+	rc	znode		;pointer to zone node
+	rc	zclass		;zone class
+	rc	loaded		;is zone loaded
+	rc	zsoa		;pointer to node with SOA
+	rc	zsoarr		;pointer to SOA RR
+	rc	ziscac		;zone is cache
+	rc	zonelo,lock	;zone lock
+	rc	zconfi,zcdata	;zone configuration data
+	rc	dtable,dntbl	;dname table
+	rc	ltable,plt	;primary label table
+	rc	rrtabl,rrtbl	;RR table
+	rc	rdtabl,rdtbl	;rdchunk table
+	rc	sadata,stgmap	;storage allocation statistics
+	rc	zpools,poltbl	;pool tables
+	rc	zpages,pagema	;page map
+	rend
+
+	record	serch		;search block
+	rc	slock		;lock variable, -1 if unlocked
+	rc	sbnext		;pointer to next search block
+	rc	sbidx		;index (zero offset) of this slot
+	rc	ldores		;non-zero if reserved for LDO
+	rc	sbzf,0,0	;first location to zero
+	rc	sbcpb,0,0	;first location to preserve across resolves
+	rc	erttl		;recursion counter to kill infinite loops
+	rc	tstart		;MSclock when query started
+	rc	tquery		;absolute time query was started
+	rc	fcode		;JSYS function
+	rc	sname,dnames	;domain name for search (plus a little extra)
+	rc	stable,dstbl	;dname string table for search name
+	rc	stype		;search QTYPE
+	rc	sclass		;search QCLASS
+	rc	sbcpz,0,0	;end of region to preserve across resolves
+	rc	lock1		;pointer to first held lock
+	rc	lock2		;pointer to second held lock
+	rc	locked		;counter of times waited for lock
+	rc	azone		;pointer to authoritative zone
+	rc	alabel		;pointer into SBPS for SOA label
+	rc	lmatch		;pointer to last match during auth zone search
+	rc	derc		;error code
+	rc	outcnt		;count of RDATA characters
+	rc	outins		;XCTed to output an octet
+	rc	outbp		;updated output byte pointer
+	rc	cnptr		;ANCOPY temp for CNAME RR pointer
+	rc	anret		;number of RRs used as answers
+
+	rc	adeln,ptr(node)	;pointer to node from azone with NS delegation
+				;RRs attached
+	rc	adell,ptr(sbps)	;value of LABEL when adeln set
+	rc	cdeln,ptr(node)	;pointer to node from cache with NS delegation
+				;RRs attached
+	rc	cdell,ptr(sbps)	;value of LABEL when cdeln set
+
+	rc	dnbp		;dump routine byte pointer for data
+	rc	dncp		;dump routine byte pointer for case mods
+	rc	dnlc		;dump routine counter
+
+;	resolver interface
+
+	rc	rtimeo		;time of next activity
+	rc	resttl		;watchdog inside resolver
+	rc	rflags		;value of FLAGS register when resolver called
+	rend
+
+	record	hgre
+	rc	hghost
+	rc	hgtout
+	rc	hgtbac
+	rc	hgtt
+	rend
+
+	record	hgraph
+	rc	hgra,hgre,hslots
+	rend
+
+	record	tgraph
+	rc	touts		;times started
+	rc	tbacks		;times completed
+	rc	ttotal		;total time for completions
+	rc	tquanta		;time slot size in ms
+	rc	tdelay,tslots+1	;delay histogram in units of delayq
+	rend
+
+	record	msure
+
+; tuning parameters for JSYS code
+
+	rc	infttl		;limit for restart (see infchk)
+	rc	plttl		;ms wait interval for primitive (AOSE) lock
+	rc	lckttl		;ms wait interval for database locks
+	rc	rwaiti		;initial ms wait for resolver
+	rc	rwait		;subsequent ms wait for resolver
+
+	rc	ripoll		;resolver idle poll interval
+	rc	rbpoll		;resolver busy poll interval
+	rc	qtoi		;query initial timeout
+	rc	qtor		;query retransmission timeout
+	rc	qtoq		;query quiet timeout
+	rc	rmttl		;resolver max ttl
+
+;	GTDOM% related measurements
+
+	rc	dcalls			;calls to GTDOM%
+	rc	dbyfn,gtdfmx+1		;by function
+	rc	dscall			;calls to dsetup
+	rc	dsbbsy			;busy sblocks found by DSETUP
+	rc	dsbbl			;all sblocks busy in DSETUP
+	rc	dedoa			;sblock busy requests cancelled
+	rc	daztry			;authoritative zone to search
+	rc	dazne			;authoritative search gets name error
+	rc	dazdel			;authoritative search gets delegation
+	rc	dazstr			;authoritative search gets * match
+	rc	dazfnd			;authoritative search finds node
+	rc	dcache			;attempts to use cache
+	rc	dcnmba			;cache uses allowed by MBA
+	rc	dcans			;cache found answers
+	rc	dresol			;attempts to use resolver
+	rc	drnldo			;resolve uses allowed by LDO
+	rc	drrip			;resolves left going in background
+	rc	drdism			;DISMS in rsolve
+	rc	dcncal			;CNAMEL calls
+	rc	dcngo			;times CNAMEL infchk OK
+	rc	dicdie			;infinite loop check failures
+	rc	dpwait			;times waited on primitive lock
+	rc	dewait			;times waited for excusive to leave
+	rc	dferr			;DFINIS with error
+	rc	dfok			;DFINIS without error
+
+	rc	dfgra,tgraph		;DFINIS time graph
+
+;	resolver related measurements
+	rc	udpgra,tgraph		;delay statistics for UDP
+	rc	udphst,hgraph		;host graph for UDP
+	rc	rpgt			;resolver page traps
+	rc	rpgf			;resolver page faults
+	rc	rpgtim			;resolver time in paging routines
+	rc	rrtime			;resolver runtime
+
+	rc	nsugra,tgraph		;name server response time graph
+	rc	nsuhst,hgraph		;name server host graph
+	rc	nsucod,<^d16>		;name server response distribution
+	rend
+
+	record	master
+	rc	dirty			;file is dirty if not zero
+	rc	uplock,lock		;update_lock
+	rc	update			;last update time
+	rc	jsysin			;file initialized by JSYS code ?
+	rc	dbvers			;version of database (avoid ILMNRFs)
+	rc	prijfn			;JFN for primary database
+	rc	secjfn			;JFN for secondary database
+	rc	prifn,fname		;Filename for primary database
+	rc	secfn,fname		;Filename for secondary database
+	rc	mbase,ptr(master)	;correct origin for master block
+	rc	allocl,lock		;memory allocation lock
+	rc	usedpa,pagema		;used page bit map
+	rc	szone,zoneen		;zone entry for search tree
+	rc	cachep,ptr(zoneen)	;pointer to cache zone
+	rc	msgfil,filebk*3		;log files
+	rc	sbloop			;pointer to search block circular list
+	rc	rcom,maxsb		;resolver commands
+	rc	rwaitw,maxsb		;slot wait words (well, one set of 'em)
+	rc	rderc,rnfks		;per fork error code array
+	rc	iaorg,dnames		;domain name for invers address tree
+	rc	starbp			;byte pointer to "*" octet
+	rc	stard			;word with "*"
+	rc	sbarra,maxsb,serch	;search block array
+	rc	tzero			;absolute time of database creation
+	rc	reshan			;resolver UDP handle
+	rc	resprt			;resolver UDP port
+	rc	resjob			;resolver job number
+	rc	logrn			;non-zero for normal resolver logging
+	rc	logri			;non-zero for all resolver incoming
+	rc	logrp			;non-zero for all resolver peculiar
+	rc	logue			;non-zero to log UDP errors
+	rc	logua			;non-zero to log all UDP packets
+
+	rc	resads,srvrty		;resolver addresses, etc
+	rc	resdsv,srvrdv		;resolver default servers
+	rc	msrdat,msure		;measurement data
+	rend
+	page
+define flipfn < asciz /<domain.local>Flip.dd/>
+define flopfn < asciz /<domain.local>flop.dd/>
+define	dcheck <
+ifn   dclb-000000000000,<printx   dclb consistency failure, should be 000000000000>
+ifn    din-000000000001,<printx    din consistency failure, should be 000000000001>
+ifn    dcs-000000000002,<printx    dcs consistency failure, should be 000000000002>
+ifn   dchb-000000000003,<printx   dchb consistency failure, should be 000000000003>
+ifn   dtlb-000000000000,<printx   dtlb consistency failure, should be 000000000000>
+ifn     da-000000000001,<printx     da consistency failure, should be 000000000001>
+ifn    dns-000000000002,<printx    dns consistency failure, should be 000000000002>
+ifn    dmd-000000000003,<printx    dmd consistency failure, should be 000000000003>
+ifn    dmf-000000000004,<printx    dmf consistency failure, should be 000000000004>
+ifn dcname-000000000005,<printx dcname consistency failure, should be 000000000005>
+ifn   dsoa-000000000006,<printx   dsoa consistency failure, should be 000000000006>
+ifn    dmb-000000000007,<printx    dmb consistency failure, should be 000000000007>
+ifn    dmg-000000000010,<printx    dmg consistency failure, should be 000000000010>
+ifn    dmr-000000000011,<printx    dmr consistency failure, should be 000000000011>
+ifn  dnull-000000000012,<printx  dnull consistency failure, should be 000000000012>
+ifn   dwks-000000000013,<printx   dwks consistency failure, should be 000000000013>
+ifn   dptr-000000000014,<printx   dptr consistency failure, should be 000000000014>
+ifn dhinfo-000000000015,<printx dhinfo consistency failure, should be 000000000015>
+ifn dminfo-000000000016,<printx dminfo consistency failure, should be 000000000016>
+ifn dmx   -000000000017,<printx dmx    consistency failure, should be 000000000017>
+ifn   dthb-000000000020,<printx   dthb consistency failure, should be 000000000020>
+ifn daxfer-000000000374,<printx daxfer consistency failure, should be 000000000374>
+ifn dmailb-000000000375,<printx dmailb consistency failure, should be 000000000375>
+ifn dmaila-000000000376,<printx dmaila consistency failure, should be 000000000376>
+ifn  dstar-000000000377,<printx  dstar consistency failure, should be 000000000377>
+ifn  fname-000000000015,<printx  fname consistency failure, should be 000000000015>
+ifn pagema-000000000035,<printx pagema consistency failure, should be 000000000035>
+ifn filebk-000000000050,<printx filebk consistency failure, should be 000000000050>
+ifn zcdata-000000002656,<printx zcdata consistency failure, should be 000000002656>
+ifn  dntbl-000000000377,<printx  dntbl consistency failure, should be 000000000377>
+ifn    plt-000000000401,<printx    plt consistency failure, should be 000000000401>
+ifn  rrtbl-000000000104,<printx  rrtbl consistency failure, should be 000000000104>
+ifn  rdtbl-000000005000,<printx  rdtbl consistency failure, should be 000000005000>
+ifn stgmap-000000000022,<printx stgmap consistency failure, should be 000000000022>
+ifn poltbl-000000000002,<printx poltbl consistency failure, should be 000000000002>
+ifn srvrty-000000000110,<printx srvrty consistency failure, should be 000000000110>
+ifn srvrdv-000000000442,<printx srvrdv consistency failure, should be 000000000442>
+ifn  maxdc-000000000400,<printx  maxdc consistency failure, should be 000000000400>
+ifn  maxdl-000000000200,<printx  maxdl consistency failure, should be 000000000200>
+ifn  maxlc-000000000077,<printx  maxlc consistency failure, should be 000000000077>
+ifn labelh-000000001761,<printx labelh consistency failure, should be 000000001761>
+ifn  maxsb-000000000012,<printx  maxsb consistency failure, should be 000000000012>
+ifn gtdfmx-000000000013,<printx gtdfmx consistency failure, should be 000000000013>
+ifn labels-000000000020,<printx labels consistency failure, should be 000000000020>
+ifn ulabel-000000000022,<printx ulabel consistency failure, should be 000000000022>
+ifn labuse-000000000003,<printx labuse consistency failure, should be 000000000003>
+ifn  dname-000000000005,<printx  dname consistency failure, should be 000000000005>
+ifn dnames-000000000100,<printx dnames consistency failure, should be 000000000100>
+ifn  dstbl-000000000201,<printx  dstbl consistency failure, should be 000000000201>
+ifn   node-000000000011,<printx   node consistency failure, should be 000000000011>
+ifn     rr-000000000006,<printx     rr consistency failure, should be 000000000006>
+ifn   lock-000000000003,<printx   lock consistency failure, should be 000000000003>
+ifn zoneen-000000011055,<printx zoneen consistency failure, should be 000000011055>
+ifn  serch-000000000341,<printx  serch consistency failure, should be 000000000341>
+ifn master-000000021370,<printx master consistency failure, should be 000000021370>
+ifn  rnfks-000000000500,<printx  rnfks consistency failure, should be 000000000500>
+ifn dbvern-000005000001,<printx dbvern consistency failure, should be 000005000001>
+	>
+	end

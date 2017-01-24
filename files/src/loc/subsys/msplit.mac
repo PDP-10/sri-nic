@@ -1,0 +1,237 @@
+;[SRI-NIC]SRC:<LOC.SUBSYS>MSPLIT.MAC.5, 28-Apr-88 11:58:36, Edit by MKL
+;fix bug parsing message flags
+;[SRI-NIC]PS:<HSS.PROG>MSPLIT.MAC.4, 16-Jan-85 17:14:18, Edit by HSS
+;Rearranged code to avoid getting jfns for redundant empty files
+;[SRI-NIC]PS:<HSS.PROG>MSPLIT.MAC.3, 16-Jan-85 16:26:39, Edit by HSS
+;Made msplit rewrite the original input file.
+;[SRI-NIC]PS:<HSS.PROG>MSPLIT.MAC.2, 15-Jan-85 11:09:55, Edit by HSS
+;Fixed file-must-exist bug.  Made checks on message count.
+
+;Original code by Bill Westfield. Minor modifications by Harry Sameshima
+
+	title	MSPLIT - Split a large mail file into manageble pieces
+	search	monsym,macsym
+
+;AC definitions
+t1=1
+t2=2
+t3=3
+t4=4
+p=17
+
+;Constants
+pdlen==20				;Stack length
+fnlen==10				;File name length
+
+;Storage
+crlf:	byte(7)15,12			;Guess
+ofi:	block 1				;Output file index
+length:	block 1				;Length of accumulated mail file.
+injfn:	block 1				;Input jfn
+outjfn:	block 1				;Output jfn
+msgcnt:	block 1				;2 Number of messages
+ifname:	block fnlen			;Space for input file name
+curout:	block fnlen			;Current output file name
+pdlist:	pdlen				;Stack length
+
+start:	RESET				;Init the world
+	move p,[iowd pdlen,pdlist]	;Init the stack
+	call gtfile			;Get the input file
+	call split			;Split the file
+	movni t1,1			;Close all files
+	CLOSF
+	 erjmp error
+	RLJFN				;Release all jfns
+	 erjmp error
+	HALTF				;Snuff it
+	jrst .-1			;Stay snuffed
+
+;Open the old mail file in exclusive access mode, so that no new mail
+;will arrive while we are munging the file. Then check the size of the 
+;file to see if we have to split it. 
+;Returns +1 if we have to split. +2 if not.
+gtfile:	hrroi t1,[asciz/Input file: /]	;Ask for a file
+	PSOUT
+	movsi t1,(gj%sht!gj%old!gj%fns!gj%cfm)
+	move t2,[.priin,,.priou]
+	GTJFN				;Get a jfn
+	 erjmp error
+	movem t1,injfn			;Save the jfn 
+	move t2,[7b5+of%rd+of%awt+of%rtd];Want restricted access
+	OPENF				;Open the file
+	 erjmp error
+	SIZEF				;Get the file size
+	 erjmp error
+	cail t3,^d250			;Small file?
+	ret				;Nope.
+query:	hrroi t1,[asciz@
+Your file is already small enough to be read by MM.  Are you trying to 
+split a file with too many messages? (Y/N): @]
+	PSOUT
+	PBIN				;2
+	push p,t1			;2
+	hrroi t1,crlf			;2
+	PSOUT				;2
+	pop p,t1			;2
+	caie t1,"y"			;2
+	cain t1,"Y"			;2
+	ret				;2
+	caie t1,"n"			;2
+	cain t1,"N"			;2	
+	jrst .+2			;2
+	jrst query			;2
+	aos (p)				;Do a skip return
+	ret
+
+;Split the mail file
+split:	hrroi t1,ifname			;Write file name here
+	move t2,injfn
+	movx t3,fld(1,js%nam)		;Just the name
+	JFNS
+	setzm ofi			;4 Init output file index
+next:	setzm length			;Message file has 0 chars so far
+	setzm msgcnt			;2 File has 0 messages
+	move t1,injfn
+	hrroi t2,buffer
+skplin:	aos t3,msgcnt			;2 Bump the message count
+	caile t3,^d1024			;2 Too many messages?
+	jrst savfil			;2 Yeah
+	push p,t2			;Save byte pointer at beginning of line
+	movei t3,^d100			;Read a maximum of 100 chars
+	movei t4,12			;Or up until a line feed
+	SIN
+	 erjmp done
+	movni t3,(t3)			;Compute how many characters we read
+	addi t3,^d100			;By subtracting space left from 100.
+	addm t3,length			;Add to total size of new file.
+	exch t2,(P)			;Save new pointer, get old one
+	move t1,t2			;Read the date
+	setz t2,
+	IDTIM
+	 erjmp prserr
+	ldb t2,t1			;Get next character
+	caie t2,","			;Should be a comma
+	call prserr			;Oops...
+	movei t3,12			;Get the message length
+	NIN
+	 ercal	prserr
+	push p,2			;Save the length
+	ldb t2,t1			;Get next character
+	caie t2,";"			;Should be a semicolon
+	 call	prserr
+;NIN% can't be used to parse 12 digit octal num if first bit is 1.
+;no need to read this field anyways.
+;	movei t3,10			;Now get the message flags,
+;	NIN				;which are a long octal number
+;	 ercal	prserr
+	pop p,3				;Get back character count of message
+	addm t3,length
+	movn t3,t3			;Input exactly that many characters
+	pop p,2				;To location of old byte ptr
+	move t1,injfn
+	SIN
+	 ercal	prserr
+	move t3,length			;Get message
+	camg t3,[^d240 * 5 * 1000]	;240 pages of text yet?
+	jrst skplin			;No, get next message.
+
+SAVFIL:	setzm curout			;4 Clear the output file name
+	move t1,[curout,,curout+1]	;4
+	blt t1,fnlen-1			;4
+	move t1,[point 7,ifname]	;4 Create byte pointers
+	move t2,[point 7,curout]	;4
+nloop:	ildb t3,t1			;4 Get a byte
+	cain t3,0			;4 Null?
+	jrst gtout			;4 Yup. Finish up the name
+	idpb t3,t2			;4 Deposit the byte
+	jrst nloop			;4
+gtout:	movei t3,"."			;4 Write a "."
+	idpb t3,t2			;4
+	move t1,t2			;4 Save the byte pointer
+	aos t2,ofi			;4 Bump the output file index
+	movei t3,^d10			;4 Decimal radix
+	NOUT				;4
+	 erjmp error			;4
+	hrroi t2,curout			;4 Get pointer to this file name.
+	movsi t1,(gj%sht!gj%fou)	;4
+	GTJFN				;4 Get jfn for output file
+	 erjmp error			;4
+	move t2,[7b5+of%wr+of%rtd]	;4 Open with exclusive access
+	OPENF				;4
+	 erjmp error			;4
+	movem t1,outjfn			;4
+	hrroi t1,[asciz/Outputting file: /];Notify user of new file
+	PSOUT
+	hrroi t1,curout
+	PSOUT
+	hrroi t1,crlf
+	PSOUT
+	move t1,outjfn			;Get current output file
+	hrroi t2,buffer			;Get beginning of collected text
+	movn t3,length			;And its total length
+	SOUT				;Output the new mail file.
+	 erjmp error			;Could be over quota or something
+	CLOSF				;Close file
+	 erjmp error
+	jrst next			;Goto next file, and continue.
+
+;Rewrite the input file
+DONE:	caie t3,^d100			;Should have read 0 characters
+	 call prserr
+	GTSTS				;Get file status
+	txnn t2,gs%eof			;End of file?
+	 call prserr			;No: error has occured!
+	hrroi t1,[asciz/I am now rewriting /];3
+	PSOUT				;3
+	movei t1,.priou			;3 Tell us the input file name
+	move t2,injfn			;3
+	setzm t3			;3
+	JFNS				;3
+	hrroi t1,crlf			;3
+	PSOUT				;3
+	move t1,injfn			;3 Close the file, keep the jfn
+	tlo t1,(co%nrj)			;3
+	CLOSF				;3
+	 jfcl				;3
+	move t1,injfn			;3 Open the file for write
+	move t2,[of%wr!of%awt!of%rtd + 7b5] ;3
+	OPENF				;3
+	 erjmp error			;3
+	hrroi t2,buffer			;Push to beginning of buffer.
+	movn t3,length			;Accumulated size of last file
+	SOUT
+	 erjmp error
+	pop p,p
+	ret
+
+;Input parsing errors
+prserr:	push p,t1			;Save register for debugging
+	hrroi t1,[asciz/Error parsing input mail file - /]
+	ESOUT
+	pop p,t1
+
+;Prints out the appropriate error message and halts the job.
+Error:	hrroi t1,[asciz/Error: /]
+	ESOUT				;Synchronize things
+	movei t1,.priou			;Output to terminal
+	hrloi t2,.fhslf			;This fork. most recent error
+	movei t3,0			;No limit to byte count
+	ERSTR				;Print the error
+	 jfcl
+	 jfcl
+	hrroi t1,crlf
+	PSOUT
+	movni t1,1			;Close all files
+	CLOSF
+	 erjmp error
+	RLJFN				;Release jfns too
+	 erjmp error
+	HALTF				;Snuff it.
+	jrst .-1			;Stay snuffed.
+
+lit
+var
+
+BUFFER:	block 1000		;BUFFER will expand to cover about 250 pages
+
+	end start

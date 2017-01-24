@@ -1,0 +1,392 @@
+File:        TCPEEK.INFO
+Program:     TCPEEK.EXE
+Description: To peek at TCP in operation
+
+TCPEEK is run by a user to examine statistics of the TCP and IP
+running on the same machine.  WHEEL capability is needed.
+TCPEEK uses the JSYS SNOOP to obtain the value of various canned
+symbols in the running monitor.  It uses these values to determine
+what monitor pages contain the statistics of interest, and maps
+these into an area called WINDOW in its own address space.
+TCPEEK then enters the main loop, where it accepts a command and
+dispatches to service it.
+
+When the take-a-snapshot command (right angle bracket, >)
+is given, TCPEEK makes a copy (using BLT) of the contents of
+WINDOW in the area called SNAP, and computes the amount each word
+changed from its value at the previous snapshot, storing the change
+in the area called DELTA.  The take-a-snapshot command also prints
+some data from the snapshot.  A header line contains the local
+host name, snapshot number, and time of day.  Then RFNTAB entries
+of interest (see set-RFNTST command, below) are printed.  Then
+message counts from .NCT0 and .NCT1 (each only if the symbol is
+defined) are printed.  For each of these, the count and change
+from previous snapshot are printed, followed by a text string for
+the message type or subtype, followed by the numeric type and
+subtype.  If the count for a type or subtype is zero, that line
+is not printed.  After printing NCT tables, GWTAB is scanned for
+any gateways which have gone up or down since the previous snapshot.
+For each which has, its address and present status are printed.
+TCPEEK initially thinks all gateways are down, so snapshot 1 will
+report all gateways which are up.
+
+The print-status-of-a-symbol command (slash, /)
+prompts the user for a text string, evaluates that string using
+the JSYS STAT, and prints the value of that location in the
+latest snapshot (and its change, found in DELTA).  The symbol
+may be a vector (such as a histogram), for which each element
+is printed.  If the user types no symbol argument, the command
+is executed as if the symbol in the previous execution of this
+command had been typed.  That symbol is printed as a reminder.
+
+The symbol typed by the user may be followed by "+" and a decimal
+number, which is used as an offset (in words) to the value found
+for the symbol.  The next-entry command (N) adds one to this
+offset and then executes as if the previous symbol had been typed
+to the print-status-of-symbol command with the new offset value.
+This makes scanning through consecutive single word statistics
+easier.
+
+After the symbol name, and word offset (if any), the user may
+type a comma and a limit on the number of entries to print.
+This argument, if present, overrides the vector length returned by
+STAT.  The result is reduced by the offset argument (if any),
+to prevent printing beyond the meaningful end of the vector.
+The user's optional limit, and the reduction by the offset, apply
+only to "free format" printout and not to the special formats
+described below.
+
+The user may terminate the print-status-of-symbol command with
+special characters to specify printing in special formats.
+The special characters / and \ specify printing as a
+two-dimensional vector (such as count of message types, with some
+ypes broken down into subtypes), optionally (\) with text (ARPANET
+type and subtype) annotation.  The special character | specifies
+printing as a histogram with bin limits defined by values in the
+histogram area itself.  This format shows the second header word
+(the first is the number of bins), followed by one line per bin,
+each line showing the snapshot value, the change since the previous
+snapshot, and the bin definition value.  In the special formats
+specified by terminator / or \ or |, the first two words of the
+area in memory are header words; thus, use of the offset option
+together with these formats will execute, but will probably
+produce unexpected results, because the print routine will interpret
+data words as header words.
+
+In summary, the print-status-of-symbol command looks like this:
+	/symbol[+offset][,limit][/ or \ or |]
+where optional arguments are shown [thus].  Not all possible
+combinations of arguments are useful; the useful combinations are:
+   /symbol		prints contents of location or vector
+			(command terminated by CR, LF, ESC, or space)
+   /symbol+offset	"offset" is added to value of symbol
+			before lookup is performed
+   /symbol,limit	only "limit" number of entries are printed
+   /symbol+offset,limit	printing begins at "offset" words
+			into the vector, and ends after "limit" words
+			into the vector; "limit" - "offset" words
+			are printed
+   /symbol/		print as 2-D vector
+   /symbol\		print as 2-D vector with ARPANET annotation
+   /symbol|		print as value-defined histogram
+
+The print-guide command (G) prints the text, evaluation, offset in
+SNAP and DELTA areas, length of the data in words, and number of
+separate areas of memory needed.  The last three of these are
+printed only if relevant (e.g., a symbol which is the length of a
+table has no corresponding area of memory).  The last entry is
+greater than 1 for a symbol such as GWTAB (gateway table), a table
+of tables, so each component table incurs a distinct need for an
+area or "block" of memory.  The guide printout can help in looking
+at statistics in SNAP or DELTA with a debugger, if normal TCPEEK
+mechanisms are not adequate for a particular task.
+
+The print-route command (R) prompts the user for an address
+(in any of three formats: octal, four decimal bytes separated by ".",
+or text name), scans NETHTB (net host table) for matching entries
+(there should be at most one, but all are found), prints the
+corresponding route found in the parallel entry in NETGWY (net
+gateway table), and the prior route if it was different and
+non-zero.  If the NETGWY entry shows routing to a local net
+interface (rather than a gateway), the interface number is printed.
+
+The set-RFNTST command (S) prompts the user for an address in
+any of three formats, and stores this as the value to be matched
+when printing out RFNTAB entries.  Entries are printed which
+match RFNTST exactly, or which are non-zero if RFNTST is zero.
+Thus setting RFNTST to zero causes all non-zero entries to print.
+The initial value of RFNTST is the user's own host, which normally
+matches no entries.  Printing is performed after each snapshot, and
+after each set-RFNTST command.  Typing no new value defaults to the
+current value of RFNTST, an easy way to repeat the latest printing.
+In detail, if the low 32 bits of RFNTAB entry n is "of interest"
+(as above), TCPEEK prints "RFNTAB+n/", the RFNM count field in the
+top 4 bits of the RFNTAB entry (in decimal), "RFN8TO+n/", and the
+contents of the parallel entry in that table (in octal).
+
+The TCB print command (tilde, ~)
+prompts the user for a TCB ID and a monitor address, maps some
+monitor memory at that address into TCPEEK, and checks that the
+TCB ID therein is the same as that the user typed.  Then the
+text name, and current value as seen through this window, of
+several locations within a TCB are printed.  Values printed are
+decimal, except those preceded by # are octal.  Once this command
+has been executed, the normal print-status-of-a-symbol command
+can be used to examine these or other TCB locations in the
+windowed TCB.
+Typing escape (ESC) defaults the TCB ID or the monitor
+address to the previous value used by the TCB print command.
+When the TCB print command is invoked, two lines of trace
+information are printed, showing arguments to the JSYS GTMPG,
+which maps the monitor pages into the window.  These are useful
+for debugging if errors occur.  Similar trace information is printed
+when TCPEEK execution begins, and when the exit command is invoked.
+
+The exit command (E) exits.  Whenever TCPEEK does a GTMPG JSYS,
+the arguments are printed before the monitor page is mapped in.
+This occurs during initial startup, and during the exit command.
+The GTMPG arguments are useful in debugging TCPEEK problems,
+and provide an indication that the mapping of monitor pages
+is proceeding.
+
+If a letter (A-Z, a-z) is typed which is not recognized as a command,
+TCPEEK assumes the user may have wanted the print-status-of-symbol
+command, and prints the appropriate command character and prompt,
+re-echoes the user's typein, and enters the print-status-of-symbol
+command service routine.  The user may continue typing the symbol,
+or may abort this with any non-symbol-or-terminator, such as rubout.
+
+Example:
+
+$tcpeek
+PEEK AT TCP IN OPERATION
+  GTMPG  A[ 407000001  B[ 11000
+  GTMPG  A[ 0  B[ 11000
+  GTMPG  A[ 403000142  B[ 11000
+  GTMPG  A[ 403000143  B[ 12000
+  GTMPG  A[ 403000144  B[ 13000
+  GTMPG  A[ 403000145  B[ 14000
+  GTMPG  A[ 403000146  B[ 15000
+  GTMPG  A[ 403000147  B[ 16000
+  GTMPG  A[ 403000150  B[ 17000
+  GTMPG  A[ 403000151  B[ 20000
+  GTMPG  A[ 403000247  B[ 21000
+  GTMPG  A[ 407000001  B[ 22000
+READY
+?  > = take snapshot
+  / = print status of symbol, optional +offset or ,limit
+      end with / = 2-dimensional, \ = 2-D with 1822 text,
+      | = histogram by value
+  ~ = print TCB
+  E = exit, releasing resources
+  G = print guide
+  N = next (/sym+) offset
+  R = print route
+  S = set RFNTST
+g
+Set <RFNTST> via S command to RFNTAB value of interest.
+"OFFSET" related to a symbol is the displacement
+into user space tables:
+   <SNAP> table is latest snapshot through window into monitor;
+   <DELTA> table is difference between <SNAP> and prior <SNAP>.
+SYMBOL   VALUE   OFFSET   LENGTH   BLOCKS (8)
+MSECTB   165540
+INTSEC   6
+RFNTAB   247110   10110   100   1
+RFN8TO   247210   10210   100   1
+RFNTSZ   100
+.NCT0   142113   2036   1145   1
+.NCT1   142215   3270   1145   1
+NTPSTS   22
+STAT0   142707   707   6252   1
+STATZZ   151160
+.NCT0   142113   1751   65   1
+.NCT1   142215   3203   65   1
+NTPSTI   21
+NETHTB   247003   10003   27   1
+NETGWY   247032   10032   27   1
+NETHSZ   27
+GWTAB   247564   11123   7   12
+MAXGWA   62
+GWBKSZ   7
+.NCT2   142355
+TCBSIZ   207
+
+~ TCB ID(10): 228
+ MONITOR ADDR(8): 6136545
+
+  GTMPG  A[ 407000136  B[ 111000
+  GTMPG  A[ 407000137  B[ 112000
+
+TCBID TJCN TOWNR TOFRK TFH          TFP TLH          TLP TSMRT TRXP TSTO  
+228   3    0     5     #30000201024 #5  #30000201102 #27 148   #0   300000
+TERR TSTAT  TVTL
+#0   #77720 #65 
+TRIS     TRLFT    TRLAK    TRWND TRLWN    TRURP    TRBS
+15600457 15600657 15600657 765   15601422 15600457 0   
+TCRCV TCRPC TCDUP TCIGN TCROS TCRZW TCEWN TCPCC TCRST TCRPU TCRUR
+0     359   0     0     0     2     0     0     0     0     0    
+TSIS       TSLFT      TSSEQ      TSWND TSURP TSBYT TSCB TSCPK
+1718878208 1718880338 1718880338 454   0     0     #0   #0   
+TCSND TCSPC TCRXP TCRXF TCPZA TCFWN TCFWT TCSPU TCSUR
+0     195   1     5     0     1     2510  177   0    
+TCICM TCISQ TCIRD TCFWP
+0     0     0     0    
+TSMXP TCRTM     TCATM     TCLTM     TCBTP     TSPRB    
+576   148179765 148784729 148982868 148982868 148912911
+TCSAG TCFAK TIFDF TTTL TTOS TABTF TCFWA
+0     0     0     60   #0   #0    0    
+~ TCB ID(10): $228 MONITOR ADDR(8): $6136545
+
+TCBID TJCN TOWNR TOFRK TFH          TFP TLH          TLP TSMRT TRXP TSTO  
+228   3    0     5     #30000201024 #5  #30000201102 #27 148   #0   300000
+TERR TSTAT  TVTL
+#0   #77720 #65 
+TRIS     TRLFT    TRLAK    TRWND TRLWN    TRURP    TRBS
+15600457 15600657 15600657 765   15601422 15600457 0   
+TCRCV TCRPC TCDUP TCIGN TCROS TCRZW TCEWN TCPCC TCRST TCRPU TCRUR
+0     359   0     0     0     2     0     0     0     0     0    
+TSIS       TSLFT      TSSEQ      TSWND TSURP TSBYT TSCB TSCPK
+1718878208 1718880338 1718880338 454   0     0     #0   #0   
+TCSND TCSPC TCRXP TCRXF TCPZA TCFWN TCFWT TCSPU TCSUR
+0     195   1     5     0     1     2510  177   0    
+TCICM TCISQ TCIRD TCFWP
+0     0     0     0    
+TSMXP TCRTM     TCATM     TCLTM     TCBTP     TSPRB    
+576   148179765 148784729 148982868 148982868 148912911
+TCSAG TCFAK TIFDF TTTL TTOS TABTF TCFWA
+0     0     0     60   #0   #0    0    
+
+>BBNF snapshot 1, 23-May-83 10:51:47
+total [delta] counts from .NCT0
+102582 [102582]  Regular Message (0)
+      102582 [102582]  Standard (0 0)
+     1 [     1]  NOP (4)
+123520 [123520]  RFNM (5)
+  5168 [  5168]  Dead Host Status (6)
+  7739 [  7739]  Dest Host/IMP Dead (7)
+          13 [    13]  Unreachable (7 0)
+        5168 [  5168]  Host Down (7 1)
+        2558 [  2558]  Admin Prohibit (7 3)
+     1 [     1]  Incomplete Transmission (9)
+           1 [     1]  Host Slow (9 0)
+     1 [     1]  Interface Reset (10)
+
+total [delta] counts from .NCT1
+ 18435 [ 18435]  Regular Message (0)
+       18435 [ 18435]  Standard (0 0)
+     1 [     1]  Error in Leader (1)
+           1 [     1]  Flipflop (1 0)
+     3 [     3]  NOP (4)
+    12 [    12]  RFNM (5)
+     3 [     3]  Dead Host Status (6)
+     5 [     5]  Dest Host/IMP Dead (7)
+           2 [     2]  Unreachable (7 0)
+           3 [     3]  Host Down (7 1)
+     1 [     1]  Interface Reset (10)
+
+  gateway   up: 10.3.0.72 = no name
+  gateway   up: 10.3.0.40 = no name
+  gateway   up: 192.1.2.3 = no name
+  gateway   up: 10.1.0.49 = no name
+  gateway   up: 192.1.2.1 = no name
+  gateway   up: 192.1.2.2 = no name
+  gateway   up: 10.0.0.77 = no name
+  gateway   up: 10.2.0.5 = no name
+  gateway   up: 3.2.0.5 = no name
+  gateway   up: 3.1.0.50 = ALTA-COMA
+
+r  Routing for host: bbnc
+  Routing for host 01200600061 = 10.3.0.49 = BBNC
+  NETGWY+12/   interface 0
+r  Routing for host: 3.3.0.5
+  Routing for host 00300600005 = 3.3.0.5 = BBNA
+  NETGWY+3/   interface 1
+r  Routing for host: 8.4.0.4
+  Routing for host 01001000004 = 8.4.0.4 = RCC-UNIX
+  NETGWY+13/   192.1.2.1 = no name
+r  Routing for host: 35.0.0.0
+  Routing for host 04300000000 = 35.0.0.0 = no name
+  no routing found
+s  RFNTST now = 10.0.0.5, new value: 10.3.0.49
+  New RFNTST is 01200600061 = 10.3.0.49 = BBNC
+RFNTAB+70/   0 1200600061   RFN8TO+70/   0
+
+>BBNF snapshot 2, 23-May-83 10:55:23
+RFNTAB+70/   0 1200600061   RFN8TO+70/   0
+total [delta] counts from .NCT0
+102878 [   296]  Regular Message (0)
+      102878 [   296]  Standard (0 0)
+     1 [     0]  NOP (4)
+123906 [   386]  RFNM (5)
+  5171 [     3]  Dead Host Status (6)
+  7756 [    17]  Dest Host/IMP Dead (7)
+          13 [     0]  Unreachable (7 0)
+        5171 [     3]  Host Down (7 1)
+        2572 [    14]  Admin Prohibit (7 3)
+     1 [     0]  Incomplete Transmission (9)
+           1 [     0]  Host Slow (9 0)
+     1 [     0]  Interface Reset (10)
+
+total [delta] counts from .NCT1
+ 18971 [   536]  Regular Message (0)
+       18971 [   536]  Standard (0 0)
+     1 [     0]  Error in Leader (1)
+           1 [     0]  Flipflop (1 0)
+     3 [     0]  NOP (4)
+    12 [     0]  RFNM (5)
+     3 [     0]  Dead Host Status (6)
+     5 [     0]  Dest Host/IMP Dead (7)
+           2 [     0]  Unreachable (7 0)
+           3 [     0]  Host Down (7 1)
+     1 [     0]  Interface Reset (10)
+
+/  symbol: nct0c\
+102878 [   296]  Regular Message (0)
+      102878 [   296]  Standard (0 0)
+     1 [     0]  NOP (4)
+123906 [   386]  RFNM (5)
+  5171 [     3]  Dead Host Status (6)
+  7756 [    17]  Dest Host/IMP Dead (7)
+          13 [     0]  Unreachable (7 0)
+        5171 [     3]  Host Down (7 1)
+        2572 [    14]  Admin Prohibit (7 3)
+     1 [     0]  Incomplete Transmission (9)
+           1 [     0]  Host Slow (9 0)
+     1 [     0]  Interface Reset (10)
+
+/  symbol: nct0e\
+131663 [   403]  Regular Message (0)
+      131663 [   403]  Standard (0 0)
+     8 [     0]  NOP (4)
+           8 [     0]   (4 4)
+
+/  symbol: tcpab    0 = 0.   [0 = 0.]
+   0 = 0.   [0 = 0.]
+   31 = 25.   [0 = 0.]
+   1064,,630342 = 148058338.   [0 = 0.]
+   255621 = 88977.   [2352 = 1258.]
+/  symbol: inphr|   0 = 0.
+   23538   [179]   0
+   65376   [448]   5
+   56753   [324]   10
+   40773   [496]   25
+   11123   [288]   50
+   1629   [26]   100
+   2635   [2]   250
+   11   [0]   500
+   0   [0]   -1
+e  quitting...
+  GTMPG  A[ 0  B[ 11000
+  GTMPG  A[ 0  B[ 12000
+  GTMPG  A[ 0  B[ 13000
+  GTMPG  A[ 0  B[ 14000
+  GTMPG  A[ 0  B[ 15000
+  GTMPG  A[ 0  B[ 16000
+  GTMPG  A[ 0  B[ 17000
+  GTMPG  A[ 0  B[ 20000
+  GTMPG  A[ 0  B[ 21000
+  GTMPG  A[ 0  B[ 22000
+  GTMPG  A[ 0  B[ 111000
+  GTMPG  A[ 0  B[ 112000
+$

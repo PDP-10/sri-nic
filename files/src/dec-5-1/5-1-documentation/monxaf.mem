@@ -1,0 +1,298 @@
+
+
+
++---------------+
+! d i g i t a l !
++---------------+
+
+
+               EXTENDED ADDRESSING FACILITIES
+
+
+The following describes TOPS20 facilities which support  the
+extended   addressing  capabilities  of  certain  models  of
+DECSYSTEM-20 CPUs.  Note  that  these  facilities  are  only
+present  when  enabled  by  the system administrator at each
+site;  they are not present in  any  version  of  TOPS20  as
+shipped.   These  facilities are a NON-SUPPORTED addition to
+the TOPS-20 monitor.
+
+The extended addressing architecture  is  described  in  the
+Hardware  Reference  Manual,  Volume  I, dated 1978 or later
+(EK-10/20-HR-001).  Prospective  users  should  be  familiar
+with  this  material  before  attempting to use the extended
+addressing facilities of the monitor.   See  also  "Extended
+Addressing on the DECSYSTEM-20, Programming Implications and
+Methodology" (file EAPGMG.MEM).
+
+Release 4 of TOPS20 provides a limited amount of  code  that
+uses the extended addressing architecture, specifically:
+
+1.  Programs may create and delete  sections  in  the  range
+1-37(8)  within  each  fork.  As an address space, each such
+section is similar to section 0  which  is  always  present.
+Each  existing section has a map which may be manipulated by
+PMAP and other page-related JSYSes as is the section 0 map.
+
+2.  All monitor calls will work  in  any  section  and  will
+assume memory arguments to be in the same section as that in
+which the JSYS was executed if the usual address  forms  are
+used (i.e.  18-bit memory addresses, 9-bit page numbers).
+
+3.  In general, JSYS arguments  may  NOT  specify  addresses
+outside  of the current section.  In specific cases however,
+a JSYS will accept an inter-section argument or an  extended
+equivalent of an existing JSYS is provided which will accept
+such arguments.  All such cases are listed below.
+
+
+JSYS ARGUMENTS
+
+With  only   the   exceptions   listed   below,   all   JSYS
+memory-related  arguments  (addresses  and page numbers) are
+assumed to refer  to  the  section  in  which  the  JSYS  is
+executed.  For example:
+
+        1000/   HRROI 1,2000
+                PSOUT
+                                                      Page 2
+
+
+will output a string beginning at location 2000  in  section
+0.  Similarly,
+
+        3,,1000/        HRROI 1,2000
+                        PSOUT
+
+will output a string beginning at location 2000  in  section
+3.  Further,
+
+        3,,1000/        SETO 1,
+                        MOVE 2,[.FHSLF,,100]
+                        SETZ 3,
+                        PMAP
+
+will clear the mapping for page 100  in  section  3  of  the
+current fork.  The consequence of this is that existing code
+which  observes  certain  conventions  relating   to   basic
+instruction  interpretation may be run in non-0 sections and
+will work correctly in that section as a  somewhat  separate
+environment.  
+
+In most cases, existing JSYSes do not have free bits to  the
+left  of the high-order bit of their non-extended address or
+page number argument in  which  to  put  a  section  number.
+Hence,  most JSYSes do not accept an inter-section argument.
+In those cases where inter-section arguments  are  essential
+for basic operation and no bits were available, an alternate
+form of the JSYS  is  provided  (e.g.   XSIR%).   Additional
+high-order  bits  were  usually  available  in  page  number
+arguments  however,  and  in  these  cases  the  JSYSes  now
+generally  accept  an 18-bit page number argument, where the
+low-order 9 bits are the page  number  as  before,  and  the
+high-order  9  bits  are the section number.  If the section
+number is 0, the "current" section  (section  in  which  the
+monitor  call  is  executed)  is taken as a default.  If the
+section number of a page argument is non-0, it is  taken  as
+an  explicit  absolute  section number within the designated
+fork.  For example,
+
+        3,,1000/        SETO 1,
+                        MOVE 2,[.FHSLF,,2100]
+                        SETZ 3,
+                        PMAP
+
+will clear the mapping for page 100  in  section  2  of  the
+current fork.
+
+Note that the above  conventions  do  not  allow  a  program
+running in a non-0 section to refer to a page in section 0.
+
+In addition to page number arguments, string  arguments  may
+generally  be  indexed  in order to specify an inter-section
+address.  E.g.,
+
+        3,,1000/        MOVSI 10,4
+                                                      Page 3
+
+
+                        MOVE 1,[POINT 7,2000(10)]
+                        PSOUT
+
+will output a string beginning at location 2000  in  section
+4.   Of  course, only the byte pointer is updated when PSOUT
+returns, the index is unchanged.  Note also that  because  a
+byte pointer with indirect addressing may not be incremented
+as a means of stepping through string data, an indirect byte
+pointer   does   not   work   as   a  technique  to  specify
+inter-section addresses.
+
+
+
+SMAP%
+
+This monitor call is used to create or delete  one  or  more
+entire sections.
+
+SMAP%   JSYS 767
+
+Accepts:
+
+1/ Source identifier:
+        -1 means delete only, no new contents
+        0 means create private section
+2/ destination identifier:
+        fork handle,,section number
+3/ access,,count of number of contiguous sections
+
+SMAP% first removes any existing mapping in  the  designated
+sections  (clearing  the  section  map  first if necessary).
+Then a new mapping  may  be  established  according  to  the
+argument.
+
+Giving 0 as the source argument specified that  a  "private"
+section  is to be created for the specified virtual section.
+A private section is equivalent to  section  0  and  may  be
+specified as the destination of a PMAP.
+
+(Other forms of SMAP% may be implemented in future  releases
+to effect other than "private" section mapping.)
+
+Initially upon creation of a fork, all sections except 0 are
+non-existant.   A  reference to an address in a non-existant
+section will fail and will initiate a PSI on the memory-read
+or  memory-write  channel.   No page (or page table) will be
+created in this case.   Once  a  private  section  has  been
+created by SMAP%, references to non-existant pages within it
+will cause private pages to be created and mapped.
+
+
+EXTENDED JSYSES
+                                                      Page 4
+
+
+The  following  new  or  modified  JSYSes  are  relevant  to
+extended addressing.
+
+ADBRK - accepts 30-bit address
+
+MRECV,  MSEND  -  accept  18-bit  page  number   per   above
+convention.
+
+PMAP - accepts 18-bit page numbers for fork arguments.
+
+RFSTS - Alternate form of call, specified by RF%LNG, returns
+30-bit  PC.   See  Release  4  Monitor Calls Manual for full
+specification.
+
+XSIR%, XRIR% - These are extended forms of SIR and  RIR  and
+allow  the  pseudo-interrupt  system  to  be setup with full
+30-bit addresses throughout.  XSIR% accepts
+
+        1/ fork handle
+        2/ address of argument block:
+                length of this block (3)
+                30-bit address of level table
+                30-bit address of channel table
+
+Entries in the extended channel table are:
+
+             -6-             -30-
+        !------------------------------------!
+        !  level  !   address of PSI routine !
+        !------------------------------------!
+
+Each extended level table entry contains the 30-bit  address
+of  a  2-word  block into which the extended interrupt PC is
+saved in usual format, i.e.
+
+         0           12
+        !-----------------------------------------------!
+        !  flags       !                                !
+        !-----------------------------------------------!
+        !       !                 PC                    !
+        !-----------------------------------------------!
+
+XRIR% accepts:
+        1/ fork handle
+        2/ address of argument block
+
+and returns in the argument block:
+
+        0/ length (unchanged)
+        1/ 30-bit address of level table
+        2/ 30-bit address of channel table
+
+These new forms should be used wherever code is executed  in
+multiple  sections  with  interrupts possible.  The previous
+forms may be used so long as code is executed  only  in  the
+                                                      Page 5
+
+
+same  section  as  that  in which the SIR was given.  If the
+monitor tries to process a PSI and discovers  the  PC  in  a
+different  section, a forced termination will result.  Also,
+XRIR% must be used following XSIR%, and RIR  following  SIR.
+If  the  non-matching  form  of  RIR  is  used,  an  illegal
+instruction condition will result.
+
+RMAP -  Accepts  18-bit  page  number  as  described  above.
+Returns  explicit section number with page number if page is
+not in current section.
+
+RPACS - Accepts 18-bit page number as described.  RPACS will
+generate  an  illegal instruction condition if the specified
+section does not exist.
+
+SPACS - accepts 18-bit page number as described.
+
+STRING ARGUMENTS - Any JSYS byte  pointer  argument  may  be
+indexed  as a means for specifying an inter-section address.
+Not all JSYSes have been thoroughly  tested  for  this  case
+however;   users are requested to report any cases found not
+to work.  Those which have been tested include  PSOUT,  SIN,
+SOUT, SINR, RDTTY, and TEXTI.
+
+ERJMP/ERCAL - These appear in code as ordinary  instructions
+although they are no-operations when interpreted by the CPU.
+When interpreted by  the  monitor  in  processing  an  error
+condition,  the  full extended effective address computation
+is performed and inter-section jumps may be effected.
+
+XJRSTF - This  machine  instruction  is  the  way  to  leave
+section  0 and begin execution in some other section.  It is
+in fact the only way to transfer out  of  section  0.   When
+running  in  non-0 sections, any jump instruction may effect
+an inter-section transfer  as  a  result  of  its  effective
+address computation.  
+
+
+DDT
+
+DDT has been modified to support the extended environment to
+a  very limited extent.  If DDT itself is running in a non-0
+section,  it  will  accept  30-bit  addresses   for   memory
+locations, break points, etc.  However, the same DDT must be
+mapped identically in all  sections  where  breakpoints  are
+set.  See DDT V41 documentation for further details.
+
+
+ENABLING SMAP%
+
+As shipped by DIGITAL, the SMAP% JSYS is not available.  Any
+attempt  by  a  user program to execute it will produce only
+the unimplemented JSYS trap  condition,  regardless  of  the
+capabilities  of  the fork.  Hence, no sections other than 0
+can be created, and use of any of the  above  JSYSes  in  an
+                                                      Page 6
+
+
+attempt  to  manipulate  or  transfer to non-0 sections will
+fail.  To make SMAP% available, the following patch must  be
+made:
+
+        JSTAB+767/   4001,,UJSYS  =>  4001,,.SMAP%
+
+This patch may be made in the EXE file  or  in  the  running
+monitor with MDDT.
+

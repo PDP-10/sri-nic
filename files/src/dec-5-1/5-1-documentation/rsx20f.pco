@@ -1,0 +1,582 @@
+
+
+
+The following  edits  are  the  edits  contained  in  RSX20F
+V14-45G:
+
+
+                           Edit C
+
+[SYMPTOM]
+
+RSX20F can get lots of spurious interrupts for DM11-BB's.
+
+[DIAGNOSIS]
+
+Code to do interrupt enable doesn't check for remote  lines,
+but sets interrupt enable for every line with a DM11-BB.
+
+[CURE]
+
+Only set interrupt enable for remote lines.
+
+The following patch is edit C to RSX20F V14-45.
+
+To apply this patch do the following:
+
+1) Shut down the system by typing the following:
+
+^\          ! Control-\ to invoke the PARSER
+
+PAR>SHUT    ! Causes TOPS-10/20 to stop running
+
+2) Now reboot the Console Front End by setting the switches
+   on the PDP-11 to 203 and pressing the ENABLE and SWITCHES
+   load switches on the KL10 front panel.
+
+3) Type ^\ (Control-\) to invoke the PARSER:
+
+4) In response to the PAR> prompt type the following:
+
+SET CONSOLE MAINTENANCE
+!
+SET MEMORY ELEVEN
+!
+!       PATCH:  BIT     #TT.RMT,STSW1(R5);is this a remote line?
+DEPOSIT 270=32765
+DEPOSIT NEXT=100
+DEPOSIT NEXT=6
+!               BR      20$             ;skip some vectors
+DEPOSIT NEXT=412
+!       10$:    JSR     PC,.STPDM       ;stop the DM-11/BB scan
+DEPOSIT 310=4737
+DEPOSIT NEXT=40174
+!               JMP     .DMTMO+130      ;go check for interrupt enabled
+DEPOSIT NEXT=137
+DEPOSIT NEXT=41256
+!       20$:    BNE     10$             ;remote line, check if enabled
+DEPOSIT 324=1371
+!               BR      30$             ;skip some vectors
+DEPOSIT NEXT=406
+!       30$:    JMP     .DMTMO+202      ;go skip interrupt enable check
+DEPOSIT 344=137
+DEPOSIT NEXT=41330
+!       40$:    JMP     PATCH           ;jump to patch space
+DEPOSIT 41252=137
+DEPOSIT NEXT=270
+!               .ASCII  /5C/            ;call this edit C
+DEPOSIT 1044=41465
+!
+SET CONSOLE OPERATOR
+
+5) Now type "MCR SAV<CR>"
+
+6) in response to the prompt SAV> type "SY0:/WB<CR>"
+
+This will save the patched RSX20F system image on the front-end
+file system.
+
+
+
+                           Edit D
+
+[SYMPTOM]
+
+Terminal lines hang, terminal input gets <BELL>ed.
+
+[DIAGNOSIS]
+
+.S2IDC gets incremented when RSX20F sends an XOFF to a  line
+to disable input due to lack of buffer space.  At each clock
+tick, routine .KW11S checks to see if .S2IDC is non-zero, if
+it  is  non-zero the first locally (RSX20F) disabled line is
+found then re-enabled and .S2IDC is always decremented.   If
+the  XOFF  is  in  progress  but has not actually been sent,
+.S2IDC get decremented when it shouldn't have been.
+
+[CURE]
+
+Only decrement .S2IDC after we have actually sent an XON for
+a  locally  disabled line.  The following patch is edit D to
+RSX20F V14-45.
+
+
+                            NOTE
+
+               Edit D fully  supercedes  edit
+               B,   and   can   be  installed
+               without  installing  edit   B.
+               Edit  B  does  not  need to be
+               removed  to  install  edit  D.
+               The  patch  area  occupied  by
+               edit B may be  overwritten  in
+               the  future, as long as edit D
+               has been installed  this  will
+               not have any adverse affect.
+
+
+
+To apply this patch do the following:
+
+1) Shut down the system by typing the following:
+
+^\          ! Control-\ to invoke the PARSER
+
+PAR>SHUT    ! Causes TOPS10/20 to stop running
+
+2) Now reboot the Console Front End by setting the switches
+   on the PDP-11 to 203 and pressing the ENABLE and SWITCHES
+   load switches on the KL10 front panel.
+
+3) Type ^\ (Control-\) to invoke the PARSER:
+
+4) In response to the PAR> prompt type the following:
+
+SET CONSOLE MAINTENANCE
+!
+SET MEMORY ELEVEN
+!       .PAT2.: TST     (R2)            ;IS LINE DISABLED?
+DEPOSIT 120=5712
+!               BPL     10$             ; NO, DON'T DECREMENT COUNT
+DEPOSIT NEXT=100036
+!               BIT     #S2.LCL,(R2)    ;IS THIS A LOCAL XOFF?
+DEPOSIT NEXT=32712
+DEPOSIT NEXT=4000
+!               BEQ     10$             ; NO,
+DEPOSIT NEXT=1433
+!               DEC     .S2IDC          ; YES, DECREMENT COUNT OF LINES
+DEPOSIT NEXT=5337
+DEPOSIT NEXT=5050
+!               BR      10$             ;SKIP SOME VECTORS
+DEPOSIT NEXT=430
+!       10$:    BIC     #S2.ENB!S2.DDN!S2.LCL!S2.CN2,(R2) ;CLEAR THE REQUEST
+DEPOSIT 220=42712
+DEPOSIT NEXT=115400
+!               JMP     75$             ;AND RETURN
+DEPOSIT NEXT=137
+DEPOSIT NEXT=42672
+!               JMP     .PAT2.          ;GO CLEAN UP REQUEST
+DEPOSIT 42564=137
+DEPOSIT NEXT=120
+!               BR      40$             ;SKIP A NO-OP
+DEPOSIT 35470=401
+!               NOP                     ;NEVER GET HERE
+DEPOSIT NEXT=240
+!               .ASCII  /5D/            ;CALL THIS EDIT D
+DEPOSIT 1044=42065
+!
+SET CONSOLE OPERATOR
+
+5) Now type "MCR SAV<CR>"
+
+6) in response to the prompt SAV> type "SY0:/WB<CR>"
+
+This will save the patched RSX20F system image on the front-end
+file system.
+
+
+
+                           Edit E
+
+[SYMPTOM]
+
+Modems don't always seem to work properly in V14-45.
+
+[DIAGNOSIS]
+
+The test for ring interrupt is being done on  the  state  of
+the ring lead, not the ring interrupt bit.  Also the code is
+not as forgiving as it can be.
+
+[CURE]
+
+Use TST on the CSR to check for ring interrupt  rather  than
+TSTB  on the line status register.  Organize $DMINT so it is
+functionally more efficient:  Re-enable scanning just before
+exiting   instead  of  before  checking  ring-interrupt  and
+carrier.  Remove the check for secondary receive  interrupts
+and  enable  check  for  carrier  at  the  same time as ring
+interrupt to be more forgiving.
+
+The following patch is edit E to RSX20F V14-45.
+
+To apply this patch do the following:
+
+1) Shut down the system by typing the following:
+
+^\          ! Control-\ to invoke the PARSER
+
+PAR>SHUT    ! Causes TOPS-10/20 to stop running
+
+2) Now reboot the Console Front End by setting the switches
+   on the PDP-11 to 203 and pressing the ENABLE and SWITCHES
+   load switches on the KL10 front panel.
+
+3) Type ^\ (Control-\) to invoke the PARSER:
+
+4) In response to the PAR> prompt type the following:
+
+!In the following dialogue, "DEPOSIT NEXT=" can be abbreviated
+!to "DEP N=".
+!
+SET CONSOLE MAINTENANCE
+!
+SET MEMORY ELEVEN
+!
+!Just dismiss interrupts (via TTSAV) for now, we will enable for
+!them when primary protocol starts.
+!
+!               RTS     PC
+DEPOSIT 037662=207
+!
+!Put a 1 in the next location which will be used by the BIS #1,(R4)
+!instruction later.
+!
+DEPOSIT NEXT=1
+!
+!       MOV     R5,R2           ;COPY TO R2
+DEPOSIT NEXT=10502
+!       BIC     #177760,R5      ;CLEAR ALL BUT UNIT NUMBER
+DEPOSIT NEXT=42705
+DEPOSIT NEXT=177760
+!       ASL     R5              ;CONVERT UNIT NUMBER TO WORD INDEX
+DEPOSIT NEXT=6305
+!       ASL     R5              ;THUS
+DEPOSIT NEXT=6305
+!       ASL     R5              ;AND SO
+DEPOSIT NEXT=6305
+!       ADD     DMTBL+2(R3),R5  ;CALCULATE ADDRESS OF "DHTBL" ENTRY
+DEPOSIT NEXT=66305
+DEPOSIT NEXT=2736
+!       BIT     #TT.RMT,STSW1(R5) ;REMOTE LINE ?
+DEPOSIT NEXT=32765
+DEPOSIT NEXT=100
+DEPOSIT NEXT=6
+!       BEQ     50$             ;EXIT IF NOT
+DEPOSIT NEXT=1450
+!       TST     .COMEF+2        ;YES -- IS PRIMARY PROTOCOL RUNNING??
+DEPOSIT NEXT=5737
+DEPOSIT NEXT=1012
+!       BPL     50$             ;NO -- IGNORE INTERRUPT
+DEPOSIT NEXT=100045
+!       TST     .INHDM          ;YES -- ARE DM-11/BB'S INHIBITED??
+DEPOSIT NEXT=5737
+DEPOSIT NEXT=2576
+!       BNE     50$             ;YES -- GO ON
+DEPOSIT NEXT=1042
+!
+! HERE FOR A RING INTERRUPT OR AN ALLOWABLE NON-RING INTERRUPT
+!
+!       TST     R2              ;RING INTERRUPT??
+DEPOSIT NEXT=5702
+!       BMI     10$             ; YES -- GO FORCE A HANGUP
+DEPOSIT NEXT=100404
+!
+! HERE FOR A NON-RING INTERRUPT
+!
+!       BIT     #2,(R4)         ;IS DTR UP?
+DEPOSIT NEXT=32714
+DEPOSIT NEXT=2
+!       BEQ     50$             ; NO -- JUST REENABLE SCAN AND EXIT
+DEPOSIT NEXT=1435
+!       BR      20$             ; YES -- WE HAVE PREVIOUSLY GOTTEN RING
+DEPOSIT NEXT=404
+!
+! RING TRANSITION (DM-11/BB'S ENABLED)
+!
+!10$:   CALL    .STTYH          ;TRANSMIT HANGUP
+DEPOSIT NEXT=4737
+DEPOSIT NEXT=40074
+!       BIS     #6,(R4)         ;SET RTS + DTR
+DEPOSIT NEXT=52714
+DEPOSIT NEXT=6
+!20$:   BIT     #100,(R4)       ;CARRIER UP?
+DEPOSIT NEXT=32714
+DEPOSIT NEXT=100
+!       BEQ     40$             ;IF .EQ. NO (EITHER NEW CALL OR DROP)
+DEPOSIT NEXT=1422
+!
+! CARRIER ON TRANSITION
+!
+!       BIC     #TT.CRW!TT.RIP,STSW1(R5);CLEAR CARRIER WAIT
+DEPOSIT NEXT=42765
+DEPOSIT NEXT=2004
+DEPOSIT NEXT=6
+!       BIT     #S0.CON,STSW0(R5) ;WAS LINE ALREADY CONNECTED??
+DEPOSIT NEXT=32765
+DEPOSIT NEXT=40000
+DEPOSIT NEXT=4
+!       BNE     50$               ; YES -- LEAVE IT ALONE
+DEPOSIT NEXT=1016
+!       BIT     #TT.ABL,STSW1(R5) ; NO -- IS THIS AN AUTO-BAUD LINE??
+DEPOSIT NEXT=32765
+DEPOSIT NEXT=40
+DEPOSIT NEXT=6
+!       BNE     30$               ; YES
+DEPOSIT NEXT=1003
+!       CALL    .STTYD            ; NO -- REPORT CONNECTION
+DEPOSIT NEXT=4737
+DEPOSIT NEXT=40060
+!       BR      50$               ;GO EXIT
+DEPOSIT NEXT=407
+!30$:   BIS     #TT.ABW,STSW1(R5) ;MARK AUTO-BAUD WAIT
+DEPOSIT NEXT=52765
+DEPOSIT NEXT=10
+DEPOSIT NEXT=6
+!       BR      50$               ;AND EXIT
+DEPOSIT NEXT=403
+!
+! CARRIER DROP TRANSITION
+!
+!40$:   BIS     #TT.CRW!TT.RIP,STSW1(R5);SET CARRIER WAIT
+!
+DEPOSIT NEXT=52765
+DEPOSIT NEXT=2004
+DEPOSIT NEXT=6
+!50$:   BIC     #1200,-(R4)     ;REENABLE SCANNING
+DEPOSIT NEXT=42744
+DEPOSIT NEXT=1200
+!       RTS     PC              ;DISMISS AND RETURN
+DEPOSIT NEXT=207
+!
+!NOTE:
+!An "EXAMINE NEXT" at this point should show location 40044
+!containing 4737, if this is not the case then a mistake has been
+!made, you should reboot with 203 ENABLE SWITCH and try again.
+!
+!Now remove RTS PC and replace with BIS instruction so we will
+!use new code.  Note that the #1 has already been patched above
+!so all we have to deposit is the instruction.
+!
+!       BIS     #1,(R4)         ;SET LINE ENABLE TO TEST SIGNAL TRANSTIONS
+DEPOSIT 37662=52714
+!
+!NOTE:
+!.TTRNG and .TTSCW are routines used by .DLINT, these routines do
+!not get changed by this patch, and immediately follow the RTS PC
+!at the end of $DMINT.  (.TTRNG starts at 40044 and .TTSCW starts
+!at 40050)
+!
+!               .ASCII  /5E/            ;call this edit E
+DEPOSIT 1044=42465
+!
+SET CONSOLE OPERATOR
+
+5) Now type "MCR SAV<CR>"
+
+6) in response to the prompt SAV> type "SY0:/WB<CR>"
+
+This will save the patched RSX20F system image on the front-end
+file system.
+
+
+
+                           Edit F
+
+[SYMPTOM]
+
+CTY hangs if KLINIK connected in USER mode while enabled for
+REMOTE.
+
+
+[DIAGNOSIS]
+
+The CTY does not get ACKed because the check for  USER  mode
+is  done  using .KLNMD rather than .KLNSW which is returning
+the allowable mode rather than the actual mode.
+
+
+[CURE]
+
+In routine .TTACK check for current KLINIK mode from  .KLNSW
+rather than .KLNMD.
+
+The following patch is edit F to RSX20F V14-45.
+
+To apply this patch do the following:
+
+1) Shut down the system by typing the following:
+
+^\          ! Control-\ to invoke the PARSER
+
+PAR>SHUT    ! Causes TOPS10/20 to stop running
+
+2) Now reboot the Console Front End by setting the switches
+   on the PDP-11 to 203 and pressing the ENABLE and SWITCHES
+   load switches on the KL10 front panel.
+
+3) Type ^\ (Control-\) to invoke the PARSER:
+
+4) In response to the PAR> prompt type the following:
+
+SET CONSOLE MAINTENANCE
+!
+SET MEMORY ELEVEN
+!
+!routine .TTACK: test for KLINIK USER mode from .KLNSW not .KLNMD
+!
+!       TSTB    .KLNSW+0        ;;; ACTIVE IN USER MODE?
+DEPOSIT 34424=1226
+!
+!               .ASCII  /5F/            ;CALL THIS EDIT F
+DEPOSIT 1044=43065
+!
+SET CONSOLE OPERATOR
+
+5) Now type "MCR SAV<CR>"
+
+6) in response to the prompt SAV> type "SY0:/WB<CR>"
+
+This will save the patched RSX20F system image on the front-end
+file system.
+
+
+
+
+                           Edit G
+
+[SYMPTOM]
+
+RSX20F appears to lose an occasional XON.
+
+
+[DIAGNOSIS]
+
+RSX20F clears the XOFFed bit when it gets a queued  protocol
+message  to set/reset the RECEIVE SYSTEM-MESSAGES bit.  When
+it finally gets the XON queued  protocol  message,  it  sees
+that  the XOFFed bit is clear, so it doesn't restart output.
+Normally, this would not cause a problem, but  PA1050  saves
+the  state  of the RECEIVE SYSTEM-MESSAGES bit when entered,
+then resets it  to  the  same  state  when  it  exits  using
+function  .MOSNT  of  the  MTOPR JSYS.  This causes a queued
+protocol message to be generated to set/reset the  state  of
+the  SYSTEM-MESSAGES  bit, which in turn clears the XOFF bit
+in RSX20F.
+
+
+[CURE]
+
+Don't clear the XOFF bit when receiving the queued  protocol
+function to set/reset the RECEIVE SYSTEM-MESSAGES bit.
+
+The following patch is edit G to RSX20F V14-45.
+
+To apply this patch do the following:
+
+1) Shut down the system by typing the following:
+
+^\          ! Control-\ to invoke the PARSER
+
+PAR>SHUT    ! Causes TOPS10/20 to stop running
+
+2) Now reboot the Console Front End by setting the switches
+   on the PDP-11 to 203 and pressing the ENABLE and SWITCHES
+   load switches on the KL10 front panel.
+
+3) Type ^\ (Control-\) to invoke the PARSER:
+
+4) In response to the PAR> prompt type the following:
+
+SET CONSOLE MAINTENANCE
+!
+SET MEMORY ELEVEN
+!
+!       PATCH:  TSTB    R5      ;ARE WE ENABLING/DISABLING XOFF?
+DEPOSIT 140=105705
+!               BEQ     10$     ;NO
+DEPOSIT NEXT=1403
+!               BIC     #TT.XOF,STSW1(R2) ;CLEAR XOFF BIT
+DEPOSIT NEXT=42762
+DEPOSIT NEXT=200
+DEPOSIT NEXT=6
+!       10$:    RTS     PC              ;RETURN
+DEPOSIT NEXT=207
+!
+!
+!               JSR     PC,PATCH        ;JUMP TO PATCH
+DEPOSIT 25444=4737
+DEPOSIT NEXT=140
+!               NOP                     ;
+DEPOSIT NEXT=240
+!
+!               .ASCII  /5G/            ;CALL THIS EDIT G
+DEPOSIT 1044=43465
+!
+SET CONSOLE OPERATOR
+
+5) Now type "MCR SAV<CR>"
+
+6) in response to the prompt SAV> type "SY0:/WB<CR>"
+
+This will save the patched RSX20F system image on the front-end
+file system.
+
+
+
+
+                       PARSER Edit A
+
+[SYMPTOM]
+
+EXAMINE PI using PARSER returns invalid data.
+
+
+[DIAGNOSIS]
+
+WORD instruction is done instead of BYTE instruction.
+
+
+[CURE]
+
+In .EXMPI change BIS (R1)+,R2 to MOVB (R1)+,R2.
+
+NOTE:  ZAP changes are permanent, be especially  careful  as
+you  are patching the PARSER.TSK image.  ZAP prompts with an
+underscore (_) after you type in the  TSK  file  to  modify.
+When  you open a location in ZAP it displays the contents of
+that location before you can deposit, if you make a  mistake
+and  deposit  the  wrong  value  or  wrong location, you can
+always re-deposit the right value or the  original  contents
+of the location, otherwise you will have to get the original
+file off of the RSX20F  distribution  DECtapes  or  floppies
+after  deleting the bad one (using PIP).  Also note that all
+ZAP commands end with <CR> (carriage return).
+
+The following patch is  Edit  A  to  PARSER  and  should  be
+applied  with  TOPS20  SHUTDOWN.   (It  can  be applied with
+TOPS20 up if you are sure the CTY will not be getting a  lot
+of output while you are in ZAP, when in doubt, apply it with
+TOPS20 SHUTDOWN.)
+
+^\
+PAR>m zap
+
+ZAP>parser.tsk/li
+SEGMENT TABLE
+000002: 100000-141247
+        .
+        .
+        .
+000055: 142214-144303
+        .
+        .
+        .
+000105: 141364-142523
+_55:142754/
+055:142754/ 052102
+_112102
+_./
+055:142754/ 112102
+_2:135144/
+002:135144/ 000200
+_101
+_./
+002:135144/ 000101
+_^Z
+^\
+PAR>what version
+ PARSER VERSION: V06-27A
+ RSX20F VERSION: VB14-45G
+PAR>
+

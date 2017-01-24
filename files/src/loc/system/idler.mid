@@ -1,0 +1,530 @@
+;[SRI-NIC]SRC:<LOC.SYSTEM>IDLER.MID.82, 26-Jul-88 18:19:48, Edit by MKL
+; Check TVT's too.
+;[SRI-NIC]SRC:<LOC.SYSTEM>IDLER.MID.77, 26-Dec-87 13:06:50, Edit by MKL
+; Don't play with operator tty's (hardwired list)
+;SRC:<LOC.SYSTEM>IDLER.MID.71, 10-Mar-86 09:43:11, Edit by KNIGHT
+; Fix reload problem.  It now looks on SYSTEM:.  Fix job number printout
+; in LOGWHO
+;[SRI-NIC]SRC:<LOC.SYSTEM>IDLER.MID.69,  8-Mar-86 02:11:56, Edit by MKL
+;fix bug at logwho after dirst
+;[SRI-NIC]SRC:<LOC.SYSTEM>IDLER.MID.68, 16-Feb-86 20:57:38, Edit by MKL
+;add some CFOBF%'s to prevent hanging tty
+
+;-*-Midas-*-
+
+	Title $IDLER
+
+.DECSAV
+
+  A=5
+  B=6
+  C=7
+  T=10
+ TT=11
+TTY=12
+  P=17
+
+PDLen==40
+MaxTTY==300			;Maximum # TTY's we can handle
+
+TimChn==0			;Channel for TIMER to use.
+
+S==1000.			;1 second
+M==S*60.			;1 minute
+H==M*60.			;1 hour
+
+Every==5*M			;Wake up every 5 minutes.
+Period==25.*M			;Time period we're worrying about
+Thresh==20.*M			;Threshold of above for truth
+
+WarnAt==1*H+45.*M
+2Idle==2*H			;If idle for this long...
+
+.INSRT MID:SYMBOLS
+.INSRT MID:MACROS
+.INSRT MID:MONRD
+
+Define FATAL &string
+	Jrst [Hrroi A,[Asciz string]
+	      Call Croak]
+Termin
+
+PDList:	-PDLen,,.
+	Block PDLen
+
+LogJFN:	0
+ErrNum:	0
+
+JobNo:	0
+TTYNo:	0
+UserNo:	0
+
+ptybeg:	0
+ptyend:	0
+TTYaob:	0
+IdlTim:	0
+
+TimePC:	0
+
+;don't touch these ttys
+OKTTY:	61			;dump tty
+	0			;end of list
+
+oldTTY==0
+MICOMs:	0
+IRP TTY,,[11,12,13,14,15,16,17,31,32,33,34,35,36,37,40]
+	Block TTY-oldTTY-1
+	-1
+	oldTTY==TTY
+TERMIN
+	Block MaxTTY-oldTTY
+
+Warned:	Block MaxTTY
+
+~SloPok:	.INSRT IDLER.EXCEPTIONS
+nSlows==.-SloPok
+
+LogFil:	Asciz "SYSTEM:IDLER.LOG"
+
+IFG nSlows,[
+SloFok:	Block nSlows
+];Slow folk
+
+IdlMsg:	Asciz "
+[If you are idle for another 15 minutes, you will be detached]
+"
+
+CRLF:	Asciz "
+"
+
+Reload:	0
+
+PSIPC1:	0
+PSIPC2:	0
+PSIPC3:	0
+
+LEVTAB:	PSIPC1
+	PSIPC2
+	PSIPC3
+
+CHNTAB:	Channel ChnTab,2,TooLon	;TIMER hit
+	Channel .ICILI,1,Linger	;Illegal instruction.
+	EndChannel
+
+PureAC==4			;Load it here.
+PurBlk:	PMAP			;4
+	  ERJMP PureAC+2	;5
+	HRRZ 1,17		;6
+	HRLI 1,.FHSLF		;7
+	GET			;10		Code dumped into the ACs
+	MOVEI 1,.FHSLF		;11		in
+	GEVEC			;12		case of a crash.
+	JRST (2)		;13
+PurLen==.-PurBlk
+
+.INSRT MID:SOUT
+
+Begin:	RESET
+	Move P,PDList
+	Movei 1,.FHSLF
+	RPCAP
+	Txnn 2,SC%WHL\SC%OPR
+	  Fatal "Need to be a WHOPR"
+	Ior 3,2
+	EPCAP
+	Movei 1,.FHSLF		;Setup interrupt stuff.
+	Move 2,[LEVTAB,,CHNTAB]
+	SIR
+	EIR
+	Movx 2,ChnMsk
+	AIC
+	Move 1,[Sixbit "PTYPAR"]
+	SYSGT
+	hrrz 2,1		;first pty
+	subi 2,5
+	movem 2,ptybeg
+	hlrz 1,1		;# of ptys
+	add 1,ptybeg
+	addi 1,5
+	movem 1,ptyend
+;	Movsi 1,-5(1)
+;	Movns 1
+;	Hrri 1,1		;-#ttys before PYYs start,,first TTY to check
+;	Movem 1,TTYaob
+
+TCP%NT==000040,,0		;Return AOBJN pointer over TVTs (STAT)
+
+	MOVX 1,TCP%NT
+	SETZ 2,
+	STAT%			;GET NVT RANGES
+	 ERJMP DIE
+	HLRE 1,2
+	TLZ 2,-1		;FIRST NVT IN 2
+	MOVN 1,1
+	SUBI 1,1
+	ADD 1,2			;LAST NVT IN 1
+	movns 1
+	hrlz 1,1
+	hrri 1,1
+	movem 1,ttyaob
+
+IFG nSlows,[
+	Movsi A,-nSlows
+gSlows:	Movx 1,RC%EMO
+	Hlro 2,SloPok(A)
+	RCUSR
+	  Erjmp .+2
+	Txne 1,RC%NOM
+	  Jrst [Type "[IDLER] "
+		Hlro 1,SloPok(A)
+		PSOUT
+		TypeCR " is not a known user."
+		Jrst nSlow]
+	Movem 3,SloFok(A)
+nSlow:	Aobjn A,gSlows
+];Slow pokes
+
+Check:	Move TTY,TTYaob
+Loop:	Hrrz 1,TTY
+	Caml 1,PTYbeg
+	 Caml 1,PTYend
+	  SkipA
+	   Jrst Next
+	Setz 2,
+Loop0:	Skipn 3,OKTTY(2)
+	 Jrst Loop1
+	Came 1,3
+	 Aoja 2,Loop0
+	Jrst Next		;skip this tty
+
+Loop1:	Setom JobNo
+	Movei 1,.TTDES(TTY)	;TTY#
+	Move 2,[-3,,JobNo]	;Want Job#, TTY#, User#
+	Movei 3,.JIJNO
+	GETJI
+	  Jrst Done
+	Move 1,JobNo		;get job number
+	Tlne 1,-1		;Anything in the LH? (assigned?)
+	  Jrst NoWarn		;  Nope, either -1 oor its,,job#
+	Txo 1,Bit(17.)		;This bit should have a name!!
+	IDLE			;Want time since there was input.
+	  Erjmp NoWarn
+	Movem 1,IdlTim
+IFG nSlows,[
+	Movsi T,-nSlows
+Slowp:	Skipn 3,SloFok(T)
+	  Jrst Slowp0
+	Camn 3,UserNo
+	  Jrst [Hrrz 2,SloPok(T)
+		Skipn (2)	;They don't get messed with?
+		  Jrst MICOMp	;  Nope.
+		Move 1,IdlTim
+		Camge 1,1(2)
+		  Jrst NoIdle
+		Camge 1,(2)
+		  Jrst Warn
+		Jrst Detach]
+Slowp0:	Aobjn T,Slowp
+];Slow pokes
+	Move 1,IdlTim
+	Camge 1,[WarnAt]
+	  Jrst NoIdle
+	Camge 1,[2Idle]
+	  Jrst Warn
+Detach:	Call TimeOn		;Just in case
+	  Jrst NoWarn
+	Move 1,JobNo
+	Txo 1,AT%NAT
+	Move 2,UserNo
+	ATACH
+	  Ernop
+	Call TimeOff
+	movei 1,3000.
+	disms%
+	Movei 1,.TTDES(TTY)
+	CFOBF%
+	 Ernop
+	Call LogDet
+	Jrst NoWarn
+
+Warn:	Skipe Warned(TTY)
+	  Jrst MICOMp
+	Call TimeOn
+	  Jrst Warn0
+	Movei 1,.TTDES(TTY)
+	CFOBF%
+	 Ernop
+	Hrroi 2,IdlMsg
+	Setz 3,
+	SOUT
+	  Ernop
+	Call TimeOff
+Warn0:	Setom Warned(TTY)
+	Jrst MICOMp
+
+NoIdle:	Setzm Warned(TTY)
+MICOMp:	Skipn MICOMs(TTY)
+	  Jrst Next
+	Move 1,IdlTim
+	IDiv 1,[Period]		;1/ completed periods, 2/ remainder
+	Camge 2,[Thresh]	;over the threshold?
+	  Jrst Next		;  Nope, so let them be.
+	Call TimeOn
+	  Jrst Next
+;	Movei 1,.TTDES(TTY)
+;	Movei 2,"!
+;	BOUT
+;	  Ernop
+	Call TimeOff
+	Skipa
+NoWarn:	  Setzm Warned(TTY)
+Next:	Aobjn TTY,Loop
+Done:	Movx 1,Every
+	DISMS				;Sleep some
+	Jrst Check			;then check again
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Logging stuff
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+LogErr:	Movem 1,ErrNum
+	Call GetLog
+	  Return
+	Hrroi 2,[Asciz " Failed to detach "]
+	Call LogWho
+	Move 1,LogJFN
+	Hrroi 2,[Asciz ", because "]
+	Setz 3,
+	SOUT
+	Hrrz 2,ErrNum
+	Hrli 2,.FHSLF
+	Setz 3,
+	ERSTR
+	  Nop
+	  Jrst [Hrroi 2,[Asciz "error#"]
+		SOUT
+		Move 2,ErrNum
+		Movei 3,8.
+		NOUT
+		  Nop
+		Jrst UnLog]
+	Jrst UnLog
+
+LogDet:	Call GetLog
+	  Return
+	Hrroi 2,[Asciz " Detached "]
+	Call LogWho
+
+UnLog:	Move 1,LogJFN
+	Hrroi 2,CRLF
+	Setz 3,
+	SOUT
+	Move 1,LogJFN
+	CLOSF
+	  Nop
+	Return
+
+LogWho:	Move 1,LogJFN
+	Setz 3,
+	SOUT
+	Move 2,UserNo
+	DIRST
+	  Ercal LogW0
+	Hrroi 2,[Asciz ", TTY"]
+	Setz 3,
+	SOUT
+	Hrrz 2,TTY
+	Movei 3,8.
+	NOUT
+	  Nop
+	Hrroi 2,[Asciz ", job "]
+	Setz 3,
+	SOUT
+	HRRZ 2,JobNo
+	Movei 3,10.
+	NOUT
+	  Nop
+	Hrroi 2,[Asciz ", idle "]
+	Setz 3,
+	SOUT
+	Move T,IdlTim
+	IDiv T,[H]
+	Jumpe T,LogWh0
+	Move 2,T
+	Movei 3,10.
+	NOUT
+	  Nop
+	Movei 2,":
+	BOUT
+	Skipa 3,[Field(2,NO%COL)+NO%LFL+NO%ZRO+10.]
+LogWh0:	  Movei 3,10.
+	Move T,TT
+	IDivi T,M
+	Move 2,T
+	NOUT
+	  Nop
+	Return
+
+LogW0:	Move 1,LogJFN		;ac1 clobbered
+	Hrroi 2,[Asciz "user# "]
+	SOUT
+	  erjmp .+1
+	Move 2,UserNo
+	Movei 3,8.
+	NOUT
+	  Nop
+	Return
+
+GetLog:	Movx 1,GJ%SHT\GJ%OLD
+	Hrroi 2,LogFil
+	GTJFN
+	  Jrst [Caie 1,GJFX19
+		  Return
+		Movx 1,GJ%SHT\GJ%NEW
+		Hrroi 2,LogFil
+		GTJFN
+		  Return
+		Jrst .+1]
+	Movem 1,LogJFN
+	Move 2,[Field(7,OF%BSZ)+OF%APP]
+	OPENF
+	  Jrst [Move 1,LogJFN
+		RLJFN
+		  Nop
+		Return]
+	Seto 2,
+	Movx 3,OT%DAY
+	ODTIM			;Output date and time.
+	Jrst Popj1
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	TIMER junk
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+TimeOn:	Skipe TimePC		;Already in a TIMER wait?
+	  Fatal "Nested TimeOn's - TIMER already set"
+	Hrrz T,(P)		;Return PC
+	Movem T,TimePC
+	Move 1,[.FHSLF,,.TIMEL]
+	Movx 2,15.*S
+	Movei 3,TimChn
+	TIMER
+	  Setzm TimePC
+Popj1:	Aos (P)
+Cpopj:	Return
+
+TimeOf:	Move 1,[.FHSLF,,.TIMAL]
+	TIMER			;Cancel TIMER
+	  Nop
+	Setzm TimePC
+	Return
+
+TooLon:	Movx T,Bit(5)		;User mode
+	Iorm T,PSIPC2
+	Move T,TimePC
+	Hrrm T,PSIPC2
+	Setzm TimePC
+	DEBRK
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	This is where we come to die...
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+Croak:	Hrrz T,(P)	;Address of death.
+	Setzm ReLoad	;Do not try and reload
+	Jrst Heave
+
+Linger:	Movei A,[Asciz "Illegal instruction"]
+	Hrrz T,PSIPC1
+	Setom ReLoad
+
+Heave:	Movei 1,.PRIOU
+	DOBE
+	Type "
+######################################################################
+#
+#  "
+	Movei 1,.PRIOU
+	Seto 2,
+	Setz 3,
+	ODTIM
+	Type "
+#
+#  IDLER crash:  "
+	Hrro 1,A
+	PSOUT
+	Type " at "
+	Movei 1,.PRIOU
+	Move 2,T
+	Movei 3,8.
+	NOUT
+	  Nop
+	Type "
+#  Last error: "
+	Movei 1,.PRIOU
+	Hrloi 2,.FHSLF
+	ERSTR
+	  Nop
+	  Nop
+	Skipe ReLoad
+	  Jrst [Type "
+#
+#  Reloading in 15 seconds..."
+		Jrst .+1]
+	Type "
+#
+######################################################################
+"
+	Skipn ReLoad
+	  Jrst Die
+
+	Movx 1,<15.*1000>
+	DISMS
+
+	RESET			;Close the world
+	Movx 1,GJ%SHT\GJ%OLD
+	Hrroi 2,[Asciz "SYSTEM:IDLER.EXE"]
+	GTJFN
+	  Jrst Burn
+	Movem 1,17		;Save JFN in AC17
+	Move 15,[PurBlk,,PureAC]
+	BLT 15,PureAC+PurLen-1
+	Seto 1,			;Setup for PMAP
+	Hrlzi 2,.FHSLF
+	Movx 3,PM%CNT+777
+	Jrst PureAC
+
+Burn:	Movei 1,.PRIOU
+	DOBE
+	Type "
+######################################################################
+#
+#  "
+	Movei 1,.PRIOU
+	Seto 2,
+	Setz 3,
+	ODTIM
+	Type "
+#
+#  IDLER: Can't reload self -- "
+	Movei 1,.PRIOU
+	Hrloi 2,.FHSLF
+	ERSTR
+	  Nop
+	  Nop
+	Type "
+#
+######################################################################
+"
+
+Die:	HALTF
+	Jrst Die
+
+	End Begin

@@ -1,0 +1,779 @@
+;-*-Midas-*-
+
+	Title @Newserver
+
+.DECSAV				;Create an .EXE file directly.
+
+  A=5
+  B=6
+  C=7
+  D=10
+  T=11
+ TT=12
+  G=13
+ BP=14
+Pub=15				;Current publication#
+ Ed=16				;and Issue# in that pub.
+  P=17
+
+ PDLen==100			;PDL length
+TCPchn==1			;Interrupt channel (^C or RECV one)
+BufLen==100			;General buffer size
+
+.INSRT SYSTEM:SYMBOLS		;Standard symbols, Call, Return, etc.
+.INSRT SYSTEM:MACROS		;Standard macros, MOVX, TXO, TYPE, etc.
+.INSRT SYSTEM:BBNTCP		;TCP symbols, JSYS defs, error stuff.
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Macros
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Define OCTET *string		;Construct 8-bit asciz string.
+.BYTE 8.
+IRPC char,,[string]
+	"char
+TERMIN
+	0
+.BYTE
+TERMIN
+
+Define SAY &string		;Send the string through the TCP connection
+	Move T,[440800,,[Octet string]]
+	Call Stuff
+Termin
+
+Define SayAdr adr		;or the string at the specified address.
+	Move T,[440800,,adr]
+	Call Stuff
+Termin
+
+PDList:	-PDLen,,.
+	Block PDLen
+
+Debug:	0			;Non-0 for debugging output
+
+JCN:	0			;Connection#
+JFN:	0			;Random JFN
+MsgNum:	0			;Message# (issue/edition)
+Date:	0			;Date of that issue.
+ReqPub:	0			;Requested pub#
+EOM:	Data			;Address of some free storage
+Number:	0			;In Build, the file's issue#
+LinBuf:	Block BufLen		;Line Buffer
+Buffer:	Block BufLen		;Random buffer
+
+JobNo:	0			;Server's job#
+Workin:	0			;Non-0 if processing a command.
+Argp:	0			;There an argument to the command?
+ArgBP:	0			;If so, this is the BP to start.
+LineBP:	440700,,LinBuf
+WrkBuf:	Block BufLen		;Saved here while doing the command.
+
+TCPbug:	0			;TCP error code saved here
+InLeft:	0			;# characters left in InBuf
+InBBP:	0			;BP to next character to take from InBuf
+InBuf:	Block BufLen		;Raw RECV'd input buffer
+BufHed:	Block .TCPBS		;Buffer header for SEND/RECV
+
+Mailen:	0			;Length in pages of that file
+MapBP:	0			;BP into mapped-in mail file,
+MailBP:	0			;and into current message in mail file
+MsgLen:	0			;Byte-count in header of each message
+Label:	Block BufLen		;MAIL.TXT header labels
+Mapped:	-1			;Currently mapped-in pub#
+FilNam:	Block 40		;Constructed filename of requested document
+
+CRLF:	.BYTE 7 ? ^M ? ^J ? .BYTE
+8CRLF:	.BYTE 8 ? ^M ? ^J ? .BYTE
+Knot:	.BYTE 8. ? 200 ? ^M ? ^J ? .BYTE
+
+PSIPC1:	0
+PSIPC2:	0
+PSIPC3:	0
+
+LevTab:	PSIPC1 ? PSIPC2 ? PSIPC3
+
+ChnTab:	Channel TCPchn,1,Input
+	EndChannel
+
+AbortT:	1,,1 ? [Asciz "Abort"],,0
+
+CmdTab:	nCmnds,,nCmnds
+	[Asciz "Abort"],,.Abort	;Out-of-synch command!
+	[Asciz "Error"],,Error
+	[Asciz "Help"],,SerHlp
+	[Asciz "List"],,List
+	[Asciz "Quit"],,Quit
+nCmnds==.-CmdTab-1
+
+PubTab:	nKeys,,nKeys
+	.INSRT SUB:TACNEWS-MENU.MID
+nKeys==.-PubTab-1
+
+;;
+;;	For the server, MaiPub contains a pointer to an array of
+;;	2-word blocks for each issue in a mail file - the first
+;;	word is the BP to start of message and the second is the
+;;	message length
+;;
+MaiPub:	Block nKeys
+
+  V%WHO==2
+V%MAJOR==1
+V%MINOR==4
+ V%EDIT==.FVERS
+
+Verstr:	CONCAT Asciz ",\V%MAJOR,.,\V%MINOR,(,\V%EDIT,)-,\V%WHO,"
+
+Evec:	Jrst Begin
+	Jrst Begin
+	Version V%WHO,V%MAJOR,V%MINOR,V%EDIT
+EvecLn==.-Evec
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Initialization stuff.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+.INSRT LIB:SOUT
+.INSRT LIB:STCMP
+
+Begin:	RESET
+	Move P,PDList
+	Txo 1,TCP%JS		;When started as a server, the JCN
+	Movem 1,JCN		;of the connection is given in AC1
+	GJINF
+	Movem 3,JobNo		;Save our job#
+	Movei 1,.FHSLF
+	Move 2,[LevTab,,ChnTab]
+	SIR
+	EIR
+	Movx 2,ChnMsk		;Enable interrupts
+	AIC
+	Move 1,JCN		;The server interrupts on RECVs done.
+	Move 2,[.DPB TCPchn,(.BP TC$REC),-1]
+	CHANL
+	  Call TCPErr
+	Call SetUp		;Prepare to get input.
+	  Call NetErr
+Lounge:	WAIT			;Wait for action.
+	Jrst .-1		;(don't need this)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	For the server, here to process a command in WrkBuf
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Proces:	Call Frag		;Fragment the input, breaking the argument off
+	Skipe Debug
+	  Jrst [Call CTYlog
+		Type /Command is "/
+		AType WrkBuf
+		Skipn Argp
+		  Jrst [TypeCR /", no argument./
+			Jrst .+1]
+		Type /", argument is "/
+		Move 1,ArgBP
+		PSOUT
+		TypeCR /"./
+		Jrst .+1]
+	Movei 1,CmdTab
+	Hrroi 2,WrkBuf
+	TBLUK
+	Txne 2,TL%NOM\TL%AMB
+	  Jrst NotCmd
+	Hrrz T,(1)	;Address of command handler.
+	Call (T)	;Do the requested thing
+	Jrst Bletch
+
+NotCmd:	Movei 1,PubTab
+	Hrroi 2,WrkBuf
+	TBLUK
+	Txne 2,TL%NOM\TL%AMB
+	  Jrst [Say "?Not a valid command"
+		Call Blast
+		Jrst Bletch]
+	Move Pub,1
+	Subi Pub,PubTab+1
+	Call Fetch	;Then do more parsing and send back the
+Bletch:	Setzm Working
+	Jrst Lounge
+
+Frag:	Move 2,[440700,,WrkBuf]
+	Setzm Argp
+Frag0:	Ildb 1,2
+	Jumpe 1,CPopj
+	Caie 1,40
+	  Jrst Frag0
+	Setz 1,
+	Dpb 1,2
+	Skipn Argp
+	  Movem 2,ArgBP
+	Setom Argp
+	Jrst Frag0
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Various and sundry commands
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Quit:	HALTF			;TCPSER will notice this and
+	Jrst .-1		;close connection for us.
+
+Error:	0			;Generate an error to check if the
+				;shell notices and prints a nice
+				;message on the console.
+
+SerHlp:	Say "Commands: ERROR, LIST [<pub-name>], QUIT, or <pub-name> <issue#>"
+	Jrst Blast
+
+.Abort:	Skipe Debug
+	  Jrst [Call CTYlog
+		TypeCR "Out-of-synch ABORT ignored"
+		Return]
+	Return
+
+List:	Skipe Argp		;There an arg?
+	  Jrst ChkLst		;  Yes, so check it out.
+	Hllz A,PubTab
+	Movns A			;Aobjn to key table
+List0:	Hrrz T,PubTab+1(A)	;Descriptor
+	Move 1,[440800,,Buffer]
+	Movei 2,40
+	Move 3,KEY$ID(T)
+	Camn 3,[-1]
+	  Movei 2,"*
+	Idpb 2,1
+	Hlro 2,PubTab+1(A)	;keyword
+	Setz 3,
+	$SOUT			;Make it 8-bit bytes.
+	Movei 4,"|
+	Idpb 4,1
+	Hrro 2,KEY$DS(T)
+	Skipe KEY$DS(T)
+	  $SOUT
+	Idpb 4,1
+	Idpb 3,1		;Make sure Asciz!
+	SayAdr Buffer		;Send it
+	Call Blast		;followed by (8bit) CRLF
+	Aobjn A,List0
+TieOff:	Jrst KnotIt
+
+ChkLst:	Movsi T,-nKeys
+ChkLs0:	Hlro 1,PubTab+1(T)
+	Move 2,ArgBP
+	$STCMP
+	Jumpe 1,ChkLs1
+	Aobjn T,ChkLs0
+	Say "?No such publication given to LIST"
+	Call Blast
+	Return
+
+ChkLs1:	Hrrz Pub,T
+	Movem Pub,ReqPub
+	Hrrz T,PubTab+1(Pub)
+	Skipn 2,KEY$ID(T)	;BP to summary filename
+	  Jrst SndMai		;  If none, must be a mail file.
+	Skipg 2,KEY$ID(T)	;If negative (1)
+	  Move 2,KEY$TM(T)	;  Then use this filename, for simple file.
+	Tlo 2,-1		;Make into HRROI-style BP
+	Jrst GetIt		;and output the file
+
+SndMai:	Hrro 2,KEY$TM(T)	;BP to mail filename
+	Call GetFil
+	  Jrst FError
+	Movem 1,JFN
+	Call MapMail		;Map in mail file
+	Setzm MsgNum
+	Move B,EOM		;some freespace.
+	Movem B,MaiPub(Pub)	;Pointer to start of array.
+SndMa0:	Call GetMsg		;Get a single message
+	  Jrst [Addi B,2	;Point to after last thing saved then
+		Movem B,EOM	;Save that freespace pointer
+		Jrst KnotIt]	;End of mailbox or fatal parsing error
+	Move B,MsgNum
+	Sos B
+	Lsh B,2			;*2
+	Add B,EOM
+	Move 1,MailBP		;Save BP to start
+	Movem 1,(B)
+	Move 1,MsgLen		;and length of message.
+	Movem 1,1(B)
+	Move 1,[440800,,Buffer]
+	Move 2,MsgNum
+	Movei 3,10.
+	NOUT
+	  Nop
+	Movei 2,^I
+	Idpb 2,1
+	Move 2,Date
+	Movx 3,OT%NTM
+	ODTIM
+	Movei 2,^I
+	Idpb 2,1
+	Hrroi 2,LinBuf
+	Setz 3,
+	SOUT
+	Idpb 3,1
+	SayAdr Buffer
+	Call Blast
+	Jrst SndMa0
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	For the server, retrieve the specified document
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Fetch:	Skipn Argp
+	  Jrst [Say "?No issue# given"
+		Call Blast
+		Return]
+	Move 1,ArgBP
+	Movei 3,10.
+	NIN
+	  Jrst [Say "?Invalid issue number - "
+		Call AccErr
+		Call Blast
+		Return]
+	Move Ed,2
+	Hrrz T,PubTab+1(Pub)
+	Skipn KEY$ID(T)		;There an index file?
+	  Jrst FetMai		;  No, so it's a mail file.
+	Hrrz T,KEY$TM(T)	;Yes, so regular setup.
+	Hrli T,440700		;This is BP to template.
+	Move 1,[440700,,FilNam]
+	Movem Ed,Number
+	Call Build
+	Hrroi 2,FilNam
+GetIt:	Call GetFil
+	  Jrst FError
+	Movem 1,JFN
+	Movem P,SavedP'		;In case interrupt screws this.
+
+SendIt:	Move 1,JFN		;OK, got it.  Sent off a chunk at a time.
+	Move 2,[440800,,Buffer]
+	Hrroi 3,-BufLen*4
+	SIN			;Suck in a block.
+	Move C,3
+	Addi C,BufLen*4		;# characters read.
+	Movei T,Buffer
+	Movx 1,TCP%PU
+	Movem 1,BufHed+.TCPBF	;Push!
+	Call Stuff0		;Send out (C) characters.
+	Cail C,BufLen*4		;Did we have a full load that time?
+	  Jrst SendIt		;  Yes, so probably more.
+Cloze:	Move P,SavedP		;Restore this SP
+	Move 1,JFN		;Close the file.
+	CLOSF
+	  Nop
+Cloze0:	Call Blast		;make sure the following is at line begin
+	Jrst KnotIt		;mark end of text.
+
+FetMai:	Came Pub,Mapped		;Got the right file mapped in?
+	  Jrst [Call GetMail
+		  Jrst Ferror
+		Jrst .+1]
+	Movem P,SavedP
+	Sos TT,Ed
+	Lsh TT,2		;*2
+	Add TT,MaiPub(Pub)	;RH+<Ed-1>*2
+	Move G,(TT)		;BP to start of message
+	Move B,1(TT)		;Length of message.
+	Setz A,
+FetMa0:	Move TT,B
+	Caile TT,BufLen*4
+	  Movei TT,BufLen*4	;Block length
+	Move 1,[440800,,Buffer]
+	Move 2,G
+	Movn 3,TT
+	SOUT			;Copy into 8-bit buffer
+	Move G,2
+	Movx 1,TCP%PU		;Push!
+	Movem 1,BufHed+.TCPBF
+	Movei T,Buffer
+	Move C,TT
+	Call Stuff0
+	Sub B,TT
+	Jumpg B,FetMa0
+	Jrst Cloze0
+
+FError:	Say "?File error - "
+	Call AccErr
+	Jrst Blast
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Serious network lossage
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+SNetEr:	Skipa TT,[Asciz "SEND"]
+NetErr:	  Move TT,[Asciz "RECV"]
+	Movem 1,TCPbug
+	Call Terpri
+	Skipn Debug
+	  Jrst [Ldb 1,[TEC$BP TCPbug]
+		Cain 1,TE$CCC	;Connection closing?
+		  Jrst Die	;  Yeah, so just go away.
+		Jrst .+1]
+	Call CTYlog
+	Type "Fatal network error during a "
+	Hrroi 1,TT
+	PSOUT
+	Type " at PC "
+	Movei 1,.PRIOU
+	Pop P,2
+	Tlz 2,-1
+	Sos 2
+	Movei 3,8.
+	NOUT
+	  Nop
+	TypeCR ":"
+	Move 1,TCPbug
+	Call TCPErr
+	AType CRLF
+Die:	HALTF
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Assorted other subroutines and random stuff
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Popj4:	Aos (P)
+Popj3:	Aos (P)
+Popj2:	Aos (P)
+Popj1:	Aos (P)
+Cpopj:	Return
+
+JError:	CType "?
+	Call Barf
+	Type " at "
+	Movei 1,.PRIOU
+	Pop P,2
+	Tlz 2,-1
+	Subi 2,2
+	Movei 3,8.
+	NOUT
+	  Nop
+	Atype CRLF
+	HALTF
+
+Barf:	Movei 1,.PRIOU
+GetErr:	Hrloi 2,.FHSLF		;Put the latest JSYS error string at
+	Setz 3,			;the designator given in AC1
+	ERSTR
+	  Nop
+	  Nop
+	Return
+
+GetFil:	Movx 1,GJ%SHT\GJ%OLD	;Get a file - call with AC2/ BP to filename
+	GTJFN
+	  Return
+	Push P,1
+	Move 2,[Field(7,OF%BSZ)+OF%RD]
+	OPENF
+	  Jrst [Pop P,1
+		RLJFN
+		  Nop
+		Return]
+	Pop P,1
+	Jrst Popj1
+
+Build:	Ildb 2,T		;Scan through the source filename.  At
+	Cain 2,"*		;the occurance (each occurance, actually)
+	  Jrst [Move 2,Number
+		Movei 3,10.
+		NOUT
+		  Nop
+		Jrst Build]
+	Idpb 2,1
+	Jumpn 2,Build
+	Return
+
+Print:	Ildb 1,T
+	Jumpe 1,CPopj
+	Cail 1,177
+	  Jrst [Move 2,1
+		Movei 1,"<
+		PBOUT
+		Movei 1,.PRIOU
+		Movei 3,8.
+		NOUT
+		  Nop
+		Movei 1,">
+		Jrst Print0]
+	Caige 1,40
+	  Jrst [Movei 2,100(1)
+		Movei 1,"^
+		PBOUT
+		Move 1,2
+		Jrst .+1]
+Print0:	PBOUT
+	Jrst Print
+
+Terpri:	Movei 1,.PRIOU
+	DOBE
+	Return
+
+CTYlog:	Call Terpri
+	Type "[NewServer "
+	Movei 1,.PRIOU
+	Move 2,JobNo
+	Movei 3,10.
+	NOUT
+	  Nop
+	Movei 2,",
+	BOUT
+	Hrrz 2,JCN
+	Movei 3,10.
+	NOUT
+	  Nop
+	Type "] "
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Mail file stuff.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+GetMai:	Hrrz T,PubTab+1(Pub)	;Nope.
+	Hrro 2,KEY$TM(T)	;BP to filename
+	Call GetFil
+	  Return
+	Movem 1,JFN
+	Call MapMail		;Map in mail file.
+	Jrst Popj1
+
+GetMsg:	Move 1,MapBP
+	Setz 2,
+	IDTIM 			;Skip over date&time received.
+	  Return		;  Ugh, must be end of stuff.
+	Movem 2,Date		;Default date if can't parse.
+	Movei 3,10.
+	NIN
+	  Return
+	Movem 2,MsgLen		;#bytes in message
+	Movei 3,2
+	NIN			;Skip over flag word.
+	  Return
+	Movem 1,MailBP
+	Move 3,MsgLen
+	Adjbp 3,1
+	Movem 3,MapBP		;and BP to start of next message.
+	Aos MsgNum		;This is message #MsgNum
+
+GetMs0:	Call GetFld		;Get a Label
+	  Jrst Popj1		;  No more.
+	Hrroi 1,Label
+	Hrroi 2,[Asciz "Date"]
+	STCMP
+	Jumpe 1,[Hrroi 1,Buffer
+		 Setz 2,
+		 IDTIM
+		   Jrst .+1	;Lost, use received date.
+		 Movem 2,Date	;Date of message
+		 Jrst GetMs0]
+	Hrroi 1,Label
+	Hrroi 2,[Asciz "Subject"]
+	STCMP
+	Jumpn 1,GetMs0
+	Hrroi 1,LinBuf
+	Hrroi 2,Buffer
+	Setz 3,
+	SOUT
+	Idpb 3,1
+	Jrst GetMs0
+
+GetFld:	Move 1,MailBP
+	Move 3,[440700,,Label]
+GetFl0:	Ildb 2,1
+	Sos MsgLen
+	Cain 2,^J
+	  Jrst [Movem 1,MailBP
+		Return]
+	Cain 2,":
+	  Setz 2,
+	Idpb 2,3
+	Jumpn 2,GetFl0
+	Move 4,1
+	Ildb 2,4
+	Cain 2,40
+	  Jrst [Move 1,4
+		Sos MsgLen
+		Jrst .+1]
+	Hrroi 2,Buffer
+	Movei 3,BufLen*5-1
+	Movei 4,^J
+	SIN			;suck in the stuff after the label.
+	Movem 1,MailBP
+	Subi 3,BufLen*5-1
+	Addm 3,MsgLen
+	Seto 1,
+	Adjbp 1,2
+	Setz 4,
+	Dpb 4,1			;Turn CR into null
+	Jrst Popj1
+
+MapMai:	Move 1,JFN
+	SIZEF
+	  Nop
+	Movem 3,Mailen		;Length (in pages) of file
+	Movs 1,JFN		;JFN,,0
+	Move 2,[.FHSLF,,MapPag]
+	Txo 3,PM%CNT\PM%PLD\PM%CPY\PM%RD
+	PMAP
+	Movei T,MapAdr
+	Movs TT,Mailen
+	Movns TT
+MapMa0:	Move 1,(T)		;Write all the pages so we get a private
+	Movem 1,(T)		;copy,
+	Addi T,1000
+	Aobjn TT,MapMa0
+	Move 1,JFN
+	CLOSF			;and close the file.
+	  Nop
+	Move 1,ReqPub
+	Movem 1,Mapped		;This is the mapped-in publication.
+	Move 1,[440700,,MapAdr]
+	Movem 1,MapBP
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Interrupt routines
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Input:	Pushn P,[1,2,T,TT]
+	Movei T,BufLen*4-1
+	Sub T,BufHed+.TCPBC	;T/ # characters in this batch
+	Move TT,[440800,,InBuf]
+CopyIn:	Sojl T,UnInt		;No more input.
+	Ildb 1,TT
+	Idpb 1,LineBP
+	Caie 1,^M		;Stop on a carriage return
+	  Jrst CopyIn
+	Setz 1,
+	Dpb 1,LineBP
+	Skipe Debug
+	  Jrst [Call CTYlog
+		Type /Input line is "/
+		Move T,[440700,,LinBuf]
+		Call Print
+		TypeCR /"/
+		Jrst .+1]
+	Skipe Working
+	  Jrst [Movei 1,AbortT		;Received a full command while in the
+		Hrroi 2,LinBuf		;middle of processing another.  The
+		TBLUK			;only such command that is handled now
+		Txne 2,TL%NOM\TL%AMB	;is an ABORT.  All others are ignored.
+		  Jrst Ignore
+		Movei T,Cloze
+		Jrst ResetL]
+	Hrroi 1,WrkBuf
+	Hrroi 2,LinBuf
+	Setz 3,
+	SOUT			;Make a copy in WrkBuf
+	Setom Working
+	Setzm LinBuf		;And clear LineBuffer
+	Movei T,Proces
+ResetL:	Move 1,[440700,,LinBuf]
+	Movem 1,LineBP
+ExitIt:	Hrrm T,PSIPC1
+	Movx TT,Bit(5)		;Set user-mode bit.
+	Iorm TT,PSIPC1
+UnInt:	Call SetUp
+	  Call NetErr		;RECV lost!
+	Popn P,[TT,T,2,1]
+	DEBRK
+
+Ignore:	Skipe Debug
+	  Jrst [Call CTYlog
+		TypeCR "Command in progress - Input ignored."
+		Jrst .+1]
+	Hrrz T,PSIPC1
+	Jrst ResetL
+
+SetUp:	Movei 1,InBuf		;Buffer is here
+	Movem 1,BufHed+.TCPBA
+	Movei 1,BufLen*4-1	;and has room for this many characters.
+	Movem 1,BufHed+.TCPBC
+	Move 1,JCN		;Note that no wait bit is set, so
+	Movei 2,BufHed		;it will return even if nothing is
+	RECV			;there yet.
+	  Return
+	Jrst Popj1
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	For NetNews and the Server, send stuff to the server.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+AccErr:	Move 1,[440800,,Buffer]
+	Call GetErr
+	Move T,[440800,,Buffer]
+	Jrst Stuff
+
+KnotIt:	Skipa T,[440800,,Knot]
+Blast:	  Move T,[440800,,8CRLF]
+	Skipa 1,[TCP%PU]
+Stuff:	  Setz 1,
+	Movem 1,BufHed+.TCPBF
+	Setz C,			;Count.
+	Move TT,T
+	Ildb 1,TT
+	Skipe 1
+	  Aoja C,.-2
+Stuff0:	Skipg C			;Nothing to send?
+	  Return		;  Aww shucks, nope.
+	Hrrzm T,BufHed+.TCPBA
+	Movem C,BufHed+.TCPBC
+ReSend:	Move 1,JCN
+	Txo 1,TCP%WT
+	Movei 2,BufHed
+	Setzb 3,4
+	SEND
+	  Skipa
+	   Return
+	Skipe Debug
+	  Jrst [Push P,1
+		Call CTYlog
+		Type "SEND failed: "
+		Move 1,(P)
+		Call TCPErr
+		TypeCR "!"
+		Pop P,1
+		Jrst .+1]
+	Txnn 1,TE$ERR		;Really an error?
+	  Jrst Wait5		;  No, what's going on here?
+	Txnn 1,TE$TMP		;If temporary error,
+	  Jrst SndDie		;  Oh no!  Fatal!
+Wait5:	Movei 1,5*1000.		;then wait 5 seconds
+	DISMS			;and try again.
+	Jrst ReSend
+
+SndDie:	Call SNetErr
+	Jrst ReSend
+
+Variables
+Constants
+
+Data:	0			;Random data storage area.
+
+HiFree=Data+5*1000
+
+MapPag==100			;Map MAIL.TXT's in here.
+MapAdr=MapPag*1000
+
+	Loc 770*1000		;Put symbols wayyyy up here
+
+	End EvecLn,,Evec

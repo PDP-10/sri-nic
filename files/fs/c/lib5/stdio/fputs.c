@@ -1,0 +1,32 @@
+/*
+ *	FPUTS - put a string to a stream
+ *
+ *	Copyright (c) 1986 by Ian Macky, SRI International
+ */
+
+#include "stdio.h"
+#include "string.h"
+#include "errno.h"
+
+int fputs(s, f)
+register char *s;
+register FILE *f;
+{
+    register int c, i;
+
+    if (!_writeable(f))
+	return EOF;
+    if (f->sioflgs & _SIOF_BUF) {
+	while ((c = *s++) && (c = putc(c, f)) != EOF) ;
+	return c;
+    } else {
+	if ((i = strlen(s)) > 0) {
+	    if (write(f->siofd, s, i) == -1) {
+		f->sioerr = errno;
+		return EOF;
+	    }
+	    f->siofdoff += i;
+	    return 0;
+	}
+    }
+}

@@ -1,0 +1,33 @@
+Problem:
+	Load goes up to 50; have to crash system.
+
+Why:	
+	Host PS1.CS.CMU.EDU sends you a bogus TCP packet where
+	the length of the IP plus TCP headers is larger than the
+	length of the whole IP packet.  This causes the TCP
+	options processing code to loop forever (in some cases).
+
+Fix:
+	In TCPTCP, add the following code to make sure the
+	packet is big enough for the headers.
+
+Note:
+	I haven't had a chance to test this out yet, but its
+	pretty straight forward and should help if you're having
+	the same problem.  
+---------------
+INPRO2:
+IFN NICSW,<	
+	LOAD T1,PIPL,(PKT)	; Get total IP length in bytes
+	LOAD T2,PIDO,(PKT)	; Get IP header length in words
+	LOAD T3,PTDO,(TPKT)	; Get TCP header length in words
+	ADD T2,T3		; Add header lengths
+	LSH T2,2		; Convert to bytes
+	CAML T1,T2		; Is packet big enough for headers?
+	 JRST INPRO3		; Yes, continue then
+;flush bogus packet
+	AOS BADPCT		; Count bad packets
+	CALL RETPKT		; Return the packet 
+	JRST INPRO0		; And do next packet
+INPRO3:
+>;IFN NICSW

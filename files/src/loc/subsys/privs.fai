@@ -1,0 +1,641 @@
+;<SOURCES>PRIVS.FAI.6, 20-Dec-82 05:11:13, Edit by MCLURE
+;Use Alan's Stpete scheme for getting the "last" dir number
+;<SOURCES>PRIVS.FAI.5, 16-Dec-80 11:15:28, Edit by MCLURE
+;Upped maximum directory to 4000 (rcusr/dir too slow for this)
+
+ 	title	privs - Find users with capabilities
+	subttl	McLure/ July '78
+
+	search  monsym
+
+enqflg__0				;0 means don't consider enq, 1 means do
+
+define ysenq,<ifn enqflg> 
+define noenq,<ife enqflg>
+
+; AC's
+f_0					; Flags
+a_1					; Temp and JSYS
+b_2					; Ditto
+c_3					; Ditto
+d_4					; Ditto
+e_5					; Temp & local to routine
+t_6					; Ditto
+u_7					; Ditto
+v_10					; Ditto 
+w_11					; Ditto
+l_12
+m_13					
+n_14
+o_15
+x_16
+p_17
+
+opdef	call	[pushj	p, 0]
+opdef	ret	[popj	p, 0]
+opdef	utype	[1B8]
+opdef	uerr	[2B8]
+
+
+
+define	type	(x)			; Types message on primary output
+   <	utype	[asciz |x|]
+   >
+
+define	typen	(x)			; Types message crlf
+   <	utype	[asciz |x
+|]
+   >
+
+define	warn	(x)			; Prints error message and returns +1
+   <	uerr	[asciz |x|]
+   >
+
+define	fatal	(x)			; Prints error message and halts
+   <	uerr	1, [asciz |x|]
+   >
+
+
+	loc	41
+	call	uuoh
+	reloc
+
+;; Main program
+
+ 
+go: 	reset
+  	move	p, [iowd npdl, pdl]
+	call	.enbl
+	call	.init
+loop:	call	.srch
+	call	.priv
+	 jrst	loop
+
+
+.enbl:	movei	1, .fhslf
+	rpcap
+	ior	c, b
+	epcap
+	trnn	c, sc%whl
+	 jrst	[ typen (you dont have the necessary capabilities)
+	 	  haltf
+ 		  jrst	.-1]
+	ret
+
+
+.init:	movei	w, 1			; Start at directory 1
+	typen	(  	  	)
+	movei	1, .priou
+	movni	2, 1
+	setz	3,
+	odtim
+	typen	( )
+	typen	( )
+	ret
+
+.chk:	caile	w, <1000*^D64>		; are we at "last" dir?
+	 jrst	[call .final
+	 	 haltf]
+	ret
+
+.srch:	call	.chk
+	move	a, w			; Retrieve current directory
+ 	hrli	a, 540000		; Expects directory number in a
+	move	n, a
+	hrroi	b, buff
+	hrroi	c, pass
+	gtdir
+	 erjmp	.more
+	move	b, buff+3
+noenq,<	trnn	b, sc%whl!sc%opr!sc%cnf!sc%mnt!sc%ipc!sc%nwz!sc%nas >
+ysenq,<	trnn	b, -1			; Anything interesting? >
+.more:	aoja	w, .srch		; Nope, back for more
+	move	b, buff+3		; Put privilege word in cap
+	movem	b, cap
+	call	.say
+	aos	w
+	ret
+
+
+.say:	movei	a, .priou
+	setz	b,
+	hrr	b, n
+	movei	c, 10
+	nout
+	 warn	(Couldnt NOUT)
+	type	<  >  
+	movei	a, .priou
+	move	b, n			; Expects the directory in n
+	hrli	b, 500000		; and stuff in lh
+	dirst				; send it to the file
+	 warn	(Couldnt DIRST)
+	movei	a, .priou
+	rfpos				; Where am I?
+ 	movei	d, namwid		; Snarf name width.
+ 	subi	d, (2) 			; How many spaces til 20?
+ 	movei	a, 40			; Snarf space
+ 	pbout
+ 	sojge	d, .-1			; Loop till we're golden.
+	ret
+
+;; Privileges
+
+.priv:	move	b, cap
+	trne 	b, sc%whl		; Wheel?
+	call	.whl
+	trne 	b, sc%opr		; Operator?
+	call	.opr
+	trne 	b, sc%cnf		; Confidential info?
+	call	.cia
+	trne 	b, sc%mnt		; Maint?
+	call	.mnt
+	trne 	b, sc%ipc		; Ipcf?
+	call	.ipc
+ysenq,<
+	trne 	b, sc%enq		; Enq-deq?
+	call	.enq
+>
+	trne 	b, sc%nwz		; Arpanet wizard?
+	call	.net
+	trne 	b, sc%nas		; Absolute arpanet sockets?
+	call	.abs
+	trne	b, 1b35			; Front-end cruft?
+	call 	.fnt
+	typen	( )
+	ret
+
+
+;; Insertion routines, insert a user number in the corresponding priv table
+.whl:	type 	<WHL >
+	move	x, w
+	sos	x
+	move	o, iwhl
+	movem	x, whl(o)
+	aos	o
+	movem	o, iwhl
+	ret
+.opr:	type	<OPR >
+	move	x, w
+	sos	x
+	move	o, iopr
+	movem	x, opr(o)
+	aos	o
+	movem	o, iopr
+	ret
+.cia:	type	<cia >
+	move	x, w
+	sos	x
+	move	o, icia
+	movem	x, cia(o)
+	aos	o
+	movem	o, icia
+	ret
+.mnt:	type	<mnt >
+	move	x, w
+	sos	x
+	move	o, imnt
+	movem	x, mnt(o)
+	aos	o
+	movem	o, imnt
+	ret
+.ipc:	type	<ipcf >
+	move	x, w
+	sos	x
+	move	o, iipc
+	movem	x, ipcf(o)
+	aos	o
+	movem	o, iipc
+	ret
+ysenq,<
+.enq:	type	<enq >
+	move	x, w
+	sos	x
+	move	o, ienq
+	movem	x, enq(o)
+	aos	o
+	movem	o, ienq
+	ret
+>
+.net:	type	<netwiz >
+	move	x, w
+	sos	x
+	move	o, inet
+	movem	x, net(o)
+	aos	o
+	movem	o, inet
+	ret
+.abs:	type 	<abs-sock >
+	move	x, w
+	sos	x
+	move	o, iabs
+	movem	x, abs(o)
+	aos	o
+	movem	o, iabs
+	ret
+.fnt:	type	<fnt-acc>
+	move	x, w
+	sos	x
+	move	o, ifnt
+	movem	x, fnt(o)
+	aos	o
+	movem	o, ifnt
+	ret
+
+.final: type	<Total number of wheels: >	; Wheel output
+	movei	a, .priou
+	move	b, iwhl
+	movei	c, =10
+	nout
+	 fatal	(NOUT failed)
+	typen	< >
+	typen	< >
+	skipg	iwhl
+	 jrst	opr1
+whl1:	movei	a, .priou
+	movei	c, 0
+lop1:	hrli	b, 500000
+	hrr	b, whl(c)
+	dirst
+	 fatal	(DIRST failed)	
+	movei	a, .priou
+	addi	c, 1
+	caml	c, iwhl
+	 jrst	opr1	 
+	type	<  >
+	call	.ndchk
+	 jrst	lop1	
+	ret
+	
+
+opr1:	typen	< >
+	typen	< >
+ 	type	<Total number of operators: >		; Operator output
+	movei	a, .priou
+	move	b, iopr
+	movei	c, =10
+	nout
+	 fatal	(NOUT failed)
+	typen	< >
+	typen	< >
+	skipg	iopr
+	 jrst	cia1
+	movei	a, .priou
+	movei	c, 0
+lop2:	hrli	b, 500000
+	hrr	b, opr(c)
+	dirst
+	 fatal	(DIRST failed)	
+	movei	a, .priou
+	addi	c, 1
+	caml	c, iopr
+	 jrst	cia1
+	type	< >
+	call	.ndchk
+	 jrst	lop2
+	ret
+
+cia1:	typen	< >				; CIA output
+	typen	< >
+ 	type	<Total number of users with confidential info access: >
+	movei	a, .priou
+	move	b, icia
+	movei	c, =10
+	nout
+	 fatal	(NOUT failed)
+	typen	< >
+	typen	< >
+	skipg	icia
+noenq,<	 jrst	mnt1 >
+ysenq,<	 jrst	enq1 >
+	movei	a, .priou
+	movei	c, 0
+lop3:	hrli	b, 500000
+	hrr	b, cia(c)
+	dirst
+	 fatal	(DIRST failed)	
+	movei	a, .priou
+	addi	c, 1
+	caml	c, icia
+noenq,<	 jrst	mnt1>
+ysenq,<	 jrst	enq1>
+	type	< >
+	call	.ndchk
+	 jrst	lop3
+	ret
+
+ysenq,<
+enq1:	typen	< >
+	typen	< >
+ 	type	<Total number of users with enq-deq privilege: >
+	movei	a, .priou
+	move	b, ienq
+	movei	c, =10
+	nout
+	 fatal	(NOUT failed)
+	typen	< >
+	typen	< >
+	skipg	ienq
+	 jrst	mnt1
+	movei	a, .priou
+	movei	c, 0
+lop4:	hrli	b, 500000
+	hrr	b, enq(c)
+	dirst
+	 fatal	(DIRST failed)	
+	movei	a, .priou
+	addi	c, 1
+	caml	c, ienq
+	 jrst	mnt1
+	type	< >
+	call	.ndchk
+	 jrst	lop4
+	ret
+>
+mnt1:	typen	< >
+	typen	< >
+ 	type	<Total number of users with maintenance capability: >
+	movei	a, .priou
+	move	b, imnt
+	movei	c, =10
+	nout
+	 fatal	(NOUT failed)
+	typen	< >
+	typen	< >
+	skipg	imnt
+	 jrst	ipc1
+	movei	a, .priou
+	movei	c, 0
+lop5:	hrli	b, 500000
+	hrr	b, mnt(c)
+	dirst
+	 fatal	(DIRST failed)	
+	movei	a, .priou
+	addi	c, 1
+	caml	c, imnt
+	 jrst	ipc1
+	type	< >
+	call	.ndchk
+	 jrst	lop5
+	ret
+
+ipc1:	typen	< >
+	typen	< >
+ 	type	<Total number of users with IPCF capability: >
+	movei	a, .priou
+	move	b, iipc
+	movei	c, =10
+	nout
+	 fatal	(NOUT failed)
+	typen	< >
+	typen	< >
+	skipg	iipc
+	 jrst	net1
+	movei	a, .priou
+	movei	c, 0
+lop6:	hrli	b, 500000
+	hrr	b, ipcf(c)
+	dirst
+	 fatal	(DIRST failed)	
+	movei	a, .priou
+	addi	c, 1
+	caml	c, iipc
+	 jrst	net1
+	type	< >
+	call	.ndchk
+	 jrst	lop6
+	ret
+
+net1:	typen	< >
+	typen	< >
+ 	type	<Total number of netwizards: >
+	movei	a, .priou
+	move	b, inet
+	movei	c, =10
+	nout
+	 fatal	(NOUT failed)
+	typen	< >
+	typen	< >
+	skipg	inet
+	 jrst	abs1
+	movei	a, .priou
+	movei	c, 0
+lop7:	hrli	b, 500000
+	hrr	b, net(c)
+	dirst
+	 fatal	(DIRST failed)	
+	movei	a, .priou
+	addi	c, 1
+	caml	c, inet
+	 jrst	abs1
+	type	< >
+	call	.ndchk
+	 jrst	lop7
+	ret
+
+
+abs1:	typen	< >
+	typen	< >
+ 	type	<Total number of absolute-socket privileges: >
+	movei	a, .priou
+	move	b, iabs
+	movei	c, =10
+	nout
+	 fatal	(NOUT failed)
+	typen	< >
+	typen	< >
+	skipg	iabs
+	 jrst	fnt1
+	movei	a, .priou
+	movei	c, 0
+lop8:	hrli	b, 500000
+	hrr	b, abs(c)
+	dirst
+	 fatal	(DIRST failed)	
+	movei	a, .priou
+	addi	c, 1
+	caml	c, iabs
+	 jrst	fnt1
+	type	< >
+	call	.ndchk
+	 jrst	lop8
+	ret
+
+fnt1:	typen	< >
+	typen	< >
+ 	type	<Total number of front-end access privileges: >
+	movei	a, .priou
+	move	b, ifnt
+	movei	c, =10
+	nout
+	 fatal	(NOUT failed)
+	typen	< >
+	typen	< >
+	skipg	ifnt
+	 ret
+	movei	a, .priou
+	movei	c, 0
+lop9:	hrli	b, 500000
+	hrr	b, fnt(c)
+	dirst
+	 fatal	(DIRST failed)	
+	movei	a, .priou
+	addi	c, 1
+	caml	c, ifnt
+	 ret
+	type	< >
+	call	.ndchk
+	 jrst	lop9
+	ret
+ 
+
+.ndchk:	movei	a, .priou
+	rfpos				; Where am I?
+ 	movei	d, 70			; Snarf name width.
+ 	subi	d, (2) 			; How many spaces til 65
+	camg	d, 7
+	typen	< >
+	ret
+
+;;; UUO handler
+
+uuoh:	jsr	savacs
+	ldb	a, [point 6, 40, 8]	; Get opcode
+	caile	a, maxuuo
+	 fatal	(Illegal UUO)
+	call	@uuos(1)
+	jsr	resacs
+	ret
+
+uuos:	0
+	%type
+	%error
+maxuuo	__ .-uuos-1
+
+
+;;; UUO routines
+
+
+; Type a message onto the primary output
+
+%type:	hrro	a, 40
+	psout
+	ret
+
+
+; Print error message on priout, then halt or whatever
+
+%error:	call	pcrlf
+	ldb	t, [point 4, 40, 12]	; Get AC field
+	hlrz	a, $errtb(t)		; Print prefix char
+	pbout
+	hrro	a, 40			; Print message
+	psout
+	call	pcrlf
+	hrrz	a, $errtb(t)		; Dispatch to handler
+	jrst	(1)
+
+$errtb:	"%",,[ret]			; AC=0 warning error
+	"?",,$fatal			; AC=1 fatal error
+
+$fatal:	move	a, $errtb(t)		; Print prefix char
+	pbout
+	movei	a, .priout		; Print last process error
+	hrloi	b, .fhslf
+	setz	c,
+	erstr
+	 tdn
+	 tdn
+	call	pcrlf
+	haltf				; Halt process
+	typen	< (continuing)>		; Oh well, loser wants to continue
+	ret
+
+
+
+;;; Sundry routines
+
+
+; Pcrlf prints a crlf onto the primary output file, while crlf prints
+; onto the current output file
+
+pcrlf:	push	p, 1
+	movei	1, .priout
+	caia
+crlf:	 push	p, 1
+	push	p, 2
+	movei	b, 15
+	bout
+	movei	b, 12
+	bout
+	pop	p, 2
+	pop	p, 1
+	ret
+
+
+; Print a space on primary output
+
+space:	movei	a, " "
+	pbout
+	ret
+
+
+
+
+
+
+;;; Impure Storage and code
+
+
+; Save acs0-16 on the stack
+
+savacs:	0				; Return address gets stuffed here
+	adjsp	p, 17			; Make some local storage
+	movem	16, (p)			; Save ac16
+	movei	16, -16(p)		; Create blt pointer
+	blt	16, -1(p)		; Save acs
+	jrst	@savacs			; Return
+
+; Restore acs0-16 from the stack
+
+resacs:	0				; Return address gets stuffed here
+	movsi	16, -16(p)		; Create blt pointer
+	blt	16, 16			; Restore acs
+	adjsp	p, -17			; Pop off local storage
+	jrst	@resacs			; Return
+
+namwid__=22				; Give name field 20 colums.
+npdl	__ =50				; Nice number
+cap:	0
+
+args:	block	20
+pass:	block	20
+buff:	block	100
+pdl:	block	npdl			; Push down list
+
+;; Here starts the tables and indexes for the wrap-up
+
+iwhl:	0
+iopr:	0
+icia:	0
+imnt:	0
+iipc:	0
+ienq:	0
+inet:	0
+iabs:	0
+ifnt:	0
+
+whl:	block	50
+opr:	block	50
+cia:	block	50
+mnt:	block	50
+ipcf:	block	50
+enq:	block	50
+net:	block	50
+abs:	block	50
+fnt:	block	50
+
+
+
+	asuppress
+	end	go
+

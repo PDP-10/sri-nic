@@ -1,0 +1,246 @@
+; * TCPMUX  (RFC 1078) by Mark K. Lottor, November 1988 *
+
+; started by LISTEN program, with primary i/o set to that of 
+; the incoming tcp connection.  find out service requested,
+; then overlay ourselves with the right exe file.
+; services are defined in system:tcpmux.cmd
+
+	Title  TCPMUX
+
+.DECSAV
+
+.INSRT	MID:MACROS
+.INSRT	MID:SYMBOLS
+.INSRT  MID:STCMP
+
+GTDOM%==104000,,765
+
+Define RetSkp
+	Jrst Popj1
+Termin
+
+lognam:	asciz /SYSTEM:TCPMUX.LOG/
+logjfn:	0
+
+CRLF:	asciz /
+/
+
+cmdnam:	asciz /SYSTEM:TCPMUX.CMD/
+cmdjfn:	0
+linbuf:	block 40
+
+svcnam:	block 40
+
+sname:	block 40
+sfile:	block 40
+stype:	0
+
+PDLen==40
+PDL:	Block PDLen
+
+
+Start:	RESET%
+	Move	P,[PDL(-PDLen)]	;init stack
+
+;read service name they would like	
+	Movei	1,.PRIIN
+	Hrroi	2,svcnam
+	Movei	3,40*5-1
+	Movei	4,.CHLFD
+	SIN%
+	 erjmp	[typecr "-Can't read service name"
+		 jrst done]
+	Seto	1,
+	Adjbp	1,2
+	Setz	2,
+	Dpb	2,1		;kill <CRLF>
+
+	Call	LogIt
+
+;open tcpmux cmd file
+	Movx	1,GJ%SHT\GJ%OLD
+	Hrroi	2,cmdnam
+	GTJFN%
+	 Erjmp	[typecr "-No services available"
+		 Jrst Done]
+	Movem	1,cmdjfn
+	Move	2,[070000,,OF%RD]
+	OPENF%
+	 Erjmp	[typecr "-No services available"
+		 Jrst Done]
+
+	Move	1,[440700,,svcnam]
+	Move	2,[440700,,[asciz "help"]]
+	$STCMP
+	Jumpe	1,Help
+
+;lookup requested service
+Lookup:	Call GetSvc
+	 Jrst NoSuch
+	Move	1,[440700,,SNAME]
+	Move	2,[440700,,svcnam]
+	$STCMP
+	Jumpn	1,Lookup
+
+;found it
+	Move	1,STYPE
+	Cain	1,"+
+	 Call	OutGo
+
+	Move	1,cmdjfn	
+	CLOSF%
+	 Erjmp .+1
+;now start up requested .exe
+	Movx	1,GJ%SHT\GJ%OLD
+	Hrroi	2,SFILE
+	GTJFN%			;get jfn on EXE
+	 Erjmp	NoSuch
+	Move	2,[ACS,,5]
+	BLT	2,11		;move code block to ACs
+	Jrst	5		;start it
+
+;this part goes to the ac's
+ACS:	Hrli 1,.FHSLF		;this fork
+	GET%
+	Movei 1,.FHSLF
+	Setz 2,
+	SFRKV%
+;;;
+
+NoSuch:	TypeCR	"-Service not available"
+	Jrst HDone
+
+OutGo:	Movei	1,.PRIOU
+	Hrroi	2,[asciz "+Go"]
+	Setz	3,
+	SOUT%
+	Hrroi	2,CRLF
+	SOUTR%			;push push push!
+	Ret
+
+Help:	Call GetSvc
+	 Jrst HDone
+	Hrroi 1,SNAME
+	PSOUT%
+	Hrroi 1,CRLF
+	PSOUT%
+	Jrst Help
+
+HDone:	Move 1,cmdjfn
+	CLOSF%
+	 Erjmp .+1
+	Jrst	Done
+
+;parse a line of service command file, retskp if success, ret if eof
+;returns with service name in SNAME, filespec in SFILE, "+/-" in STYPE
+GetSvc:	Move 1,cmdjfn
+	Hrroi 2,linbuf
+	Movei 3,40*5-1
+	Movei 4,.CHLFD
+	SIN%
+	 Erjmp R
+	Movei 1,"-
+	Movem 1,STYPE		;default is off
+	Move 2,[440700,,linbuf]
+	Ildb 3,2
+	Caie 3,";
+	 Cain 3,"!
+	  Jrst GetSvc		;skip comments
+	Cain 3,.CHCRT
+	 Jrst GetSvc		;skip blank lines
+	Cain 3,"+
+	 Movem 3,STYPE		;they set the positive flag
+	Caie 3,"+
+	 Move 2,[440700,,linbuf]	;otherwise fix things up
+	Move 1,[440700,,SNAME]
+lp1:	Ildb 3,2
+	Jumpe 3,eof
+	Caie 3,.CHSPC
+	 Cain 3,.CHTAB
+	  Setz 3,
+	Idpb 3,1
+	Jumpn 3,lp1
+
+lp2:	Ildb 3,2
+	Jumpe 3,eof
+	Caie 3,.CHSPC
+	 Cain 3,.CHTAB
+	  Jrst lp2
+
+	Move 1,[440700,,SFILE]
+	Idpb 3,1
+lp3:	Ildb 3,2
+	Caie 3,.CHSPC
+	 Cain 3,.CHTAB
+	  Setz 3,
+	Caie 3,.CHCRT
+	 Cain 3,.CHLFD
+	  Setz 3,
+	Idpb 3,1
+	Jumpn 3,lp3
+	Retskp
+eof:	Ret
+
+LogIt:	Movx	1,GJ%SHT\GJ%OLD
+	Hrroi	2,lognam
+	GTJFN%
+	 Erjmp	[Movx 1,GJ%SHT\GJ%NEW\GJ%FOU
+		 Hrroi 2,lognam
+		 GTJFN%
+		  Erjmp R
+		 Jrst .+1]
+	Movem	1,logjfn
+	Move	2,[070000,,OF%APP]
+	OPENF%
+	 Erjmp	R
+	Seto	2,
+	Setz	3,
+	ODTIM%
+	Movei	2,.CHSPC
+	BOUT%
+;hostname	
+	Movei	1,.PRIIN
+	GDSTS%
+	Movei	1,.GTHNS
+	Move	2,logjfn
+	GTDOM%
+	 Ercal	OutHnum
+	Move	1,logjfn
+	Movei	2,.CHSPC
+	BOUT%
+	Hrroi	2,svcnam	;service they want
+	Setz	3,
+	SOUT%
+	Hrroi	2,CRLF
+	SOUT%
+	CLOSF%
+	 Erjmp .+1
+	Ret
+
+OutHnum:	
+	Move 1,logjfn
+	Move 2,3
+	Movei 3,10
+	NOUT%
+	 Erjmp .+1
+	Ret
+
+Popj1:	Aos	(P)
+R:	Ret
+
+Error:	Call	ErrRet
+	Jrst	Die
+
+ErrRet:	Movei	1,.PRIOU
+	Hrloi	2,.FHSLF
+	Setz	3,
+	ERSTR%
+	 jfcl
+	 jfcl
+	Ret
+Done:
+
+Die:	Haltf%
+	Jrst	Die
+
+	End Start

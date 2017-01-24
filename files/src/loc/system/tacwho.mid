@@ -1,0 +1,203 @@
+;-*-Midas-*-
+
+	Title $TACWHO - Receive TAC-who datagrams from A. T. machine
+
+.DECSAV
+
+A=5
+B=6
+C=7
+T=12
+TT=13
+P=17
+
+PDLen==40
+UDPPRN==17.			;UCP Protocol Number
+WHOprt==57.			;Local WHO port#
+MaxLen==10.			;This long for a TACID
+
+.IPKVR==1			;Version, data offset, type of service
+.IPKSG==2			;Segment ID, frag stuff.
+.IPKPR==3			;Time to live, protocol#, header checksum
+.IPKSH==4			;Source host internet address
+.IPKDH==5			;Destination host " "
+    IPhlen==5			;IP header length.
+.UDPPO==6			;UDP port#'s
+.UDPLN==7			;UDP length, checksum
+    UDPhlen==2			;Length of UDP header
+.UDPDT==10			;UDP data bytes
+
+L16==<777774,,0>		;Mask for left 16-bit byte in word
+R16==<3,,777760>		;and for right 16-bit byte.
+B32==L16\R16			;Full 32-bit byte
+
+UD$LEN==:<.BP L16,.UDPLN>
+
+Define FATAL &string
+	Ercal [Hrroi T,[Asciz string]
+	       Jrst FatErr]
+Termin
+
+Define JFATAL &string
+	Jrst [Hrroi T,[Asciz string]
+	      Jrst FatErr]
+Termin
+
+PDL:	-PDLen,,.
+	Block PDLen
+
+IQH:	0			;Internet Queue Handle (returned by ASNIQ%)
+MaxPak:	0			;Maximum Paket size before fragmentation
+
+Addres:	0
+PortNo:	0
+TACID:	Block MaxLen
+
+QDB:	.BYTE 8. ? 0 ? 0 ? 0 ? UDPPRN ? .BYTE	;UDP Protocol Number
+	0					;Foreign host [FillIn]
+	0					;Local host [FillIn]
+	.BYTE 16. ? WHOprt ? WHOprt ? .BYTE	;local port, foreign port
+	.BYTE 8. ? 0 ? 0 ? 0 ? 377 ? .BYTE	;Protocol number mask
+	.BYTE 32. ? -1 ? .BYTE			;Foreign host mask
+	.BYTE 32. ? -1 ? .BYTE			;Source host mask
+	.BYTE 16. ? -1 ? -1 ? .BYTE		;Local, Foreign port mask
+QDBlen==.-QDB
+
+PakBuf:	0					;Packet Buffer total length.
+;;
+;;	Start of IP header
+;;
+	.BYTE 4,4,8.,16. ? 4 ? 5 ? 0 ? 0 ? .BYTE
+		;IP version #, Data Offset, Type of Service, Datagram Length
+	0	;Segmentation and frag junk.
+	.BYTE 8.,8.,16. ? 60. ? UDPPRN ? 0 ? .BYTE
+		;Time-to-live, Protocol number, IP header checksum
+	0	;Source host
+	0	;Destination host
+;;
+;;	End of IP header, start of UDP header.
+;;
+	0	;Local port number, destination port #
+	0	;UDP header+data length, checksum
+;;
+;;	End of UDP header, start of UDP data.
+;;
+	Block 200
+PakLen==.-PakBuf
+
+Begin:	RESET%
+	Move P,PDL
+
+	Call FillIn		;Fill in the QDB
+	Call GetQue		;Get an Internet Queue
+Loop:	Call GetOne		;Get a Datagram
+	  Jrst Loop		;  Oops, try again
+	Call Process		;Process it
+	Jrst Loop		;and wait for more.
+
+FillIn:	Movei 1,.GTHSZ
+	GTHST%
+	  Fatal "Can't get own host#"
+	Dpb 4,[.BP B32,QDB+IQSHV]	;Local host#
+	Movei 1,.GTHSN
+	Hrroi 2,[Asciz "SRI-F4"]
+	GTHST%
+	  Fatal "Can't get SRI-F4's host#"
+	Dpb 3,[.BP B32,QDB+.IQFHV]	;Foreign host#
+	Return
+
+GetQue:	Movei 1,QDB
+	Setzb 2,3
+	ASNIQ%
+	  Fatal "Can't assign Internet Queue"
+	Movem 1,IQH
+	Movem 2,MaxPak
+	Return
+
+GetOne:	Movei 1,PakLen
+	Hrrzm 1,PakBuf		;Size of Packet Buffer in LH of first word
+	Move 1,IQH
+	Movei 2,PakBuf
+	Setz 3,
+	RCVIN%
+	  Return
+Popj1:	Aos (P)
+CPopj:	Return
+
+Proces:	Ldb T,[.BP UD$LEN PakBuf]	;Get UDP data
+	Subi T,UDPhlen*4		;Subtract # of bytes that are header
+	Jumple T,CPopj			;If no real data, nothing to do.
+	Move TT,[440800,,PakBuf+.UDPDT]	;Point to the data
+	Call Get4			;Get 4-byte TAC address
+	  Return
+	Movem A,Addres
+	Call Get1			;Get TAC port#
+	  Return
+	Movem A,PortNo
+	Call Get1			;Get Length of TACID
+	  Return
+	Jumpe A,CPopj			;0-length doesn't get us anywhere
+	Movei D,(A)
+	Caile D,MaxLen*5-1
+	  Movei D,MaxLen*5-1
+	Move C,[440700,,TACID]
+GetUID:	Call Get1
+	  Return
+	Idpb A,C
+	Sojg D,GetUID
+	Setz A,
+	Idpb A,C
+	Jrst Popj1
+
+Get1:	Sojl T,CPopj
+	Ildb A,TT
+	Jrst Popj1
+
+Get2:	Call Get1
+	  Return
+	Lsh A,8.
+	Movei B,(A)
+	Call Get1
+	  Return
+	Addi A,(B)
+	Jrst Popj1
+
+Get4:	Call Get2
+	  Return
+	Lsh A,16.
+	Move B,A
+	Call Get2
+	  Return
+	Add A,B
+	Jrst Popj1
+
+FatErr:	Call Header
+	Move 1,T
+	PSOUT%
+	Type " -- "
+	Call Barf
+	Type " at "
+	Movei 1,.PRIOU
+	Hrrz 2,(P)
+	Subi 2,1
+	Movei 3,8.
+	NOUT%
+	  Nop
+	AType CRLF
+Die:	HALTF%
+	Jrst Die
+
+Header:	Movei 1,.PRIOU
+	DOBE%			;Wait until output buffer empty
+	Type "[TACWHO] "
+	Return
+
+Barf:	Movei 1,.PRIOU
+	Hrloi 2,.FHSLF
+	Setz 3,
+	ERSTR%
+	  Nop
+	  Nop
+	Return
+
+	End Begin

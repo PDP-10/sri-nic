@@ -1,0 +1,664 @@
+;[SRI-NIC]SRC:<LOC.SUBSYS>DIALOG.MAC.8, 17-Mar-87 14:55:50, Edit by VIVIAN
+; Half duplex instead of full.
+;SRC:<LOC.SUBSYS>DIALOG.MAC.5, 10-Feb-87 14:50:04, Edit by KNIGHT
+; Redo edit 4 just a little
+;SRC:<LOC.SUBSYS>DIALOG.MAC.4, 10-Feb-87 14:42:06, Edit by KNIGHT
+; Add logging to SYSTEM:DIALOG.LOG
+;SRC:<LOC.SUBSYS>DIALOG.MAC.3, 10-Feb-87 10:49:56, Edit by KNIGHT
+; Change escape character to something more palatable
+;SRC:<LOC.SUBSYS>DIALOG.MAC.2, 9-Feb-87 16:22:01, Edit by KNIGHT
+; Raise DTR on line we're connecting to, and drop it when we're done
+;SRC:<LOC.SUBSYS>DIALOG.MAC.1, 6-Feb-87 14:42:06, Edit by KNIGHT
+; First cut at this loser
+	TITLE DIALOG
+
+; Real hacked TTLINK
+; Connect to another computer over a TTY line.  Inspired by TTY function
+; of MRC's TELNET.  Differs from TELNET in that all parameters and settings
+; can be specified on a single command line (making it easy for another
+; program -- like an autodialer controller -- to run this program in an
+; inferior fork with any desired parameters), and it runs in a single fork
+; rather than 2.  Also, it does SINs and SOUTs whenever it can.
+;
+; F. da Cruz, CUCCA, Jan 83
+;  Copy for use as DIALOG front-end
+; Bob Knight, NIC, Feb 86
+
+	SEARCH MONSYM,MACSYM,CMD
+	.REQUIRE SYS:MACREL,SYS:CMD
+
+	SUBTTL Symbol and macro definitions
+
+E=<D=<C=<B=<A=1>+1>+1>+1>+1	; ACs
+P=17				; Stack pointer.
+XX=10				; Typein flag/counter.
+Q=11				; Miscellanous usage...
+DEFBRK==3			; Default nulls to send on break
+DEFINE ERRET <
+	IFJER.
+	  JSERR
+	  RET
+	ENDIF.>
+
+    	SUBTTL Data
+CMDSTG				; CMD package expands this for itself
+PDLSIZ==100			; Stack
+PDL:	BLOCK PDLSIZ		;  ...
+INCNT:	0			; Count of characters user typed
+OUTCNT:	0			; Count of characters DIALOG typed
+NOCTLC:	0			; -1 = no ^C capa, 0 = ^C capa enabled ok.
+DIAPOR:	61			; TTYs for DIALOG, end with zero word
+	62
+	0
+PORT:	0			; TTY number for link.
+PORTS:	BLOCK 2			; String version of TTY number.
+DUPLEX:	0			; Duplicity (full or half)
+DUPSTR:	BLOCK 2			; String representation of above.
+ESCAPE:	34 			; Escape character (^\).
+ESCS:	BLOCK 2			; String version of above for comnd.
+PARITY:	0			; Parity
+PARSTR:	BLOCK 2			; String representation of parity.
+SPD:	0			; Setting from SPEED:
+BRK:	0			; Nulls to send on BREAK key
+TIMOUT:	0			; Timeout flag.
+FORKH:	0			; Handle for inferior fork.
+PNAME:	BLOCK 2			; Program name
+CAPAS:	0			; Enabled process capabilities.
+TIWORD:	0			; Terminal interrupt word.
+TTYMOD:	0			; TTY mode word.
+LNKJFN:	0			; JFN for link TTY line.
+LNKSTR: BLOCK 3			; Area to construct "TTYnn:" string.
+TTYJFN:	0			; JFN for controlling terminal.
+ASSFLG:	0			; Flag for whether we did an ASND.
+JOB:	0			; Job number of who has line assigned.
+COUNT:	0			; Character count for...
+BUFPTR:	0			;  Pointer to...
+BUFSIZ=^D100			;  Size of...
+BUF:	BLOCK BUFSIZ		; String buffer.
+	0
+
+; Interrupt data area
+LEVTAB:	PC1
+	PC2
+	PC3
+PC1:	0
+PC2:	0
+PC3:	0
+	
+CHNTAB: PHASE 0			; Channel table
+TYPCHN:	1,,TYPINT
+BRKCHN:	1,,BRKINT
+	REPEAT <^D36>,<0>
+	DEPHASE
+	SUBTTL	Main Code
+
+ENTVEC:	JRST START		; Start address
+	JRST START		; Reenter address
+VERSIO:	BYTE(3)0(9)<1>(6)0(18)<0> ; Version number
+EVLEN=.-ENTVEC
+
+START:	RESET%			; Reset...
+	MOVE P,[PDLSIZ,,PDL]	; Set up stack.
+	ACVAR <PRTPTR>		; Just for this junk
+	MOVEI PRTPTR,DIAPOR	; Find a port for this guy
+	DO.
+	  SKIPE A,(PRTPTR)	; At end of table?
+	  IFSKP.		; Yup.  Well, they lose.
+	    TMSG <?All DIALOG ports in use, try again later>
+	    HALTF%
+	  ENDIF.
+	  CALL ASSIGN		; Get it?
+	  IFNSK.
+	    AOJ PRTPTR,		; No, didn't, well try again
+	    LOOP.
+	  ENDIF.
+	ENDDO.			; Continue on with a port...
+	ENDAV.
+	MOVX A,.FHSLF		; Get my fork capabilities
+	RPCAP%
+	MOVEM C,CAPAS		; and save them
+	HRRZI A,.FHJOB		; OK,now get TTY interrupt word for this job.
+	RTIW%
+	MOVEM B,TIWORD		; Save it.
+	MOVEI A,.PRIOU		; Get TTY mode word.
+	RFMOD%
+	MOVEM B,TTYMOD		; Save it.
+	MOVEI A,.FHSLF		; For this fork & all inferiors
+	MOVE B,[LEVTAB,,CHNTAB] ; here is where interrupt tables are.
+	SIR%
+	EIR%			; Enable interrupts.
+	SETZM PORTS		; and no string for it.
+	SETZM PARITY		; No parity.
+;	SETZM DUPLEX		; Full duplex. - comment this out.  want half.
+        CALL CONN		;  Yes, go do the command.
+	CALL DEASS		; Clean up JFNs & deassign link tty.
+	HALTF%			; Halt.
+	SUBTTL TTY assign and deassign
+
+; Call with TTY number in A.
+; Skip return if successful, +0 if not
+ASSIGN:	MOVEM A,PORT		; Form device designator.
+	MOVEI A,.TTDES(A)	; 
+	DVCHR%			; Check to see if it's already assigned.
+	 ERJMP R
+	HLRE A,C		; Who has it?
+	MOVEM A,JOB		; Job number of who has it, or -1 (or -2).
+	GJINF			; Get my own job number.
+	SETZM ASSFLG		; Assume I don't have to assign it.
+	CAMN C,JOB		; If I had it assigned already,
+	IFSKP.
+	  MOVE A,PORT		; Form device designator again,
+	  MOVEI A,.TTDES(A)	;  and...
+	  ASND%			;  give it a try.
+	   ERJMP R		; Uh oh, can't assign it.
+	  SETOM ASSFLG		; Assigned it.  Set this flag to remember.
+	ENDIF.
+	SKIPLE LNKJFN		; It's mine.  Now get a JFN on it
+	IFSKP.
+	  MOVE A,[POINT 7,LNKSTR] ; Init pointer for tty filespec string.
+	  MOVE B,[ASCIZ/TTY/]	; Construct TTYn: string.
+	  MOVEM B,LNKSTR	; First the TTY part.
+	  MOVEI B,3		; Point past it.
+	  ADJBP B,A	
+	  MOVE A,B
+	  MOVE B,PORT		; Convert TTY number to
+	  MOVEI C,8		; octal string,
+	  NOUT%			; and append it.
+	   ERRET
+	  MOVEI B,":"		; Append colon,
+	  IDPB B,A
+	  SETZ B,		; terminate with null.
+	  IDPB B,A
+	  MOVX A,GJ%SHT		; Get a JFN on it.
+	  HRROI B,LNKSTR
+	  GTJFN%
+	   ERRET
+	  MOVEM A,LNKJFN	; Save the JFN.
+	  MOVX B,FLD(^D8,OF%BSZ)!OF%RD!OF%WR
+	  OPENF%		; Open it in 8-bit mode.
+	   ERRET		; Lose, lose
+	ENDIF.
+	SKIPLE TTYJFN		; Already got one?
+	IFSKP.
+	  MOVX A,GJ%SHT		; Also, get a JFN on controlling TTY.
+	  MOVE B,[POINT 7,[ASCIZ /TTY:/]]
+	  GTJFN%
+	   ERRET
+	  MOVEM A,TTYJFN	; Save it.
+	  MOVX B,FLD(^D8,OF%BSZ)!OF%RD!OF%WR
+	  OPENF%		; Open it in 8-bit mode too.
+	   ERRET
+	ENDIF.
+	RETSKP			; All OK.
+	SUBTTL TTY setup and restore
+; Restore TTY parameters, turn off interrupts, and close any log file.
+FIXTTY:	MOVE A,PORT
+	TRO A,400000
+	MOVEI B,.MOHUP		; Turn off DTR
+	MTOPR%
+	MOVE A,TTYJFN		; Restore mode word.
+	MOVE B,TTYMOD
+	SFMOD%			; Better do both of these...
+	STPAR%
+	MOVX A,.FHJOB		; Put tty back the way it was.
+	MOVE B,TIWORD		; put the terminal interrupt word
+	SKIPE NOCTLC		; (not if we don't have ^C capa)
+	IFSKP.
+	  STIW%			; back the way it was
+	  EJSERR
+	ENDIF.
+	CIS%			; Clear any pending interrupts.
+	MOVEI A,.TICTI		; Deassign terminal interrupt code.
+	DTI%
+	MOVEI A,.FHSLF		; Deactivate interrupt channels.
+	MOVX B,<1B<TYPCHN>+1B<BRKCHN>>
+	DIC%
+	MOVX A,.FHSLF		; Put the process capabilities
+	MOVE C,CAPAS		; back the way they were.
+	EPCAP%
+	 EJSERR
+	RET			;  No, done.
+
+; Deassign and close the TTY link.
+DEASS:	SKIPG A,LNKJFN		; If nothing there,
+	IFSKP.
+	  CLOSF%		; Close the JFN.
+	   EJSERR		; Complain on errors, but continue.
+	ENDIF.
+	SETOM LNKJFN		; Remember it's closed.
+	SKIPN ASSFLG		; Did we assign it ourselves?
+	IFSKP.
+	  MOVE A,PORT		; Yes, deassign the device.
+	  MOVEI A,.TTDES(A)
+	  RELD%
+	   EJSERR
+	ENDIF.
+	SKIPG A,TTYJFN	; Close JFN on TTY: too.
+	IFSKP.
+	  CLOSF%
+	   EJSERR
+	  SETOM TTYJFN
+	ENDIF.
+	RET
+
+; Set up TTY for linking, and open any logging file.
+TTYINI: MOVE A,PORT
+	TRO A,400000
+	MOVEI B,.MODUP		; Turn on DTR
+	MTOPR%
+	MOVE A,TTYJFN
+	MOVE B,TTYMOD
+	TXZ B,TT%PGM+TT%DAM	; Turn off terminal page mode and data mode.
+	SFMOD%
+	 ERRET
+	STPAR%
+	 ERRET
+	MOVX A,.FHJOB		; Turn off ^C, ^O, ^T interrupts for whole job.
+	MOVE B,TIWORD
+	TXZ B,1B<.TICCC>+1B<.TICCO>+1B<.TICCT>
+	SKIPE NOCTLC		; But do we have ^C capability?
+	IFSKP.
+	  STIW%			; Can't do STIW if we don't...
+	   ERRET
+	ENDIF.
+	HRLZI A,.TICTI		; Interrupt on channel 0 for any typein.
+	ATI%
+	MOVE A,[.TICBK,,BRKCHN]	; Break character and channel
+	ATI%
+	MOVEI A,.FHSLF
+	MOVX B,1B<TYPCHN>+1B<BRKCHN> ; Type-in and break chans
+	AIC%
+	RET
+	SUBTTL Connect
+CONN:	MOVX A,.FHSLF		; Turn on CTRL-C capability.
+	MOVE C,CAPAS
+	TXO C,SC%CTC
+	SETZM NOCTLC		; (Assume we can)
+	EPCAP%
+	RPCAP%			; Read them back.
+	IFXE. C,SC%CTC		; Did we?
+	  TMSG <
+%Can't set CTRL-C capability, continuing...
+>				; Can't, must be running
+	  SETOM NOCTLC		; in batch or something, remember, but
+	ENDIF.			; go on...
+	CALL TTYINI		; OK to go on, set up the tty.
+	MOVX A,GJ%SHT!GJ%OLD	; Get JFN for log file
+	HRROI B,[ASCIZ/SYSTEM:DIALOG.LOG/]
+	GTJFN%
+	IFNJE.
+	  PUSH P,A
+	  MOVX B,OF%APP!FLD(7,OF%BSZ)
+	  OPENF%
+	  IFNJE.
+	    POP P,A
+	    SETO B,		; Set up for ODTIM%
+	    SETZ C,
+	    ODTIM%
+	    HRROI B,[ASCIZ/  DIALOG start, user /]
+	    SOUT%
+	    PUSH P,A		; Save JFN
+	    GJINF%
+	    MOVE B,A		; Get user number
+	    POP P,A
+	    DIRST%
+	     TRN
+	    HRROI B,[ASCIZ/ on TTY/]
+	    SETZ C,
+	    SOUT%
+	    MOVE B,D
+	    MOVEI C,10
+	    NOUT%
+	     TRN
+	    HRROI B,[ASCIZ/: over TTY/]
+	    SETZ C,
+	    SOUT%
+	    MOVE B,PORT
+	    MOVEI C,10
+	    NOUT%
+	     TRN	
+	    SETZ C,
+	    HRROI B,[ASCIZ/:
+/]
+	    SOUT%
+	    CLOSF%
+	     TRN
+	  ELSE.
+	    POP P,A
+	    RLJFN%
+	      TRN
+	  ENDIF.
+	ENDIF.
+	TMSG <[Connecting to DIALOG over > ; Type message.
+	HRROI A,LNKSTR		; String for link tty device name.
+	PSOUT
+	TMSG <, TYPE >
+	MOVEI A,74		; Left pointy bracket...
+	PBOUT%
+	TMSG <CTRL->
+	MOVE A,ESCAPE		; (tell escape character)
+	ADDI A,"A"-1
+	PBOUT%
+	MOVEI A,76		; ...Right pointy bracket
+	PBOUT%
+	TMSG <C to quit.]
+>
+	SETO XX,		; Start out assuming some typeahead.
+	MOVE A,LNKJFN		; Send a CR down the line to get things started
+	MOVEI B,.CHCRT
+	CALL SETPAR		;  (use desired parity)
+	BOUT
+	 ERRET			; Catch any errors here!
+	AOS INCNT		; Increment count of user-typed characters
+	;... fall thru to main loop.
+	SUBTTL Main I/O Loop
+MORE:	DO.
+	  IFE. XX		; Typein?
+	    MOVE A,LNKJFN	; No, just wait for a character from the link.
+	    BIN%		; This is the only place we hang...
+MOREX:	    TXZ B,200		; Strip any parity.
+	    MOVE A,TTYJFN	; Type it out on the tty
+	    BOUT%		;  ...
+	    AOS OUTCNT		; Bump count of DIALOG-typed characters
+	    LOOP.
+	  ENDIF.
+MORE1:	  SETZ XX,		; Clear the typein flag.
+	  MOVE A,TTYJFN		; Allegedly some typein -- check to be sure.
+	  SIBE%			; Anything there?
+	  SKIPG C,B		; Yes, how many chars?
+	   LOOP.		; None...
+	  MOVE Q,C		; Something there, save how many.
+	  MOVE B,[POINT 8,BUF]	; Read them into this buffer.
+	  MOVE D,ESCAPE		; Terminate on the escape character, or
+	  SIN%			;  the count provided by SIBE.
+	  SUB Q,C		; Subtract the number SIN didn't get.
+	  MOVEM Q,COUNT		; Remember how many characters we got.
+	  SETZB C,E		; Make a zero, and assume esc not typed.
+	  LDB D,B		; Check the last character in the string.
+	  TRZ D,200		; Strip any parity.
+	  CAME D,ESCAPE		; Escape character?
+	  IFSKP.
+	    SETO E,		; It was, flag that we saw it.
+	    SOS COUNT		; Account for it.
+	  ELSE.
+	    IBP B		; No, point after it.
+	  ENDIF.
+	  MOVE A,COUNT		; Bump count of user-typed characters
+	  ADDM A,INCNT
+	  DPB C,B		; Terminate string, zeroing out esc char.
+	  MOVE B,[POINT 8,BUF]	; Point to what was typed.
+	  MOVE A,LNKJFN		; Now send user's input to remote.
+	  SKIPN PARITY		; Or doing parity?
+	   SKIPE DUPLEX		; Local echo?
+	  IFSKP.
+	    SETZB C,D		; No, just send the string.
+	    SOUT%
+	  ELSE.
+	    MOVE C,[POINT 8,BUF]	; Must do one character at a time.
+	    MOVE Q,COUNT	; Loop counter.
+	    DO.
+	      SOJL Q,ENDLP.	; Any characters left?
+	      ILDB B,C		; Yes, get next one.
+	      SKIPE DUPLEX	; Echoing locally?
+	       CALL ECHO	;  Yes, do that.
+	      CALL SETPAR	; Set the parity bit.
+	      BOUT%		; Send it.
+	      LOOP.
+	    ENDDO.
+	  ENDIF.
+	  JUMPE E,MORE1		; If esc char not typed, continue main loop.
+	ENDDO.
+;... (fall thru to escape char handler)
+
+; Escape character was typed -- Get argument.
+DOESC:	MOVE A,TTYJFN
+	BIN%			; Escape char was typed, get argument.
+	TRZ B,200		; Strip any parity bit.
+	CAIL B,"a"		; Uppercase any letter.
+	 CAILE B,"z"
+	 SKIPA	
+	 SUBI B," "
+	CAIN B," "		; The null command.
+	 JRST MORE1		;  ...
+	CAIE B,"C"		; Close connection.
+	IFSKP.	
+	  CALL FIXTTY	; Put tty back the way it was...
+	  TMSG <
+[Connection closed---ending DIALOG]
+>
+	  MOVX A,GJ%SHT!GJ%OLD	; Get JFN for log file
+	  HRROI B,[ASCIZ/SYSTEM:DIALOG.LOG/]
+	  GTJFN%
+	  IFNJE.
+	    PUSH P,A
+	    MOVX B,OF%APP!FLD(7,OF%BSZ)
+	    OPENF%
+	    IFNJE.
+	      POP P,A
+	      SETO B,		; Set up for ODTIM%
+	      SETZ C,
+	      ODTIM%
+	      HRROI B,[ASCIZ/  DIALOG end, user /]
+	      SOUT%
+	      PUSH P,A		; Save JFN
+	      GJINF%
+	      MOVE B,A		; Get user number
+	      POP P,A
+	      DIRST%
+	       TRN
+	      HRROI B,[ASCIZ/ over TTY/]
+	      SETZ C,
+	      SOUT%
+	      MOVE B,PORT
+	      MOVEI C,10
+	      NOUT%
+	       TRN	
+	      HRROI B,[ASCIZ/:, user typed /]
+	      SETZ C,
+	      SOUT%
+	      MOVE B,INCNT
+	      MOVEI C,^D10
+	      NOUT%
+	       TRN
+	      HRROI B,[ASCIZ/ chars, DIALOG typed /]
+	      SETZ C,
+	      SOUT%
+	      MOVE B,OUTCNT
+	      MOVEI C,^D10
+	      NOUT%
+	       TRN
+	      HRROI B,[ASCIZ/ chars
+/]
+	      SETZ C,
+	      SOUT%
+	      CLOSF%
+	       TRN
+	    ELSE.
+	      POP P,A
+	      RLJFN%
+	        TRN
+	    ENDIF.
+	  ENDIF.
+	  RET
+	ENDIF.
+	CAIE B,"B"		; Is it a break?
+	IFSKP.
+	  CALL BRKIN0		; Yes, handle it
+	  JRST MORE1		;   then continue
+	ENDIF.
+	CAIE B,"?"		; Help
+	IFSKP.
+	  HRROI A,[ASCIZ\
+B - Send break
+C - Close connection
+? - This message
+Type the escape character twice to send one copy of it to the remote host.
+
+Escape character is \]
+	  PSOUT%
+	  MOVE B,ESCAPE		; Type the escape character.
+	  CALL ECHO
+	  TMSG <
+>
+	  JRST MORE1
+	ENDIF.
+	CAME B,ESCAPE		; Send escape character
+	IFSKP.
+	  SKIPE DUPLEX		; If local echo
+	   CALL ECHO		;  take care of that.
+	  CALL SETPAR		; Add desired parity to it.
+	  MOVE A,LNKJFN		; Send it out the link.
+	  BOUT%
+	  JRST MORE1
+	ENDIF.
+	MOVEI A,.TICCG		; Anything else, just beep
+	PBOUT%
+	JRST MORE1
+	SUBTTL Echo a character.
+
+; Need to do this because having TTY open in binary mode overrides CCOC
+; settings.  B contains character to echo.
+ECHO:	SAVEAC <A,B,C>		; Must save all ACs.
+	TRZ B,200		; Strip any parity.
+	MOVE C,B		; Make a copy of the character.
+	SKIPG A,TTYJFN		; Echo it on the tty.
+	 MOVEI A,.PRIOU
+	CAIE C,.CHESC		; ESC
+	IFSKP.
+	  MOVEI B,"$"		; Echo as dollar sign
+	ELSE.
+	  CAIE C,.CHDEL		; DEL
+	  IFSKP.
+	    MOVEI B,"^"		; Print an uparrow
+	    BOUT%
+	    MOVEI B,"?"
+	  ELSE.
+	    CAILE C,.TICCZ	; ^Z or less?
+	    IFSKP.
+	      MOVEI D,CCTAB	; Exception table
+	      ACVAR <CHAR>
+	      DO.
+	        SKIPN CHAR,(D)	; Any more?
+	        IFSKP.		; No...
+	          MOVEI B,"^"	; Print an uparrow
+	          BOUT%
+	          MOVEI B,100(C) ; Convert to char to uncontrollified version.
+	 	ELSE.
+		  CAIN B,CHAR	; Was this one in the table?
+		  IFSKP.
+		    AOJ D,	; No...
+		    LOOP.
+		  ENDIF.
+		ENDIF.
+	      ENDDO.
+	      ENDAV.
+	    ENDIF.
+	    MOVE B,C		; Anything else, just type it.
+	  ENDIF.
+	ENDIF.
+	BOUT%			; Print the character itself.
+	RET
+
+; Characters that just get echoed as their wonderful selves.  End w/zero word.	
+CCTAB:	.TICCG			; ^G
+	.TICCL			; ^L
+	.TICCM			; ^M
+	0
+	SUBTTL Interrupt handlers
+
+; Typein
+TYPINT:	PUSH P,A		; Get a work AC.
+	SETO XX,		; Set flag saying we have typein.
+	HRRZ A,PC1		; See what we were up to.
+	CAIL A,MORE		; Setting up
+	 CAILE A,MOREX		;  or executing BIN from link tty?
+	IFNSK.
+	  POP P,A
+	  DEBRK%
+	ENDIF.
+	HRRI A,MORE1		; Yes,so we want to go back here.
+	HLL A,PC1		; Get the PC flags.
+	TXO A,1B5		; Set user mode bit to escape from JSYS.
+	MOVEM A,PC1		; Replace the PC.
+	POP P,A		; Restore the AC.
+	DEBRK			; And resume.
+
+; BRKINT - Terminal interrupt reached when a BREAK is typed.  This
+;	routine will cause a framing error over the TTY line -- a
+;	framing error is often equivalent to a BREAK (which is actually
+;	a framing error consisting only of nulls). The framing error is
+;	induced by setting the line speed to a low value and sending a 
+;	number of nulls.  Because the line speed cannot be properly read
+;	by TOPS-20 the user must first specify their speed with the SPEED
+;	switch.  The BREAK-NULLS switch can also be used to say how many 
+;	nulls are to be sent down the line.  The BREAK-NULLS switch is 
+;	useful because different SPEEDs will require a different number 
+;	of NULLs to be sent -- in some cases a large setting for this switch
+;	will cause multiple breaks to be sent.  Since this value, and indeed
+;	this whole mechanism, is dependant on the connected machine type,
+;	this paramter is left to the user.
+
+BRKINT:	CALL BRKIN0		; call the work routine
+	DEBRK%			; and continue
+
+BRKIN0:	SAVEAC <A,B,C,D>	; save all used registers
+	SKIPG SPD		; do we know about a speed?
+	IFSKP.
+	  MOVE A,LNKJFN		; get the output terminal jfn
+	  MOVX B,.MOSPD		; set the speed
+	  HRLZ C,SPD		; same input speed
+	  HRRI C,^D50		; but output is lower (input,,output speeds)
+	  MTOPR%
+	   EJSHLT
+	  SKIPG C,BRK		; get count of nulls to send
+	   MOVEI C,DEFBRK	; use the default
+	  CAILE C,MAXNUL	; greater than we support?
+	   MOVEI C,MAXNUL	; yes, use that
+	  MOVNS C		; make negative
+	  MOVE B,[POINT 7,NULLS]	; point to them
+	  SETZ D,		; no stop char
+	  SOUT%
+	   EJSHLT
+	  MOVX B,.MOSPD		; now reset speed
+	  MOVE C,SPD
+	  HRLS C		; make input same as output
+	  MTOPR%
+	   EJSHLT
+	ELSE.
+	  TMSG <
+[BREAKs are not enabled, use the SPEED: switch first]
+>
+	ENDIF.
+	RET
+
+MAXNUL==100
+NULLS:	REPEAT <MAXNUL/5>+1,<0>
+	SUBTTL Parity routines.
+; Set parity bit of character in B.  Destroys D.
+SETPAR:	MOVE D,PARITY		; Get desired parity and compute it:
+	XCT [NOP		; None,
+	     TRO B,200		; Mark,
+	     JRST EVEN		; Even,
+	     JRST ODD		; Odd,
+	     TRZ B,200 ](D)	; Space.
+	RET			; Done.
+
+EVEN:	SAVEAC <C>		; Even parity
+	TRZ B,200		; Start off with bit 8=0.
+	MOVEI C,(B)		; Make a copy to work on.
+	JRST BOTH		; Join shared code.
+
+ODD:	SAVEAC <C>		; Odd parity.
+	TRO B,200		; Start off with bit 8=1.
+	MOVEI C,(B)		; Make a copy.
+BOTH:	LSH C,-4		; Get high order 4 bits of character
+	XORI C,(B)		; Fold into 4 bits.
+	TRCE C,14		; Left two bits both 0 or 1?
+	 TRNN C,14		;  or both 1?
+	 XORI B,200		; Yes,set parity
+	TRCE C,3		; Right two bits both 0?
+	 TRNN C,3		;  or both 1?
+	 XORI B,200		; Yes, set parity.
+	RET
+
+.END:	END <EVLEN,,ENTVEC>	; Entry-vector length,,address

@@ -1,0 +1,257 @@
+SUBTTL Deliver mail using DEC's IPCF mailer
+
+;;;Special definitions used by DEC IPCF MAILER
+SYSCOD==-2			;Special user number for SYSTEM
+NACK1==2			;Total wipeout by MAILER
+
+	LIT			;Help out cretinous MACRO
+
+	.ENDPS
+	.PSECT DATA		;Put this in data psect
+
+PIDGET:	IP%CPD			;Create a PID
+	0			;Where the PID goes
+	0			;For <SYSTEM>INFO
+	ENDPID-.,,.+1		;Pointer to actual message
+	1,,.IPCIW		;Get PID for name
+	0			;No PID for copy
+	ASCIZ/[SYSTEM]MAILER/	;The name
+ENDPID==.
+
+	.ENDPS
+	.PSECT CODE		;Back to code
+
+;;;Send local mail via IPCF mailer
+
+SNDLCL:	SKIPN W,LCLIST		;Any local mail to do?
+	 RET			;No, forget it then
+	MOVE A,[POINT 7,STRBUF]
+	MOVEI B,[ASCIZ/PS:</]
+	CALL MOVSTR
+	MOVE B,MYUSR		;Get my user number
+	DIRST%
+	 JFATAL
+	MOVEI B,[ASCIZ/>MSG.TMP.-1;P770000;T/]
+	CALL MOVST0		;And the null
+	MOVX A,GJ%FOU!GJ%NEW!GJ%SHT
+	HRROI B,STRBUF		;Get it back
+	GTJFN%
+	 JERROR (Can't get temporary file)
+	MOVEM A,TMPJFN
+	DO.
+	  MOVX B,<<FLD ^D36,OF%BSZ>!OF%WR> ;Open initially in 36-bit mode
+	  OPENF%
+	  IFJER.
+	    MOVE A,TMPJFN	;Let user try CONTINUE
+	    JSNARL (Can't open temporary file "%1J")
+	    HALTF%
+	    LOOP.
+	  ENDIF.
+	ENDDO.
+	SETZ B,			;No flags
+	BOUT%
+	DO.
+	  MOVE B,ADRUSR(W)	;Get directory number
+	  CAME B,[-1]		;Special local one?
+	  IFSKP.
+	    TXON F,F%F2		;Yes, use saved messages file
+	     SKIPE SAVFIL	;If have it from move command
+	     IFSKP.
+	       MOVE B,MYAUSR	;Otherwise just to me
+	       BOUT%
+	     ENDIF.
+	  ELSE.
+	    BOUT%		;Output directory number
+	  ENDIF.
+	  HRRZ W,ADRLNK(W)	;Get next in list
+	  JUMPN W,TOP.		;For all
+	ENDDO.
+	SETZ B,			;Mark end of list
+	BOUT%
+	BOUT%
+	MOVEI B,7		;Now get ready to output text
+	SFBSZ%
+	 JERROR
+	LDB B,[POINT 7,HDRPAG,6] ;Skip over leading CRLF if present
+	CAIN B,.CHCRT
+	 SKIPA B,[POINT 7,HDRPAG,13]
+	  HRROI B,HDRPAG	;Output our headers
+	SETZ C,
+	SOUT%
+	HRROI B,TXTPAG		;And text of message
+	SETZ C,
+	SOUT%
+	TXO A,CO%NRJ		;Close but keep the JFN for later
+	CLOSF%
+	 JWARN (Couldn't close temporary file)
+	TXZ F,F%F1		;Flag for warning message
+	SKIPE PIDGET+.IPCFS	;Have a PID already?
+	 TDZA A,A		;Yes, use it
+	  MOVX A,IP%CPD		;No, make one with first message
+	MOVEM A,PIDGET
+	DO.
+	  MOVEI B,PIDGET	;Get Mailer's PID
+	  SETZM PIDGET+.IPCFR	;Send to INFO
+	  MOVEI A,4		;Length of block
+	  MSEND%
+	  IFJER.
+	    TXON F,F%F1		;Already gave warning?
+	     JWARN <Waiting...>
+	    SETZM PIDGET+.IPCFS	;Maybe our PID was invalid
+	    MOVEI A,^D500	;Wait 1/2 sec
+	    DISMS%
+	    MOVX A,IP%CPD	;Create PID this time, and try again
+	    MOVEM A,PIDGET
+	    LOOP.
+	  ENDIF.
+	  MOVX A,IP%CPD		;Don't need to make a PID any more
+	  ANDCAM A,PIDGET
+	  DO.
+	    SETZB T,U		;No flags, any sender
+	    MOVE V,PIDGET+.IPCFS ;The PID I got last time
+	    MOVE W,[10,,WRTPGS]	;Some place for messages
+	    MOVEI A,.IPCFP+1	;Size of block
+	    MOVEI B,T		;Pointer to block
+	    MRECV%		;Get message from INFO
+	     NOP
+	    LOAD U,IP%CFC,T	;See who sent message
+	    CAIE U,.IPCCC	;From <SYSTEM>IPCF
+	     CAIN U,.IPCCF	;Or <SYSTEM>INFO
+	      CAIA		;Yes, good
+	       LOOP.		;No, get another message
+	    LOAD U,IP%CFE,T	;Get error field
+	    IFN. U
+	      CAIN U,.IPCSN	;INFO crash?
+	       LOOP.		;Yes, go get more messages
+	      MOVEI A,[ASCIZ/MAILER not running/]
+	      CALLRET SNLQAL	;Go queue all messages
+	    ENDIF.
+	  ENDDO.
+	  JXN T,IP%CFM,TOP.	;If undeliverable, try sending it again
+	ENDDO.
+	MOVE V,WRTPGS+1		;Get MAILER's PID
+	MOVEM V,PIDGET+2	;Save for later too
+	SETZB D,WRTPGS
+	HRROI A,WRTPGS+1
+	MOVE B,TMPJFN		;Temp file
+	MOVE C,[111110,,JS%PAF]	;Print all fields
+	JFNS%
+	IDPB D,A		;Move over null
+	MOVSI W,-WRTPGS(A)	;Get length of string
+	MOVEI A,(B)		;Now can get rid of JFN
+	RLJFN%
+	 NOP
+	SETOM TMPJFN
+	HRRI W,WRTPGS+1		;Where message is
+	SETZ T,			;No flags
+	MOVE U,PIDGET+1		;Sent by me
+	DO.
+	  MOVEI A,4		;Length
+	  MOVEI B,T		;Address
+	  MSEND%
+	  IFJER.
+	    MOVEI A,^D500	;Failed, wait a bit
+	    DISMS%
+	    LOOP.
+	  ENDIF.
+	ENDDO.
+	CITYPE <Processing local mail...>
+	DO.
+	  MOVEI A,4
+	  MOVEI B,T
+	  SETZB T,U
+	  MOVE V,PIDGET+1
+	  MOVE W,[1000,,WRTPGS+1000]
+	  MRECV%		;Get message from MAILER
+	   NOP
+	  LOAD B,IP%CFC,T	;Get sender type
+	  IFN. B		;Not special, must be mailer
+	    CAIE B,.IPCCC	;From <SYSTEM>INFO?
+	     CAIN B,.IPCCF	;Or private info
+	      LOOP.		;Yes, get some more
+	    MOVEI A,[ASCIZ/Could not send to MAILER/]
+	    CALLRET SNLQAL	;Queue them all if network
+	  ENDIF.
+	  CAME U,PIDGET+2
+	   LOOP.		;Not from mailer, get some more
+	ENDDO.
+	LOAD T,IP%CFE,T		;Get error code
+	IFN. T			;Any errors?
+	  CAIE T,NACK1		;Yes, total wipeout?
+	  IFSKP.
+	    MOVEI A,[ASCIZ/Processing errors occurred/]
+	    CALLRET SNLQAL
+	  ENDIF.
+	  SUB W,[1,,0]
+	  TLC W,-1		;Form AOBJN pointer
+	  HRRI W,WRTPGS+1000	;Point to list of failed things
+	  DO.
+	    MOVE T,1(W)		;Get bad guy
+	    MOVE U,LCLIST	;Get list of local recipients
+	    DO.
+	      CAME T,ADRUSR(U)	;This the guy?
+	      IFSKP.
+		EXCH U,W
+		CALL REMLST	;Remove from present list
+		EXCH U,W
+		SETZM ADRLNK(U)	;Queue for mailing through network
+		SETZM ADRUSR(U)
+		MOVEI B,NETLST
+		CALL ADDLST
+		 NOP
+	      ELSE.
+		HRRZ U,ADRLNK(U) ;No, get next in list
+		JUMPN U,TOP.
+		CAMN T,[SYSCOD]	;Queued mail for SYSTEM?
+		IFSKP.
+		  SNARL <Error reported for %6U, but it's not on local recipient list>
+		ELSE.
+		  MOVX A,RC%EMO	;Exact match
+		  HRROI B,[ASCIZ/SYSTEM/] ;In case SYSTEM not FILES-ONLY
+		  RCUSR%
+		  IFXE. A,RC%NOM!RC%AMB ;Is SYSTEM a user?
+		    MOVE T,C	;Yes, try looking for SYSTEM's user #
+		    MOVE U,LCLIST ;Get list of local recipients
+		    LOOP.
+		  ENDIF.
+		  SNARL <Error reported for SYSTEM, but it's not on local recipient list>
+		ENDIF.
+	      ENDIF.
+	      AOBJN W,.+1
+	      AOBJN W,TOP.	;Go handle next baddie
+	    ENDDO.
+	  ENDDO.
+	ENDIF.
+	SKIPL SNDVBS		;Doesn't want to here about this
+	 SKIPN U,LCLIST
+	  RET
+	DO.
+	  MOVEI A,ADRSTR(U)	;Get user name string
+	  CIETYP < %1R -- ok>	;Tell about it
+	  HRRZ U,ADRLNK(U)
+	  JUMPN U,TOP.
+	ENDDO.
+	RET			;All done
+
+;;;Gross failure, queue all messages
+
+SNLQAL:	CIETYP <%1S, all messages will be queued>
+	MOVE W,LCLIST
+	DO.
+	  JUMPE W,R
+	  MOVEI U,(W)
+	  SETZM ADRHST(U)	;Clear host address
+	  HRRZ W,ADRLNK(U)	;Get next link
+	  SETZM ADRLNK(U)	;Clear links
+	  MOVEI B,NETLST
+	  CALL ADDLST		;Link to net list now
+	   NOP
+	  LOOP.
+	ENDDO.
+SUBTTL End of program
+
+XLIST				;For clean listings
+	LIT
+LIST				;Literals are XLISTed out
+
+	END <EVECL,,EVEC>

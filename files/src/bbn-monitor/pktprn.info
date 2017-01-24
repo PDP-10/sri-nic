@@ -1,0 +1,394 @@
+File:        PKTPRN.INFO
+Program:     PKTPRN.EXE
+Description: To filter and format binary packet trace data for printing
+
+		  How to Gather Packet Samples
+
+
+   The new TCP/IP packet trace facility makes snapshots of packets
+at several points during processing, writing the data first to an
+in-core buffer, then to a file.
+
+   A typical test session begins by making sure there is a large in-core
+buffer (there may be one from the last test session).  First,
+get into MDDT by
+
+	$^EMDDT		or	$SDDT
+				JSYS 777<esc>X
+
+Then, examine location TCPPTB
+
+		tcpptb[   1,,157475
+
+The section 1 address means that the trace routines have not been
+initialized.  They are initialized by
+
+		CALL TCPPIN<esc>X
+
+Location TCPPTB will then contain an INTSEC address
+
+		tcpptb[   6,,164145
+
+   TCPPIN should only be called once (per monitor reload).
+
+   The next step is to create an empty file to hold the binary
+information.  Since the file is appended to, it should be newly
+created for each test run.  The filename is specified at TCPPFN::
+(in STG.MAC); the default name is PS:<OPERATOR>IPTRAC.BIN.  The COPY
+command may be used to create the empty file:
+
+	$COPY NUL: PS:<OPERATOR>IPTRAC.BIN;P777777
+
+   The third step is to make sure that the in-core buffer is empty.
+If the contents of TCPPTB and TCPPTC differ, CALL TCPPWR from MDDT
+and return to the COPY command above.
+
+   It also possible to specify a particular address/port to
+be traced by placing the left-justified host address into the
+location after the SKIPA T2,.+1 located at PRNPKT+4.  Filtering
+by a port may be specified by placing the right-justified port
+number in the word after the SKIPA T4,.+1 located at PRKPKT+22.
+(Note that the host-address should also be similarly placed in
+PRNPKH if filtering is desired at the local-net driver level;
+port filtering is not available at this level.)
+
+   Recording of packets at all points is initiated by setting
+INTTRC to -1 (this is NOT recommended as it generates data VERY
+quiclky).  The value 4000 samples at the host-gateway level,
+creating one or two samples per packet;  2000 should be used
+for gathering local-net driver samples (note that samples at this
+level do not contain much of the packet so you might want to
+use 6000 to get both samples).  Other values allow selective
+tracing by prototype module or level of interest;  see PT%%xx
+in INPAR.MAC for the meaning of the various bits.
+
+		INTTRC[   0   4000
+
+   The experiment may then be run.
+
+   Recording of packets is terminated by setting INTTRC back to 0.
+
+		INTTRC[   4000   0
+
+   The data remaining in the in-core buffer is written to the file
+by calling TCPPWR from MDDT.
+
+		CALL TCPPWR<esc>X
+		1,,MRETN<esc>G			to exit MDDT
+
+
+Example: [The binary trace file for the following example, UCL.BIN, was
+collected by setting INTTRC to 4000 (samples at the host-gateway level --
+this collects two samples per packet sent and one per packet received).]
+The example shows some of the results of using <ESC> and ?.
+
+$pktprn
+TCP Packet Trace Listing Program   V1.0(7)
+Parameters:? one of the following:
+ EXIT	  FILTER    FORMAT    GO	HELP	  INPUT	    OUTPUT    SHOW
+ SKIP
+Parameters:shOW
+Format Binary, Short, Version 1
+Filter TRACE-CODES 5130 5230 /MASK:7777
+  and  PROTOCOLS ICMP-PACKETS /MASK:377
+  and  NOT CODES ECHO-REPLY ECHO /MASK:377
+or     TRACE-CODES 5130 5230 /MASK:7777
+  and  PROTOCOLS TCP-PACKETS /MASK:377
+Parameters:fiLTER 
+Filter term: ? one of the following:
+ CLEAR	       CODES	      DONE	     ENTER	    HELP
+ HOSTS-PORTS   NOT	      PROTOCOLS	     SHOW	    TRACE-CODES
+Filter term: clEAR (filter expression) ? ALL
+  or decimal number
+  or confirm with carriage return
+Filter term: clEAR (filter expression) aLL 
+Filter term: hoSTS-PORTS (FH) 32.2.0.42 (FP) 12.23 (lp) 23
+
+Filter term: proTOCOLS ? Protocol name, pick one of the following:
+ CHAOS				CMCC-GATEWAY-MONITORING-MSG
+ DCN				GGP-PACKETS
+ HELP				ICMP-PACKETS
+ MIT-SUBNET-SUPPORT		MULTIPLEXING
+ NVP				INTERNET-PACKET-CORE-UTILITY
+ PLURIBUS			PUP
+ BBN-RCC-MONITORING		SATNET-BACKROOM-EXPAK
+ SATNET-MONITORING		SECURE
+ ST				BACKROOM-SATNET-MONITORING
+ TAC-MONITORING			TCP-PACKETS
+ TELENET			UCL
+ USER-DATAGRAM			WIDEBAND-EXPAK
+ WIDEBAND-MONITORING		XNET
+  or protocol decimal number
+  or /MASK:
+  or confirm with carriage return
+Filter term: proTOCOLS tcp
+Filter term: trACE-CODES ? one of the following:
+ GATEWAY-INPUT	    GATEWAY-OUTPUT	LOCAL-NET-ALL	    LOCAL-NET-INPUT
+ LOCAL-NET-OUTPUT
+  or octal number
+  or /MASK:
+  or confirm with carriage return
+Filter term: trACE-CODES 5130 5230
+Filter term: shOW
+       TRACE-CODES 5130 5230 /MASK:777777
+  and  PROTOCOLS TCP-PACKETS /MASK:377
+  and  HOSTS-PORTS Foreign 32.2.0.42 12.23 Local 0.0.0.0 0.23
+           /Masks: 255.255.255.255 255.255    0.0.0.0 255.255
+Filter term: enTER (current filter expression into filter table) 
+  Entered.
+Filter term: doNE (entering filter expressions) 
+Parameters:foRMAT ? one of the following:
+ ASCII		    BINARY		CORE-INPUT-FILE	    GARBAGE-OCTETS
+ HELP		    I-FIELDS		I-LEADERS	    ICMP-FIELDS
+ INTERNAL-FIELDS    INTERNAL-LEADERS	IP-FIELDS	    L-FIELDS
+ L-LEADERS	    LOCAL-FIELDS	LOCAL-LEADERS	    LONG-FORMAT
+ NO		    PAGINATE-LISTING	SHORT-FORMAT	    TCP-FIELDS
+ VERSION
+Parameters:foRMAT asCII 
+Parameters:foRMAT loNG-FORMAT 
+Parameters:iNPUT (from file) ucl.bIN.2 
+Parameters:oUTPUT (to file) UCL.LST.2
+Parameters:gO (process data) 
+
+% 4485 samples read, 134 headers and 133 samples listed.
+
+  [BBNF]PS:<CLYNN>UCL.LST.2
+Dump of PS:<CLYNN>UCL.BIN.2,1266,20-May-83 13:03:12
+
+Protocol    Recv    Sent
+TCP-PACK    4488    5660
+ICMP-PAC     169     308
+BBN-RCC-      35     446
+
+TCP Port    Recv    Sent
+TELNET      1872    2708
+
+Type-Code   Recv    Sent
+Echo Rep     168      28
+Redirect       1       0
+ Net           1       0
+Echo           0     280
+
+   Trace    Recv    Sent
+    5257       0    3193
+    5230       0    3221
+    5130    4692       0
+  11173 samples read, 142 headers and 140 samples listed.
+Parameters:eXIT 
+$ty ucl.lst
+  [BBNF]PS:<CLYNN>UCL.LST.2
+Dump of PS:<CLYNN>UCL.BIN.2,1266,20-May-83 13:03:12
+
+ Input PS:<CLYNN>UCL.BIN.2
+Output PS:<CLYNN>UCL.LST.2
+Format ASCII, Long, Version 1
+Filter TRACE-CODES 5130 5230 /MASK:777777
+  and  PROTOCOLS TCP-PACKETS /MASK:377
+  and  HOSTS-PORTS Foreign 32.2.0.42 12.23 Local 0.0.0.0 0.23
+           /Masks: 255.255.255.255 255.255    0.0.0.0 255.255
+
+
++.    34495530., Sample 1113.,6117061 PP% DUN  NOTE: PT%QLN
+ IP:  Do=5 Tos=0 Ln=40 ID=35357  TTL=59  6TCP S=10.0.0.5 0.23 D=32.2.0.42 12.23
+TCP: Seq=4256697867 Ack=236839538 Do=5   Ack     Wnd=917 Urgp=0
+
++ 101708.    34597238., Sample 2152.,6204311 PP% DUN  NOTE: PT%RGW
+ IP:  Do=5 Tos=0 Ln=42 ID=44828  TTL=61  6TCP S=32.2.0.42 12.23 D=10.0.0.5 0.23
+TCP: Seq=236839538 Ack=4256697867 Do=5   Ack  Psh    Wnd=256 Urgp=0
+  TCP Data:  15  12 
+
+...
+		    PKTPRN Output Formats
+
+   The formats and data presented in the lines of the packet trace
+listing file are illustrated and explained below.  Prototype PKTPRN
+output lines are shown with the data fields inclosed in angle brackets
+"<...>".  Some packets/lines/items are present only if the appropriate
+listing option was requested.  Note that only the dafault cases are
+shown;  custom formats may be specified using the xxx-FIELDS keyword.
+
+1)  Header Line (begins with "+") (Note: Multiple Header Lines are
+	listed for sequential samples of the same packet)
+
++ <dit>. <dct>., Sample <dsmp>.,<obuf> PP% <trcflg> NOTE: <where>
+
+dit	Decimal incremental time in msec, since last header line
+dct	Decimal (TODCLK) time in msec
+dsmp	Decimal sample number (running index of samples in .BIN file)
+obuf	Octal packet buffer memory address
+
+trcflg	(Samples collected within TCP) Old (TCP related) trace flags,
+        PP%xxx (see NETPAR.MAC):
+
+	MT	The packet buffer is empty
+	SK	The packet Source is known
+	GSS	The state inforamtion applies to the Source
+	PZ	The packet is being generated
+	SNT	The packet is being sent
+	REX	The packet is being retransmitted
+	DK	The packet Destination is known
+	GDS	The state information applies to the Destination
+	RCV	The packet is being received
+	RA	The packet is being reassembled by TCP
+	DUN	The packet buffer is being dumped
+
+where	New trace codes, PT%xxx (see NETPAR.MAC)
+	The most frequent codes for TCP tracing are:
+
+	200560	PT%TBD	TCP emptied user send buffer
+	201260	PT%TPZ	TCP packet generated
+	201230	PT%TRX	TCP packet sent
+	  5257	PT%RGI	IP gateway received packet from protocol
+	  5234	PT%BYP	IP gateway bypassed packet
+	  5230	PT%QLN	IP gateway passed packet to local net
+	  5130	PT%RGW	IP gateway received packet from local net
+	 11157	PT%IQP	IP passed packet to protocol
+	201130	PT%TDI	TCP received packet from IP
+	201140	PT%TQR	TCP queued packet for reassembly
+	201142	PT%TRA	TCP reassembling packet
+	201144	PT%TDR	TCP dequeued packet from reassembly
+	201160	PT%TID	TCP processing of packet finished
+	201244	PT%TDX	TCP dequeued packet from retransmission queue
+
+2)  Internal Leader Line (Format Internal-leader)
+
+ Int'l Hdr: TX=<tx> RXI=<rxi> TO=<to> ESEQ=<eseq> FLG=<flg>
+
+tx	Time, msec., the packet was (last) sent.
+rxi	Retransmission interval, msec.
+to	Time, msec., the packet will timeout.
+eseq	TCP packet end+1 sequence number.
+flg	Flags (see NETPAR.MAC)
+
+
+3)  Local Header Line (OPTION-L) (Note: Omitted if all fields are zero)
+
+ Local Hdr: #Pkts=<lnms> <ladr> Link=<llnk> Bits=<lbit>  <ltst>
+
+lnms	Right 4 bits of message type (maxsiz), omitted if zero (octal)
+ladr	Internet address
+llnk	Link nn, link field
+lbit	Bits nn, packet bit length
+ltst	ASCII type/subtype message, e.g. 0 0 is Reg Std
+
+
+4) IP Header, (Format LONG) (Note: tcbflg omitted unless TCP)
+
+IP: Do=<io> Tos=<its> Ln=<pl> ID=<id> TTL=<tl> <ip> S=<sa> <sp> D=<da> <dp>
+  IP Opt: <iop>
+    Next: <iop>
+ Garbage: <iopg>
+
+io	Data offset
+its	Precedence level and Delay/Throughput/Reliability bits
+pl	Packet length
+id	Segment ID
+tl	Time-to-live
+ip	Protocol - number followed by protocol mnemnonic
+sa	Source address
+sp	Souurce port, if applicable
+da	Destination address
+dp	Destination port, if applicable
+
+iop	Option octets: 0-End, 1-Nop, or <type> <length> <data>*
+iopg	Option garbage octets (after End type)
+
+5a) IP Fragments
+
+IP Frag:  <ddat>
+
+ddat	IP fragment octets, sixteen per line
+
+
+5b) Protocol 1 - ICMP packets, followed by included packet, if any
+
+ICMP Pkt: <etyp> <ecod> Cks = <ecks> <eidsq> <erut> <etim>
+Included Packet:
+<IP Packet>
+
+etyp	Either ASCII packet type string or octal type number
+ecod	Code nn., packet code, omitted if zero (decimal)
+ecks	Ckecksum (octal)
+eidsq	ID = nn, Seq = mm, packet ID and Sequence # (decimal)
+erut	Route via <address>, redirect address (octal)
+etim	Originate = <ut>, Receive = <ut>, Transmit = <ut>
+ut	Timestamps, msec since midnight universal time (decimal)
+	If left-most bit set, some other time value
+IP Packet	Header of included IP packet, if any (Note: only
+	first 64 bits beyond IP header are valid)
+
+
+5c) Protocol 2 - GGP
+
+GGP Data:  <ddat>
+
+ddat	GGP octets, sixteen per line
+
+
+5d) Protocol 3 - Secure
+
+SCR Data:  <ddat>
+
+ddat	Secure data octets, sixteen per line
+
+5e) Protocol 6 - TCP
+
+TCP: Seq=<tseq> Ack=<tack> Do=<to> <tctl> Wnd=<twnd> Urgp=<turg>
+ TCP Opt: <top>
+    Next: <top>
+ Garbage: <topg>
+TCP Data: <tdata>
+ Omitted: <tdom>
+
+tcbflg	TCB status flags:
+		Receive side	Send side
+	State: 	SYNABL		SYNABL	Listening
+		SYNRCV		SYNSNT	Synchronizing
+		SYNCED		SYNCED	Synchronized
+		FINRCV		FINSNT	Closing
+		NOTSYN		NOTSYN	Closed
+		?1		?1	Undefined
+		?3		?3	Undefined
+		?6		?6	Undefined
+	UOP	Opened by user and not yet CLOSEd/ABORTed
+	OPN	User told open
+	PRS	TCP%PS set at OPEN (persistent)
+	ABT	Has been ABORTed
+	SV	Send Sequence number is valid
+	10	Undefined
+	4	Undefined
+	SURG	Send Urgent mode
+	RURG	Receive Urgent mode
+
+tseq	Packet sequence number
+tack	Packet acknowledgement number, if PACK
+to	Data offset
+tctl	Control flags set:
+	URG	Urgent
+	ACK	Acknowledgement valid
+	PSH	PUSH
+	RST	RESET
+	SYN	SYN
+	FIN	FIN
+twnd	Window size
+turg	Urgent pointer, if PURG
+
+top	Option octets: 0-End, 1-Nop, or <type> <length> <data>*
+topg	Option garbage octets (after End type)
+tdata	First 16. TCP data octets, or
+	First 16. TCP data octets in ASCII or octal
+tdom	Number of data octets not listed in <tdata>
+
+5f) Other Protocols
+
+IP Data:  <ddat>
+
+ddat	IP data octets, 16. per line
+
+
+6)  All Protocols
+
+ Garbage:  <garb>
+
+garb	Sampled bytes beyond <pl>-determined end of packet,
+	if any, 16. octets per line

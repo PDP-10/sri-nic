@@ -1,0 +1,225 @@
+title	fix-incremental -- fix incremental backup counts after disk restorals
+
+.decsav
+$$jser==1
+.insrt	mid:macsxx
+.insrt	mid:cmd
+
+.scalar	stack(200)
+
+fj==	5
+fd==	6
+
+define	typecr	*cruft
+	hrroi	1,[asciz cruft
+]
+	psout%
+termin
+
+define	crtype	*cruft
+	hrroi	1,[asciz 
+cruft]
+	psout%
+termin
+
+
+start:	reset%
+	movei	1,.fhslf
+	rpcap%				; find out if we be wopr
+	 ernop
+	ifxe.	2,sc%whl\sc%opr		; are we?
+	  emsg	"Must be wheel or operator"
+	  haltf%			; nope, are luser
+	  jrst	start			; so go away
+	else.
+	  tro	3,(2)			; yup, enable ourself
+	  epcap%
+	   ernop			; well, we tried
+	endif.
+	move	p,[-200,,stack-1]
+	hrroi	1,wrnmsg		; tell user what this program does
+	psout%
+	call	cmdini			; init the parser
+	movx	1,gj%ifg\gj%old\.gjall	; default to wildcard filespec
+	movem	1,cjfnbk+.gjgen		; existing files
+	movx	1,g1%iin		; find invisible files, too
+	movem	1,cjfnbk+.gjf2
+	hrroi	1,[asciz "*"]
+	movem	1,cjfnbk+.gjnam
+	movem	1,cjfnbk+.gjext
+	do.				; loop for commands
+	  prompt "Fix-Incremental>"
+	  movei	1,[flddb. .cmkey,,keytab]
+	  call	rfield
+	  hrrz	1,(2)
+	  call	(1)
+	  loop.
+	enddo.
+
+keytab:	keylen,,keylen
+cmd	exit
+cmd	fix
+cmd	help
+cmd	list
+	keylen==.-1-keytab
+
+.exit:	noise	"program"
+	call	confrm
+	haltf%
+	ret
+
+.help:	noise	"with program"
+	call	confrm
+	hrroi	1,hlpmsg
+	psout%
+	ret
+
+.list:	noise	"backup words for files"
+	movei	1,[flddb. .cmfil]
+	call	cfield
+	move	fj,2			; keep the jfn
+	do.				; for all files
+	  call	getfdb			; get fdb info
+	  tmsg	"File: "
+	  movei	1,.priou
+	  hrrz	2,fj			; write the filename
+	  movx	3,js%spc\js%paf
+	  jfns%
+	  ifjer.
+	    tmsg "???"
+	  endif.
+	  crtype "Write count: "
+	  movei	1,.priou
+	  hlrz	2,fd			; LH (.FBCNT)
+	  movei	3,10.
+	  nout%
+	   ernop
+	  crtype "Write count when backed up : "
+	  movei	1,.priou
+	  hrrz	2,fd+1			; RH (.FBBK0)
+	  movei	3,10.
+	  nout%
+	   ernop
+	  crtype "File is "
+	  hlrz	2,fd			; File is backed up
+	  hrrz	3,fd+1			; if counts are equal
+	  camn	2,3
+	  ifskp.
+	    tmsg "not "
+	  endif.
+	  tmsg	"backed up on tape
+File is on "
+	  movei	1,.priou
+	  hlre	2,fd+1			; LH (.FBBK0)
+	  movei	3,10.
+	  nout%
+	   ernop
+	  tmsg	" incremental tapes (including full-incremental)
+
+"
+	  move	1,fj			; step to next file
+	  gnjfn%
+	   erskp
+	    loop.			; go do it if there is one
+	enddo.
+	setz	fj,			; don't try to reuse this
+	ret				; done, go home
+
+.fix:	noise	"fdb backup info for files"
+	movei	1,[flddb. .cmfil]
+	call	cfield
+	move	fj,2			; save the jfn
+	tmsg	"
+This function will change the fdb information of the specified files
+to indicate that the files are on one incremental backup tape.  Do not
+do this if you aren't sure you understand the consequences.
+
+"
+	prompt	"Are you sure?  [Confirm]"
+	movei	1,[flddb. .cmcfm]	; confirm but handle errors ourself
+	call	rflde
+	ifnsk.				; does user really want to do this?
+	  move	1,fj			; didn't think so
+	  rljfn%			; so release the jfn
+	   ernop			; well, we tried
+	  typecr "[Not confirmed]"
+	  ret				; get out of here now
+	endif.
+	typecr	"Ok but don't say I didn't warn you...."
+	do.				; for all files
+	  movei	1,.priou		; start by announcing file
+	  hrrz	2,fj
+	  movx	3,js%spc\js%paf
+	  jfns%
+	   ejshlt			; be extremely paranoid
+	  call	getfdb			; get fdb info
+;	  hlrz	1,fd			; see if is backed up at all
+;	  hrrz	2,fd+1
+;	  camn	1,2			; write counts match?
+;	  ifskp.			; guess not, flame
+;	    typecr " really isn't on tape so not marking saved"
+;	  else.
+;	    hlre 2,fd+1			; get incr tape field
+;	    ifn. 2			; somebody already mess with it?
+;	      tmsg " is already marked as being on "
+;	      movei 1,.priou
+;	      movei 3,10.
+;	      nout%
+;	       ernop
+;	      typecr " incremental tape(s)"
+;	    else.			; nobody messed with it, ok
+	      move  1,fj		; to procede
+	      hrli  1,.fbbk0		; change backup word
+;	      movsi 2,-1		; mask of field to change
+	seto 2,
+	      movsi 3,1			; value to put there
+	hlr 3,fd
+	      chfdb%			; do it and block until finished
+	      ifnje.			; make it?
+	        typecr " [OK]"
+	      else.			; nope
+	        jserr			; so flame
+	      endif.			; done
+;	    endif.
+;	  endif.
+	  move	1,fj			; step to next file
+	  gnjfn%
+	   erskp
+	    loop.			; go do it if exists
+	enddo.
+	ret				; done
+
+hlpmsg:	asciz	|
+This program is used to display or mung the backup information in a file's
+FDB.  The currently supported functions are:
+
+HELP	  Type this cruft
+EXIT	  Guess
+LIST	  Display the .FBCNT and .FBBK0 words with comments and arrows and
+	  scroll bars...
+FIX	  Change the incremental tape count field of .FBBK0 to indicate that
+	  a file is on at either a full or incremental dump tape.  This is
+	  useful after a large number of files have been restored to disk from
+	  dump tapes (say, after a head crash), because such files have this
+	  field set to zero.  Thus the next incremental save tape will contain
+	  all the files just restored.  (This isn't a bug in DUMPER, if you
+	  think about it, which is why this program exists.)
+
+Other functions may be added someday if I see a need for them.  The FIX command
+is extremely paranoid since it could be very embarassing to accidently prevent
+somebody's thesis from being on the backup tapes.
+|
+
+wrnmsg:	asciz	|
+Type HELP if you don't understand what this program does, *before* trying out
+any of the commands.
+|
+
+getfdb:	hrrz	1,fj			; get the jfn
+	move	2,[2,,.fbcnt]		; two words, starting at .fbcnt
+	movei	3,fd			; where to put them
+	gtfdb%				; snarf
+	 ejshlt
+	ret				; done
+
+	end	start

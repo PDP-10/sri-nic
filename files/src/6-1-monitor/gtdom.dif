@@ -1,0 +1,685 @@
+
+
+; GTDOM.MAC.45 & GTDOM.SU.1  9-Jun-87 0006	PAGE 1
+
+
+
+LINE 1, PAGE 1
+1)	;[SRI-NIC]SRC:<6-1-MONITOR>GTDOM.MAC.3,  5-Jun-87 13:22:26, Edit by MKL
+1)	; add NIC hacks under GTDSW conditional
+1)	;SRC:<6.1.MONITOR.STANFORD>GTDOM.MAC.31,  5-Nov-86 13:57:13, Edit by BILLW
+LINE 1, PAGE 1
+2)	;SIERRA::SRC:<GROSSMAN.GTDOM>GTDOM.MAC.33, 10-Mar-87 13:57:34, Edit by GROSSMAN
+2)	;Reduce stack usage in RSOLVE to prevent MONPDL's.
+2)	;[SIERRA.STANFORD.EDU]SRC:<6.1.MONITOR.STANFORD>GTDOM.MAC.32, 17-Dec-86 16:28:56, Edit by BILLW
+2)	; correct TYPO near IF2 conditional
+2)	;SRC:<6.1.MONITOR.STANFORD>GTDOM.MAC.31,  5-Nov-86 13:57:13, Edit by BILLW
+
+
+LINE 2, PAGE 4
+1)	IFN GTDSW,<
+1)	NICSIZ==1000
+1)	NICNAM:	BLOCK NICSIZ		;NICKNAME STRING SPACE
+1)	NICTSZ==200
+1)	NICTAB:	BLOCK NICTSZ		;TBLUK TABLE
+1)	LNBFLN==40
+1)	
+1)	NICDNM:	BLOCK maxdc
+1)	
+1)	LOCDOM:	ASCIZ "ARPA"		;IN CASE NOT SET
+1)		BLOCK 10		;LOCAL DOMAIN NAME
+1)	
+1)	;ADD A NICKNAME, RETSKP IF OK, ENTRY TO ADD IN T2
+1)	NICTBA::XMOVEI T1,NICTAB
+1)		TBADD%
+1)		 ERJMP R
+1)		RETSKP
+1)	
+1)	;LOOKUP A NICKNAME, STRING IN T2
+1)	;RETSKP IF FOUND WITH ADDRESS OF TABLE ENTRY IN T1
+1)	NICTBL:	XMOVEI T1,NICTAB
+1)		TBLUK%
+1)		 ERJMP R
+1)		TXNN T2,TL%EXM		;EXACT MATCH?
+1)		 RET
+1)		RETSKP
+1)	
+1)	^L	SUBTTL Nickname Table Initialization
+1)	
+1)	COMMENT \
+1)		The nickname translation table is used by the GTDOM% jsys.
+1)	Any name without a dot is first looked up in the nickname table
+1)	and if an entry is found it is translated into it's official name
+1)	before being passed off for resolving.
+1)	
+1)		Things used by this routine:
+
+; GTDOM.MAC.45 & GTDOM.SU.1  9-Jun-87 0006	PAGE 2
+
+
+1)	
+1)	NICNAM		the name space for strings
+1)	NICSIZ		number of words allocated for NICNAM
+1)	NICSPC		the number of free words in NICNAM space
+1)	NICPTR		pointer to next free word in NICNAM
+1)	NICTAB		a tbluk table of nicknames
+1)	NICTSZ		size of tbluk table
+1)	
+1)	\
+1)	
+1)	NICINI:
+1)		TRVAR <NICJFN,NICSAV,NICSPC,NICPTR,<TMPBUF,20>,<LINBUF,LNBFLN>,LINPTR>
+1)	
+1)		MOVX T1,GJ%SHT!GJ%OLD
+1)		HRROI T2,[ASCIZ /SYSTEM:DOMAIN.CMD/]
+1)		GTJFN%
+1)		 ERJMP R		;file not found
+1)		MOVEM T1,NICJFN		;save JFN
+1)		MOVX T2,7B5!OF%RD
+1)		OPENF%
+1)		 ERJMP NICER1
+1)	
+1)		MOVNI T1,NICSIZ		;SIZE OF NAME SPACE
+1)		MOVEM T1,NICSPC		;WORDS REMAINING
+1)		MOVEI T1,NICNAM
+1)		MOVEM T1,NICPTR		;NEXT AVAILABLE STRING SPACE
+1)		MOVEI T1,NICTSZ
+1)		MOVEM T1,NICTAB		;TBLUK SETUP
+1)	
+1)	NICNL:	CALL NCNL		;SKIP TO START OF NEXT DATA LINE
+1)		 JRST NICCLS		;EOF
+1)		CALL NCRFLD		;READ A FIELD (primary host name)
+1)		 JRST NICNL		;NOTHING THERE
+1)	
+1)		PUSH P,T1
+1)		HRROI T1,TMPBUF
+1)		HRROI T2,[ASCIZ /LOCAL-DOMAIN/]
+1)		STCMP%
+1)		JUMPE T1,[POP P,T1
+1)			  CALL NICLOC	;GET LOCAL DOMAIN NAME
+1)			  JRST NICNL]
+1)		POP P,T1
+1)	
+1)		IDIVI T1,5
+1)		SKIPE T2
+1)		 ADDI T1,1
+1)		MOVE T3,T1
+1)		ADDM T1,NICSPC		;DECREMENT NAME SPACE LEFT
+1)		SKIPLE NICSPC		;TABLE FULL?
+1)		 JRST NICERF
+1)		MOVE T1,T3
+
+; GTDOM.MAC.45 & GTDOM.SU.1  9-Jun-87 0006	PAGE 3
+
+
+1)		PUSH P,T1		;SAVE COUNT
+1)		ADD T1,NICPTR
+1)		HRLZI T2,TMPBUF
+1)		HRR T2,NICPTR
+1)		BLT T2,(T1)		;SAVE STRING
+1)		MOVE T1,NICPTR		
+1)		MOVEM T1,NICSAV		;SAVE ADDR OF OFFICIAL NAME
+1)		POP P,T1		;RESTORE COUNT
+1)		ADDM T1,NICPTR		;UPDATE POINTER
+1)	
+1)	NICNIC:	CALL NCRFLD		;READ A NICKNAME
+1)		 JRST NICNL		;NOTHING
+1)		IDIVI T1,5
+1)		SKIPE T2
+1)		 ADDI T1,1
+1)		MOVE T3,T1
+1)		ADDM T1,NICSPC		;DECREMENT NAME SPACE LEFT
+1)		SKIPLE NICSPC		;TABLE FULL?
+1)		 JRST NICERF
+1)		MOVE T1,T3
+1)		PUSH P,T1		;SAVE COUNT
+1)		ADD T1,NICPTR
+1)		HRLZI T2,TMPBUF
+1)		HRR T2,NICPTR
+1)		BLT T2,(T1)		;SAVE STRING
+1)		HRLZ T2,NICPTR		
+1)		POP P,T1		;RESTORE COUNT
+1)		ADDM T1,NICPTR		;UPDATE POINTER
+1)		HRR T2,NICSAV		;NICKNAME,,OFFICIAL NAME
+1)		CALL NICTBA		;ADD TO TABLE
+1)		 TRN			;SKIP ERRORS
+1)		JRST NICNIC		;READ ANOTHER NICKNAME
+1)	
+1)	NICER1:	MOVE T1,NICJFN
+1)		RLJFN%
+1)		 ERJMP .+1
+1)		RET
+1)	
+1)	NICERF:	TMSG <%Nickname space full
+1)	>
+1)	NICCLS:	MOVE T1,NICJFN
+1)		CLOSF%
+1)		 ERJMP .+1
+1)		RETSKP			;success return
+1)	
+1)	;GET LOCAL DOMAIN NAME
+1)	NICLOC:	CALL NCRFLD		;READ IT
+1)		 JRST NICNL		;NOTHING
+1)		MOVE T1,[POINT 7,LOCDOM];DEST
+1)		MOVE T2,[POINT 7,TMPBUF];SOURCE
+1)		ILDB T3,T2
+
+; GTDOM.MAC.45 & GTDOM.SU.1  9-Jun-87 0006	PAGE 4
+
+
+1)		IDPB T3,T1
+1)		JUMPN T3,.-2
+1)		RET
+1)	
+1)	;SKIP TO NEXT LINE, RETSKP IF OK
+1)	NCNL:	MOVE T1,NICJFN
+1)		MOVE T2,[POINT 7,LINBUF]
+1)		MOVEI T3,LNBFLN*5-1
+1)		MOVEI T4,.CHLFD
+1)		SIN%
+1)		 ERJMP [SETZM LINPTR
+1)			RET]
+1)		SETZ T4,
+1)		IDPB T4,T2
+1)		LDB T1,[POINT 7,LINBUF,6]
+1)		CAIE T1,.CHCRT
+1)		 CAIN T1,.CHLFD
+1)		  JRST NCNL
+1)		CAIE T1,";"
+1)		 CAIN T1,"!"
+1)		  JRST NCNL
+1)		MOVE T1,[POINT 7,LINBUF]
+1)		MOVEM T1,LINPTR
+1)		RETSKP
+1)	
+1)	;READ A FIELD, RETSKP IF OK, RETURN CHAR COUNT IN T1, STRING IN TMPBUF
+1)	NCRFLD:	SKIPN LINPTR
+1)		 RET			;NOTHING TO DO
+1)		MOVE T2,[POINT 7,TMPBUF]
+1)		SETZ T3,
+1)	NCRFL1:	ILDB T1,LINPTR
+1)		JUMPE T1,R
+1)		CAIE T1,.CHSPC
+1)		 CAIN T1,.CHTAB
+1)		  JRST NCRFL1
+1)		CAIE T1,.CHCRT
+1)		 CAIN T1,.CHLFD
+1)		  RET
+1)	NCRFL2:	IDPB T1,T2
+1)		ADDI T3,1
+1)		ILDB T1,LINPTR
+1)		JUMPE T1,NCRFL3
+1)		CAIE T1,.CHSPC
+1)		 CAIN T1,.CHTAB
+1)		  JRST NCRFL3
+1)		CAIE T1,.CHCRT
+1)		 CAIN T1,.CHLFD
+1)		  JRST NCRFL3
+1)		CAIE T1,","
+1)		 CAIN T1,":"
+1)	          JRST NCRFL3
+
+; GTDOM.MAC.45 & GTDOM.SU.1  9-Jun-87 0006	PAGE 5
+
+
+1)		JRST NCRFL2
+1)	NCRFL3:	SETZ T1,
+1)		IDPB T1,T2
+1)		MOVEI T1,1(T3)		;RETURN COUNT (INCLUDING NULL)
+1)		RETSKP
+1)	>;IFN GTDSW
+1)	
+1)	^L
+1)		Subttl	Parameters needed for tuning performance or configuration
+LINE 2, PAGE 4
+2)		Subttl	Parameters needed for tuning performance or configuration
+
+
+LINE 15, PAGE 14
+1)	IFN GTDSW,<
+1)	TRVAR <<nicdnm,maxdc>>
+1)		ifxe. flags,dnf			;if asciz name
+1)		  umove t1,2			;get source designator
+1)		  call nicsin			;read in string
+1)		    djerr(gtdx1)
+1)	 	  umovem t1,2			;store updated designator
+1)		  call nicluk			;check for special stuff
+1)		    jrst nicnum			;  [a.b.c.d] format found
+1)		    jrst nicloc			;  append local domain
+1)		    jrst nicsub			;  nickname found
+1)	niccon:	  call dsetup			;set up database context
+1)		  move t1,[point 7,nicdnm]	;source
+1)		  move t3,[ildb t2,t1]		;load instruction
+1)		  call sindnx
+1)		    djerr(gtdx1)
+1)		else.				;if domain format name
+1)		  call dsetup			;set up database context
+1)		  umove t1,2			;get source designator
+1)		  call sindn			;get domain name set up
+1)		    djerr(gtdx1)			;lost somehow, punt
+1)		  umovem t1,2			;store updated designator
+1)		endif.
+1)	>;IFN GTDSW
+1)	IFE GTDSW,<
+1)		call dsetup			;set up database context
+LINE 15, PAGE 12
+2)		call dsetup			;set up database context
+
+
+; GTDOM.MAC.45 & GTDOM.SU.1  9-Jun-87 0006	PAGE 6
+
+
+
+LINE 45, PAGE 14
+1)	>
+1)		movei t1,da
+1)		jrst dlooki			;and look it up	
+1)	^L
+1)	
+1)	IFN GTDSW,<
+1)	;read string to translate, retskp if ok
+1)	nicsin:	move t3,[xctbu [ildb t2,t1]]	;instruction to fetch bytes
+1)		tlnn t1,777777			;if jfn do JSYS
+LINE 20, PAGE 12
+2)		movei t1,da
+2)		jrst dlooki			;and look it up	
+2)	^L
+2)		Subttl	GTDGEN - General domain resolution request
+2)	
+2)	;	BEFORE:				AFTER:
+2)	;
+2)	;	AC1/ flags,,.GTDRR (11)		AC1/ updated flags
+2)	;	AC2/ address of argument block
+2)	;
+2)	;	Argument block format:
+2)	;	.GTDLN (0)	Length of block not including this word
+2)	;	.GTDQN (1)	Input designator for QNAME
+2)	;	.GTDTC (2)	QTYPE,,QCLASS
+2)	;	.GTDBC (4)	Maximum number of bytes allowed in answer (updated)
+2)	;	.GTDBP (5)	Destination designator for output (updated)
+2)	;
+2)	;	A zero in .GTDBC means no limit on output.
+2)	;	Too few words in the argument block cause an ARGX04 error.
+2)	;	More words than are understood will be ignored, since somebody
+2)	;	may think of more useful fields someday.
+2)	
+2)	gtdgen:	umove flags,1			;setup flags and fcode
+2)		andx flags,diflag		;clear any unknown flags
+2)		umove t1,2			;get pointer to argument block
+2)		umove t2,.gtdln(t1)		;get length word
+2)		caige t2,.gtdbp			;must be at least through .gtdbp
+2)		 reterr(argx04)			;too few args, punt
+2)		push p,t1			;save argblock address
+2)		call dsetup			;set up database context
+2)		pop p,t2			;get back argblock address
+2)		umove t1,.gtdqn(t2)		;get QNAME
+2)		umove t3,.gtdtc(t2)		;get QTYPE,,QCLASS
+2)		hlrzm t3,stype(sblock)		;setup type
+2)		hrrzm t3,sclass(sblock)		;setup class
+2)		call sindn			;setup input name
+2)		 djerr(gtdx1)			;lost somehow, punt
+2)		txo flags,nullok
+
+; GTDOM.MAC.45 & GTDOM.SU.1  9-Jun-87 0006	PAGE 7
+
+
+2)		umove t2,2			;argblk address again
+2)		umovem t1,.gtdqn(t2)		;store updated source designator
+2)		jrst dlook			;go do the lookup
+2)	^L
+2)		Subttl	SinDN
+2)	
+2)	;	SINDN - gets a domain name into SNAME using the byte
+2)	;	pointer specified by the user in AC2.
+2)	;
+2)	;	The domain name is in domain name format if DNF is set;
+2)	;	otherwise ASCIZ is assumed
+2)	;
+2)	;	register usage:
+2)	;	t1/	source designator
+2)	;	t2/	input byte
+2)	;	t3/	instruction to fetch next byte
+2)	;	t4/	count of octets which can be added to dname
+2)	;	t5/	count of octets for label
+2)	;	t7/	byte pointer into dname
+2)	;
+2)	; returns +2 on success, +1 on failure (gtdx1)
+2)	
+2)	sindn:					;caller already set T1 for us
+2)	ifdj  <	move t3,[xctbu [ildb t2,t1]]>
+2)	ifndj <	move t3,[ildb t2,t1]>
+2)		tlnn t1,777777			;if jfn do JSYS
+
+
+LINE 11, PAGE 15
+1)		movei t4,maxdc			;max chars allowed
+1)		move t7,[point 7,nicdnm]	;put asciz name here
+1)	nicsi1:	xct t3				;get a character
+1)		 erjmp r
+1)		sojl t4,r			;error if more than max
+1)		jumpe t2,nicsix
+1)		caie t2,.chspc
+1)		 cain t2,.chtab
+1)		  jrst nicsix
+1)		caie t2,.chcrt
+1)		 cain t2,.chlfd
+1)		  jrst nicsix
+1)		idpb t2,t7			;save it
+1)		jrst nicsi1
+1)	nicsix:	setz t2,
+1)		idpb t2,t7			;end string
+1)		retskp
+1)	
+1)	;check name read
+1)	;ret +1 if [a.b.c.d] format
+1)	;    +2 if name ended with a dot
+1)	;    +3 if nickname (no dots)
+
+; GTDOM.MAC.45 & GTDOM.SU.1  9-Jun-87 0006	PAGE 8
+
+
+1)	;    +4 if domain name (dots)
+1)	; ac 4/dot count
+1)	; ac 5/last character
+1)	nicluk:	ldb t2,[point 7,nicdnm,6]
+1)		cain t2,133			;left bracket?
+1)		 ret 				;host number return     
+1)		aos (p)				;ret 2+
+1)		setzb t4,t5			;zero dot count, last char
+1)		move t2,[point 7,nicdnm]
+1)	niclu1:	ildb t3,t2
+1)		jumpe t3,niclu2
+1)		cain t3,"."			;count dots
+1)		 addi t4,1
+1)		move t5,t3			;save last char
+1)		jrst niclu1
+1)	niclu2:	cain t5,"."			;was last char a dot?
+1)		 ret				;yes, say name ended with dot
+1)		aos (p)
+1)		skipn t4			;any dots?
+1)		 ret				;no dots, nickname
+1)		retskp				;otherwise normal domain name
+1)	
+1)	;nicdnm was a nickname, substitute official name
+1)	nicsub:	hrroi t2,nicdnm
+1)		call nictbl		;lookup nickname
+1)		 jrst niccon		;failed, do nothing
+1)		hrrz t1,(t1)		;get address of official name
+1)		hrli t1,(<point 7,0>)
+1)		move t2,[point 7,nicdnm]
+1)	nicsu1:	ildb t3,t1		;substitute it
+1)		idpb t3,t2
+1)		jumpn t3,nicsu1
+1)		jrst niccon
+1)	
+1)	;name ended with a dot, so append local domain to it
+1)	nicloc:	move t1,[point 7,nicdnm]
+1)		ildb t2,t1
+1)		jumpn t2,.-1		;find end of string
+1)		seto t2,
+1)		adjbp t2,t1
+1)		move t3,[point 7,locdom];local domain string
+1)		ildb t1,t3
+1)		idpb t1,t2
+1)		jumpn t1,.-2		;append string
+1)		jrst niccon
+1)	
+1)	;string was "[a.b.c.d]", just return internet number
+1)	nicnum:	move t1,[point 7,nicdnm]
+1)		ildb t2,t1		;skip left bracket
+1)		movei t4,4		;4 octets
+1)		setz t5,		;form address here
+
+; GTDOM.MAC.45 & GTDOM.SU.1  9-Jun-87 0006	PAGE 9
+
+
+1)		movei t3,^d10
+1)	nicnu1:	lsh t5,^d8
+1)		nin%
+1)		 erjmp nicnue
+1)		dpb t2,[point 8,t5,35]
+1)		sojg t4,nicnu1
+1)		umovem t5,t3		;return number to user
+1)		umovem t4,t4		;zero status
+1)		jrst skmrtn		;skip return
+1)	
+1)	nicnue:	djerr(gtdx1)		;lose
+1)	
+1)	>;IFN GTDSW
+1)	
+1)	^L
+1)		Subttl	GTDGEN - General domain resolution request
+1)	
+1)	;	BEFORE:				AFTER:
+1)	;
+1)	;	AC1/ flags,,.GTDRR (11)		AC1/ updated flags
+1)	;	AC2/ address of argument block
+1)	;
+1)	;	Argument block format:
+1)	;	.GTDLN (0)	Length of block not including this word
+1)	;	.GTDQN (1)	Input designator for QNAME
+1)	;	.GTDTC (2)	QTYPE,,QCLASS
+1)	;	.GTDBC (4)	Maximum number of bytes allowed in answer (updated)
+1)	;	.GTDBP (5)	Destination designator for output (updated)
+1)	;
+1)	;	A zero in .GTDBC means no limit on output.
+1)	;	Too few words in the argument block cause an ARGX04 error.
+1)	;	More words than are understood will be ignored, since somebody
+1)	;	may think of more useful fields someday.
+1)	
+1)	gtdgen:	umove flags,1			;setup flags and fcode
+1)		andx flags,diflag		;clear any unknown flags
+1)		umove t1,2			;get pointer to argument block
+1)		umove t2,.gtdln(t1)		;get length word
+1)		caige t2,.gtdbp			;must be at least through .gtdbp
+1)		 reterr(argx04)			;too few args, punt
+1)		push p,t1			;save argblock address
+1)		call dsetup			;set up database context
+1)		pop p,t2			;get back argblock address
+1)		umove t1,.gtdqn(t2)		;get QNAME
+1)		umove t3,.gtdtc(t2)		;get QTYPE,,QCLASS
+1)		hlrzm t3,stype(sblock)		;setup type
+1)		hrrzm t3,sclass(sblock)		;setup class
+1)		call sindn			;setup input name
+1)		 djerr(gtdx1)			;lost somehow, punt
+1)		txo flags,nullok
+1)		umove t2,2			;argblk address again
+
+; GTDOM.MAC.45 & GTDOM.SU.1  9-Jun-87 0006	PAGE 10
+
+
+1)		umovem t1,.gtdqn(t2)		;store updated source designator
+1)		jrst dlook			;go do the lookup
+1)	^L
+1)		Subttl	SinDN
+1)	
+1)	;	SINDN - gets a domain name into SNAME using the byte
+1)	;	pointer specified by the user in AC2.
+1)	;
+1)	;	The domain name is in domain name format if DNF is set;
+1)	;	otherwise ASCIZ is assumed
+1)	;
+1)	;	register usage:
+1)	;	t1/	source designator
+1)	;	t2/	input byte
+1)	;	t3/	instruction to fetch next byte
+1)	;	t4/	count of octets which can be added to dname
+1)	;	t5/	count of octets for label
+1)	;	t7/	byte pointer into dname
+1)	;
+1)	; returns +2 on success, +1 on failure (gtdx1)
+1)	
+1)	sindn:					;caller already set T1 for us
+1)	ifdj  <	move t3,[xctbu [ildb t2,t1]]>
+1)	ifndj <	move t3,[ildb t2,t1]>
+1)	IFN GTDSW,<
+1)	sindnx:
+1)	>
+1)		tlnn t1,777777			;if jfn do JSYS
+1)		 move t3,[bin%]
+1)		tlc t1,777777			;check for LH=-1
+1)		tlcn t1,777777
+1)		 hrli t1,(<point 7,0>)		;use standard pointer
+1)		movei t4,maxdc			;maximum characters in domain name
+LINE 28, PAGE 14
+2)		movei t4,maxdc			;maximum characters in domain name
+
+
+LINE 53, PAGE 21
+1)		  movx t1,sbcpz-sbcpb		;how many words to copy
+1)		  xmovei t2,sbcpb(sblock)	;from search block
+1)		  xmovei t3,1(p)		;onto stack
+1)		  adjsp p,sbcpz-sbcpb		;make room on stack (or BUGHLT!)
+1)		  extend t1,[xblt]		;save sblock stuff we care about
+1)		endif.
+LINE 53, PAGE 18
+2)	
+2)	;Note carefully!  At this point we need to save all of the information needed
+2)	;to restart the resolution request.  This includes QCLASS, QTYPE, and the
+2)	;domain name.  The goal here is to save all of the info on the stack, and to
+2)	;minimize the amount of stack space used.  (The code that this replaces used
+2)	;to copy the entire SBLOCK onto the stack, and consumed 341 words of stack
+
+; GTDOM.MAC.45 & GTDOM.SU.1  9-Jun-87 0006	PAGE 11
+
+
+2)	;space!  This resulted in occasional MONPDLs when JOBCOF gets activated).
+2)	;Currently, the scheme here is to essentially save QCLASS and QTYPE in the
+2)	;first word, and then to save the domain name after that.  Since we don't
+2)	;know how big the name is until we've done the copy, we just do the copy
+2)	;first prior to allocating the stack space, and then adjust the stack pointer
+2)	;appropriately.  We also save the length of the area used, and a pointer to
+2)	;.STKRT.  Essentially, we have built a dynamic STKVAR, and can therefore do
+2)	;returns at any point in the code.  Even with the STKVAR stuff, the common
+2)	;case domain resolution request (at STANFORD.EDU) only needs about 9 words of
+2)	;stack space.
+2)	
+2)		  move t1,sclass(sblock)	;Get the query class
+2)		  hrl t1,stype(sblock)		;Get the query type
+2)		  push p,t1			;Save the type and class
+2)		  push p,tstart(sblock)		;Save the starting time
+2)		  push p,tquery(sblock)		;Save reference time
+2)		  movx t1,^d256			;Get max byte count
+2)		  xmovei t2,sname(sblock)	;Get address of name
+2)		  txo t2,owgp.(8)		;Turn it into a byte pointer
+2)		  xmovei t3,1(p)		;Get address of dest (on stack)
+2)		  txo t3,owgp.(8)		;Make dest into a BP
+2)		  do.				;Loop over all labels
+2)		    ildb label,t2		;Get the length of this label
+2)		    subi t1,1(label)		;Subtract length of label+count byte
+2)		    skipge t1			;Any room left?
+2)		     djerr gtdx6		;Is this the appropriate error???
+2)		    idpb label,t3		;Save it away
+2)		    jumpe label,endlp.		;Quit when we reach 0 length label
+2)		    do.				;Loop over all chars in a label
+2)		      ildb t4,t2		;Get a label char
+2)		      idpb t4,t3		;Stuff it
+2)		      sojg label,top.		;And loop over all characters
+2)		    enddo.			;End of char loop
+2)		    loop.			;On to next label
+2)		  enddo.			;End of per label loop
+2)		  movx t2,^d256+3		;Get max size again (+ round up)
+2)		  sub t2,t1			;Compute # of bytes used
+2)		  ash t2,-2			;Convert to words
+2)		  adjsp p,(t2)			;Fix the stack to cover actual amount
+2)		  addi t2,3			;Account stype, sclass, tstart, tquery
+2)		  push p,t2			;Save the length
+2)		  push p,[msec1,,.stkrt##]	;Save the STKVAR cleanup routine
+2)		endif.
+
+
+; GTDOM.MAC.45 & GTDOM.SU.1  9-Jun-87 0006	PAGE 12
+
+
+
+LINE 96, PAGE 21
+1)		skipn t1,@[gfiwm domsec,rderc(t1)]
+1)		ifskp.				;resolver claims we got an error
+1)		  adjsp p,sbcpb-sbcpz		;fix stack
+1)		  reterr			;we hold no locks, punt to user
+1)		endif.				;resolver says we won
+1)		call dsetup			;get new search block (and go NOINT)
+1)		adjsp p,sbcpb-sbcpz		;fix stack pointer
+1)		movx t1,sbcpz-sbcpb		;how many words to copy
+1)		xmovei t2,1(p)			;from stack (saved search block)
+1)		xmovei t3,sbcpb(sblock)		;into new search block
+1)		extend t1,[xblt]		;restore sblock stuff we care about
+1)		jrst dlook			;and go restart search
+LINE 139, PAGE 18
+2)		skipe t1,@[gfiwm domsec,rderc(t1)]
+2)						;resolver claims we got an error
+2)		 reterr				;we hold no locks, punt to user
+2)		call dsetup			;get new search block (and go NOINT)
+2)	
+2)		pop p,(p)			;Dump the STKVAR return address
+2)		pop p,t1			;Get the STKVAR length
+2)		movns t1			;Make it negative
+2)		adjsp p,(t1)			;Fix the stack
+2)		move t1,1(p)			;Get sclass and stype back
+2)		hrrzm t1,sclass(sblock)		;Get the query class
+2)		hlrzm t1,stype(sblock)		;Get the query type
+2)		move t1,2(p)			;Get the starting time back
+2)		movem t1,tstart(sblock)		;Save it in the SB
+2)		move t1,3(p)			;Get the ref time back
+2)		movem t1,tquery(sblock)		;Restore that too
+2)		xmovei t3,4(p)			;Get address of saved name
+2)		txo t3,owgp.(8)			;Make into a BP
+2)		do.				;Loop over all labels
+2)		  movem t7,1(label)		;Remember the start of this label
+2)		  aos stable+dstcnt(sblock)	;And up label count
+2)		  ildb t1,t3			;Get the length of this label
+2)		  idpb t1,t7			;Save it away
+2)		  jumpe t1,endlp.		;Quit when we reach 0 length label
+2)		  do.				;Loop over all chars in a label
+2)		    ildb t4,t3			;Get a label char
+2)		    idpb t4,t7			;Stuff it
+2)		    sojg t1,top.		;And loop over all characters
+2)		  enddo.			;End of char loop
+2)		  aoja label,top.		;On to next label
+2)		enddo.				;End of per label loop
+2)	
+2)		jrst dlook			;and go restart search
+
+
+; GTDOM.MAC.45 & GTDOM.SU.1  9-Jun-87 0006	PAGE 13
+
+
+
+LINE 118, PAGE 21
+1)	ifdj  <	camn 1,domrww(2)>			;still working for us?
+1)	ifndj <	camn 1,@[gfiwm domsec,rwaitw(2)]>	;still working for us?
+LINE 182, PAGE 18
+2)	ifdj  <	jn fkps1,(7),1(4)			;wakeup if PSI is pending
+2)		camn 1,domrww(2)>			;still working for us?
+2)	ifndj <	camn 1,@[gfiwm domsec,rwaitw(2)]>	;still working for us?
+
+
+LINE 32, PAGE 35
+1)	
+1)	IFN GTDSW,<
+1)		CALL NICINI			;initialize nickname table
+1)		 TRN				;ignore errors
+1)	>;IFN GTDSW
+1)	
+1)		setz filver,
+LINE 32, PAGE 32
+2)		setz filver,
+
+
+LINE 13, PAGE 43
+1)	HSTGOO:	NETNUM T2,T1			;Get network number of destination
+1)		CAME T2,PRFNET
+LINE 13, PAGE 40
+2)	HSTGOO:	SKIPN SUBNTF		;Stanford Subnetting ?
+2)	IF2,<Printx HSTGOO assumes Class A net, 8 bit subnets.>
+2)		IFSKP.
+2)		 MOVE T2,T1			;get copy of host address
+2)		 XOR T2,PRFADR			;XOR with our preferred address
+2)		 CAIL T2,200000			;were net+subnet the same
+2)		 ANSKP.
+2)		  MOVEI T2,7			;yes - try to prefer this address
+2)		  RET
+2)		ENDIF.				;otherwise, continueu
+2)		NETNUM T2,T1			;Get network number of destination
+2)		CAME T2,PRFNET
+

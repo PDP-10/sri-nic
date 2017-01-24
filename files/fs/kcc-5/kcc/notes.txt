@@ -1,0 +1,495 @@
+			NOTES.TXT
+
+This file is a collection of various notes and thoughts about possible
+improvements to the KCC C compiler, retained for posterity or future
+consideration.  Remember that existence of a item in this file does
+NOT necessarily mean it would be a Good Thing to implement; moreover,
+some of the things noted have already been done or fixed.
+
+Unless otherwise specified, most of this stuff is the product of KLH's
+imagination.  Pre-KLH notes (from KRONJ, etc) take up the last portion.
+
+KCC bugs:
+	Still loses track of proper line count (for err msgs) when
+	#asm code occurs in the file.  Not serious, but annoying.  Fix
+	when tmpfile() is ready.
+
+LIBC stuff:
+	- lseek uses SIZEF which may bomb if file is newly created (GTFDB
+	screws up) or I/O bytesize is different from FDB bytesize.
+	Invent a new internal file-size function that both fstat() and
+	lseek() can use.
+	- STDIO is still not well described.  Need state diagram, especially
+		to make sense of update streams with ungetc, and
+		improve fseek/ftell.
+	- read() is inefficient.  Prime candidate for using PMAP.
+	- getenv() needs to be re-designed.  Ideally could invent some scheme
+		to reliably pass both envp and argp.  May need to use
+		temp disk files.
+
+Todo:
+	Fix up CCGEN for MIDAS output.  Remove outstrs and printfs,
+	create "outbset" and "outbend" to bracket "outbyte".  Also
+	create "outblk(size)".
+	Fix up users of jsys.h macros (esp C lib) to use new monsym.h.
+	What about avoiding error msgs in _KCCsymfnd constructs similar
+	to #if (defined(FOO) && FOO)?  Worry about it later.
+	Replace all #include ""s in LIB with <>s, add -H to -make-.cmd.
+
+Ideas:
+	- Beebe would like args of the form "foo.fai" to cause KCC to call
+	the assembler on those files, just like Un*x does for foo.s.
+	- More work on PSECT support so can load directly into sect N,
+	get info from PDV, etc.
+	- Permit compile-time initializations of the form (int)(ptr) and
+	(ptr)(int) whereby a pointer is turned into an integer and vice
+	versa.  Since this is a no-op, may as well allow it.
+	- Have KCC check for doing unsigned compares vs 0, as in
+	foo < 0, and grumble if so?  Also complain if find tests that
+	will never succeed, such as comparing a masked # vs a larger #.
+	- Errors pertaining to semantics (not syntax) such as type,
+	definedness, etc should check for N_UNDEF or N_ERROR and try to avoid
+	further complaints.
+	- Check for malloc/realloc/calloc (at end of compilation?) and print
+warning if types are not "char *".  Nonstandard, but cause of many screws
+on PDP-10.
+	- Find some way to combine both UNIX and OS error numbers into
+"errno".
+	- Add special _exitcontinue(&argc, &argv) function which exits in
+such a way that it can return from the call with a new command invocation
+stored into argc/argv.  All I/O will be reset, etc.  This will help
+some programs set up lots of initialization and then suspend themselves
+for dumping.  _exitreenter?  _exitsuspend?  _exitrestart?
+The USYS code needs a special routine like _usreset() which will re-init
+all USYS variable stuff -- for example, sigvec(), getpid(), time(), and
+the like can all have static data areas that need re-initialization.
+Perhaps it would be best to simply put this in the CRT.C code and allow
+starting at $INIT to take care of CRT-level mapping/initialization, whereupon
+user can dump image; normal start vector then bypasses that stuff.
+	- Include UNV.C from KCC dir for kicks?
+	- Change extended-addr startup so that section 3 isn't
+automatically allocated; let sbrk() do it if necessary?  Or start
+allocating in section 2, use some room from top of stack.  Idea is to
+minimize overhead for usual programs.  Provide routines that main() can
+call at runtime (or a patch location) so that programs which really need
+gigantic amounts of stack space can get it.  Note ITS pgms also need a way
+to specify stack size somehow.
+	- Allow malloc to use portions of stack space, to squeeze out
+max memory usage?
+
+KCC: C compiler itself
+	- Array refs ought to be checked where possible, so that arr[2] would
+	complain if the size was only 2 (but not if the expression was
+	&arr[2], since ANSI explicitly permits p[size+1] to be a valid pointer)
+	Hard to do this at parse time since it requires expression
+	evaluation to get at the constants.  Must work with *(p+1) too.
+	- for #if COMMENT / #endif COMMENT  make the non-whitespace in the
+	#endif do something -- print warning depending on -P level?
+	- Given #if 0 / ... /#endif, if there is unterminated comment inside
+	the conditional, complaint at EOF is about unterm condit, not about
+	unterm comment!  Fix this.
+	- Decl problem: doing "static char foo[];" and then later
+		a "static char foo[] = { "str", "str" }"
+		causes an error about multiple definition!
+		ANSI allows multiple static declarations, CARM mentions
+		problem on p.56.
+	- H&S: 8.4 last parag - make KCC complain about inits within compnd
+		stmts that are switch bodies.  Do general check and complain
+		if any unlabelled code.
+	- H&S: Clean up generation of declaration initializers.
+	- H&S: Thoroughly go over all type checking and type conversion stuff.
+		Ensure all H&S type conversions are applied to all expr ops.
+		- Handle parameter conversions (sec 9.4).
+	- H&S: Fix KCC so section 7.10 (constant expressions) is followed.
+		Currently still too liberal.  Invent new N_PCONST type?
+		(Pointer constant)
+	- Implement direct .REL file generation.  In preparation for this,
+		must fix up #asm and convert all outxxx() calls into
+		single-word output calls or equivalent.
+	- Perhaps allow auto array initialization.
+	- Perhaps allow union initialization.
+	- Introduce code for checking funct arg types with formal param types,
+		will be useful when ANSI comes along.
+	- Fix compound assignment bug the right way (as opposed to current
+		kludge using SETM).
+		Requires BIG revisions to pseudo-code and peepholer.
+	- Add a "constant" flag to NODE flags?  Each operator propagates this
+		flag if its operands have the flag set.  Faster folding and
+		checking.
+	- Flush unused error messages from ccerr.h - maybe revamp all
+		error messages and standardize again.
+	- Helpful check - if function is "main", ensure return type is
+		either void or int, and issue warning (not error) otherwise.
+	- Add option/switch to generate non-extended code only.
+		Use for KA/KI/KS and some KL programs.
+		Counterpart switch for extended code only?
+	- Error handling is really poor.  One idea for improving is to
+		not scan for an expected char, but instead just assume
+		it is seen, and continue from where we are.
+	- General code cleanup
+		Apply "static" to all non-external functions.
+		Make function definitions consistent -- decide whether
+			to have type on same line, or on previous line.
+			"void foo()" vs "void\nfoo()".
+		Isolate all target-mach dependencies.  Add t-m char map table.
+		Move more defs from cc.h to right places.
+		Check uses of immedop, directop in CCGEN2
+		Clean up CCOUT, check for p-code string and do simops diffntly
+	- Flush "entry" after a while.
+	- Introduce "$asm();" hack to allow instrs within function body.
+		Only valid where a statement is legal (or at top level).
+		$asm("string"); just passes on string.
+		$asm(OP,REG,ADDR); can interpret/integrate instruction.
+			OP = actual op code? or string? or KCC token value?
+			REG = string, or reg value 0-017
+			ADDR = constant addr expression?
+		Use semicolon in $asm text to separate instructions, then
+		can ignore EOL.  Problem: multi-word literals.  Maybe could
+		then have #asm turn enclosed stuff into $asm text.
+	- Find way to speed up struct assignments, or to push on stack faster.
+		Pass pointer to temporary struct (rather than doing
+		push/return on stack).
+		Calling SPUSH/SPOP is slow.  Invent a P_PUSHN op?  Could
+		expand into series of PUSH instructions (either to stack
+		or directly to target)  Set cutoff point for calling general
+		SPUSH.  Could even code directly for BLT if both addrs
+		known to be in local section (simple data).  Can do table
+		entries this way...
+	- Extend "register" declaration flag to VREG struct?
+	- Add edit history comments?  Ho ho.
+	-Random idea for assembler collision avoidance: if identifier
+		symbol will conflict with an asm pseudo, change to prepend
+		a "." on it (or something).
+	-Random idea: remember knowledge of vreg or local contents,
+		ie anything not "volatile", so can use knowledge for
+		optimization.  8 possibilities plus a constant val:
+		Unknown (never set), Unknown (but set), Known to be one
+		of < <= == >= > != relative to constant (often 0).
+	-Random idea: have way for parser to know if token came from macro
+		arg, and if it is part of a side-effect expression,
+		give warning.  Tough but handy.
+	-Not-so-random idea: have way to halt program (specifically KCC)
+		in such a way it can be dumped as an EXE which when
+		invoked can proceed from where it left off.  Very handy
+		for generating a version with symtab already initialized!
+
+	-Give warning for case of "if (x = 3)".  That is, if an assignment
+	of a constant is being used as a conditional expression.
+
+	-Give warning or error for symbols which will cause external
+	conflicts.  If two static symbols conflict in this way, gensym new
+	unique names?  Requires storing 6-char representation, but will
+	need to do this anyway for .REL file output.
+	- Note that KCC-extension of `sym` is stored with initial ` as
+	SPC_char, so that the symbols FOO and `FOO` are not considered
+	the same.  But on output, barf if any 2 idents become the same
+	as result of transformation to external symbol.
+
+KRONJ et al:
+
+(1) Propagate pseudo-label for return in endlabels
+    - Change JRST to ret label into a POPJ
+    - Careful not to try to skip over this
+    - This can be done by checking in gboolean() and jumping over jump
+    - Or just always jumping over jump and letting it get optimized
+    - Maybe have $RETZ, $RETO, $RETT for 0, -1, 1 returns?
+
+(2) Re-install automatic indirection
+    - Make sure all optimizations safe
+    - Perhaps undo when offsets other than zero used from same cell
+    - Don't do it for LSH
+
+(3) Allow assembly code within C sources
+    - Make this work inside functions
+    - Define pseudo-macros for args and locals
+    - Parse and re-emit (binary search on dec20op[] so comment alpha order)
+
+(4) Improve tail recursion for more expressions in places of variables
+
+(5) Fold ops on adjacent bit/byte field together.
+    - Turn byte field ops into bit field ones where possible.
+    - Merge adjacent deposits to or loads from literal byte pointers
+    - More halfword ops
+    - Change MOVE + ANDI into HRRZ (this actually happens in runtm)
+
+(8) Vectorize named array initialization loops into BLTs.
+    - Combine BLT loops into bigger BLTs.
+    - Use register loops for unnamed arrays...
+
+(9) Fix calling conventions for pseudo-instructions ($DMOVE etc)
+    - Use AC1 and AC2 rather than AC15 and AC16
+    - Push more of it into code generation rather than code emission
+    - Use getret/getrpair etc
+    - This allows more folds, simpler behavior for CSE, etc
+
+(10) Clean up peephole optimizer
+    - Make sure pushneg() not called in foldboth() when reg later used as index
+    - Put monument in pushneg() about it not checking for future uses
+    - Move more optimizations from code gen to optimizer modules (esp code0, 4)
+    - Break up large hairy messes into simple functions
+    - Pull comparison operand in code0 across multi-instr code for other op
+
+(11) Improve anti-aliasing
+    - Byte pointer changing ops can't affect cells used as word pointers
+    - Indexed expr with offset can't affect labeled cell with smaller offset
+
+(12) More creative uses of the PDP-10 instruction set
+    - Pull AOS R,S across in foldplus
+    - Push back AOS over IMULI by doing IDIVI / ASH afterwards
+    - Use DMOVE, DMOVEM, and EXCH to replace combinations of MOVE and MOVEM
+    - MOVE R,x + MOVEM R,1(S) => PUSH S,x  (choke)
+    - MOVE R,x + XMOVEI 16,y + CAMx R,16 => XMOVEI R,y + CAMy R,x
+    - MOVN + MOVEM becomes MOVNM + MOVN (in foldboth; flush MOVN in genrelease)
+    - CAIE+CAIN+TRNA => CAIL+CAILE even when skipped as long as CAILE reskips
+    - ADDB + AOS => ADDI + ADDB
+    - Flush duplicate assignments to same place
+    - Use ROT for LSH/AND/OR combos
+    - Fold NEG into COMPL and vice versa when useful
+    - Fold multiple AND/OR into one; fold binary+unary into appropriate binary
+    - PUSHJ can be ADJSP 17,1 + JRST or TRNA (both useless)... better tricks?
+
+(13) Clean up runtimes
+    - Either remove call to jsys() in runtm or use it more regularly
+    - wait() in runtm can just be a jsys, move rest of mess elsewhere
+    - Make pipe() know how to use PTYs if PIP: doesn't work
+    - Teach _gtjfn() about ~username syntax
+    - Implement berkeley dir stuff (see man 3 directory), ...
+    - Work out some PRARG% convention to supercede RSCAN% passing if used
+
+(14) Language features
+    - Structure-structure assignment ($BLT?), vectorizing loops?
+    - Long variable names
+    - Warn about local variable shadowing function arg, built-in typedef
+    - Warn about statements without side effects
+
+(15) Programs
+    - More Unix programs and filters (as runtimes work or source found)
+    - Make AS68, LD68, CC68, C2 work (already have CCOM and CPP working)
+    - Get a shell running
+
+(16) Compiler execution
+    - REL instead of FAIL (remain able to make FAIL) (long externs optional)
+    - Code generation uses table of PDP-10 opcode structure by actual op
+    - Make fixprev() back up to save peephole buffer space
+    - Allocate various data structures dynamically
+
+(17) Simplified instruction set for non-emission use
+    - Flush immedop() and directop() in favor of using IMMED forms
+
+Found in CCGEN1:		Should be:
+
+	CAIG	11,1			CAIL	4,77
+	CAIN	4,100			CAILE	4,102
+	JRST	$21			CAILE	11,1
+	CAIE	4,77			JRST	$21
+	CAIN	4,102
+	JRST	$21
+	CAIN	4,101
+	JRST	$21
+
+	CAIE	5,126			CAIL	5,125
+	CAIN	5,125			CAILE	5,127
+	JRST	$83			JRST	$82
+	CAIE	5,127
+	JRST	$82
+$83::
+
+	TRNA				CAIN	1,2
+$155::					JRST	$158
+	MOVEI	1,1			CAIE	1,1
+	CAIN	1,2			JRST	$159
+	JRST	$158		$155::
+	CAIE	1,1
+	JRST	$159
+
+Found in hock:
+
+$186::
+	MOVEI	3,1
+	MOVE	5,-3(17)
+	MOVE	4,2(5)
+	MOVEM	3,0(4)
+	CAML	3,-7(17)
+	JRST	$177			...
+	MOVEI	6,60			MOVE	3,-5(17)
+	ADD	3,-5(17)		LDB	10,1(3)
+	LDB	10,0(3)			CAIL	10,60
+	CAMLE	6,10			CAILE	10,71
+	JRST	$177			JRST	$177
+	MOVE	11,-5(17)
+	LDB	12,1(11)
+	CAILE	12,71
+	JRST	$177
+
+	PUSH 17,-1(17)			SKIPN 4,-2(17)
+	MOVE 4,0(17)			 POPJ 17,
+	JUMPN 4,$356			PUSH 17,4
+	ADJSP 17,-1
+	POPJ 17,
+$356::
+
+	IBP -4(17)			CAIN 4,0
+	JUMPN 4,$923			AOSA 5,-1(17)
+	SETO 3,				TRNA
+	ADJBP 3,-4(17)			JRST $919
+	MOVEM 3,-4(17)			IBP -4(17)
+	AOS 5,-1(17)			JRST $923
+	JRST $919
+
+	MOVNI 4,2			MOVNI 4,2
+	ADJBP 4,-5(17)			ADJBP 4,-5(17)
+	DPB 3,4				IDPB 3,4
+	SETZ 5,				SETZ 5,
+	SETO 6,				DPB 5,4
+	ADJBP 6,-5(17)
+	DPB 5,6
+
+	MOVE 3,210(10)			MOVE 3,210(10)
+	MOVE 6,-4(17)			MOVE 6,-4(17)
+	ADD 6,period			SKIPE 7,period
+	ADDB 3,31(6)			 ADDM 3,31(6)
+	SKIPN 7,period			ADD 6,7
+	 JRST $1334			ADDB 3,31(6)
+	MOVE 4,210(10)
+	MOVE 11,-4(17)
+	ADDB 4,31(11)
+$1334::
+
+gettok:
+	ADJSP	17,2			SETZB	4,ntoks
+	SETZB	4,ntoks			MOVEM	4,nctoks
+	MOVEM	4,nctoks		MOVEM	4,tokind
+	MOVEM	4,tokind		LDB	5,-3(17)
+	XMOVEI	3,tokbuf		CAIN	5,0
+	IOR	3,$BYTE			POPJ	17,
+	MOVEM	3,0(17)			ADJSP	17,2
+	LDB	5,-3(17)		XMOVEI	3,0(17)
+	CAME	5,4			IOR	3,$BYTE
+	JRST	$198			MOVEM	3,0(17)
+	ADJSP	17,-2
+	POPJ	17,
+$198::
+
+	JUMPE	5,$200			CAIN	5,40
+	CAIE	5,40			AOSA	3,tokind
+	CAIN	5,11			TRNA
+	TRNA				JRST	$199
+	JRST	$200			CAIE	5,11
+	CAIE	5,11			JRST	$200
+	AOSA	3,tokind		MOVN	3,tokind
+	SKIPA	4,[10]			IDIVI	3,10
+	JRST	$199			ADDI	4,10
+	MOVE	5,tokind		ADDB	4,tokind
+	IDIVI	5,10
+	SUB	4,6
+	ADDB	4,tokind
+	
+
+	MOVE	6,-1(17)		XMOVEI	4,linbuf
+	XMOVEI	4,linbuf		IOR	4,$BYTE
+	IOR	4,$BYTE			CAME	4,-1(17)
+	CAME	6,4			JRST	$222
+	JRST	$222
+
+doincl:
+	ADJSP	17,4			PUSH	17,nctoks
+	PUSH	17,nctoks		PUSH	17,-2(17)
+	PUSH	17,-6(17)		PUSHJ	17,maktnc
+	PUSHJ	17,maktnc		ADJSP	17,-2
+	ADJSP	17,-2			CAIN	1,0
+	MOVEM	1,-3(17)		POPJ	17,
+	JUMPN	1,$225			PUSH	17,1
+	ADJSP	17,-4			ADJSP	17,3
+	POPJ	17,			MOVEM	1,-1(17)
+$225::
+	MOVE	3,-3(17)
+	MOVEM	3,-1(17)
+
+	MOVE	6,0(17)			POP	17,6
+	LDB	3,[331106,,147]		LDB	1,[331106,,147]
+	JUMPN	3,$289			CAIN	1,0
+	LDB	4,[331106,,206]		LDB	1,[331106,,206]
+	JUMPE	4,$288			CAIE	1,0
+$289::					LDB	1,[331106,,1]
+	MOVE	1,0(17)			CAIE	1,0
+	LDB	3,[331101,,1]		MOVE	1,6
+	JUMPE	3,$288			POPJ	17,
+	ADJSP	17,-1
+	POPJ	17,
+$288::
+	SETZ	1,
+	ADJSP	17,-1
+	POPJ	17,
+
+pctfra:
+	ADJSP 17,1			PUSH 17,-3(17)
+	PUSH 17,-4(17)			PUSH 17,-3(17)
+	PUSH 17,-4(17)			PUSH 17,-3(17)
+	PUSH 17,-4(17)			PUSHJ 17,pldfra
+	PUSHJ 17,pldfra			ADJSP 17,-3
+	ADJSP 17,-3			LDB 3,1
+	MOVEM 1,0(17)			CAIN 3,60
+	LDB 3,1				 IBP 1
+	CAIN 3,60			POPJ 17,
+	 IBP 0(17)
+	POP 17,1
+	POPJ 17,
+
+	SKIPL 7,-4(17)			MOVE 7,-4(17)
+	 SKIPGE 5,-5(17)		XOR 7,-5(17)
+	 TRNA				JUMPGE 7,$1635
+	 JRST $1635
+	SKIPGE 4,-5(17)
+	 JUMPL 7,$1635
+
+	LDB 3,-4(17)			LDB 1,-4(17)
+	JUMPE 3,$1654			CAIE 1,0
+	SETO 1,				SETO 1,
+	JRST $1655
+$1654::
+	SETZ 1,
+
+upcase:
+	MOVEI 3,141			MOVE 1,-1(17)
+	CAMLE 3,-1(17)			CAILE 1,141
+	 JRST $1661			 CAILE 1,172
+	MOVE 1,-1(17)			 TRNA
+	CAILE 1,172			 SUBI 1,40
+	 JRST $1661			POPJ 17,
+	SUBI 1,40
+	POPJ 17,
+$1661::
+	MOVE 1,-1(17)
+	POPJ 17,
+
+10-Dec-85 08:48:23-PST,1880;000000000005
+Return-Path: <EPPSTEIN@CS.COLUMBIA.EDU>
+Received: from CS.COLUMBIA.EDU by SRI-NIC.ARPA with TCP; Tue 10 Dec 85 08:48:14-PST
+Date: 10 Dec 1985  11:47 EST (Tue)
+Message-ID: <EPPSTEIN.12166024376.BABYL@CS.COLUMBIA.EDU>
+From: David Eppstein <Eppstein@CS.COLUMBIA.EDU>
+To:   Ian Macky <Ian@SRI-NIC.ARPA>, KLH@SRI-NIC.ARPA
+Subject: floating-point operations
+In-reply-to: Msg of Mon 9 Dec 1985  17:01 PST from Ian Macky <Ian@SRI-NIC>
+
+I've been thinking lately about how to avoid the flushcode() in double
+compares.  I came up with a sequence using DSUB instead of DFSB, and
+another with an ADDI, but these all share a problem with the DFSB
+suggestion: they don't work right if the addition overflows.
+
+The following might be a way to do it: Switch the position and sense
+of the first two compares.  You will get something like
+	CAML(E) R+1,S+1
+	CAMGE R,S
+	CAMG R,S
+(the middle op can also be CAME but that will take three instead of
+two instructions in more cases).  The R+1/S+1 compare is safe to
+optimize because R+1 and S+1 are not used anytime after that.  The
+only time we have to worry is when we are generating the middle
+compare, so that we don't lose the values for the final compare.  So
+if we make sure code0() does not do any optimization if the preceding
+op is a skip we will be safe.  Since you'd be adding code for this
+case there anyway you might as well make code0() do a setskip() and
+take out that code from double generation.  You would also want to fix
+invskip() to track the changed sequence, and might want to insert some
+fixup for compares against zero...

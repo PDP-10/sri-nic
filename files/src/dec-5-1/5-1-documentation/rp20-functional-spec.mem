@@ -1,0 +1,208 @@
+
+
+
+       TOPS-20 RP20 Software Functional Specification
+
+
+
+
+
+I.  OVERVIEW
+
+
+This is a functional specification which describes the  work
+performed  for  TOPS-20  to  add  support  for the RP20 disk
+subsystem.
+
+
+II.  CONFIGURATION DETAILS
+
+
+Generally, each  available  RH20  channel  can  drive  eight
+DX20s.   Each DX20 can drive one RP20 controller.  Each RP20
+controller can  drive sixteen spindles.  In actual practice,
+these limits  will  not be attained because of monitor table
+space and performance problems.
+
+Each RP20 drive  can  be  dual  ported.   Therefore,  it  is
+possible for a disk to be accessed from two different RH20s,
+DX20s, or 8000s.  It  is  important  to  realize  that  this
+dual-porting   is  not  active,  however.   Unlike  TOPS-10,
+TOPS-20 will not do commands to a drive  using  both  paths.
+All  that  will  be done is that the monitor will notice the
+existance of dual-porting, and not think that  two  separate
+drives  exist.   This  is  for  availability.  If one of the
+paths to a disk becomes unavailable because of some hardware
+problem,  the  disk can be accessed from the other path when
+the monitor is restarted.
+
+Dual porting is determined as follows.  Each 8000 controller
+can  be assigned a number from 0 to 7.  If the controller is
+0, then all RP20 disks  connected  to  that  controller  are
+single  ported.   If the controller number is non-zero, then
+each disk is dual ported to another controller with the same
+number.   This  convention is necessary because RP20s do not
+have a serial number which can be used to determine  if  two
+access paths lead to the same disk drive.
+
+It is possible to dual port the RP20  disks  such  that  one
+port  is available to each of two different TOPS-20 systems.
+However, only one port can be enabled at  any  time.   Since
+the  two systems do not communicate, access to the same disk
+at the same time would destroy the data  on  the  disk.   To
+switch  the  disk  from  one  system  to another, it must be
+dismounted from the first system, and then the port to  that
+system must be disabled.  Then the port to the second system
+can be enabled, and the disk mounted on the second system.
+
+There are two spindles inside of each  RP20  box.   However,
+                                                      Page 2
+
+
+these  two  spindles  are  totally independent.  The monitor
+treats these as separate units,  and  therefore  they  could
+appear as two separate structures.  For model B's there is a
+limit of  3  spindles  per  structure.   For  model  A's,  a
+structure can only use one spindle.
+
+The capacity of a single RP20 spindle is 201420  pages.   An
+RP06  holds  76000  pages,  so  an  RP20  has 2.65 times the
+capacity of an RP06 when formatted for  TOPS-20.   Therefore
+one  RP20  box  containing two spindles has over 5 times the
+capacity of a single RP06.  Almost all of this space will be
+available  to  the  users, since the RP20 cannot be used for
+booting, does not have a front-end area, and does  not  have
+swapping  space.   This  means  that  a  system must include
+another type of disk for these functions.
+                                                      Page 3
+
+
+III.  INTERNAL MONITOR CHANGES
+
+
+There are many changes necessary to use  the  RP20  disk  in
+TOPS-20.   The  following  is  a  simple  outline  of  these
+changes.
+
+
+        RELEASE 4 CHANGES
+
+        The monitor must understand about the  existence  of
+        controllers.    Many   subroutines  have  to  accept
+        controller numbers in addition to channel  and  unit
+        numbers.   The  MSTR  JSYS  has to be able to handle
+        controller numbers  in  its  unit  status  functions
+        (.MSRUS  and .MSRNU).  The 403 restart option of the
+        monitor must be able to input and output  controller
+        numbers.   The  DSKOP  JSYS  must  handle controller
+        numbers.  (See the next section for details.)
+
+        The monitor must be  able  to  handle  sector  sizes
+        which  are  one  page.   Places in the monitor which
+        assumed a disk sector was  200(8)  words  in  length
+        also  have to handle sectors which are 1000(8) words
+        in length.  Length errors reading sectors have to be
+        ignored when reading HOM or BAT blocks.
+
+        The  DSKOP  JSYS  has   been   extended   to   allow
+        multiple-page   reads.    This   is   to  allow  the
+        image-backup programs to run quickly.
+                                                      Page 4
+
+
+        IV.  CHANGES TO THE DSKOP JSYS
+
+
+        The  DSKOP  JSYS  has  been  changed  to  allow  the
+        specification of controller numbers.  Also, the size
+        of the unit number field must  be  extended  because
+        RP20s  can  have  unit  numbers  up to 377.  The new
+        DSKOP format is the following:
+
+        If the flag DOP%NF (bit 10) is not set in AC2,  then
+        DSKOP  works  as in previous monitors.  If DOP%NF is
+        set, then the arguments for the .DOPPU type of DSKOP
+        (physical   unit   information)  are  changed.   The
+        channel and unit fields in AC1 (DOP%CN  and  DOP%UN)
+        are   ignored.    Instead,   AC4  will  contain  the
+        following information:
+
+        Symbol Bits Description        ______ ____ ___________
+        DOP%C2 0-11 The channel number
+        DOP%K2 12-23 The controller number (or 7777 if none)
+        DOP%U2 24-35 The unit number
+
+        Also, the word count is no longer restricted to 1000
+        octal  words.   The  rule  is:   if a transfer stays
+        within a single memory page, DSKOP works as  before,
+        and  error  correlation  and  is disabled.  So if an
+        error return occurs on a multi-page DSKOP, the  user
+        program  can  then revert back to single page DSKOPS
+        to recover.  There is a limit of  50  decimal  pages
+        for  a  transfer (an attempt to read/write info more
+        than 50 memory pages is illegal).
+
+                                                      Page 5
+
+
+V.  NECESSARY CHANGES TO UTILITIES
+
+
+The following programs have been changed in order to support
+the  RP20 disk.  Most of these changes are necessary because
+of the existence of a controller for these disks.
+
+        RELEASE 4 CHANGES
+
+        BOOT - Code has been added so that BOOT can load the
+        microcode for DX20s which control RP20s, in addition
+        to those DX20s which control the TU7x  tapes.   BOOT
+        will  not  know how to access an RP20.  Thus it will
+        not be possible to load the system from an RP20,  or
+        to  save  a  dump  on an RP20.  Another type of disk
+        (such as an RP06) is necessary for these functions.
+
+        CHECKD - The data for the RP20 disk has  been  added
+        to  the  tables  it contains.  The prompting for the
+        disk unit has been changed to include the controller
+        number  in  the CREATE command.  The routine to type
+        out  the  possible  units  includes  the  controller
+        number.
+
+        DDT  -  The  version  of  DDT  for  examining  files
+        (FILDDT)  has  been  changed to allow the input of a
+        controller number for the DRIVE command.   The  code
+        which  does  the  DSKOP JSYS has been changed to use
+        the new format of the JSYS.
+
+        MOUNTR - The IPCF packet sent  by  ORION  containing
+        the  controller number has been handled.  The output
+        messages  listing  available  drives  includes   the
+        controller number.
+
+        DX20LD - The program has to be able  to  distinguish
+        the  DX20 which drives the RP20s from the DX20 which
+        drives TU7xs.  The proper version of  the  microcode
+        has  to be loaded in each case.  The internal tables
+        have been reorganized.  DS20LD  will  recognize  the
+        names  DXMCA*  as tape microcode, and DXMCE* as disk
+        microcode as defaults.  There will also be  the  two
+        new switches:
+
+        /T this is for tape DX20's
+        /R this is for RP20 DX20's
+
+
+        SYSERR - New code and  tables  have  been  added  to
+        handle errors from the RP20s.
+
+        POSSIBLE FUTURE CHANGES
+
+        OPR/ORION - The command  "SET  DISK-DRIVE"  must  be
+        extended to include the controller number.  The IPCF
+                                                      Page 6
+
+
+        packet sent by ORION to MOUNTR  which  contains  the
+        SET  DISK-DRIVE  data  must  contain  the controller
+        number.

@@ -1,0 +1,4 @@
+cc -q -c -IC: -
+  cleanu fclose fdopen fflush fgetc fgets fopen fputc fputs -
+  fread freope fseek ftell fwrite gets getw mktemp perror printf puts -
+  putw remove rename rewind scanf setbuf sopen tmpfil tmpnam ungetc vprint

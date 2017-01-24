@@ -1,0 +1,701 @@
+;[SRI-NIC]PS:<MKL>TIME.MAC.65, 17-Mar-86 11:35:33, Edit by MKL
+; add some time sanity checks
+;[SRI-NIC]PS:<MKL>TIME.MAC.47,  5-Mar-86 16:18:34, Edit by MKL
+; More changes. Call WWV program if it exists.
+; Handle UDP retransmissions.
+;[SRI-NIC]PS:<MKL>TIME.MAC.2, 14-Feb-86 13:25:29, Edit by MKL
+; NIC version, UDP only
+;[SRI-CSL]PS:<TCP>TIME.MAC.12, 24-May-85 15:44:00, Edit by MKL
+;always set time, fix bug to print failed host name in POLLER routine
+;[SRI-CSL]PS:<TCP>TIME.MAC.8, 10-May-85 17:14:06, Edit by MKL
+;change host table
+;<VAF.MAC>TIME.MAC.1, 16-May-84 10:25:57, Edit by VAF
+;Initial version derived from BBN TIMCHK program.
+
+	TITLE TIME - Set clock from network
+
+;Based on TIMCHK:
+;Written October/November 1981 by Robert C Clements, at
+; Bolt Beranek and Newman, Inc.
+;
+; Copyright (c) 1981 Bolt Beranek and Newman, Inc., Cambridge MA 02238
+;
+; This software may be copied freely for use within the Internet
+; community, but may not be sold or used for profit without permission
+; of the author and copyright holder.
+;
+
+	SEARCH MACSYM,MONSYM
+	.REQUIRE SYS:MACREL,SQRT
+	extern sqrt
+
+F=0
+A=1
+B=2
+C=3
+D=4
+E=5
+
+Q1=6
+Q2=7
+Q3=10
+
+X=11
+Y=12
+TCBH=13
+
+P=17
+
+OPDEF CALL [PUSHJ P,]
+OPDEF RET [POPJ P,]
+DEFINE MSG(MESS)<
+	HRROI B,[ASCIZ \MESS\]
+	CALL DOSOUT
+>
+
+PDLL==100			;STACK LENGTH
+
+SCNTIM==^D500			;1/2 SECOND SLEEP BETWEEN SCANS
+NCHECK==^D6000/SCNTIM		;6 SECONDS MAX
+HLO2=^d5			;send second set of hellos after NXTHLO scans
+HLO3=^d8			;send third set of hellos after NXTHLO scans
+
+;MISC PARAMS
+
+RCVLEN==100			;SPACE FOR RCV BUFFER
+AQ%SPT==1B1			;SHOULD BE IN MONSYM
+.IQPTV==3			; " "
+TSPORT==^D37			;TIME SERVER PORT NUMBER
+UDPPRN==^D17			;USER DATAGRAM PROTOCOL
+
+; LAYOUT OF INET BUFFER FOR UDP PROTOCOL
+
+
+.IPKVR==0			;VERSION, TYPE OF SERVICE
+.IPKSG==1			;SEGMENTATION INFO
+.IPKPR==2			;PROTOCOL, TIME TO LIVE, ...
+.IPKSH==3			;SOURCE HOST
+.IPKDH==4			;DEST HOST
+.UDPPO==5			;PORT NUMBERS
+.UDPLN==6			;LENGTH, CHECKSUM
+.TSVCK==7			;TIME SERVER CLOCK
+TXLEN==.TSVCK+1+1		;ONE FOR HEADER
+
+TCBHSZ==3			;SIZE OF RING HEADERS
+
+;START OF PROGRAM
+
+GO:	RESET			;CLEAR THE WORLD
+	MOVE P,PDP		;SET UP A STACK
+	Tmsg <Network Time Setter
+>
+	MOVEI F,0		;FLAGS ALL CLEAR TO START
+	MOVX A,.SNPSY		;Want symbol value
+	MOVE B,[RADIX50 0,INTON] ;Flag if IP is on yet
+	MOVE C,[RADIX50 0,STG]	;In STG
+	SNOOP%			;Read symbol
+	IFSKP.			;OK
+	  MOVE A,B		;Copy address
+	  HRLI A,1		;Only one word
+	  MOVEI B,C		;Put in C
+	  PEEK%			;Read value of INTON
+	ANSKP.			;OK.
+	  IFE. C		;Is it off?
+	    TMSG <% TIME: Cannot get time because network not initialized
+>
+	    HALTF%		;Punt now, instead of later....
+	  ENDIF.
+	ENDIF.
+	SETOM OJFN		;NO OUTPUT JFN YET
+	movx 1,gj%sht!gj%old
+	hrroi 2,[Asciz /SYSTEM:MONITR.EXE.0/]
+	gtjfn%
+	 erjmp jsyser
+	movei 2,4
+	movei 3,1
+	rftad%
+	 erjmp jsyser
+	rljfn%
+	 erjmp .+1
+	move 2,4
+	call cvinet
+	movem 2,montim
+;	TMSG <TIME: Waiting for net . . . >
+;	movei 1,^d10000		; 10 seconds delay before polling to
+;	disms%			;give f4 a chance to bring up net
+	CALL SETUP		;GET STUFF ABOUT THIS SITE
+	CALL DOWWV		;get time from local clock, returned in ac1
+	skipe 2,1
+	 call cvinet		;convert tops20 to net format
+	move 4,2
+	time%
+	sub a,begrlt
+	idivi a,^d1000
+	sub 4,a	
+	camg 4,montim
+	 setz 4,
+	movem 4,wwvtim
+	CALL HELLO		;SEND HELLO'S TO ALL SITES
+	CALL POLL		;POLL ALL SITES
+	CALL PRTTIM		;Print what we got
+	MOVEI A,.FHSLF		;SEE IF WE'RE A WHOPR
+	RPCAP			; AND ENABLED
+	TRNE C,SC%WHL!SC%OPR	; ..
+	CALL SETTIM		;IFF SO, OFFER TO SET THE TIME
+	HALTF			;DONE
+	JRST GO			;RESTART IF CONTINUED
+
+;get time from WWV clock if it exists, returns time in AC1 or zero
+DOWWV:	movx 1,gj%old!gj%sht
+	hrroi 2,[asciz /SYSTEM:WWV.EXE/]
+	GTJFN%
+	 erjmp nowwv
+	move 4,1		;save jfn
+	movx 1,cr%cap
+	CFORK%
+	 erjmp nowwv
+	move 5,1		;save handle
+	hrlz 1,5
+	hrr 1,4
+	GET%
+	 erjmp nowwv
+	move 1,5
+	move 2,[.priin,,.nulio]	;no output
+	SPJFN%%
+	 erjmp .+1
+	move 1,5
+	setz 2,
+	SFRKV%
+	 erjmp nowwv
+	move 1,5
+	WFORK%
+	 erjmp nowwv
+	move 1,5
+	movei 2,RCVBUF
+	RFACS%
+	 erjmp nowwv
+	KFORK%
+	 erjmp nowwv
+	move 1,4
+	RLJFN%
+	 erjmp .+1
+	move 1,RCVBUF+1		;get time returned
+	camg 1,montim		;greater than last monitor write?
+	 setz 1,		;no good
+	ret
+nowwv:	setz 1,
+	ret
+
+
+SETUP:	MOVNI A,1		;CURRENT JOB
+	HRROI B,D		;ANSWER INTO D
+	MOVEI C,.JIJNO		;JOB NUMBER
+	GETJI			;GET IT
+	 SETO D,0		;FAIL?
+	MOVEM D,MYJOBN		;REMEMBER IT
+	MOVEI A,.FHSLF		;WE WILL NEED NETWIZ CAPABILITY
+	RPCAP
+	TXO B,SC%NWZ		; ..
+	TXO C,SC%NWZ		; ..
+	EPCAP			;SO TRY FOR IT
+	SETO A,0		;RELEASE ANY IQ'S
+	RELIQ%			; ..
+	 JFCL			;WE TRIED
+	CALL GETIQ		;GET THE IQ HANDLE
+	 SETZM IQH		;COULDN'T GET IT
+	MOVEI A,0		;ASK FOR LOCAL HOST
+	GTHST			;AND TABLE SIZES
+	 ERJMP JSYSER		;SOMETHING WRONG
+	MOVEM B,MNHSTN		;MINUS N HOST NAMES
+	MOVEM C,MNHSTS		;MINUS N HSTSTS TABLE
+	MOVEM D,MYADDR		;MY INTERNET ADDRESS
+	MOVSI X,-NHOSTS		;TABLE OF HOSTS WE WANT TO PROBE
+SETL1:	MOVE C,HNUMS(X)		;NUMBER ASSEMBLED IN?
+	JUMPN C,SETNN1		;IF SO, USE IT.
+	MOVEI A,.GTHSN		;ELSE, CONVERT STRING TO NUMBER
+	MOVSI B,440700		;STRING POINTER
+	HRR B,HNAMES(X)		;THIS GUY'S NAME
+	GTHST			;CONVERT IT
+	 MOVEI C,0		;UNKNOWN BY SYSTEM?
+SETNN1:	MOVEM C,HNMBR(X)	;SAVE IN TABLE
+	SETZM HTIMES(X)		;TIME NOT YET KNOWN
+	AOBJN X,SETL1		;LOOP OVER NAME LIST
+	MOVEI A,.GTHNS		;GET MY NAME STRING
+	MOVE C,MYADDR
+	MOVE B,[440700,,TBLOCK]	;INTO THIS TEMP TEXT BLOCK
+	GTHST
+	 ERJMP JSYSER
+	TIME			;Get real time at start
+	MOVEM A,BEGRLT		; ..
+	SETZM LOCTIM		;No local time gotten yet
+	RET			;GOT THAT STUFF
+
+; SITE TABLES AND TYPES
+
+	TYPUDP==1		;IEN 142 DATAGRAM TO PORT 37.
+
+;HOST NAMES AND NUMBERS. IF NUMBER IS OMITTED, PROGRAM ASKS
+; SYSTEM FOR THE NUMBER FROM THE NAME. IF NUMBER IS SUPPLIED HERE,
+; THAT NUMBER IS USED. THIS GETS AROUND SOME MULTI-HOMING PROBLEMS,
+; AND ALLOWS USE OF SITES NOT IN SYSTEM TABLES. ADDRESS MAY NOT
+; BE OMITTED FOR NCP PROTOCOL SERVERS.
+
+;ARGUMENTS ARE: PROTOCOL, NAME STRING,
+; AND (OPTIONALLY) FOUR BYTES OF INET ADDRESS IN DECIMAL.
+
+DEFINE HOSTS<
+  	HH UDP,dcn1.udel.edu
+	HH UDP,UMD1.UMD.EDU
+	HH UDP,XEROX.COM
+	HH UDP,ames.arc.nasa.gov
+	HH UDP,GW.UMICH.EDU
+	HH UDP,TERP.UMD.EDU
+	HH UDP,ns.nic.ddn.mil
+>
+DEFINE HH(AA,BB,H1,H2,H3,H4)<
+	TYP'AA,,[ASCIZ \BB\]
+>
+HNAMES:	HOSTS
+NHOSTS==.-HNAMES
+
+DEFINE HH(AA,BB,H1,H2,H3,H4)<
+   IFB <H1>,<
+	EXP 0
+   >
+   IFNB <H1>,<
+	BYTE (4)0(8)H1,H2,H3,H4
+   >
+>
+
+HNUMS:	RADIX 10
+	HOSTS
+	RADIX 8
+
+;FIRST PHASE SENDS OUT A DATAGRAM
+
+HELLO:	MOVSI X,-NHOSTS		;LOOK THRU TABLE FOR NCP TYPE HOSTS
+HLOL1:	MOVE B,HNMBR(X)		;MAKE SURE NOT TALKING TO SELF
+	CAMN B,MYADDR		;SELF?
+	JRST HLON1		;YES, DON'T INCLUDE US
+	call udphlo
+HLON1:	AOBJN X,HLOL1		;LOOP OVER ALL HOSTS
+	RET			;DONE SETUPS
+
+;Hello routine for UDP servers
+
+UDPHLO:	skipe htimes(x)
+	 ret
+	CALL IQSEND		;SEND THE IEN-142 UDP REQUEST
+	 jfcl			;FAILED
+	RET			;RETURN, OK
+
+
+;POLL ROUTINE, WAITS FOR UDP PACKETS
+; TO RETURN, AND PROCESSES THE ANSWERS.
+
+POLL:	setz Y,
+	MOVSI Y,-NCHECK		;HOW MANY TIMES TO CHECK STATE
+POLL1:	CALL IQPOLL		;ALWAYS CHECK THE INET Q
+	hrrz 1,Y		;get scan count
+	cain 1,HLO2
+	 call hello		;send more hello's
+	cain 1,HLO3
+	 call hello		;send more hello's
+	MOVEI A,SCNTIM		;STILL PENDING, SLEEP A LITTLE
+	DISMS
+	AOBJN Y,POLL1		;TRY AGAIN
+	call iqpoll
+POLDUN:	RET			;ALL POLLING DONE
+
+REPORT:	TIME			;GET CURRENT REAL-TIME
+	MOVE D,A		;Copy to more convenient place
+	SUB D,BEGRLT		;REALTIME SINCE STARTED
+	IDIVI D,^D1000
+	MOVE B,Q2		;TIME IN NET FORMAT
+	SUB B,D			;FUDGE BY REALTIME CHANGE
+	camg b,montim		;greater than last monitor write?
+	 setz b,		;no good
+	movem b,htimes(x)
+	RET
+
+IQPOLL:	MOVEI A,RCVLEN		;PREPARE TO RECEIVE A PACKET
+	MOVEM A,RCVHDR		;TELL SYSTEM SIZE OF BUFFER
+	HRRZ A,IQH		;Q TO LISTEN ON
+	TLO A,(1B0)		;DON'T WAIT
+	MOVEI B,RCVHDR		;POINT AT IT
+	MOVEI C,0		;MBZ BITS
+	RCVIN%			;GET IT
+	 RET			;FAILED OR NOTHING ON Q
+	PUSH P,X		;SAVE HOST INDEX
+	MOVSI X,-NHOSTS		;SEARCH FOR GUY WHO SENT THIS
+	MOVE A,RCVBUF+.IPKSH	;WHERE DID IT COME FROM?
+	LSH A,-4		; ..
+	CAME A,HNMBR(X)		;RIGHT GUY?
+	AOBJN X,.-1		;NO, LOOP TO FIND IT
+	JUMPGE X,IQPOL1		;NOT FOUND, JUNK IT
+	MOVE Q2,RCVBUF+.TSVCK	;THIS ONE. GET THE CLOCK VALUE
+	LSH Q2,-4		; ..
+	MOVEM Q2,HTIMES(X)	;SAVE FOR REPORTING
+	call report
+IQPOL1:	POP P,X			;RESTORE HOST INDEX
+	JRST IQPOLL		;LOOP UNTIL NONE ON Q
+
+GETIQ:	MOVE A,[QDBPRO,,QDBLK]	;COPY PROTOTYPE TO QDB
+	BLT A,QDBLKE		; ..
+	MOVE A,MYJOBN		;GET MY JOB NUMBER
+	ANDI A,377		;JUST 8 BITS
+	SKIPN A			;IN CASE JOB 256
+	SETO A,0		; ..
+	LSH A,10		;SHIFT OVER
+	TRO A,TSPORT		;ADD IN TIME PORT
+	DPB A,[POINT 16,QDBLK+.IQPTV,15]
+	MOVEI A,QDBLK		;POINT AT QDB
+	SETZB B,C		;MBZ AC'S
+	ASNIQ%			;TRY FOR IT
+	 RET			;FAILED
+	MOVEM A,IQH
+CPOPJ1:	AOS 0(P)
+CPOPJ:	RET
+
+IQSEND:	MOVE A,[SNDPRO,,SNDBUF]	;SEND THIS CANNED MESSAGE
+	BLT A,SNDBUF+TXLEN
+	MOVE A,MYJOBN		;GET MY JOB NUMBER
+	ANDI A,377		;JUST 8 BITS
+	SKIPN A			;IN CASE JOB 256
+	SETO A,0		; ..
+	LSH A,10		;SHIFT OVER
+	TRO A,TSPORT		;ADD IN TIME PORT
+	DPB A,[POINT 16,SNDBUF+.UDPPO,15]
+	MOVEI A,TXLEN
+	MOVEM A,SNDHDR		;THIS MANY WORDS, PLEASE
+	MOVE A,HNMBR(X)		;INTERNET ADDR
+	LSH A,^D<36-32>
+	MOVEM A,SNDBUF+.IPKDH	;DEST HOST
+	MOVE A,IQH		;HANDLE FOR QUEUE
+	MOVEI B,SNDHDR		;HEADER FOR THE BUFFER
+	MOVEI C,0		;MBZ
+	SNDIN%			;SEND IT
+	 RET			;FAILED
+	JRST CPOPJ1		;OK
+
+SNDPRO:	BYTE (4)4,5(8)0(16)^D28
+	BYTE (32)0
+	BYTE (8)100,UDPPRN,0,0
+	BYTE (32)0
+	BYTE (32)0
+	BYTE (16).-.,TSPORT
+	BYTE (16)10,0
+	EXP 0
+
+CRLF:	HRROI B,[ BYTE (7).CHCRT,.CHLFD,0]
+DOSOUT:	SKIPG A,OJFN
+	MOVEI A,.PRIOU
+	MOVEI C,0
+	SOUT
+	RET
+
+DOBOUT:	SKIPG A,OJFN
+	MOVEI A,.PRIOU
+	BOUT
+	RET
+
+JSYSER:	JSERR			;FAILURE
+	HALTF
+	JRST GO
+
+TMBDIF==^D<365*41>+^D55		;1858 BASE VS 1900 BASE, IN DAYS
+
+CVINET:	PUSH P,C		;PRESERVE A COUPLE REGS
+	PUSH P,D		; ..
+	MOVEI C,(B)		;TOPS20 FRACTION OF A DAY
+	HLRZS B			;DAYS SINCE NOV 1858
+	SUBI B,TMBDIF		;BRING DOWN TO 1900
+	MULI C,^D<24*60*60>	;CONVERT TO SECONDS FROM 1/3 SEC
+	DIV C,[1,,0]		; ..
+	CAIL D,400000		;ROUND TO NEAREST SECOND
+	ADDI C,1		;ROUND UP
+	CAIL C,^D<24*60*60>	;WENT TO WHOLE DAY?
+	JRST [	MOVEI C,0	;YES, COUNT A DAY
+		AOJA B,.+1]
+	IMULI B,^D<24*60*60>	;SECONDS FROM DAYS
+	ADDI B,(C)		;SECONDS WITHIN TODAY
+	POP P,D			;RESTORE REGS
+	POP P,C			; ..
+	RET			;RETURN RFC738 FORMAT TIME IN B
+
+CVNETI:	PUSH P,C		;PRESERVE REGISTERS
+	PUSH P,D		; ..
+	IDIVI B,^D<24*60*60>	;GET DAYS AND SECONDS IN TODAY, GMT
+	ADDI B,TMBDIF		;ADD OFFSET FOR MJD 0
+	MUL C,[1,,0]		;CONVERT SECONDS TO FRACTION OF DAY
+	DIVI C,^D<24*60*60>	; FOR TOPS20 FORMAT GTAD
+	CAIL D,^D<24*60*60>/2	;ROUND IT
+	ADDI C,1		; ..
+	MOVSI B,(B)		;DAYS TO LH OF GTAD
+	HRRI B,(C)		;FRACTION OF DAY TO RH
+	POP P,D			;RESTORE REGS
+	POP P,C			; ..
+	RET			;GTAD FORMAT IN B
+
+getavg:	movsi x,-nhosts
+	setzm timcnt
+	setzb 3,4		;sum goes here
+getav1:	setz 1,
+	skipn 2,htimes(x)
+	 jrst getav2
+	aos timcnt
+	dadd 3,1
+getav2:	aobjn x,getav1
+;wwv
+	skipn 2,wwvtim
+	 jrst getav3
+	aos timcnt
+	dadd 3,1
+;wwv
+getav3:	div 3,timcnt
+	movem 3,avg
+	ret
+
+;compute variances (time-average)^2
+dovar:	movei x,nhosts-1
+	setzm sumvar
+dovar1:	skipn 1,htimes(x)
+	 jrst dovar2
+	sub 1,avg
+	mul 1,1			;square it
+	movem 2,vary(x)
+	addm 2,sumvar		;add up variances
+dovar2:	sojge x,dovar1
+;wwv
+	skipn 1,wwvtim
+	 jrst dovar3
+	sub 1,avg
+	mul 1,1
+	movem 2,wwvvar
+	addm 2,sumvar
+;wwv
+dovar3:	move 1,sumvar
+	call sqrt
+	movem 1,stddev
+	ret
+
+
+PRTTIM:	call getavg		;compute average time
+	call dovar		;compute variances and std dev
+	move b,timcnt
+	movem b,sampl1		;save number of sample on first run
+	movei a,.priou
+	movei c,^d10
+	nout%
+	 jfcl
+	Tmsg < time samples received.
+>
+
+	SKIPN B,timCNT		;GET NUMBER OF SAMPLES
+	 RET			;None
+	tmsg <Average time is >
+	move b,avg
+	call cvneti
+	MOVEI A,.PRIOU		;To primary output
+	SETZ C,			;Full, verbose format
+	ODTIM%			;Print the time out
+	tmsg <
+>
+	tmsg <standard deviation = >
+	movei a,.priou
+	move b,stddev
+	idiv b,timcnt
+	movei c,^d10
+	nout%
+	 trn
+	lsh b,1			;times two
+	caige b,3		;at least 3 seconds
+	 movei b,3
+	movem b,cutoff
+	tmsg <, cutoff = >
+	movei a,.priou
+	move b,cutoff
+	movei c,^d10
+	nout%
+	 trn
+	tmsg < seconds.
+>
+	tmsg <Site		Time		     Off
+>
+	tmsg <WWV-CLOCK	>
+	MOVEI A,.PRIOU		;To primary output
+	move 2,wwvtim
+	jumpe b,[Tmsg <not available.>
+		 jrst prt101]
+	call cvneti
+	SETZ C,			;Full, verbose format
+	ODTIM%			;Print the time out
+	tmsg <   >
+	MOVEI A,.PRIOU		;To primary output
+	move b,wwvtim
+	sub b,avg
+	movm b,b
+	movei c,^d10
+	nout%
+	 jfcl
+	camle b,cutoff		;whats this number?
+	 jrst  [tmsg < out of range>
+		setzm wwvtim	;one less time to use
+		jrst .+1]
+prt101:	TMSG <
+>
+	movsi x,-nhosts
+;print site name and time we got
+prtlop:	HRRO A,HNAMES(X)	;The name of it
+	trnn a,-1
+	 jrst prtlx		;noname
+	PSOUT
+	movei 1,.priou
+spl:	movei 2,.chspc
+	bout%
+	rfpos%
+	tlz 2,-1
+	caige 2,^d16
+	 jrst spl
+	skipn hnmbr(x)		;got it's ip address?
+	 jrst [tmsg <unknown ip address.
+>
+		     jrst prtlx]
+
+	move b,htimes(x)	;get the time we got
+	jumpe b,[Tmsg <timed out.
+>
+		 jrst prtlx]
+	CALL CVNETI		;Convert from net to internal time format
+	MOVEI A,.PRIOU		;To primary output
+	SETZ C,			;Full, verbose format
+	ODTIM%			;Print the time out
+	tmsg <   >
+	movei a,.priou
+	move b,htimes(x)
+	sub b,avg
+	movm b,b
+	movei c,^d10
+	nout%
+	 jfcl
+	camle b,cutoff		;whats this number?
+	 jrst  [tmsg < out of range>
+		setzm htimes(x)	;one less time to use
+		jrst .+1]
+	TMSG <
+>
+prtlx:	aobjn x,prtlop
+
+	call getavg		;recompute average
+	skipn timcnt
+	 jrst [ tmsg <%Aborted:  All samples out of range>
+		call crlf
+		setzm avg	;don't set time!
+		ret]
+	tmsg <Recomputed average time is >
+	move b,avg
+	call cvneti
+	MOVEI A,.PRIOU		;To primary output
+	SETZ C,			;Full, verbose format
+	ODTIM%			;Print the time out
+	tmsg <
+>
+	move b,avg
+	camg b,montim
+	 jrst [ tmsg <%Aborted:  Time not since last monitor creation>
+		call crlf
+		setzm avg
+		ret]
+	RET
+
+; SETTIM ROUTINE, OFFERS TO SET TIME TO THE AVERAGE OF THOSE FROM NET
+
+SETTIM:	SKIPN avg		;ANYTHING FOUND FROM NET?
+	 RET			;NO, CAN'T DO IT
+	HRROI A,[ASCIZ /Setting system time to /]
+	PSOUT
+	TIME
+	SUB A,BEGRLT		;ACCOUNT FOR TIME WAITING FOR ANSWER
+	ADDI A,^D500		;ROUND OFF
+	IDIVI A,^D1000
+	add a,avg		;plus computed time
+	MOVE B,A		;CONVERT TO GTAD TIME
+	CALL CVNETI
+	move x,b		;save time
+	MOVEI A,.PRIOU
+	SETZ C,
+	ODTIM			;REPORT IT
+	CALL CRLF
+	move 1,sampl1
+	caige 1,3		;must have at least 3 samples
+	 jrst [ tmsg <%Aborted:  Need at least 3 samples>
+		call crlf
+		ret]
+	GTAD%
+	Came	1,[-1]
+	 Jrst	[Tmsg <%Aborted:  Time already set as >
+		 movei a,.priou
+		 seto b,
+		 setz c,
+		 ODTIM%
+		 call crlf
+		 ret]
+	MOVE A,x
+	STAD			;SET IT!
+	 JRST SETTME		;ERROR
+	RET
+
+SETTME:	HRROI A,[ASCIZ /?Failed to set time
+/]
+	PSOUT
+	RET
+
+;CONSTANTS
+
+QDBPRO:	BYTE (8)0,0,0,UDPPRN	;UDP PROTOCOL NUMBER
+	EXP 0			;WILD FOREIGN HOST
+	EXP 0			;WILD SOURCE HOST
+	BYTE (16).-.,TSPORT	;MY PORT,,SERVER PORT
+	BYTE (8)0,0,0,377	;PROTOCOL NUMBER MASK
+	EXP 0			;HOST MASK
+	EXP 0			;SOURCE MASK
+	BYTE (16)-1,-1		;PORT NUMBER MASK
+NQDB==.-QDBPRO
+
+PDP:	XWD -PDLL,PDL
+
+;VARIABLES
+
+MYADDR:	BLOCK 1			;MY ADDRESS, INTERNET 32-BIT FORM
+MYJOBN:	BLOCK 1			;THIS JOB'S JOB NUMBER
+MNHSTS:	BLOCK 1			;LENGTHS FROM GTHST
+MNHSTN:	BLOCK 1			; ..
+OJFN:	BLOCK 1			;OUTPUT DATA TO THIS JFN
+IQH:	BLOCK 1			;INTERNET Q HANDLE FOR UDP
+QDBLK:	BLOCK NQDB		;FOR UDP Q DESCRIPTOR
+ QDBLKE==.-1			;END OF SAME
+HNMBR:	BLOCK NHOSTS		;INTERNET ADDRESSES OF HOSTS
+HTIMES:	BLOCK NHOSTS		;NET FORMAT TIME, PER HOST
+VARY:	BLOCK NHOSTS		;(time-avg)^2
+AVG:	BLOCK 1			;average time
+wwvtim:	0			;time from local clock (net format)
+wwvvar:	0
+sumvar:	0			;sum of variances
+stddev:	0			;std dev
+cutoff:	0
+NUMTIM:	BLOCK 1			;number of times we got back
+BEGRLT:	BLOCK 1			;TIME% done at program startup
+montim:	block 1			;time of last monitor write
+timcnt:	block 1
+sampl1:	0	
+LOCTIM:	BLOCK 1
+TADTIM:	BLOCK 1			;Local time via GTAD
+TBLOCK:	BLOCK 40		;TEXT BLOCK FOR NAME STRINGS
+RCVHDR:	BLOCK 1			;HEADER FOR UDP RECEIVES
+RCVBUF:	BLOCK RCVLEN+2		;BUFFER SIZE PLUS SLOP
+SNDHDR:	BLOCK 1			;HEADER FOR UDP SENDS
+SNDBUF:	BLOCK RCVLEN+2		;BUFFER SIZE PLUS SLOP
+
+PDL:	BLOCK PDLL+1
+
+	END GO

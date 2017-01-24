@@ -1,0 +1,775 @@
+;[SRI-NIC]SRC:<FINGER>HSTNAM.MAC.69, 23-Jun-87 16:18:50, Edit by MKL
+; set RBK bit on GTDOM% (don't wait for resolve to happen)
+;[SRI-NIC]SRC:<FINGER>HSTNAM.MAC.66, 25-Feb-87 23:50:34, Edit by MKL
+; change GTHST% to GTDOM%
+;SRA:<MM.V1039>HSTNAM.MAC.64, 18-Mar-84 02:09:32, Edit by LOUGHEED
+;Flush the addition/removal of .ARPA domain strings
+
+	TITLE HSTNAM TOPS-20 host name lookup routines
+	SUBTTL Written by Mark Crispin - December 1982
+
+; Copyright (C) 1982, 1983 Mark Crispin.  All rights reserved.
+;  This software, in source and binary form, is distributed free of charge.
+; The binary form of this software may be incorporated into public-domain
+; software and the source may be used for reference purposes.  Copies may
+; be made of the source provided this copyright notice is included.  Wholesale
+; copying of the routines in this software or usage of this software in a
+; proprietary product without prior permission is prohibited.
+
+;  This module is an attempt to provide a common and consistant host name/host
+; address lookup interface for all network software.  For the most part, these
+; modules have been designed like jsi.  They take their arguments in AC's in a
+; fairly consistant manner.  Only the documented returned value AC's are
+; changed; everything else is unaffected.  Note that in a failure return the
+; returned value AC's are undefined; software should not be written to assume
+; any side-effects of a failure as this may change from release to release.
+;
+;  The only real difference from a JSYS is that since these are subroutines
+; invoked by CALL and use the stack any stack references (e.g. STKVAR) must be
+; made absolute prior to using the routines.  For example, assuming FOOSTR is
+; a string in a STKVAR:
+;  Wrong:
+;	MOVE A,[POINT 7,FOOSTR]
+;	CALL $xxxxx
+;  Right:
+;	HRROI A,FOOSTR
+;	CALL $xxxxx
+;
+;  In addition to the individual routines for each network, there are also
+; global routines allowing name/address lookups for multiple networks.  In
+; general, software should be written to use the global routines rather than
+; a specific network's routine if there is any possibility that software will
+; ever be used for more than one network.  The additional generality gained
+; costs nothing but a minor bit of discipline on the part of the programmer
+; and will save future programmers much grief.
+;
+;  One firm rule: absolutely NO software should do host lookups without going
+; through this module.  In particular, no software should be written to access
+; "host tables" (e.g. SYSTEM:HOSTSn.BIN).  Any software which knows about the
+; format, or depends upon existance, of host tables is guaranteed to break
+; without warning.
+;
+;  This module tries to be "internet" (not to be confused with Internet).  In
+; order to provide a means of specifying an explicit name registry, top-level
+; domains prefixed with an "#" are used.  These are relative domains, not to
+; be confused with Internet domains which are absolute.  Eventually, absolute
+; addressing will come into being, but at present that requires considerably
+; more cooperation from the various networks than is presently forthcoming.
+
+; Definitions
+
+	SEARCH MACSYM,MONSYM	; system definitions
+	SALL			; suppress macro expansions
+	.DIRECTIVE FLBLST	; sane listings for ASCIZ, etc.
+
+IFNDEF FTGTHBUG,<FTGTHBUG==1>	; -1 => compensate for .GTHSN GTHST% bug which
+				;  sometimes returns 1200,,0 if no such host
+IFNDEF HSTNML,<HSTNML==^D64>	; length of a host name (64 required minimum)
+ HSTNMW==<HSTNML/5>+1		; host name length in words
+
+rbk=1b6				;do resolve in background if needed
+
+; AC definitions
+
+A=:1				; JSYS, temporary AC's
+B=:2
+C=:3
+D=:4
+P=:17				; stack pointer
+
+	.PSECT CODE		; enter pure CODE PSECT
+
+; $GTPRO - Get host address and find protocol supported by host
+; Accepts:
+;	A/ host name string
+;	C/ pointer to protocol list or -1 to try all supported protocols
+;	CALL $GTPRO
+; Returns +1: Failed
+;	  +2: Success, updated pointer in A, host address in B,
+;			protocol address in C
+;
+;  The protocol list is in the form:
+;	[ASCIZ/protocol1/],,data1
+;	[ASCIZ/protocol2/],,data2
+;		...
+;	[ASCIZ/protocoln/],,datan
+;	0			; end of table
+
+$GTPRO::SAVEAC <D>
+	STKVAR <HSTPTR,HSTPRO>
+	TXC A,.LHALF		; is source LH -1?
+	TXCN A,.LHALF
+	 HRLI A,(<POINT 7,>)	; yes, set up byte pointer
+	MOVEM A,HSTPTR		; save pointer
+	IFL. C			; user want all known protocols?
+	  MOVEI C,PROTAB	; yes, use our internal table
+	ENDIF.
+	MOVEM C,HSTPRO		; save current protocol pointer
+	DO.
+	  SKIPN B,@HSTPRO	; get protocol entry
+	   RET			; end of list, return failure
+	  HLROS B		; make string pointer to name
+	  MOVEI A,PRORTS	; our known table
+	  TBLUK%		; see if can find entry in table
+	   ERJMP R		; strange failure
+	  IFXE. B,TL%NOM!TL%AMB	; found this protocol in table?
+	    HRRZ B,(A)		; yes, get pointer to routines to call
+	    HRRZ B,(B)		; get address/string routine
+	    MOVE A,HSTPTR	; get pointer to host name
+	    CALL (B)		; see if name known under this protocol
+	    IFSKP.
+	      MOVE C,HSTPRO	; found it, get protocol pointer in C
+	      RETSKP		; return success
+	    ENDIF.
+	  ENDIF.
+	  AOS HSTPRO		; not found here, bump current pointer
+	  LOOP.
+	ENDDO.
+
+; $GTNAM - Get name of host given its protocol
+; Accepts:
+;	A/ pointer to destination host string
+;	B/ foreign host address
+;	C/ protocol list item pointer
+;	CALL $GTNAM
+; Returns +1: Failed
+;	  +2: Success, updated pointer in A
+;
+;  For compatibility with the $GTPRO call and the possible convenience of
+; applications programs, a negative argument ("try all protocols") is allowed
+; in C.  However, this is only valid if B is also negative ("local host")
+; since different networks have different addressing conventions.  If this is
+; the case, $GTNAM becomes $GTLCL.
+
+$GTNAM::IFL. C			; caller want to try all protocols?
+	  JUMPL B,$GTLCL	; yes, use $GTLCL if local host desired
+	  RET			; else fail, meaningless call
+	ENDIF.
+	SAVEAC <C>
+	STKVAR <HSTPTR,HSTNUM>
+	TXC A,.LHALF		; is destination pointer's LH -1?
+	TXCN A,.LHALF
+	 HRLI A,(<POINT 7,>)	; yes, set up byte pointer
+	MOVEM A,HSTPTR		; save pointer
+	MOVEM B,HSTNUM		; save host address
+	MOVEI A,PRORTS		; table of known protocols
+	HLRO B,(C)		; protocol to look up
+	TBLUK%			; see if can find entry in table
+	 ERJMP R		; strange failure
+	JXN B,TL%NOM!TL%AMB,R	; fail if protocol not found in table?
+	HRRZ C,(A)		; get pointer to routines to call
+	HLRZ C,(C)		; get string/address routine
+	MOVE A,HSTPTR		; get pointer to host name
+	MOVE B,HSTNUM
+	CALLRET (C)		; see if name known under this protocol
+
+; $GTLCL - Get name of local host
+; Accepts:
+;	A/ pointer to destination host string
+;	CALL $GTLCL
+; Returns +1: Failed (shouldn't happen)
+;	  +2: Success, with updated pointer in A
+
+$GTLCL::SAVEAC <B,C,D>
+	STKVAR <HSTPTR,HSTNUM,<HSTSTR,HSTNMW>,TMPJFN>
+	TXC A,.LHALF		; is destination pointer's LH -1?
+	TXCN A,.LHALF
+	 HRLI A,(<POINT 7,>)	; yes, set up byte pointer
+	MOVEM A,HSTPTR		; save pointer
+	MOVSI D,-NPROTS
+	DO.
+	  MOVEI A,PRORTS	; look up protocol
+	  HLRO B,PROTAB(D)	; protocol to look up
+	  TBLUK%
+	   ERJMP R		; strange failure
+	  JXN B,TL%NOM!TL%AMB,R	; very strange if protocol not found
+	  HRRZ C,(A)		; get pointer to routines to call
+	  HLRZ C,(C)		; get address/string routine
+	  MOVE A,HSTPTR		; pointer to destination string
+	  SETO B,		; translate local host
+	  CALL (C)		; see if we're known under this protocol
+	  IFSKP.
+	    RETSKP		; we are, return success
+	  ENDIF.
+	  AOBJN D,TOP.		; try next protocol
+	ENDDO.
+	MOVX A,GJ%SHT!GJ%OLD	; try for the local hostname file
+	HRROI B,[ASCIZ/SYSTEM:HOSTNAME.TXT/]
+	GTJFN%			; find system file with our name
+	IFNJE.
+	  MOVEM A,TMPJFN	; save JFN in case OPENF% failure
+	  MOVX B,<<FLD 7,OF%BSZ>!OF%RD> ; open in 7-bit ASCII
+	  OPENF%
+	  IFNJE.
+	    HRROI B,HSTSTR	; read in host name
+	    MOVX C,HSTNML	; up to this many characters
+	    MOVX D,.CHLFD	; terminate on a linefeed
+	    SIN%
+	     ERJMP .+1
+	    CLOSF%		; close off file
+	     ERJMP .+1
+	    MOVE A,[POINT 7,HSTSTR] ; now process string a bit
+	    DO.
+	      ILDB B,A		; get byte from string read in
+	      CAIE B,.CHLFD	; LF terminates
+	       CAIN B,.CHCRT	; CR terminates
+		SETZ B,
+	      CAIE B,.CHTAB	; TAB terminates
+	       CAIN B,.CHSPC	; space terminates
+		SETZ B,
+	      IDPB B,HSTPTR	; return byte to user
+	      JUMPN B,TOP.	; if null, done
+	    ENDDO.
+	    MOVE A,HSTPTR	; return updated pointer
+	    RETSKP
+	  ELSE.
+	    MOVE A,TMPJFN	; get back JFN we got
+	    RLJFN%		; free it
+	     ERJMP R		; not interested in errors here
+	    RET
+	  ENDIF.
+	ENDIF.
+	MOVE A,HSTPTR		; destination
+	HRROI B,[ASCIZ/TOPS-20/] ; default name string
+	SETZ C,			; no limit
+	SOUT%			; copy the string
+	 ERJMP R		; can't fail
+	RETSKP
+
+; Table of known protocols and their dispatches
+
+DEFINE DN (NAME,ADRNAM,NAMADR) <
+ [ASCIZ/'NAME'/],,['ADRNAM',,'NAMADR']
+>;DEFINE DN
+
+PRORTS:	NPROTS,,NPROTS
+	DN Chaos,$CHSNS,$CHSSN	; Chaosnet
+	DN DECnet,$DECNS,$DECSN	; DECnet
+	DN Pup,$PUPNS,$PUPSN	; Pup Ethernet
+	DN TCP,$GTHNS,$GTHSN	; TCP/IP Internet
+NPROTS==<.-PRORTS>-1
+
+;  Similar, but in $GTPRO protocol list format in "preferred" order for name
+; registration lookup.  Note that this is not necessarily the same as the
+; "preferred" order for communications.  In particular, TCP comes first since
+; Internet registry is the closest thing to a universal registry there is and
+; any non-Internet networks which communicate with Internet are expected to
+; comprehend and obey Internet's conventions.
+;  *** IMPORTANT: The mailer depends upon Internet being the preferred
+; registry in this table.  In particular, it knows that $GTLCL will return
+; the Internet registry if the local host is on Internet.
+
+DEFINE DP (NAME) <
+ [ASCIZ/'NAME'/],,0
+>;DEFINE DP
+
+PROTAB:	DP TCP
+	DP Pup
+	DP Chaos
+	DP DECnet
+IFN <.-PROTAB>-NPROTS,<PRINTX ?PROTAB/PRORTS length mismatch
+	PASS2
+	END
+>
+	0			; terminate for $GTPRO
+
+; $GTHNS - Translate Internet host address to host name
+; Accepts:
+;	A/ pointer to destination host string
+;	B/ foreign host address
+;	CALL $GTHNS
+; Returns +1: Failed
+;	  +2: Success, updated pointer in A
+
+$GTHNS::SAVEAC <C,D>
+	STKVAR <HSTPTR,HSTNUM>
+	TXC A,.LHALF		; is string pointer LH -1?
+	TXCN A,.LHALF
+	 HRLI A,(<POINT 7,>)	; yes, set up byte pointer
+	MOVEM A,HSTPTR		; save host pointer
+	MOVEM B,HSTNUM		; save host address
+	CAME B,[-1]		; want local address?
+	IFSKP.
+	  MOVX A,.GTHSZ		; yes, get local address so can output
+	  GTDOM%		;  bracketed if unnamed local host
+	   ERJMP R		; not on Internet
+	  MOVEM D,HSTNUM	; set new host address
+	ENDIF.
+	MOVX A,.GTHNS		; number to name conversion
+	txo a,gd%ldo		; local data only
+	MOVE B,HSTPTR		; destination pointer
+	MOVE C,HSTNUM		; host address
+	GTDOM%
+	IFNJE.
+	  MOVEM C,HSTNUM	; return host address
+	  MOVE A,B		; set up byte pointer for $ADDOM
+REPEAT 0,<
+	  HRROI B,[ASCIZ/ARPA/]	; add ARPA domain
+	  CALL $ADDOM		; add domain, leave pointer in A
+>;REPEAT 0
+	ELSE.
+	    movx a,.gthns
+	    txo a,gd%rbk	; resolve this for next person in background
+	    GTDOM%
+	     erjmp .+1		; expected error
+	  MOVEI A,"["		; start bracketed number
+	  IDPB A,HSTPTR
+	  MOVE A,HSTPTR		; get pointer back
+	  LDB B,[POINT 8,HSTNUM,11] ; get first byte
+	  MOVEI C,^D10		; output host parts in decimal
+	  NOUT%			; output it
+	   ERJMP R
+	  MOVEI D,"."		; delimiting dot
+	  IDPB D,A		; add delimiting dot
+	  LDB B,[POINT 8,HSTNUM,19] ; get next byte
+	  NOUT%			; output it
+	   ERJMP R
+	  IDPB D,A		; add delimiting dot
+	  LDB B,[POINT 8,HSTNUM,27] ; get next byte
+	  NOUT%			; output it
+	   ERJMP R
+	  IDPB D,A		; add delimiting dot
+	  LDB B,[POINT 8,HSTNUM,35] ; get final byte
+	  NOUT%			; output it
+	   ERJMP R
+	  MOVEI D,"]"		; terminate bracketed number
+	  IDPB D,A
+	  SETZ D,		; tie off string
+	  IDPB D,A
+	  SETO D,
+	  ADJBP D,A
+	  MOVE A,D
+	ENDIF.
+	MOVE B,HSTNUM		; and host address
+	RETSKP
+
+; $GTHSN - Translate Internet host name to host address
+; Accepts:
+;	A/ pointer to host string
+;	CALL $GTHSN
+; Returns +1: Failed
+;	  +2: Success, updated pointer in A, host address in B
+
+$GTHSN::SAVEAC <C,D>		; preserve these
+	STKVAR <HSTPTR,HSTNUM,<HSTSTR,HSTNMW>>
+	MOVE B,A		; copy string so we can muck with it
+	HRROI A,HSTSTR		; into HSTSTR
+	MOVX C,-HSTNML		; up to this many characters
+	SOUT%
+	 ERJMP R		; percolate failure up to caller
+	MOVEM B,HSTPTR		; save updated pointer
+	LDB A,[POINT 7,HSTSTR,6] ; get opening character
+	CAIE A,"#"		; moby number following?
+	IFSKP.
+	  MOVE A,[POINT 7,HSTSTR,6] ; set up pointer to number
+	  MOVEI C,^D10		; in decimal
+	  NIN%			; input number
+	   ERJMP R		; failed
+	  LDB C,A		; get terminating byte
+	  JUMPN C,R		; string has non-numeric text in it
+	  RETSKP		; return success
+	ENDIF.
+	CAIE A,"["		; bracketed host following?
+	IFSKP.
+	  SETZM HSTNUM		; clear out existing crud in number
+	  MOVE A,[POINT 7,HSTSTR,6] ; set up pointer to number
+	  MOVEI C,^D10		; in decimal
+	  NIN%			; input number
+	   ERJMP R		; failed
+	  JXN B,<<MASKB 0,27>>,R ; disallow if not 8-bit number
+	  DPB B,[POINT 8,HSTNUM,11] ; store byte
+	  LDB B,A		; get terminating byte
+	  CAIE B,"."		; proper terminator?
+	   RET			; return failure
+	  NIN%			; input number
+	   ERJMP R		; failed
+	  JXN B,<<MASKB 0,27>>,R ; disallow if not 8-bit number
+	  DPB B,[POINT 8,HSTNUM,19] ; store byte
+	  LDB B,A		; get terminating byte
+	  CAIE B,"."		; proper terminator?
+	   RET			; return failure
+	  NIN%			; input number
+	   ERJMP R		; failed
+	  JXN B,<<MASKB 0,27>>,R ; disallow if not 8-bit number
+	  DPB B,[POINT 8,HSTNUM,27] ; store byte
+	  LDB B,A		; get terminating byte
+	  CAIE B,"."		; proper terminator?
+	   RET			; return failure
+	  NIN%			; input number
+	   ERJMP R		; failed
+	  JXN B,<<MASKB 0,27>>,R ; disallow if not 8-bit number
+	  DPB B,[POINT 8,HSTNUM,35] ; store final byte
+	  LDB B,A		; get terminating byte
+	  CAIE B,"]"		; proper terminator?
+	   RET			; return failure
+	  MOVE B,HSTNUM		; return host address
+	  RETSKP		; return success
+	ENDIF.
+REPEAT 0,<
+	HRROI A,HSTSTR		; now remove ARPA domain
+	HRROI B,[ASCIZ/ARPA/]
+	CALL $RMDOM
+>;REPEAT 0
+	MOVX A,.GTHSN		; translate name to number
+	txo a,gd%ldo		; local data only
+	HRROI B,HSTSTR		; foreign host name
+	GTDOM%
+	 ERJMP R
+	ILDB B,B		; be sure it parsed the whole string
+	JUMPN B,R		; it didn't, return failure
+	MOVE A,HSTPTR		; get back updated pointer
+	MOVE B,C		; get host address in proper AC
+IFN FTGTHBUG,<
+	CAME B,[1200,,0]	; did GTHST% return this silly value?
+	IFSKP.
+	  SETZ B,		; return 0 for host address
+	  RET
+	ENDIF.
+>;IFN FTGTHBUG
+	RETSKP
+
+; $DECNS - Translate DECnet host address to host name
+; Accepts:
+;	A/ pointer to destination host string
+;	B/ foreign host address
+;	CALL $DECNS
+; Returns +1: Failed
+;	  +2: Success, updated pointer in A
+
+$DECNS::SAVEAC <C>
+	STKVAR <HSTPTR,HSTNUM,<NODBLK,2>>
+	TXC A,.LHALF		; is string pointer LH -1?
+	TXCN A,.LHALF
+	 HRLI A,(<POINT 7,>)	; yes, set up byte pointer
+	MOVEM A,HSTPTR		; save destination pointer
+	MOVEM A,.NDNOD+NODBLK	; set up string pointer in NODE% block
+	MOVEM B,HSTNUM		; save host "number"
+	MOVX A,.NULIO		; don't care about output
+	MOVX B,<<.DVDES+.DVDCN>,,-1> ; DCN: device designator
+	DEVST%			; see if DECnet really exists
+	 ERJMP R		; it doesn't, so give up
+	MOVE B,HSTNUM		; get back desired "number"
+	CAME B,[-1]		; want local address?
+	IFSKP.
+	  MOVX A,.NDGLN		; get local node name function
+	  MOVEI B,NODBLK	; pointer to destination name string
+	  NODE%			; get local name
+	   ERJMP R		; failed
+	  MOVE A,HSTPTR		; now build host "number"
+	  MOVE B,[POINT 6,HSTNUM]
+	  DO.
+	    ILDB C,A		; get byte of returned name
+	    CAIG A," "		; has a sixbit representation?
+	     EXIT.		; no, done
+	    CAIL A,"`"		; lowercase?
+	     SUBI A,"a"-"A"	; yes, convert to upper case
+	    SUBI C,"A"-'A'	; convert to SIXBIT
+	    IDPB C,B		; stash in string
+	    TLNE B,770000	; at last byte?
+	     LOOP.
+	  ENDDO.
+	  MOVE A,.NDNOD+NODBLK	; get string pointer in NODE% block
+	  MOVEM A,HSTPTR	; set as updated host pointer
+	ELSE.
+	  MOVE A,HSTPTR		; get destination string pointer
+	  MOVEM B,HSTNUM	; save host "number"
+	  DO.
+	    SETZ C,		; prepare for byte
+	    ROTC B,6		; get a SIXBIT byte
+	    JUMPE C,R		; imbedded space invalid
+	    ADDI C,"A"-'A'	; convert to ASCII
+	    IDPB C,A		; store in returned string
+	    JUMPN B,TOP.	; get next byte
+	  ENDDO.
+	  MOVEM A,HSTPTR	; update pointer
+	  IDPB B,A		; tie off string
+	  MOVX A,.NDVFY		; now verify node name
+	  MOVEI B,NODBLK	; pointer to verify block
+	  NODE%
+	   ERJMP R		; failed
+	  MOVE A,.NDFLG+NODBLK	; get verify flags
+	  JXE A,ND%EXM,R	; return failure if no match
+	ENDIF.
+	MOVE A,HSTPTR		; return updated pointer
+	HRROI B,[ASCIZ/#DECnet/] ; add DECnet domain
+	CALL $ADDOM
+	MOVE B,HSTNUM		; and updated "number"
+	RETSKP
+
+; $DECSN - Translate DECnet host name to host address
+; Accepts:
+;	A/ pointer to host string
+;	CALL $DECSN
+; Returns +1: Failed
+;	  +2: Success, updated pointer in A, host address in B
+
+$DECSN::SAVEAC <C>
+	STKVAR <HSTPTR,HSTNUM,<HSTSTR,HSTNMW>,NODPTR,<NODBLK,2>>
+	MOVEM A,HSTPTR		; save host pointer
+	MOVX A,.NULIO		; don't care about output
+	MOVX B,<<.DVDES+.DVDCN>,,-1> ; DCN: device designator
+	DEVST%			; see if DECnet really exists
+	 ERJMP R		; it doesn't, so give up
+	HRROI A,HSTSTR		; copy string so we can muck with it
+	MOVE B,HSTPTR		; get back host pointer
+	MOVX C,-HSTNML		; up to this many characters
+	SOUT%
+	 ERJMP R		; percolate failure up to caller
+	MOVEM B,HSTPTR		; save updated pointer
+	HRROI A,HSTSTR		; now remove DECnet domain
+	HRROI B,[ASCIZ/#DECnet/]
+	CALL $RMDOM
+	MOVEM A,NODPTR		; save node pointer
+	MOVEM A,.NDNOD+NODBLK	; set up string pointer in NODE% block
+	MOVX A,.NDVFY		; now verify node name
+	MOVEI B,NODBLK		; pointer to verify block
+	NODE%
+	 ERJMP R		; failed
+	MOVE A,.NDFLG+NODBLK	; get verify flags
+	JXE A,ND%EXM,R		; return failure if no match
+	SETZM HSTNUM		; now build host "number"
+	MOVE B,[POINT 6,HSTNUM]
+	DO.
+	  ILDB A,NODPTR		; get byte of name
+	  CAIG A," "		; has a sixbit representation?
+	   EXIT.		; no, done
+	  CAIL A,"`"		; lowercase?
+	   SUBI A,"a"-"A"	; yes, convert to upper case
+	  SUBI A,"A"-'A'	; convert to SIXBIT
+	  IDPB A,B		; stash in string
+	  TLNE B,770000		; at last byte?
+	   LOOP.
+	ENDDO.
+	MOVE A,HSTPTR		; return updated pointer
+	MOVE B,HSTNUM		; and updated "number"
+	RETSKP
+
+; $PUPNS - Translate Pup Ethernet host address to host name
+; Accepts:
+;	A/ pointer to destination host string
+;	B/ foreign host address
+;	CALL $PUPNS
+; Returns +1: Failed
+;	  +2: Success, updated pointer in A
+
+IFNDEF PUPNM%,<
+	OPDEF PUPNM% [JSYS 443]
+
+PN%NAM==:1B0
+PN%FLD==:1B1
+PN%OCT==:1B2
+>;IFNDEF PUPNM%
+
+$PUPNS::SAVEAC <C,D>
+	STKVAR <HSTPTR,<PUPHSN,2>>
+	MOVEM A,HSTPTR		; save host pointer
+	CAME B,[-1]		; want local address?
+	IFSKP.
+	  MOVX A,SIXBIT/PUPROU/	; get GETAB% index of PUPROU table
+	  SYSGT%		; B/ -items,,table number
+	   ERJMP R		; shouldn't happen
+	  JUMPE B,R		; fail if no such table
+	  HLLZ C,B		; C/ AOBJN pointer through PUPROU
+	  DO.
+	    HRR A,B		; table number
+	    HRL A,C		; index in table
+	    GETAB%		; get table entry
+	     ERJMP R		; shouldn't happen
+	    IFXE. A,1B0		; network inaccessible?
+	      JXN A,.RHALF,ENDLP. ; no, done if have local addr on this network
+	    ENDIF.
+	    AOBJN C,TOP.	; try next entry
+	    RET			; unable to find our host address
+	  ENDDO.
+	  HRLI B,1(C)		; network # is 1+<PUPROU index>
+	  HRR B,A		; host # is in RH of PUPROU entry
+	ENDIF.
+	MOVEM B,PUPHSN		; save host address argument
+	SETZM 1+PUPHSN		; don't want port info
+	MOVE A,HSTPTR		; destination string
+	MOVX B,PN%FLD!PN%OCT!<FLD 1,.LHALF> ; no defaults, use octal if have to
+	HRRI B,PUPHSN		; pointer to host address
+	PUPNM%			; call incredibly hairy Pup JSYS
+	 ERJMP R		; failed
+	HRROI B,[ASCIZ/#Pup/]	; add Pup domain
+	CALL $ADDOM
+	MOVE B,PUPHSN		; return host number too in case argument -1
+	RETSKP
+
+; $PUPSN - Translate Pup Ethernet host name to host address
+; Accepts:
+;	A/ pointer to host string
+;	CALL $PUPSN
+; Returns +1: Failed
+;	  +2: Success, updated pointer in A, host address in B
+
+$PUPSN::SAVEAC <C,D>
+	STKVAR <HSTPTR,<HSTSTR,HSTNMW>,<PUPHSN,2>>
+	MOVE B,A		; copy string so we can muck with it
+	HRROI A,HSTSTR		; into HSTSTR
+	MOVX C,-HSTNML		; up to this many characters
+	SOUT%
+	 ERJMP R		; percolate failure up to caller
+	MOVEM B,HSTPTR		; save updated pointer
+	HRROI A,HSTSTR		; now remove Pup domain
+	HRROI B,[ASCIZ/#Pup/]
+	CALL $RMDOM
+	MOVX B,PN%NAM!<FLD 1,.LHALF> ; lookup name, return one word
+	HRRI B,PUPHSN		; pointer to host address
+	PUPNM%			; call incredibly hairy Pup JSYS
+	 ERJMP R		; failed
+	MOVE A,HSTPTR		; return updated pointer
+	MOVE B,PUPHSN		; get host address
+	RETSKP
+
+; $CHSNS - Translate Chaosnet host address to host name
+; Accepts:
+;	A/ pointer to destination host string
+;	B/ foreign host address
+;	CALL $CHSNS
+; Returns +1: Failed
+;	  +2: Success, updated pointer in A
+
+IFNDEF CHANM%,<
+	OPDEF CHANM% [JSYS 460]
+
+.CHNPH==:0			; return local site primary name and number
+.CHNSN==:1			; Chaosnet name to number
+.CHNNS==:2			; Chaosnet number to primary name
+>;IFNDEF CHANM%
+
+$CHSNS::SAVEAC <C>
+	STKVAR <HSTPTR,HSTNUM>
+	MOVEM A,HSTPTR		; save host pointer
+	MOVEM B,HSTNUM		; save host number
+	CAME B,[-1]		; want local address?
+	IFSKP.
+	  MOVX A,.CHNPH		; return primary name/address
+	  MOVE B,HSTPTR		; pointer to string
+	  CHANM%
+	   ERJMP R		; failed
+	  MOVEM A,HSTNUM	; set returned address
+	ELSE.
+	  MOVX A,.CHNNS		; return name for this address
+	  MOVE B,HSTPTR
+	  MOVE C,HSTNUM
+	  CHANM%
+	   ERJMP R		; failed
+	ENDIF.
+	MOVE A,B		; updated pointer from CHANM% returned in B
+	HRROI B,[ASCIZ/#Chaos/]	; add Chaos domain
+	CALL $ADDOM
+	MOVE B,HSTNUM		; return host number too in case argument -1
+	RETSKP
+
+; $CHSSN - Translate Chaosnet host name to host address
+; Accepts:
+;	A/ pointer to host string
+;	CALL $CHSSN
+; Returns +1: Failed
+;	  +2: Success, updated pointer in A, host address in B
+
+$CHSSN::SAVEAC <C>
+	STKVAR <HSTPTR,<HSTSTR,HSTNMW>>
+	MOVE B,A		; copy string so we can muck with it
+	HRROI A,HSTSTR		; into HSTSTR
+	MOVX C,-HSTNML		; up to this many characters
+	SOUT%
+	 ERJMP R		; percolate failure up to caller
+	MOVEM B,HSTPTR		; save updated pointer
+	HRROI A,HSTSTR		; now remove Chaos domain
+	HRROI B,[ASCIZ/#Chaos/]
+	CALL $RMDOM
+	MOVX A,.CHNSN		; Chaosnet name to number
+	HRROI B,HSTSTR		; foreign host name
+	CHANM%
+	 ERJMP R
+	EXCH A,B		; want pointer in A, address in B
+	RETSKP
+
+; $ADDOM - Add top-level domain name
+; Accepts:
+;	A/ pointer to host string
+;	B/ pointer to domain name string
+;	CALL $ADDOM
+; Returns +1: Always, updated pointer in A
+
+$ADDOM::SAVEAC <B,C>
+	MOVEI C,"."		; add domain delimiter
+	IDPB C,A
+	SETZ C,			; no limit
+	SOUT%
+	RET
+
+; $RMDOM - Remove top-level domain name
+; Accepts:
+;	A/ pointer to host string
+;	B/ pointer to domain name string
+;	CALL $RMDOM
+; Returns +1: Always
+
+$RMDOM::SAVEAC <B>
+	STKVAR <HSTPTR,DOMPTR,DOMNAM>
+	SETZM DOMPTR		; initially no top-level domain pointer
+	MOVEM B,DOMNAM
+	TXC A,.LHALF		; is source LH -1?
+	TXCN A,.LHALF
+	 HRLI A,(<POINT 7,>)	; yes, set up byte pointer
+	MOVEM A,HSTPTR		; set up pointer to return
+	DO.
+	  ILDB B,A		; get a byte from name
+	  IFN. B		; if null, scan done
+	    CAIN B,"."		; start of a domain segment?
+	     MOVEM A,DOMPTR	; yes, remember its pointer
+	    LOOP.
+	  ENDIF.
+	ENDDO.
+	SKIPN B,DOMPTR		; get pointer to top-level domain
+	IFSKP.
+	  MOVE A,DOMNAM		; see if top-level domain is the one we want
+	  STCMP%
+	  IFE. A		; name match?
+	    SETZ A,		; yes, tie off string before top-level domain
+	    DPB A,DOMPTR
+	  ENDIF.
+	ENDIF.
+	MOVE A,HSTPTR
+	RET
+
+; $RMREL - Remove top-level relative domain names
+; Accepts:
+;	A/ pointer to host string
+;	CALL $RMREL
+; Returns +1: Always
+
+$RMREL::SAVEAC <B>
+	STKVAR <HSTPTR,DOMPTR>
+	TXC A,.LHALF		; is source LH -1?
+	TXCN A,.LHALF
+	 HRLI A,(<POINT 7,>)	; yes, set up byte pointer
+	MOVEM A,HSTPTR		; set up pointer to return
+	DO.
+	  SETZM DOMPTR		; initially no top-level domain pointer
+	  DO.
+	    ILDB B,A		; get a byte from name
+	    IFN. B		; if null, scan done
+	      CAIN B,"."	; start of a domain segment?
+	       MOVEM A,DOMPTR	; yes, remember its pointer
+	      LOOP.
+	    ENDIF.
+	  ENDDO.
+	  MOVE A,HSTPTR		; get host pointer for return or loopback
+	  SKIPN B,DOMPTR	; get pointer to top-level domain
+	  IFSKP.
+	    ILDB B,B		; get first byte of domain name
+	    CAIE B,"#"		; relative domain?
+	    IFSKP.
+	      SETZ B,		; yes, tie off string before top-level domain
+	      DPB B,DOMPTR
+	      LOOP.		; re-do to eliminate other relative domains
+	    ENDIF.
+	  ENDIF.
+	ENDDO.
+	RET
+
+	END

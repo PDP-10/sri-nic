@@ -1,0 +1,150 @@
+/*
+ Author: Andrew Lowry
+
+ Columbia University Center for Computing Activities, July 1986.
+ Copyright (C) 1986, 1987, Trustees of Columbia University in the City
+ of New York.  Permission is granted to any individual or institution
+ to use, copy, or redistribute this software so long as it is not sold
+ for profit, provided this copyright notice is retained.
+*/
+/* Internal symbols, declarations, and storage allocations required by
+** the system modules of the ccmd package.  This file is generated
+** automatically by m4 from information in cmfnc.h4 and the various
+** cm???.cnf configuration files.  The initial portion of this file,
+** including this comment, is copied verbatim from the file cmfnc.top.
+*/
+
+
+#include <ctype.h>		/* needed by many function handlers */
+#undef ispunct			/* we have our own idea of punctuation */
+#define ispunct(c) (!(isdigit(c) || isupper(c) || islower(c)))
+
+/*
+** The ftspec structure contains information for parsing a particular
+** field type, including pointers to three handler functions, and a pointer
+** to a default break table.  The parsing handler is invoked when an
+** attempt is made to parse the current input using this field type.
+** The help handler is invoked to provide a standard help message for
+** this field.  The completion handler is invoked when the user has
+** requested completion for this field type.  Calling conventions are as
+** follows:
+**
+** _ftprs (parse handler):
+**   Input arguments:
+**      text - A pointer to the text to be parsed.
+**      textlen - The number of characters in the text.
+**      fdbp - A pointer to the FDB that caused this handler to be invoked.
+**
+**   Output arguments:
+**     parselen - The number of characters consumed by a successful parse.
+**     value - A pointer to a data item to be filled with the result of
+**       a successful parse.  (The data item is not allocated by the
+**       parse handler -- the passed pointer must point to an existing 
+**	 item.)
+**
+**   Returns: Standard return code.
+**
+** _fthlp (help handler):
+**   Input arguments:
+**      text - A pointer to the text being parsed.
+**      textlen - The number of characters in text.
+**      fdbp - A pointer to the FDB that caused this handler to be invoked.
+**      cust - TRUE if a custom help string was typed for this FDB
+**
+**   Output arguments: None.
+**
+**   Returns: Standard return code.
+**
+** _ftcmp (completion handler):
+**   Input arguments:
+**     text - A pointer to the text being parsed.
+**     textlen - The number of characters in text.
+**     fdbp - A pointer to the FDB that caused this handler to be invoked.
+**     full - TRUE if full completion is requested, otherwise only partial
+**       completion is required.
+**
+**   Output arguments:
+**     cplt - A pointer to the completion text to be filled in.  NULL
+**       means no completion text.
+**     cpltlen - If cplt is not NULL, the number of characters to fill
+**       in.  -1 means fill in to the end of the completion string
+**       (zero terminated).
+**
+**   Returns: Flags (defined below) whether or not to:
+**     - Beep at the user (flag CMP_BEL)
+**     - Add a space after the completion text (flag CMP_SPC)
+**     - Stop completion after first punctuation char (flag CMP_PNC)
+**     - Wake up the parse (flag CMP_GO)
+**/
+
+typedef struct FTSPEC {
+  int (*_ftprs)();		/* parse handler address */
+  int (*_fthlp)();		/* help handler address */
+  int (*_ftcmp)();		/* completion handler address */
+  int _ftflg;			/* field type flags */
+  brktab *_ftbrk;		/* standard break table */
+} ftspec;
+  
+/* Flags defined for ftspec structure (_ftflg field) */
+
+#define	FT_DFX	0x0001		/* blocks defaulting on confirm */
+
+/* Flags to be returned by completion handlers */
+
+#define CMP_BEL	0x0001		/* beep at the user */
+#define CMP_SPC	0x0002		/* add space after completion text */
+#define CMP_GO	0x0004		/* wakeup requested */
+#define CMP_PNC	0x0008		/* end completion after first punctuation */
+
+/* global break table shared by some parse functions */
+
+extern brktab cmallbk;
+
+/* Error table, indexed by the left byte of an error code,
+** points to a function error structure, which includes a count
+** of the number of error codes in the table, and a pointer to
+** an array of error strings, indexed by the right byte of the
+** error code.
+**/
+
+typedef struct FNERR {
+  int _fecnt;			/* number of error strings in table */
+  char **_ferrs;		/* pointer to array of error strings */
+} fnerr;
+
+/* badfnc - Macro to decide whether a given function code is legal.
+** First, the code is checked for a range error.  If it passes, the
+** function table entry is checked for a NULL parse function pointer,
+** indicating that the function has been stubbed out of this application.
+**/
+
+#define badfnc(code)	(((code) < 1) || ((code) > cmfmax) ? TRUE : \
+			 (cmfntb[(code)-1]->_ftprs == NULL))
+
+/* Some useful character constants */
+
+#define NULCHAR	'\0'
+#define	BELL	'\007'
+#define BS	'\010'
+#define	TAB	'\t'		/* ASCII 011 */
+#define	NEWLINE	'\n'		/* ASCII 012 */
+#define FORMFEED '\014'
+#define	RETURN	'\r'		/* ASCII 015 */
+#define SPACE	'\040'
+#define DELETE	'\177'
+
+/*
+ * Macros to inspect break tables:
+ *  BREAK1(b,c) => nonzero iff character c is a 1st character break in
+ *    break table *b.
+ *  BREAKR(b,c) => nonzero iff character c is a non-1st character break in
+ *    break table *b.
+ *  BREAK(b,c,p) => nonzero iff character c is a break character in position
+ *    p according to break table *b.  (p should be 0 to check for 1st char
+ *    break, nonzero otherwise.)
+ */
+
+#define	BREAK1(b,c)	(0x80 & ((b)->_br1st[(c)/8] << ((c) % 8)))
+#define	BREAKR(b,c)	(0x80 & ((b)->_brrest[(c)/8] << ((c) % 8)))
+#define BREAK(b,c,p)	((p) == 0 ? BREAK1(b,c) : BREAKR(b,c))
+

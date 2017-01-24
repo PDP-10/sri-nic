@@ -1,0 +1,432 @@
+;[SRI-NIC]PS:<MKL>CONLOG.MID.2, 11-Feb-86 00:26:22, Edit by MKL
+; NIC version
+
+.lstof
+	title CONLOG - capture console log in a file
+
+;;10-Aug-84 15:38:37, GZ, v1 -- created.
+;;28-Aug-84 03:03:57, GZ, v2 -- put fudge factor in new-log-file creation time,
+;;	so it doesn't keep moving forward.  Also make sure the console dynamic
+;;	data buffer is permanent, just for fun.
+;; 6-Sep-84 04:03:50, GZ, v3 -- more fudge in fudge factor
+;;30-Oct-84 11:59:13, GZ, v7 -- Flush all the fudging around, replace the
+;;	new-file-every-24-hours algorithm with new-file-each-midnight.
+;; 1-Nov-84 01:19:21, GZ, v8 -- Oops, forgot internal time is in gmt, so
+;;	midnight happens around 7pm.
+
+ifndef dbgsw,dbgsw==0
+
+.decsav
+
+T=:5
+TT=:6
+
+.insrt mid:macsym.mid
+
+define fatal &msg
+	jsp T,$fatal
+	asciz msg
+termin
+
+define jfatal &msg
+	ercal [jsp T,$jfatal
+	       ifse [msg][] 0
+	       .else [asciz msg]]
+termin
+
+lognam:	asciz "PS:<OPERATOR>CONSOLE.LOG;P770000"
+
+chktim==:60.			;Number of seconds between spy-link checks
+
+ttflg1==:0			;Offset of TTFLG1 word in tty dynamic block
+tt%prm==:001000,,0		;The "permanent block" flag
+ttlink==:21			;Offset of TTLINK word in tty dynamic block
+
+pdllen==:100
+	.vector pdl(pdllen)
+
+strsiz==:100
+	.vector strbuf(strsiz)	;Buffer for PTY input
+
+	.scalar logjfn		;JFN on log file
+	.scalar logcrv		;Log file creation date
+
+	.scalar ctytty		;TTY designator for the CTY
+	.scalar ctylnk		;PEEK pointer to CTY's TTLINK word.
+
+	.scalar ptytty		;TTY designator for the PTY
+	.scalar ptyjfn		;JFN on the PTY
+
+	.scalar lev1pc,lev2pc,lev3pc
+
+LEVTAB:	lev1pc
+	lev2pc
+	lev3pc
+
+CHNTAB:	0
+ptychn==:.-chntab
+	3,,ptyout
+repeat 36.-2,0
+
+chnmsk==:1_<35.-ptychn>
+
+begin:	RESET%
+	move p,[-pdllen,,pdl-1]
+	movei 1,.fhslf
+	setob 2,3
+	EPCAP%
+
+	setzm logjfn
+	call CTYIni		;Prepare for any error messages
+
+	hrroi 1,[asciz "CTY:"]
+	STDEV%
+	  JFatal "Can't find the CTY:"
+	movei 2,.ttdes(2)
+	movem 2,ctytty
+
+ife dbgsw,[			;Don't bother while debugging, too damn slow
+	movei 1,.snpsy
+	move 2,[.rsqz 0,TTACTL]
+	setz 3,
+	SNOOP%
+	  JFatal "Can't find TTACTL"
+]
+.else	movei 2,260605
+	move 1,ctytty
+	subi 1,.ttdes
+	add 1,2
+	hrli 1,1
+	movei 2,3
+	PEEK%
+	  JFatal "Can't find TTACTL slot for CTY"
+	jumple 3,[Fatal "Bad value for CTY TTACTL slot"]
+	movei 1,ttlink(3)	;Address of ttlink word
+	hrli 1,1		;Make it a PEEK pointer
+	movem 1,ctylnk		;and save
+	hrri 1,ttflg1(3)
+	movei 2,3
+	PEEK%
+	  JFatal "Can't find TTFLG1 for CTY"
+	jxe 3,tt%prm,[fatal "CTY DYN-DATA-BLOCK not permanent"]
+
+getpty:	move 1,[sixbit/PTYPAR/]	;Get us a PTY
+	SYSGT%
+	jumpe 2,[fatal "Can't find PTYPAR"]
+	hrrz TT,1		;TTY # of first PTY in system
+	hllz T,1		;Total number of PTY's
+	movns T			;Make an aobjn pointer
+	do.
+	  move 1,T
+	  hrli 1,.dvdes+.dvpty
+	  DVCHR%
+	  ifxn. 2,dv%av
+	    hlrzs 3		;Check that not assigned (could be assigned
+	    caie 3,-1		;to another fork in this job)
+	  anskp.
+	    move 2,1
+	    hrroi 1,strbuf
+	    DEVST%
+	  anskp.
+	    movei 2,":
+	    idpb 2,1
+	    setz 2,
+	    idpb 2,1
+	    movx 1,gj%sht
+	    hrroi 2,strbuf
+	    GTJFN%
+	  anskp.
+	    push p,1
+	    movx 2,fld(7,of%bsz)\of%rd\of%wr
+	    OPENF%
+	    ifskp.
+	      pop p,ptyjfn	;Done!
+	      addi T,.ttdes(TT)
+	      hrrzm T,ptytty
+	      exit.
+	    endif.
+	    pop p,1
+	    RLJFN%
+	      nop
+	  endif.
+	  aobjn T,top.
+	  fatal "No available ptys"
+	enddo.
+
+	move 1,ptytty
+	movei 2,.tt120
+	STTYP%
+
+	move 1,ptytty
+	txo 1,tl%sab\tl%abs
+	TLINK%
+	  JFatal "Can't receive links"
+
+	movei 1,.fhslf
+	move 2,[levtab,,chntab]
+	SIR%
+	EIR%
+	movx 2,chnmsk
+	AIC%
+
+	move 1,ptyjfn
+	movx 2,mo%oir\fld(ptychn-1,mo%sic)+.moapi
+	MTOPR%
+	 JFatal "Can't assign PTY interrupt"
+
+	move 1,ptytty		;PTY is object, CTY is remote
+	hrli 1,(tl%ero)		;Remote to object
+	move 2,ctytty
+	TLINK%
+	  JFatal "Can't create spy link"
+
+Start:	hrroi 2,[asciz "Logging started"]
+	call CTYMsg
+	call CTYSay
+
+	do.
+	  movx 1,chktim*1000.	;Wake up every this many seconds
+	  DISMS%
+	  move 1,ctylnk		;See if we're still linked
+	  movei 2,3
+	  PEEK%
+	   JFatal "Can't read TTLINK word"
+	  move 1,ptytty
+	  subi 1,.ttdes
+	  repeat 4,[
+	    setz 2,
+	    lshc 2,9
+	    camn 2,1
+	      loop.		;Still there, go back to sleep
+	    ]
+	  move 1,ctytty	
+	  hrroi 2,4
+	  setz 3,
+	  GETJI%
+	   Erjmp .+1
+	  Skipl 4		;if no job then relink
+	   loop.		;else loop
+	  movei 1,.fhslf
+	  DIR%
+	  move 1,ptytty		;PTY is object, CTY is remote
+	  hrli 1,(tl%ero)	;Remote to object
+	  move 2,ctytty
+	  TLINK%
+	    JFatal "Can't recreate spy link"
+	  hrroi 2,[asciz "** My spy link had been snapped **"]
+	  call CTYMsg
+	  call CTYSay
+	  movei 1,.fhslf
+	  EIR%
+	  loop.
+	enddo.
+
+
+;;Reopen log file
+ReOpen:	skipe logjfn
+	ifskp.			;First time
+	  movx 1,gj%sht\gj%old	;Try to use an old one if any
+	  hrroi 2,lognam
+	  GTJFN%
+	anskp.
+	  movem 1,logjfn
+	  call GetCRV
+	endif.
+	skipn logjfn
+	ifskp.
+	  seto 2,		;Get current time
+	  movx 4,ic%jud
+	  ODCNV%
+	   erjmp [seto 2,	;System doesn't know the time yet
+		  jrst .+1]
+	  camle 2,logcrv	;File created on this day (or later?)
+	  ifskp.
+	    move 1,logjfn	;Yup, use it
+	    movx 2,fld(7,of%bsz)\of%app
+	    OPENF%
+	     skipa
+	       ret		;All done!
+	    hrroi T,[asciz "Can't reopen log file"]
+	    caie 2,opnx2	;File does not exist?
+	      call $JFatal	;No, random error
+	  endif.
+	  ;here if log file is old or got deleted (expunged actually)
+	  move 1,logjfn		;Will make a new one
+	  RLJFN%
+	    JFatal "Can't release old log jfn"
+	endif.
+	movx 1,gj%sht\gj%new\gj%fou
+	hrroi 2,lognam
+	GTJFN%
+	  JFatal "Can't create log jfn"
+	movem 1,logjfn
+	movx 2,fld(7,of%bsz)\of%wr
+	OPENF%
+	  JFatal "Can't open new log file"
+	hrli 1,(co%nrj)
+	CLOSF%			;Actually create it
+	  JFatal "Can't close new log file"
+	call GetCRV		;Get creation time
+	jrst ReOpen		;And try it again now
+
+GetCRV:	move 1,logjfn		;Get file creation date
+	move 2,[1,,.fbcrv]
+	movei 3,2
+	GTFDB%
+	movx 4,ic%jud		;Convert to julian time
+	ODCNV%
+	movem 2,logcrv		;year,,day
+	ret
+
+	.vector ptyacs(16)	;Saved program ACs 1-16
+
+PtyOut:	movem 1,ptyacs
+	move 1,[2,,ptyacs+1]
+	blt 1,ptyacs+15
+	call ReOpen		;Reopen log file
+	do.
+	  move 1,ptytty
+	  SOBE%
+	   skipa
+	    jumpn 2,ptyerr
+	  skipg T,2
+	    exit.
+	  caile T,strsiz*5
+	    movei T,strsiz*5
+	  movn 3,T
+	  hrroi 2,strbuf
+	  move 1,ptyjfn
+	  SIN%
+	    JFatal "Error doing PTY input"
+	  jumpn 3,[Fatal "Can't get all PTY input"]
+	  move 1,logjfn
+	  hrroi 2,strbuf
+	  movn 3,T
+	  SOUT%
+	  loop.
+	enddo.
+	move 1,logjfn
+	hrli 1,(co%nrj)
+	CLOSF%
+	 JFatal "Can't close log file"
+	move 1,[ptyacs+1,,2]
+	blt 1,16
+	move 1,ptyacs
+	DEBRK%
+
+ptyerr:	hrroi T,[asciz "Error checking PTY buffer"]
+	call $JFatal
+
+
+	.scalar ctybp
+	.vector ctybuf(100)
+
+CTYMsg:	move 1,ctybp
+	hrli 2,440700
+	do.
+	 ildb 3,2
+	 idpb 3,1
+	 jumpn 3,top.
+	enddo.
+	seto 3,
+	ibp 3,1
+	movem 3,ctybp
+	ret
+
+CTYNum:	move 1,ctybp
+	NOUT%
+	 jrst [hrroi 2,[asciz "<some number>"]
+	       jrst CTYMsg]
+	movem 1,ctybp
+	ret
+
+CTYErr:	move 1,ctybp
+	hrli 2,.fhslf
+	setz 3,
+	ERSTR%
+	  jrst [movei 2,(2)
+		push p,2
+		hrroi 2,[asciz "Undefined error #"]
+		call CTYMsg
+		pop p,2
+		movei 3,8
+		jrst CTYNum]
+	  jrst [hrroi 2,[asciz "<some error message>"]
+		jrst CTYMsg]
+	movem 1,ctybp
+	ret
+
+CTYSay:	Movei 1,.fhslf
+	DIR%
+	 Erjmp .+1
+	hrroi 2,[asciz "
+"] ?	call CTYMsg
+	movei 1,.priou
+	DOBE%
+	 nop
+	hrroi 2,ctybuf
+	setz 3,
+	SOUT%
+CTYIni:	move 1,[440700,,ctybuf]
+	movem 1,ctybp
+	hrroi 2,[asciz "[CONLOG] "]
+	Movei 1,.fhslf
+	EIR%
+	 Erjmp .+1
+	jrst CTYMsg
+
+
+$JFata:	hrroi T,(T)
+	skipa
+$Fatal:	 movei T,(T)
+	movei 1,.fhslf
+	movx 2,chnmsk
+	DIC%
+	move 1,ctybp
+	came 1,[010700,,ctybuf+1]
+	 call CTYSay
+	skipn (T)
+	  hrri T,[asciz "Unexpected error"]
+	hrroi 2,(T)
+	call CTYMsg
+	ifl. T
+	  hrroi 2,[asciz " ("]
+	  call CTYMsg
+	  movei 1,.fhslf
+	  GETER%
+	  call CTYErr
+	  hrroi 2,[asciz ") at "]
+	  call CTYMsg
+	  pop p,2
+	  movei 2,-2(2)
+	  movei 3,8
+	  call CTYNum
+	endif.
+CDie:	move 1,ptytty
+	hrli 1,(tl%cro)
+	move 2,ctytty
+	TLINK%
+	  nop
+	call CTYSay
+	;In the future should reload and all that
+	seto 1,
+	CLOSF%
+	  nop
+	seto 1,
+	RLJFN%
+	  nop
+	RESET%
+	HALTF%
+
+ifn dbgsw,[
+Unlink:	move 1,ptytty		;PTY is object, CTY is remote
+	hrli 1,(tl%cro)		;Remote to object
+	move 2,ctytty
+	TLINK%
+	  JFatal "Can't clear spy link"
+	ret
+]
+	variab
+Junk:	consta
+
+	end begin

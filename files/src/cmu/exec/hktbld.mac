@@ -1,0 +1,398 @@
+;<5.1.CMU>HKTBLD.MAC.1,  9-May-83 20:01:01, Edit by PA0B
+;Created...
+;
+; HKTBLD is a program which produces the keyword tables used by the "Help"
+; and, where such exists, the "Document" command.
+;
+; This file is the source for both the program (if RELFLG = 1) and for
+; Hktbld.Unv, which contains the definitions necessary to access the tables.
+;
+;		Philip Almquist		9-May-83
+;
+
+IFNDEF RELFLG,<RELFLG==0>	;Default is universal
+DEFINE UNV <IFE RELFLG>
+DEFINE REL <IFN RELFLG>
+
+UNV,<
+	UNIVERSAL HKTBLD
+>
+
+REL,<
+	TITLE HKTBLD
+	SEARCH MONSYM,MACSYM
+>
+
+;Version number:
+
+	VMAJ==1
+	VMIN==0
+	VEDT==1
+	VWHO==0
+
+;Defininitions:
+
+;Version word macro:
+
+DEFINE HKTVER,<
+	FLD(VWHO,VI%WHO)!FLD(VMAJ,VI%MAJ)!FLD(VMIN,VI%MIN)!FLD(VEDT,VI%EDN)
+>
+
+;Name of the keyword table file:
+
+DEFINE HKTFIL,<
+	ASCIZ "HLP:HELP-KEYWORD-TABLES.BIN"
+>
+
+;Offsets into the keyword table file:
+
+	PHASE 0
+	.HTOFF:!BLOCK 1		;Offset of the start of the "Help" table
+	.DTOFF:!BLOCK 1		;Offset of the start of the "Document" table
+	.MXOFF:!BLOCK 0		;Maximum offset
+	DEPHASE
+
+;Random constants, needed by REL file only:
+
+REL,<
+	STDAC.			;Define AC names
+	PDLEN==20		;Stack size
+	MTOPIC==10000		;Maximum number of keywords we support
+>
+
+UNV,<
+	END			;End of UNV file
+>
+
+;The rest of the file is after the END of the UNV file...
+
+;Entry vector:
+
+ENTVEC:	JRST START
+	JRST START
+	HKTVER			;Version number
+
+;Initialize the world:
+
+START:	RESET%			;Be good
+	MOVE P,[IOWD PDLEN,PD]	;Set up stack
+	MOVEI T1,TABBUF+.MXOFF	;Get address of first free word for tables
+	MOVEM T1,TABFRE		;Save for later
+	MOVEI T1,STRBUF		;Get address of string buffer
+	MOVEM T1,STRFRE		;Save for later, too
+	SETZM TABBUF		;Zero first word of headers
+	MOVE T1,[TABBUF,,TABBUF+1]
+IFG <.MXOFF-1>,<	
+	BLT T1,TABBUF+.MXOFF-1	;Zero rest of headers
+>
+
+;Do "Help" keyword table:
+
+	MOVE T1,TABFRE		;Get offset of "Help" tabe in resulting file
+	MOVEM T1,TABBUF+.HTOFF	;Store
+	HRROI T1,[ASCIZ "HLP:*.HLP.0"]
+	CALL MKTABL
+
+;Do "Document" keyword table:
+
+	MOVE T1,TABFRE		;Get address of start of "Document" table
+	MOVEM T1,TABBUF+.DTOFF	;Store
+	HRROI T1,[ASCIZ "HLP:*.DOC.0"]
+	CALL MKTABL
+
+;Stick strings immediately after tables:
+
+	MOVE T1,TABFRE		;Get address of word right after tables
+	HRLI T1,STRBUF		;Get address of first word of strings
+	MOVE T2,STRFRE		;Get address of first free string space
+	SUBI T2,STRBUF+1	;Compute length of strings
+	ADD T2,TABFRE		;Compute address of last word to move
+	MOVEM T2,HLPEND		;Save for PMAP% code below
+	BLT T1,(T2)		;Copy the strings
+
+;Make addresses in table relative to the beginning of the table file:
+
+	MOVEI T2,STRBUF		;Get address of string buffer
+	SUB T2,TABFRE		;Compute relocation caused by moving strings
+	ADDI T2,TABBUF		;Make relative to beginning of file
+	MOVNS T2		;Change sign so subr can add relocation factor
+	PUSH P,T2		;Save relocation factor
+	MOVE T1,TABBUF+.HTOFF	;Get address of "Help" table
+	CALL HKTRLC		;Relocate its entries
+	MOVE T1,TABBUF+.DTOFF	;Get address of "Document" table
+	POP P,T2		;Get back relocation factor
+	CALL HKTRLC		;Relocate its entries
+
+;Make addresses in headers be relative to beginning of the file:
+
+	MOVNI T1,TABBUF		;Get relocation factor
+	ADDM T1,TABBUF+.HTOFF	;Relocate "Help" table offset
+	ADDM T1,TABBUF+.DTOFF	;Relocate "Document" table offset
+
+;Write tables out to the file:
+
+	HRROI T1,[HKTFIL]	;Get name of file
+	CALL HKTWRT		;Write the tables
+
+;Done:
+
+	HALTF%
+	JRST .-1
+
+;Routine which, given a file name, generates a TBLUK% table of the
+;names (JS%NAM) of the files.
+;
+;Takes:
+;	T1/	pointer to wildcard string to generate names
+;	TABFRE/	address at which to put the table
+;	STRFRE/	address at which to put the strings
+;	CUMTBL/	address of a TBLUK% table of strings that are already
+;		in other tables
+;Returns:
+;	+1/	success
+;	does not return on serious error
+;Outputs:
+;	TABFRE/	address one past the end of the table
+;	STRFRE/	address one past the last address used for our strings
+;	CUMTBL/	strings from our table added
+;
+MKTABL:	STKVAR <JFN,TBLHDR>
+	MOVE T2,T1		;Move string pointer to T2
+	MOVE T1,TABFRE		;Get address of beginning of table
+	MOVEM T1,TBLHDR		;Save for later
+	SETZM (T1)		;No entries in table yet
+	AOS TABFRE		;Point past header
+	MOVX T1,GJ%OLD!GJ%IFG!GJ%SHT ;Find existing files
+	GTJFN%
+	 ERMSG <HKTBLD: GTJFN% in MKTABL failed>
+	MOVEM T1,JFN		;Save JFN for later
+	DO.
+	  CALL ADDNAM		;Add name to table
+	  MOVE T1,TBLHDR	;Get address of table header
+	  MOVE T2,(T1)		;Get table header
+	  AOBJN T2,.+1		;Increment table size and #used entries
+	  MOVEM T2,(T1)		;Put back updated table header
+	  MOVE T1,JFN		;Get back JFN
+	  GNJFN%		;See if more files to do
+	   ERJMP .+2		;No or blew up somehow
+	  LOOP.			;Yes, go do them
+	OD.
+	CAIN T1,GNJFX1		;No more files?
+	 RET			;Yes, done
+	TMSG <? HKTBLD: GNJFN% in MKTABL failed>
+	JSHLT			;No, die
+
+	ENDSV.
+
+;Routine to add an entry to a TBLUK table.  Called from MKTABL above
+;for each file found.
+;
+;Takes:
+;	T1/	JFN to get keyword from
+;	TABFRE/	Address at which to put table entry
+;	STRFRE/	Address at which to put string (if one is needed)
+;	CUMTBL/	Table of already used strings
+;Returns:
+;	+1/	always
+;	does not return on serious error
+;Outputs:
+;	TABFRE/	Incremented
+;	STRFRE/	Address of next free string space
+;	CUMTBL/	Keyword is in the table
+;
+ADDNAM:	STKVAR <JFN,NEWFRE>
+	MOVEM T1,JFN		;Save the JFN
+	HRRO T1,STRFRE		;Make pointer to string space
+	HRRZ T2,JFN		;Get JFN
+	MOVX T3,FLD(.JSAOF,JS%NAM) ;File name only
+	JFNS%			;Write file name
+	IBP T1			;Skip over null (for calculation on next line)
+	AOS T1			;Save address of next free word of
+	HRRM T1,NEWFRE		; string space
+	MOVEI T1,CUMTBL		;Get address of table of strings
+	HRRO T2,STRFRE		;Get pointer to string we just made
+	TBLUK%			;Look for it in the table
+	TXNN T2,TL%EXM		;Was it there?
+	IFSKP.
+	  HLRZ T1,(T1)		;Yes, get address of string to use
+	ELSE.
+	  HRRO T1,STRFRE	;Get -1,,address of string
+	  CALL FOLDST		;Make lowercase
+	  MOVEI T1,CUMTBL	;Get address of table again
+	  HRLZ T2,STRFRE	;Make table entry for new string
+	  TBADD%		;Add it to the table
+	   ERJMP .+1
+	  MOVE T1,NEWFRE	;Get new value for STRFRE
+	  EXCH T1,STRFRE	;Update STRFRE, get address of new string
+	ENDIF.
+	HRLZ T1,T1		;Make new table entry
+	MOVE T2,TABFRE		;Get address where entry should go
+	MOVEM T1,(T2)		;Write new entry
+	AOS T1,TABFRE		;Update free pointer
+	CAIG T1,STRBUF		;Table expanded into string space?
+	 RET			;No, ok
+	TMSG<? HKTBLD: Table overflow in ADDNAM>
+	JSHLT			;Die
+
+	ENDSV.	  
+
+;Routine to fix the case of a (null terminated) string.  Assumes that
+;the case of the first character or any character that does not follow
+;an alphabetic should not be changed -- everything else is lowercased.
+;
+;Takes:
+;	T1/	byte pointer to string to be "fixed" (-1,,addr ok)
+;Returns:
+;	+1/	always
+;
+FOLDST::HLRZ T3,T1		;Get left half of the byte pointer
+	CAIN T3,-1		;Is it a -1,, pseudo byte pointer?
+	 HRLI T1,440700		;Yes, make it a real one
+FSTR2:	SKIPA T4,[0]		;Say don't fold case of next char
+FSTR1:	SETO T4,		;Say fold case of next char
+	ILDB T3,T1		;Get a character
+	CAIL T3,"A"		;Uppercase
+	 CAILE T3,"Z"		;  character?
+	  JRST FSTR10		;No
+	JUMPE T4,FSTR1		;If not to fold this char, go do next one
+				;  and say to fold it
+	ADDI T3,40		;Fold it
+	DPB T3,T1		;Put it back in the string
+	JRST FSTR1		; and go do next char
+
+;Not an uppercase character
+
+FSTR10:	CAIN T3,0		;Null?
+	 RET			;Yes, we're done, go away
+	CAIL T3,"0"		;Is it a
+	 CAILE T3,"9"		;  number?
+	  JRST FSTR20		;No, go on
+	JRST FSTR2		;Yes, don't fold next character
+
+;Not an uppercase letter or a number
+
+FSTR20:	CAIL T3,"a"		;Is it a lowercase
+	 CAILE T3,"z"		; letter?
+	  JRST FSTR30		;No, go on
+	JRST FSTR1		;Yes, go on and say to fold next character
+
+;Not a letter or a number
+
+FSTR30:	JRST FSTR2		;Must be something strange.  Do next char
+				; but don't fold it
+
+;Routine to change the string addresses in a table from absolute to relative
+;addresses or visa versa.  Does not touch the data (right) half of the table
+;entries.
+;
+;Takes:
+;	T1/	Address of table
+;	T2/	Relocation factor (number to add to an address to do the
+;		proper conversion
+;Returns:
+;	+1/	always
+;
+HKTRLC:	MOVEI T4,1(T1)		;Get address of first entry in table
+	HLRZ T1,(T1)		;Get number of entries in table
+	SKIPN T1		;Zero-length table?
+	 RET			;Yes, done
+	MOVNS T1		;Make count negative
+	HRLM T1,T4		;Make AOBJN pointer
+	DO.
+	  HLRZ T1,(T4)		;Get string address
+	  ADD T1,T2		;Relocate it
+	  HRLM T1,(T4)		;Store it back
+	  AOBJN T4,TOP.		;Loop again if more entries
+	OD.
+	RET			;Done
+
+;Routine which writes the tables we have generated out to the help
+;keywords table file.
+;
+;Takes:
+;	T1/	pointer to output file name
+;	HLPEND/	address of last word of the tables
+;	(assumes that tables begin at TABBUF)
+;Returns:
+;	+1/	success
+;	does not return on serious error
+;
+HKTWRT:	STKVAR <HKTJFN>
+	MOVE T2,T1		;Get filespec pointer into T2
+	MOVX T1,GJ%SHT!GJ%FOU	;Make new version
+	GTJFN%
+	IFJER.
+	  TMSG <? HKTBLD: Couldn't GTJFN% HKT file>
+	  JSHLT
+	ENDIF.
+	MOVEM T1,HKTJFN		;Save the JFN
+	MOVX T2,FLD(^D36,OF%BSZ)!OF%WR
+	OPENF%			;Open it for write
+	IFJER.
+	  MOVE T1,HKTJFN
+	  RLJFN%
+	   ERMSG <HKTBLD: Couldn't release HKT JFN after OPENF% failed>
+	  TMSG <? HKTBLD: Couldn't open HKT file>
+	  JSHLT
+	ENDIF.
+	HRLZ T2,T1		;Make JFN,,page #0 as destination for PMAP%
+	MOVE T1,[.FHSLF,,<TABBUF/1000>]	;Source is in-core table
+	MOVE T3,HLPEND		;Get address of last word of table
+	SUBI T3,TABBUF-1	;Compute length in words
+	IDIVI T3,1000		;Convert to number of pages
+	SKIPE T4		;Remainder?
+	 AOS T3			;Yes count as another full page
+	TXO T3,PM%WR!PM%CNT	;Turn on appropriate PMAP% bits
+	PMAP%			;Write the file
+	IFJER.
+	  MOVE T1,HKTJFN
+	  RLJFN%
+	   ERMSG <HKTBLD: Couldn't release HKT JFN after PMAP% failed>
+	  TMSG <? HKTBLD: Couldn't write HKT file>
+	  JSHLT
+	ENDIF.
+	HRRZ T1,HKTJFN		;Get back the JFN
+	TXO T1,CO%NRJ		;Keep the JFN
+	CLOSF%			;Close the file
+	IFJER.
+	  MOVE T1,HKTJFN
+	  RLJFN%
+	   ERMSG <HKTBLD: Couldn't release HKT file after CLOSF% failed>
+	  TMSG <? HKTBLD: Couldn't close HKT file>
+	  JSHLT
+	ENDIF.
+	TMSG <HKTBLD: >
+	MOVX T1,.PRIOU
+	MOVE T2,HKTJFN
+	SETZ T3,
+	JFNS%			;Put out filespec
+	 ERJMP .+1
+	TMSG < written
+>
+	MOVE T1,HKTJFN		;Get back JFN
+	RLJFN%			;Release it
+	 ERJMP .+1		;Ignore error
+	RET			;Done
+
+	ENDSV.
+
+;Impure storage:
+
+TABFRE:	BLOCK 1			;Address of next free word in TABBUF
+STRFRE:	BLOCK 1			;Address of next free word in STRBUF
+HLPEND:	BLOCK 1			;Address of last word of constructed tables
+				; (after strings have been merged with tables)
+PD:	BLOCK PDLEN		;Stack
+CUMTBL:	0,,MTOPIC		;Table of keywords from all tables.  Used to
+	BLOCK MTOPIC		; detect when entries in multiple tables can
+				; point to the same string
+
+	LIT			;Don't put literals in buffer area
+	LOC <.+777>&777000	;Get to page boundary
+TABBUF=.			;Start of buffer where tables and file are
+				; built
+STRBUF=.+MTOPIC+2		;String space begins after table space.  The
+				; "+2" is to allow for a header word for each
+				; table
+
+	END <3,,ENTVEC>

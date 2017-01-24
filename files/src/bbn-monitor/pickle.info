@@ -1,0 +1,111 @@
+File:        PICKLE.INFO
+Program:     PICKLE.EXE
+See also:    STS.INFO, STS1.EXE
+Description: To Tickle, Gather and File IP Status Reports
+
+PICKLE is an internet protocol tickler and statusgram logger.
+It runs as a user program and requires NETWIZ capability.
+
+The send-tickle (S) command prompts for a host address, which
+may be typed as an octal number, four decimal bytes separated
+by ".", or a text name.  A terminator alone defaults to the
+previous ticklee.  The tickle has 4 octets of data: 16 bits of
+local port (source of tickle), and 16 bits of foreign port
+(destination of tickle).  The ticklee is expected to return a
+statusgram, an IP packet reporting its status, which TICKLE logs.
+
+The receive (R) command puts TICKLE into a spooling mode,
+primarily intended for unattended monitoring operation.
+Received statusgrams are logged to appropriate files.
+
+The verbose (V) command toggles whether text information
+indexing the log files is printed on the terminal or not.
+The default is not to print it.  It is always written into
+index files, however.
+
+The exit (E) command leaves PICKLE gracefully, after allowing
+any logging in progress to complete and halting the inferior
+process.
+
+The inferior process executes a loop: read an IP message,
+process it, loop.  If the reception (RCVIN) is in error, the
+packet is ignored.  If the packet is an ICMP message, TICKLE
+prints a warning on the terminal, such as:
+	Received ICMP message from host BBNA,
+	    type 3 (dest unreachable), code 2
+and does not further process the ICMP message.
+Otherwise, TICKLE appends the packet, including the RCVIN
+argument-and-return-value word containing the word count,
+to a file.  The file name is host.bin, where "host" is the
+text name of the packet's source, such as BBNA.BIN.  If no
+text name is available, TICKLE uses the four decimal bytes
+punctuated with "-", such as 3-3-0-5.BIN.
+Then TICKLE constructs a text string describing the index
+information for the packet it has just logged.  This string
+has the date and time from the packet, the source host system
+up time from the packet, the sequence number (segment ID),
+the decimal value of the host.bin file pointer at the start of
+the new entry, the length of the entry in words,
+and the source host (as text or as four decimal bytes
+punctuated with ".").  This string is appended to the file
+host.index, where "host" is the same as with the host.bin file.
+If verbose mode has been enabled (see V command, above), the
+string is also printed on the terminal.  A header line,
+listing the various fields of the index text string, is printed
+each time the verbose (V) command is serviced; this is an easy
+way to obtain a run-time printout of the field meanings.
+The inferior then returns to awaiting another packet.
+
+When the first receive (R) or send (S) command is serviced,
+the inferior fork is started.  Also at this time the ASNIQ,
+to assign an internet queue, is executed.  Some parameters of
+the ASNIQ vary depending on whether the command needing the
+ASNIQ is an R or an S, that is, which is serviced first.
+The difference in parameters creates two modes of operation.
+R first creates "monitor mode", where TICKLE logs all
+statusgrams initiated by foreign sites.  S first creates
+"manual mode", where TICKLE logs only responses to tickles
+initiated by the user of this instance of TICKLE.  A single
+host may run one TICKLE in monitor mode and one or more TICKLEs
+in manual mode, all simultaneously.  The varying parameters are:
+mode		local port value	local port mask (octal)
+----		----------------	-----------------------
+monitor (R)	LOCPOR (= 240.)		177777
+manual (S)	job#,0 (1 octet each)	177400
+The job number is also used in the segment ID field of each
+tickle; the high octet is the job number, and the low octet is
+a count starting at 1 and incrementing for each tickle sent.
+
+
+Example: (of manual mode)
+
+$pickle
+IP STATUSGRAM FILER
+  R (receive) command first ==> monitor mode
+  S (send) command first ==> manual mode
+READY
+?
+  E = exit, R = receive, S = send, V = verbose
+s  Host to tickle: bbnf
+
+  Tickle # 1 to host 01200000005 = 10.0.0.5 = BBNF
+
+v  Verbose mode on
+ date, time in pkt/up H:M/seq #/   .bin ptr/ len/src host
+s  Host to tickle: bbnf
+
+  Tickle # 2 to host 01200000005 = 10.0.0.5 = BBNF
+23-May-83 11:02:55  41:34  6914        4942 4942 BBNF
+e  quitting...
+$vd bbnf*
+   PS:<CLYNN>
+ BBNF.BIN.1;P777700        20 9884(36)   23-May-83 11:02:58 CLYNN     
+   .INDEX.1;P777700         1 110(7)     23-May-83 11:03:00 CLYNN     
+ Total of 21 pages in 2 files
+$ty bbnf.index
+23-May-83 11:01:53  41:33  6913           0 4942 BBNF
+23-May-83 11:02:55  41:34  6914        4942 4942 BBNF
+$
+
+The STS(1,2,3).EXE program may be used to format the binary data
+in the .BIN file for printing.

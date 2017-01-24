@@ -1,0 +1,2451 @@
+! THIS SOFTWARE IS FURNISHED UNDER A LICENSE AND MAY  BE  USED
+! OR COPIED ONLY IN ACCORDANCE WITH THE TERMS OF SUCH LICENSE.
+!
+! COPYRIGHT  (C)  DIGITAL  EQUIPMENT  CORPORATION 1982, 1985.
+! ALL RIGHTS RESERVED.
+
+![11] Nourse - Fix mismatched parens in $RMS$DEFINE_CALL
+![10] Nourse - Define new XABKEY datatypes for RMS v2.
+![7] Nourse - Add fields DAP may want
+![6] Nourse - LIST function codes
+![5] Nourse - TYP block
+![4] Nourse - Invent the NAM block
+![3] LCampbell - Conform to XDUMP conventions
+![2] Nourse - Add new fields for network access
+![1] LUSK  8-Jul-81 13:40:28 "Initial library load"
+
+%SBTTL 'Internal macro definitions'
+
+%IF NOT %DECLARED(%QUOTE $XPO_IOB)
+%THEN
+LIBRARY 'BLI:XPORT';
+%FI;
+
+!++
+!
+!	The following internal macros support the 
+!	RMS argument block definition macros.
+!--
+
+MACRO
+
+!++
+!
+! $RMS_BITFLD (and its support macros ...)
+!
+!	Internal macro.  Allows the initialization
+!	of a field with the OR of one or more (named) bits
+!
+!--
+
+    $RMS_BITS(A,B)[] =
+	%NAME(A,B)	$RMS_OR(%REMAINING) $RMS_BITS(A,%REMAINING) %,
+
+    $RMS_OR[] =
+	OR %,
+
+    $RMS_BITFLD(PREFIX, VALUE)=
+	%IF %NULL(VALUE)
+	%THEN 0
+	%ELSE $RMS_BITS(PREFIX, %REMOVE(VALUE))
+	%FI %,
+
+!++
+!
+!  $RMS_CODFLD
+!
+!	Internal macro.  Allows the initialization
+!	of a field with a named value.
+!
+!--
+
+    $RMS_CODFLD(PREFIX, VALUE)=
+	%NAME(PREFIX, %REMOVE(VALUE)) %,
+
+!+
+!
+!  $RMS_STRFLD
+!
+!	$RMS_STRFLD initializes a string address 
+!	field with either an address passed
+!	as an argument or the value of an UPLIT
+!	containing a string passed as an argument.
+!-
+
+    $RMS_STRFLD(VALUE) =
+	%IF %ISSTRING(VALUE)
+	%THEN UPLIT(%ASCIZ VALUE)
+	%ELSE VALUE
+	%FI %;
+
+!+
+!
+!   $RMS_POSITION
+!   $RMS_SIZE
+!
+!	$RMS_POSITION and its companion $RMS_SIZE
+!	with their supporting macros
+!	are used in the $XABKEY macro for initializing
+!	the segment position and size fields
+!
+!-
+
+MACRO
+    $RMS_POSITION [POSITION] =
+	[%NAME(XABKEY$H_POS, %COUNT)] = POSITION %,
+
+    $RMS_SIZE [SIZE] =
+	[%NAME(XABKEY$H_SIZ, %COUNT)] = SIZE %;
+
+!+
+!
+!   $RMS_POSITION_INI
+!   $RMS_SIZE_INI
+!
+!	$RMS_POSITION_INI and its companion $RMS_SSIZE_INI
+!	are used in the $XABKEY_INIT macro for initializing
+!	the segment position and size fields dynamically
+!
+!-
+
+MACRO
+    $RMS_POSITION_INI(BLK)[POSITION] =
+	BLK [%NAME(XABKEY$H_POS, %COUNT)] = POSITION %,
+
+    $RMS_SIZE_INI(BLK)[SIZE] =
+	BLK [%NAME(XABKEY$H_SIZ, %COUNT)] = SIZE %;
+
+
+
+%SBTTL 'FAB definitions'
+!+
+!
+!	FAB symbols and macros
+!
+!-
+
+
+LITERAL
+    FAB$K_BLN		= 16,
+    FAB$K_BID		= 1;
+
+
+! FAB structure
+
+$FIELD
+    $FAB_BLOCK_FIELDS =
+	SET
+	FAB$H_BLN	= [$BYTES(2)],	! Block length field
+	FAB$H_BID	= [$BYTES(2)],	! Block type field
+            $OVERLAY(FAB$H_BID)         ! **FTS**
+            FAB$B_BID_1=[$BYTE],        ! **FTS**
+            FAB$V_DEV_REMOTE=[$BIT],    ! **FTS**
+            $CONTINUE                   ! **FTS**
+	FAB$H_STV	= [$BYTES(2)],	! Secondary status field
+	FAB$H_STS	= [$BYTES(2)],	! Primary status field
+	FAB$G_CTX	= [$BYTES(4)],	! User context word
+	FAB$H_JFN	= [$BYTES(2)],	! User's JFN, if offered
+	FAB$A_IFI	= [$ADDRESS],		! Address of FST
+	FAB$H_SHR	= [$BITS(18)],		! SHR field of FAB
+	    $OVERLAY(FAB$H_SHR)
+	    FAB$V_SHR_GET = [$BIT],
+	    FAB$V_SHR_UPD = [$BIT],
+	    FAB$V_SHR_PUT = [$BIT],
+	    FAB$V_SHR_DEL = [$BIT],
+	    FAB$V_SHR_TRN = [$BIT],
+            FAB$V_SHR_BIO = [$BIT],     ! Block mode I/O **FTS** ** Reserved **
+            FAB$V_SHR_BRO = [$BIT],     ! Block and Record I/O ** Reserved **
+            FAB$V_SHR_APP = [$BIT],     ! Append Only ** Reserved **
+	    $CONTINUE
+	FAB$H_FAC	= [$BITS(18)],		! User's desired access
+	    $OVERLAY(FAB$H_FAC)
+	    FAB$V_FAC_GET = [$BIT],
+	    FAB$V_FAC_UPD = [$BIT],
+	    FAB$V_FAC_PUT = [$BIT],
+	    FAB$V_FAC_DEL = [$BIT],
+	    FAB$V_FAC_TRN = [$BIT],
+            FAB$V_FAC_BIO = [$BIT],     ! Block mode I/O **FTS**
+            FAB$V_FAC_BRO = [$BIT],     ! Block and Record I/O ** Reserved **
+            FAB$V_FAC_APP = [$BIT],     ! Append Only ** Reserved **
+	    $CONTINUE
+	FAB$Z_BLS	= [$BITS(8)],		! Block size for tape
+	FAB$Z_BSZ	= [$BITS(6)],		! File byte-size
+	FAB$Z_ORG	= [$BITS(4)],		! File organization
+	FAB$H_FOP	= [$BITS(18)],		! File options
+	    $OVERLAY(FAB$H_FOP)
+	    FAB$V_FOP_WAT = [$BIT],
+	    FAB$V_FOP_CIF = [$BIT],
+	    FAB$V_FOP_DRJ = [$BIT],
+	    FAB$V_FOP_DFW = [$BIT],
+	    FAB$V_FOP_SUP = [$BIT],
+            FAB$V_FOP_SPL = [$BIT],             ! print on close **FTS**
+            FAB$V_FOP_SCF = [$BIT],             ! Submit on close **FTS**
+            FAB$V_FOP_DLT = [$BIT],             ! Delete on close **FTS**
+            FAB$V_FOP_NAM = [$BIT],             ! open by NAM blk **Reserved**
+            FAB$V_FOP_CTG = [$BIT],             ! File is contiguous **FTS**
+            FAB$V_FOP_LKO = [$BIT],             ! Override lock ** Reserved **
+            FAB$V_FOP_TMP = [$BIT],             ! Temporary file ** Reserved **
+            FAB$V_FOP_MKD = [$BIT],             ! Mark for delete ** Reserved *
+            FAB$V_FOP_OFP = [$BIT],             ! Output file parse ** FTS **
+	    $CONTINUE
+	FAB$A_FNA	= [$POINTER],		! Pointer to filename
+	FAB$H_MRS	= [$SHORT_INTEGER],	! Maximum record size
+	FAB$H_RAT	= [$BITS(18)],		! Record attributes
+	    $OVERLAY(FAB$H_RAT)
+	    FAB$V_RAT_BLK = [$BIT],
+            FAB$V_RAT_MACY11= [$BIT],           ! MACY11 format ** reserved **
+            FAB$V_RAT_FTN = [$BIT],             ! FORTRAN carr.ctl. ** Reserved
+            FAB$V_RAT_CR = [$BIT],              ! Implied CRLF ** Reserved **
+            FAB$V_RAT_PRN = [$BIT],             ! Print file (VMS) ** Reserved
+            FAB$V_RAT_EMB = [$BIT],             ! Embedded carr.ctl ** Reserved
+            FAB$V_RAT_CBL = [$BIT],             ! COBOL carr.ctl ** Reserved **
+	    $CONTINUE
+	FAB$G_MRN	= [$INTEGER],		! Maximum record number
+	FAB$Z_RFM	= [$BITS(5)],		! Record format
+	FAB$Z_BKS	= [$BITS(8)],		! Default bucket size
+        FAB$Z_FSZ       = [$BITS(5)],           ! Fixed hdr size ** Reserved **
+	FAB$H_UNUSED_0	= [$BITS(18)],		! Reserved
+	FAB$A_XAB	= [$ADDRESS],		! Address of XAB chain
+	FAB$A_JNL	= [$ADDRESS],		! Address of log block
+	FAB$H_SDC	= [$BITS(18)],		! Spooling dev. characteristics
+	FAB$H_DEV	= [$BITS(18)],		! Device characteristics
+	    $OVERLAY(FAB$H_DEV)
+	    FAB$V_DEV_REC = [$BIT],
+	    FAB$V_DEV_CCL = [$BIT],
+	    FAB$V_DEV_TRM = [$BIT],
+	    FAB$V_DEV_MDI = [$BIT],
+	    FAB$V_DEV_SQD = [$BIT],
+	    $CONTINUE
+        FAB$A_NAM = [$ADDRESS],                 ! Address of NAM block **FTS**
+        FAB$A_TYP = [$ADDRESS],                 ! Address of TYP block **FTS**
+	FAB$G_ALQ = [$BYTES(4)],                ! Allocation quantity
+        FAB$G_UNUSED_3  = [$BYTES(4)],          ! Reserved
+	FAB$G_UNUSED_4	= [$BYTES(4)]		! reserved
+	TES;
+
+! End of FAB
+
+! definitions of FAB-related values and constants.
+
+LITERAL
+    FAB$K_SIZE = $FIELD_SET_SIZE;
+
+LITERAL
+    FAB$M_FAC_NIL	= 0,			! FB$NIL -- quick'n'dirty read
+    FAB$M_FAC_GET	= 1 ^ 0,		! FB$GET -- read access
+    FAB$M_FAC_UPD	= 1 ^ 1,		! FB$UPD -- update access
+    FAB$M_FAC_PUT	= 1 ^ 2,		! FB$PUT -- write access
+    FAB$M_FAC_DEL	= 1 ^ 3,		! FB$DEL -- delete access
+    FAB$M_FAC_TRN	= 1 ^ 4,		! FB$TRN -- truncate access
+    FAB$M_FAC_BIO       = 1 ^ 5,                ! FB$BIO -- Block I/O ** FTS **
+    FAB$M_FAC_BRO       = 1 ^ 6,                ! FB$BRO -- Blk/rec ** Reserved
+    FAB$M_FAC_APP       = 1 ^ 7;                ! Append only ** Reserved **
+
+LITERAL
+    FAB$M_SHR_NIL	= 0,			! FB$NIL -- exclusive access
+    FAB$M_SHR_GET	= 1 ^ 0,		! FB$GET -- read access
+    FAB$M_SHR_UPD	= 1 ^ 1,		! FB$UPD -- update access
+    FAB$M_SHR_PUT	= 1 ^ 2,		! FB$PUT -- write access
+    FAB$M_SHR_DEL	= 1 ^ 3,		! FB$DEL -- delete access
+    FAB$M_SHR_TRN	= 1 ^ 4,		! FB$TRN -- truncate access
+    FAB$M_SHR_BIO       = 1 ^ 5,                ! FB$BIO -- Block I/O ** FTS **
+    FAB$M_SHR_BRO       = 1 ^ 6,                ! FB$BRO -- Blk/rec ** Reserved
+    FAB$M_SHR_APP       = 1 ^ 7;                ! Append only ** Reserved **
+
+LITERAL
+    FAB$M_FOP_WAT	= 1 ^ 0,		! wait for file access
+    FAB$M_FOP_CIF	= 1 ^ 1,		! create if non-existent
+    FAB$M_FOP_DRJ	= 1 ^ 2,		! do not release JFN
+    FAB$M_FOP_DFW	= 1 ^ 3,		! deferred write to file
+    FAB$M_FOP_SUP	= 1 ^ 4,		! supersede existing file *FTS*
+    FAB$M_FOP_SPL       = 1 ^ 5,                ! Spool (print) on close *FTS*
+    FAB$M_FOP_SCF       = 1 ^ 6,                ! Submit on close **FTS**
+    FAB$M_FOP_DLT       = 1 ^ 7,                ! Delete on close **FTS**
+    FAB$M_FOP_NAM       = 1 ^ 8,                ! Open by NAM block **FTS**
+    FAB$M_FOP_CTG       = 1 ^ 9,                ! File is contiguous **FTS**
+    FAB$M_FOP_LKO       = 1 ^ 10,               ! Override lock ** Reserved **
+    FAB$M_FOP_TMP       = 1 ^ 11,               ! Temporary file ** Reserved *
+    FAB$M_FOP_MKD       = 1 ^ 12,               ! Mark for delete ** Reserved *
+    FAB$M_FOP_OFP       = 1 ^ 13;               ! Output file parse ** FTS **
+
+LITERAL
+    FAB$K_ORG_SEQ	= 1,			! Sequential organization
+    FAB$K_ORG_REL	= 2,			! Relative file organization
+    FAB$K_ORG_IDX	= 3,			! Indexed file organization
+    FAB$K_ORG_HSH       = 4,                    ! Hashed file org ** Reserved *
+    FAB$K_ORG_DIRECTORY = 5;                    ! File is a directory **FTS**
+
+LITERAL
+    FAB$K_RFM_VAR	= 0,			! Variable record format
+    FAB$K_RFM_STM	= 1,			! Stream ASCII records
+    FAB$K_RFM_LSA	= 2,			! Line sequenced ASCII
+    FAB$K_RFM_FIX	= 3,			! Fixed length records
+    FAB$K_RFM_VFC       = 4,                    ! VFC format ** FTS **
+    FAB$K_RFM_UDF       = 5;                    ! Undefined/unknown ** FTS **
+
+LITERAL
+    FAB$M_RAT_BLK	= 1 ^ 0,		! Blocked records
+    FAB$M_RAT_MACY11    = 1 ^ 1,                ! MACY11 format **FTS**
+    FAB$M_RAT_FTN       = 1 ^ 2,                ! FORTRAN cc ** Reserved **
+    FAB$M_RAT_CR        = 1 ^ 3,                ! Implied CRLF ** Reserved **
+    FAB$M_RAT_PRN       = 1 ^ 4,                ! Print file ** Reserved **
+    FAB$M_RAT_EMB       = 1 ^ 5,                ! Embedded cc ** Reserved **
+    FAB$M_RAT_CBL       = 1 ^ 6;                ! COBOL cc ** Reserved ** 
+!++
+!
+!	The following macros support declaration,
+!	allocation, and/or initialization of various
+!	flavors of FABs.
+!
+!--
+
+!+
+!
+!  $FAB_DECL
+!
+!	Used to declare a FAB control block where
+!	initialization is not required
+!-
+
+MACRO
+
+    $FAB_DECL =
+	BLOCK[FAB$K_BLN] FIELD($FAB_BLOCK_FIELDS) %;
+
+!+
+!
+!  $FAB
+!
+!	Used to allocate and statically initialize
+!	a FAB control block
+!
+!-
+
+KEYWORDMACRO
+    $FAB(				! Declare a compile_time FAB
+	BKS = 0,	BLS = 0,	BSZ = 7,	CTX = 0,
+	FAC = GET,	FNA = 0,	FOP,		JFN = 0,
+	JNL = 0,	MRN = 0,	MRS = 0,	ORG = SEQ,
+	RAT,		RFM = VAR,	SHR = NIL,      XAB = 0,
+        NAM = 0,        TYP = 0  ) =
+
+	$FAB_DECL
+	PRESET(
+	    [FAB$H_BLN]		= FAB$K_BLN,
+	    [FAB$H_BID]		= FAB$K_BID,
+	    [FAB$H_STV]		= 0,
+	    [FAB$H_STS]		= 0,
+	    [FAB$G_CTX]		= CTX,
+	    [FAB$H_JFN]		= JFN,
+	    [FAB$H_SHR]		= $RMS_BITFLD(FAB$M_SHR_, SHR),
+	    [FAB$H_FAC]		= $RMS_BITFLD(FAB$M_FAC_, FAC),
+	    [FAB$Z_BLS]		= BLS,
+	    [FAB$Z_BSZ]		= BSZ,
+	    [FAB$Z_ORG]		= $RMS_CODFLD(FAB$K_ORG_, ORG),
+	    [FAB$H_FOP]		= $RMS_BITFLD(FAB$M_FOP_, FOP),
+	    [FAB$A_FNA]		= $RMS_STRFLD(FNA),
+	    [FAB$H_MRS]		= MRS,
+	    [FAB$H_RAT]		= $RMS_BITFLD(FAB$M_RAT_, RAT),
+	    [FAB$G_MRN]		= MRN,
+	    [FAB$Z_RFM]		= $RMS_CODFLD(FAB$K_RFM_, RFM),
+	    [FAB$Z_BKS]		= BKS,
+	    [FAB$A_XAB]		= XAB,
+	    [FAB$A_JNL]		= JNL,
+            [FAB$A_NAM]         = NAM,
+            [FAB$A_TYP]         = TYP ) %;
+
+
+!+
+!
+!  $FAB_INIT
+!
+!	Used to dynamically initialize
+!	a FAB control block
+!
+!-
+
+KEYWORDMACRO
+    $FAB_INIT(					! Initialize a FAB
+
+	FAB,
+
+	BKS = 0,	BLS = 0,	BSZ = 7,	CTX = 0,
+	FAC = GET,	FNA = 0,	FOP,		JFN = 0,
+	JNL = 0,	MRN = 0,	MRS = 0,	ORG = SEQ,
+	RAT,		RFM = VAR,	SHR = NIL,	XAB = 0,
+        NAM = 0,        TYP = 0 ) =
+
+	( BIND $RMS_PTR = FAB : $FAB_DECL;
+	  CH$FILL(0, FAB$K_BLN, CH$PTR($RMS_PTR, 0, 36));
+
+	    $RMS_PTR [FAB$H_BLN]	= FAB$K_BLN;
+	    $RMS_PTR [FAB$H_BID]	= FAB$K_BID;
+	    $RMS_PTR [FAB$H_STV]	= 0;
+	    $RMS_PTR [FAB$H_STS]	= 0;
+	    $RMS_PTR [FAB$G_CTX]	= CTX;
+	    $RMS_PTR [FAB$H_JFN]	= JFN;
+	    $RMS_PTR [FAB$H_SHR]	= $RMS_BITFLD(FAB$M_SHR_, SHR);
+	    $RMS_PTR [FAB$H_FAC]	= $RMS_BITFLD(FAB$M_FAC_, FAC);
+	    $RMS_PTR [FAB$Z_BLS]	= BLS;
+	    $RMS_PTR [FAB$Z_BSZ]	= BSZ;
+	    $RMS_PTR [FAB$Z_ORG]	= $RMS_CODFLD(FAB$K_ORG_, ORG);
+	    $RMS_PTR [FAB$H_FOP]	= $RMS_BITFLD(FAB$M_FOP_, FOP);
+	    $RMS_PTR [FAB$A_FNA]	= $RMS_STRFLD(FNA);
+	    $RMS_PTR [FAB$H_MRS]	= MRS;
+	    $RMS_PTR [FAB$H_RAT]	= $RMS_BITFLD(FAB$M_RAT_, RAT);
+	    $RMS_PTR [FAB$G_MRN]	= MRN;
+	    $RMS_PTR [FAB$Z_RFM]	= $RMS_CODFLD(FAB$K_RFM_, RFM);
+	    $RMS_PTR [FAB$Z_BKS]	= BKS;
+	    $RMS_PTR [FAB$A_XAB]	= XAB;
+	    $RMS_PTR [FAB$A_JNL]	= JNL;
+            $RMS_PTR [FAB$A_NAM]        = NAM;
+            $RMS_PTR [FAB$A_TYP]        = TYP;
+	    1) %;
+
+!+
+!
+!  $FAB_STORE
+!
+!	Used to dynamically change
+!	a FAB control block
+!
+!-
+
+KEYWORDMACRO
+    $FAB_STORE(					! Change a FAB
+
+	FAB,
+
+	BKS,	BLS,	BSZ,	CTX,	FAC,	FNA,	FOP,	JFN,
+	JNL,	MRN,	MRS,	ORG,	RAT,	RFM,	SHR,	XAB,
+        NAM,    TYP ) =
+
+	( BIND $RMS_PTR = FAB : $FAB_DECL;
+
+	%IF NOT %NULL(CTX)
+	%THEN
+	    $RMS_PTR [FAB$G_CTX]	= CTX;
+	%FI
+	%IF NOT %NULL(JFN)
+	%THEN
+	    $RMS_PTR [FAB$H_JFN]	= JFN;
+	%FI
+	%IF NOT %NULL(SHR)
+	%THEN
+	    $RMS_PTR [FAB$H_SHR]	= $RMS_BITFLD(FAB$M_SHR_, SHR);
+	%FI
+	%IF NOT %NULL(FAC)
+	%THEN
+	    $RMS_PTR [FAB$H_FAC]	= $RMS_BITFLD(FAB$M_FAC_, FAC);
+	%FI
+	%IF NOT %NULL(BLS)
+	%THEN
+	    $RMS_PTR [FAB$Z_BLS]	= BLS;
+	%FI
+	%IF NOT %NULL(BSZ)
+	%THEN
+	    $RMS_PTR [FAB$Z_BSZ]	= BSZ;
+	%FI
+	%IF NOT %NULL(ORG)
+	%THEN
+	    $RMS_PTR [FAB$Z_ORG]	= $RMS_CODFLD(FAB$K_ORG_, ORG);
+	%FI
+	%IF NOT %NULL(FOP)
+	%THEN
+	    $RMS_PTR [FAB$H_FOP]	= $RMS_BITFLD(FAB$M_FOP_, FOP);
+	%FI
+	%IF NOT %NULL(FNA)
+	%THEN
+	    $RMS_PTR [FAB$A_FNA]	= $RMS_STRFLD(FNA);
+	%FI
+	%IF NOT %NULL(MRS)
+	%THEN
+	    $RMS_PTR [FAB$H_MRS]	= MRS;
+	%FI
+	%IF NOT %NULL(RAT)
+	%THEN
+	    $RMS_PTR [FAB$H_RAT]	= $RMS_BITFLD(FAB$M_RAT_, RAT);
+	%FI
+	%IF NOT %NULL(MRN)
+	%THEN
+	    $RMS_PTR [FAB$G_MRN]	= MRN;
+	%FI
+	%IF NOT %NULL(RFM)
+	%THEN
+	    $RMS_PTR [FAB$Z_RFM]	= $RMS_CODFLD(FAB$K_RFM_, RFM);
+	%FI
+	%IF NOT %NULL(BKS)
+	%THEN
+	    $RMS_PTR [FAB$Z_BKS]	= BKS;
+	%FI
+	%IF NOT %NULL(XAB)
+	%THEN
+	    $RMS_PTR [FAB$A_XAB]	= XAB;
+	%FI
+	%IF NOT %NULL(JNL)
+	%THEN
+	    $RMS_PTR [FAB$A_JNL]	= JNL;
+	%FI
+
+        %IF NOT %NULL(NAM)
+        %THEN
+            $RMS_PTR [FAB$A_NAM]        = NAM;
+        %FI
+
+        %IF NOT %NULL(TYP)
+        %THEN
+            $RMS_PTR [FAB$A_TYP]        = TYP;
+        %FI
+
+	1) %;
+
+
+!+
+!
+!  $FAB_ZERO
+!
+!	Used to dynamically zero
+!	a FAB control block
+!
+!-
+
+KEYWORDMACRO
+    $FAB_ZERO(FAB) =				! Zero a FAB
+	(BIND $RMS_PTR = FAB : $FAB_DECL;
+	CH$FILL(0, FAB$K_BLN, CH$PTR($RMS_PTR, 0, 36))) %;
+
+
+
+%SBTTL 'RAB definitions'
+!++
+!
+!	RAB definitions
+!
+!--
+
+! RAB structure
+
+$FIELD
+    $RAB_BLOCK_FIELDS =
+	SET
+	RAB$H_BLN	= [$BYTES(2)],		! RAB length
+	RAB$H_BID	= [$BYTES(2)],		! RAB identifier
+	RAB$H_STV	= [$BYTES(2)],		! Status value
+	RAB$H_STS	= [$BYTES(2)],		! Primary status
+	RAB$G_CTX	= [$BYTES(4)],		! User's context word
+	RAB$A_FAB	= [$ADDRESS],		! Pointer to FAB
+	RAB$A_ISI	= [$ADDRESS],		! Internal stream identifier
+	RAB$H_ROP	= [$BITS(18)],		! Record operation bits
+	    $OVERLAY(RAB$H_ROP)
+	    RAB$V_ROP_EOF = [$BIT],		! Set to EOF on $CONNECT
+	    RAB$V_ROP_FDL = [$BIT],		! Fast delete
+	    RAB$V_ROP_LOC = [$BIT],		! Use locate mode on $GETs
+	    RAB$V_ROP_RAH = [$BIT],		! Read ahead
+	    RAB$V_ROP_LOA = [$BIT],		! Use load limits
+	    RAB$V_ROP_WBH = [$BIT],		! Write behind
+	    RAB$V_ROP_KGT = [$BIT],		! Search key >
+	    RAB$V_ROP_KGE = [$BIT],		! Search key >=
+	    RAB$V_ROP_PAD = [$BIT],		! Use PAD character as filler
+	    RAB$V_ROP_NRP = [$BIT],		! Set NRP on $FIND
+            RAB$V_ROP_UIF = [$BIT],             ! Update existing ** Reserved *
+            RAB$V_ROP_ULK = [$BIT],             ! Manual unlock ** Reserved **
+            RAB$V_ROP_TPT = [$BIT],             ! Truncate to EOF ** Reserved *
+            RAB$V_ROP_NLK = [$BIT],             ! Do not lock ** Reserved **
+            RAB$V_ROP_RLK = [$BIT],             ! Read locked rec ** Reserved *
+            RAB$V_ROP_BIO = [$BIT],             ! Block I/O ** Reserved **
+            RAB$V_ROP_LIM = [$BIT],             ! ** RESERVED ** key lim
+            RAB$V_ROP_NXR = [$BIT],             ! ** RESERVED ** non ex record
+	    $CONTINUE
+	RAB$Z_MBF	= [$BYTE],		! Multi-buffer count
+	RAB$Z_RAC	= [$BYTE],		! Record access
+	RAB$A_UBF	= [$POINTER],		! User buffer
+	RAB$A_RBF	= [$POINTER],		! Record buffer
+	RAB$H_USZ	= [$SHORT_INTEGER],	! User buffer size (words)
+	RAB$H_RSZ	= [$SHORT_INTEGER],	! Record size (bytes)
+	RAB$G_RFA	= [$BYTES(4)],		! Record file address
+	RAB$H_LSN	= [$BYTES(2)],		! Line sequence number
+	RAB$Z_KSZ	= [$TINY_INTEGER],	! Key size
+	RAB$Z_KRF	= [$TINY_INTEGER],	! Key of reference
+	RAB$A_KBF	= [$POINTER],		! Key buffer
+	RAB$G_BKT	= [$BYTES(4)],		! Bucket hash code
+	RAB$Z_UNUSED_0	= [$BYTES(3)],		! Unused area
+	RAB$Z_PAD	= [$BYTE],		! Padding character
+	RAB$G_UNUSED_1	= [$BYTES(4)],		! Three
+	RAB$G_UNUSED_2	= [$BYTES(4)],		!    unused
+	RAB$G_UNUSED_3	= [$BYTES(4)]		!       words
+	TES;
+
+! End of RAB
+!++
+!
+!	Symbol definitions for RAB
+!
+!--
+
+LITERAL
+    RAB$K_SIZE = $FIELD_SET_SIZE;
+
+LITERAL
+
+!
+!	Default values
+!
+	RAB$K_BLN	= 16,		! RAB length
+	RAB$K_BID	= 2,		! Block type
+!
+!	RAC (record access) field
+!
+    RAB$K_RAC_SEQ	= 0,		! Sequential access mode
+    RAB$K_RAC_KEY	= 1,		! Key access mode
+    RAB$K_RAC_RFA	= 2,		! RFA access mode
+    RAB$K_RAC_BLK      = 253,                   ! Block access ** RESERVED **
+    RAB$K_RAC_TRA      = 254,          ! Record mode file transfer  **FTS**
+    RAB$K_RAC_BFT      = 255,          ! Block Mode file transfer   **FTS**
+
+!
+!	ROP (record options) field
+!
+	RAB$M_ROP_EOF	= 1 ^ 0,	! Position file to EOF
+	RAB$M_ROP_FDL	= 1 ^ 1,	! Fast delete
+	RAB$M_ROP_LOC	= 1 ^ 2,	! Use locate mode on $GETs
+	RAB$M_ROP_RAH	= 1 ^ 3,	! Read ahead
+	RAB$M_ROP_LOA	= 1 ^ 4,	! Follow load percentages
+	RAB$M_ROP_WBH	= 1 ^ 5,	! Write behind
+	RAB$M_ROP_KGT	= 1 ^ 6,	! Key greater than
+	RAB$M_ROP_KGE	= 1 ^ 7,	! Key greater than or equal to
+	RAB$M_ROP_PAD	= 1 ^ 8,	! Use PAD character to fill buffer
+	RAB$M_ROP_NRP	= 1 ^ 9,	! Set Next Record Ptr on $FIND
+        RAB$M_ROP_UIF   = 1 ^ 10,               ! ** RESERVED **
+        RAB$M_ROP_ULK   = 1 ^ 11,               ! ** RESERVED **
+        RAB$M_ROP_TPT   = 1 ^ 12,               ! ** RESERVED **
+        RAB$M_ROP_NLK   = 1 ^ 13,               ! ** RESERVED **
+        RAB$M_ROP_BIO   = 1 ^ 14,               ! ** RESERVED **
+        RAB$M_ROP_LIM   = 1 ^ 15,               ! ** RESERVED **
+        RAB$M_ROP_NXR   = 1 ^ 16;               ! ** RESERVED **
+
+!++
+!
+!	RAB declaration/allocation/initialization macros
+!
+!--
+
+!+
+!
+!  $RAB_DECL
+!
+!	$RAB_DECL allocates space for a RAB
+!	but does not initialize any storage
+!
+!-
+MACRO
+
+    $RAB_DECL = 
+	BLOCK[RAB$K_BLN] FIELD($RAB_BLOCK_FIELDS) %;
+
+!+
+!
+!  $RAB
+!
+!	$RAB allocates space for a RAB and 
+!	initializes the fields therein.
+!
+!-
+
+KEYWORDMACRO
+
+    $RAB(				! Build a compile-time RAB
+	RAC = SEQ,	ROP,		UBF = 0,	USZ = 0,
+	RBF = 0,	RSZ = 0,	PAD = 0,	KBF = 0,
+	KSZ = 0,	FAB = 0,	MBF = 0,	CTX = 0,
+	KRF = 0) =
+
+	$RAB_DECL
+	PRESET (			! Set up the fields
+		[RAB$H_BLN]		= RAB$K_BLN,
+		[RAB$H_BID]		= RAB$K_BID,
+		[RAB$G_CTX]		= CTX,
+		[RAB$A_FAB]		= FAB,
+		[RAB$H_ROP]		= $RMS_BITFLD(RAB$M_ROP_, ROP),
+		[RAB$Z_MBF]		= MBF,
+		[RAB$Z_RAC]		= $RMS_CODFLD(RAB$K_RAC_, RAC),
+		[RAB$A_UBF]		= UBF,
+		[RAB$A_RBF]		= RBF,
+		[RAB$H_USZ]		= USZ,
+		[RAB$H_RSZ]		= RSZ,
+		[RAB$Z_KSZ]		= KSZ,
+		[RAB$Z_KRF]		= KRF,
+		[RAB$A_KBF]		= KBF,
+		[RAB$Z_PAD]		= PAD) %;
+!+
+!
+!  $RAB_INIT
+!
+!	$RAB_INIT dynamically initializes a RAB.
+!
+!-
+
+KEYWORDMACRO
+
+    $RAB_INIT(				! Initialize a RAB
+
+	RAB,
+
+	RAC = SEQ,	ROP,		UBF = 0,	USZ = 0,
+	RBF = 0,	RSZ = 0,	PAD = 0,	KBF = 0,
+	KSZ = 0,	FAB = 0,	MBF = 0,	CTX = 0,
+	KRF = 0) =
+
+	(BIND $RMS_PTR = RAB : $RAB_DECL;
+	CH$FILL(0, RAB$K_BLN, CH$PTR($RMS_PTR, 0, 36));
+
+		$RMS_PTR [RAB$H_BLN]		= RAB$K_BLN;
+		$RMS_PTR [RAB$H_BID]		= RAB$K_BID;
+		$RMS_PTR [RAB$G_CTX]		= CTX;
+		$RMS_PTR [RAB$A_FAB]		= FAB;
+		$RMS_PTR [RAB$H_ROP]		= $RMS_BITFLD(RAB$M_ROP_, ROP);
+		$RMS_PTR [RAB$Z_MBF]		= MBF;
+		$RMS_PTR [RAB$Z_RAC]		= $RMS_CODFLD(RAB$K_RAC_, RAC);
+		$RMS_PTR [RAB$A_UBF]		= UBF;
+		$RMS_PTR [RAB$A_RBF]		= RBF;
+		$RMS_PTR [RAB$H_USZ]		= USZ;
+		$RMS_PTR [RAB$H_RSZ]		= RSZ;
+		$RMS_PTR [RAB$Z_KSZ]		= KSZ;
+		$RMS_PTR [RAB$Z_KRF]		= KRF;
+		$RMS_PTR [RAB$A_KBF]		= KBF;
+		$RMS_PTR [RAB$Z_PAD]		= PAD;
+		1) %;
+
+!+
+!
+!  $RAB_STORE
+!
+!	$RAB_STORE dynamically changes a RAB.
+!
+!-
+
+KEYWORDMACRO
+
+    $RAB_STORE(				! Change a RAB
+
+	RAB,
+
+	RAC,	ROP,	UBF,	USZ,	RBF,	RSZ,	PAD,	KBF,
+	KSZ,	FAB,	MBF,	CTX,	KRF) =
+
+	(BIND $RMS_PTR = RAB : $RAB_DECL;
+
+	%IF NOT %NULL(CTX)
+	%THEN
+		$RMS_PTR [RAB$G_CTX]		= CTX;
+	%FI
+	%IF NOT %NULL(FAB)
+	%THEN
+		$RMS_PTR [RAB$A_FAB]		= FAB;
+	%FI
+	%IF NOT %NULL(ROP)
+	%THEN
+		$RMS_PTR [RAB$H_ROP]		= $RMS_BITFLD(RAB$M_ROP_, ROP);
+	%FI
+	%IF NOT %NULL(MBF)
+	%THEN
+		$RMS_PTR [RAB$Z_MBF]		= MBF;
+	%FI
+	%IF NOT %NULL(RAC)
+	%THEN
+		$RMS_PTR [RAB$Z_RAC]		= $RMS_CODFLD(RAB$K_RAC_, RAC);
+	%FI
+	%IF NOT %NULL(UBF)
+	%THEN
+		$RMS_PTR [RAB$A_UBF]		= UBF;
+	%FI
+	%IF NOT %NULL(RBF)
+	%THEN
+		$RMS_PTR [RAB$A_RBF]		= RBF;
+	%FI
+	%IF NOT %NULL(USZ)
+	%THEN
+		$RMS_PTR [RAB$H_USZ]		= USZ;
+	%FI
+	%IF NOT %NULL(RSZ)
+	%THEN
+		$RMS_PTR [RAB$H_RSZ]		= RSZ;
+	%FI
+	%IF NOT %NULL(KSZ)
+	%THEN
+		$RMS_PTR [RAB$Z_KSZ]		= KSZ;
+	%FI
+	%IF NOT %NULL(KRF)
+	%THEN
+		$RMS_PTR [RAB$Z_KRF]		= KRF;
+	%FI
+	%IF NOT %NULL(KBF)
+	%THEN
+		$RMS_PTR [RAB$A_KBF]		= KBF;
+	%FI
+	%IF NOT %NULL(PAD)
+	%THEN
+		$RMS_PTR [RAB$Z_PAD]		= PAD;
+	%FI
+		1) %;
+
+!+
+!
+!  $RAB_ZERO
+!
+!	$RAB_ZERO dynamically zeroes a RAB.
+!
+!-
+
+KEYWORDMACRO
+
+    $RAB_ZERO(RAB) =				! Zero a RAB
+	(BIND $RMS_PTR = RAB : $RAB_DECL;
+	CH$FILL(0, RAB$K_BLN, CH$PTR($RMS_PTR, 0, 36)))  %;
+
+
+
+%SBTTL 'XAB definitions'
+
+
+!++
+!
+!	RMSXAB.REQ defines all symbols and macros pertaining
+!	to XABs: the fields of a XAB, the $XAB_DECL, $XAB,
+!	and $XAB_INIT macros, and the values stored therein.
+!
+!--
+
+!+
+!
+!	The XAB field definitions are given using XPORT macros
+!
+!-
+
+! XABALL block
+$FIELD
+    $XABALL_BLOCK_FIELDS =
+	SET
+	XABALL$H_BLN	= [$BYTES(2)],		! Block length
+	XABALL$H_BID	= [$BYTES(2)],		! Block type
+	XABALL$A_NXT	= [$ADDRESS],		! Address of next XAB in chain
+	XABALL$Z_COD	= [$BITS(5)],		! XAB-type code
+	XABALL$Z_UNUSED_0	= [$BITS(13)],		!
+	XABALL$Z_BKZ	= [$BYTE],		! Bucket size
+	XABALL$Z_AID	= [$BYTE],		! Area I.D.
+	XABALL$H_UNUSED_1	= [$BYTES(2)],		!
+	XABALL$G_UNUSED_2	= [$BYTES(4)],		!
+	XABALL$G_UNUSED_3	= [$BYTES(4)],		!
+	XABALL$G_UNUSED_4	= [$BYTES(4)]		!
+	TES;
+
+LITERAL
+    XABALL$K_SIZE = $FIELD_SET_SIZE;
+
+LITERAL
+    XABALL$K_BLN = 6,				! XABALL block length
+    XABALL$K_COD = 1,				! XABALL block code
+    XABALL$K_BID = 3;				! XAB block type
+
+
+!+
+!
+!   $XABALL_DECL
+!
+!	$XABALL_DECL allocates space for an area XAB 
+!	without initializing storage.  It is meant
+!	to be used with the $XABALL_INIT macro.
+!
+!-
+
+MACRO
+    $XABALL_DECL = BLOCK[XABALL$K_BLN] FIELD($XABALL_BLOCK_FIELDS) %;
+
+!+
+!
+!   $XABALL
+!
+!	$XABALL allocates space and initializes
+!	storage for a compile-time area XAB.
+!
+!-
+
+KEYWORDMACRO
+    $XABALL(
+	NXT = 0,	AID = 0,	BKZ = 1) =
+
+	$XABALL_DECL
+	PRESET(
+	    [XABALL$H_BLN]	= XABALL$K_BLN,
+	    [XABALL$H_BID]	= XABALL$K_BID,
+	    [XABALL$Z_COD]	= XABALL$K_COD,
+	    [XABALL$A_NXT]	= NXT,
+	    [XABALL$Z_BKZ]	= BKZ,
+	    [XABALL$Z_AID]	= AID) %;
+
+
+!+
+!
+!   $XABALL_INIT
+!
+!	$XABALL_INIT initializes storage
+!	for an area XAB.
+!
+!-
+
+KEYWORDMACRO
+    $XABALL_INIT(
+
+	XAB,
+
+	NXT = 0,	AID = 0,	BKZ = 1) =
+
+	(BIND $RMS_PTR = XAB : $XABALL_DECL;
+	 CH$FILL(0, XABALL$K_BLN, CH$PTR($RMS_PTR, 0, 36));
+
+	    $RMS_PTR [XABALL$H_BLN]	= XABALL$K_BLN;
+	    $RMS_PTR [XABALL$H_BID]	= XABALL$K_BID;
+	    $RMS_PTR [XABALL$Z_COD]	= XABALL$K_COD;
+	    $RMS_PTR [XABALL$A_NXT]	= NXT;
+	    $RMS_PTR [XABALL$Z_BKZ]	= BKZ;
+	    $RMS_PTR [XABALL$Z_AID]	= AID;
+	    1) %;
+
+
+!+
+!
+!   $XABALL_STORE
+!
+!	$XABALL_STORE changes storage
+!	fields of an area XAB.
+!
+!-
+
+KEYWORDMACRO
+    $XABALL_STORE(
+
+	XAB,	NXT,	AID,	BKZ) =
+
+	(BIND $RMS_PTR = XAB : $XABALL_DECL;
+
+	%IF NOT %NULL(NXT)
+	%THEN
+	    $RMS_PTR [XABALL$A_NXT]	= NXT;
+	%FI
+	%IF NOT %NULL(AID)
+	%THEN
+	    $RMS_PTR [XABALL$Z_AID]	= AID;
+	%FI
+	%IF NOT %NULL(BKZ)
+	%THEN
+	    $RMS_PTR [XABALL$Z_BKZ]	= BKZ;
+	%FI
+	    1) %;
+
+!+
+!
+!   $XABALL_ZERO
+!
+!	$XABALL_ZERO zeroes storage
+!	for an area XAB.
+!
+!-
+
+KEYWORDMACRO
+    $XABALL_ZERO(XAB) =			! Zero an area XAB
+	(BIND $RMS_PTR = XAB : $XABALL_DECL;
+	 CH$FILL(0, XABALL$K_BLN, CH$PTR($RMS_PTR, 0, 36)))  %;
+
+! XABDAT block
+$FIELD
+    $XABDAT_BLOCK_FIELDS =
+	SET
+	XABDAT$H_BLN	= [$BYTES(2)],	! Block length
+	XABDAT$H_BID	= [$BYTES(2)],	! Block type
+	XABDAT$A_NXT	= [$ADDRESS],		! Address of next XAB in chain
+	XABDAT$Z_COD	= [$BITS(5)],		! XAB-type code
+	XABDAT$Z_UNUSED_0	= [$BITS(13)],		!
+	XABDAT$G_CDT	= [$BYTES(4)],		! Creation date
+	XABDAT$G_RDT	= [$BYTES(4)],		! Read date
+	XABDAT$G_EDT	= [$BYTES(4)]		! Deletion date
+	TES;
+
+LITERAL
+    XABDAT$K_SIZE = $FIELD_SET_SIZE;
+
+LITERAL
+    XABDAT$K_BLN = 5,				! XABDAT block length
+    XABDAT$K_COD = 2,				! XABDAT block code
+    XABDAT$K_BID = 3;				! XAB block type
+
+!+
+!
+!   $XABDAT_DECL
+!
+!	$XABDAT_DECL allocates space for a date XAB 
+!	without initializing storage.  It is meant
+!	to be used with the $XABDAT_INIT macro.
+!
+!-
+
+MACRO
+    $XABDAT_DECL = BLOCK[XABDAT$K_BLN] FIELD($XABDAT_BLOCK_FIELDS) %;
+
+!+
+!
+!   $XABDAT
+!
+!	$XABDAT allocates space and initializes
+!	storage for a compile-time date XAB.
+!
+!-
+
+KEYWORDMACRO
+    $XABDAT(
+	NXT = 0,	EDT = 0) =
+
+	$XABDAT_DECL
+	PRESET(
+	    [XABDAT$H_BLN]	= XABDAT$K_BLN,
+	    [XABDAT$H_BID]	= XABDAT$K_BID,
+	    [XABDAT$Z_COD]	= XABDAT$K_COD,
+	    [XABDAT$A_NXT]	= NXT,
+	    [XABDAT$G_EDT]	= EDT) %;
+
+
+!+
+!
+!   $XABDAT_INIT
+!
+!	$XABDAT_INIT initializes storage
+!	for a date XAB.
+!
+!-
+
+KEYWORDMACRO
+    $XABDAT_INIT(
+	XAB,
+	NXT = 0,	EDT = 0) =
+	(BIND $RMS_PTR = XAB : $XABDAT_DECL;
+	 CH$FILL(0, XABDAT$K_BLN, CH$PTR($RMS_PTR, 0, 36));
+	    $RMS_PTR [XABDAT$H_BLN]	= XABDAT$K_BLN;
+	    $RMS_PTR [XABDAT$H_BID]	= XABDAT$K_BID;
+	    $RMS_PTR [XABDAT$Z_COD]	= XABDAT$K_COD;
+	    $RMS_PTR [XABDAT$A_NXT]	= NXT;
+	    $RMS_PTR [XABDAT$G_EDT]	= EDT;
+	    1) %;
+
+
+!+
+!
+!   $XABDAT_STORE
+!
+!	$XABDAT_STORE changes storage
+!	fields of a date XAB.
+!
+!-
+
+KEYWORDMACRO
+    $XABDAT_STORE(
+
+	XAB,	NXT,	EDT) =
+
+	(BIND $RMS_PTR = XAB : $XABDAT_DECL;
+
+	%IF NOT %NULL(NXT)
+	%THEN
+	    $RMS_PTR [XABDAT$A_NXT]	= NXT;
+	%FI
+	%IF NOT %NULL(EDT)
+	%THEN
+	    $RMS_PTR [XABDAT$G_EDT]	= EDT;
+	%FI
+	    1) %;
+!+
+!
+!   $XABDAT_ZERO
+!
+!	$XABDAT_ZERO zeroes a date XAB
+!
+!-
+
+KEYWORDMACRO
+    $XABDAT_ZERO(XAB) =			! Zero a date XAB
+	(BIND $RMS_PTR = XAB : $XABDAT_DECL;
+	 CH$FILL(0, XABDAT$K_BLN, CH$PTR($RMS_PTR, 0, 36))) %;
+! XABKEY block
+$FIELD
+    $XABKEY_BLOCK_FIELDS =
+	SET
+	XABKEY$H_BLN	= [$BYTES(2)],	! Block length
+	XABKEY$H_BID	= [$BYTES(2)],	! Block type
+	XABKEY$A_NXT	= [$ADDRESS],		! Address of next XAB in chain
+	XABKEY$Z_COD	= [$BITS(5)],		! XAB-type code
+	XABKEY$Z_UNUSED_0	= [$BITS(13)],		!
+	XABKEY$H_FLG	= [$BITS(18)],		! Key flags
+	    $OVERLAY(XABKEY$H_FLG)
+	    XABKEY$V_FLG_DUP = [$BIT],		! Duplicate keys allowed
+	    XABKEY$V_FLG_CHG = [$BIT],		! Change of key allowed
+	    XABKEY$V_FLG_HSH = [$BIT],		! Hash method of index org.
+	    $CONTINUE
+	XABKEY$Z_DTP	= [$BITS(6)],		! Data type
+	XABKEY$Z_UNUSED_1	= [$BITS(12)],		!
+	XABKEY$Z_REF	= [$BYTE],		! Key of reference
+	XABKEY$Z_LAN	= [$BYTE],		! Lowest index area number
+	XABKEY$Z_DAN	= [$BYTE],		! Data area number
+	XABKEY$Z_IAN	= [$BYTE],		! Index area number
+	XABKEY$H_DFL	= [$BYTES(2)],	! Data fill limit
+	XABKEY$H_IFL	= [$BYTES(2)],	! Index fill limit
+	XABKEY$A_KNM	= [$POINTER],		! Address of key name
+	XABKEY$G_RES0	= [$BYTES(4)],		! Two words
+	XABKEY$G_RES1	= [$BYTES(4)],		!    are reserved
+	XABKEY$G_UNUSED_2	= [$BYTES(4)],		! Unused
+	XABKEY$G_UNUSED_3	= [$BYTES(4)],		! Unused
+	XABKEY$G_UNUSED_4	= [$BYTES(4)],		! Unused
+	XABKEY$H_SIZ0	= [$BYTES(2)],	! Size of segment 0
+	XABKEY$H_POS0	= [$BYTES(2)],	! Position of segment 0
+	XABKEY$H_SIZ1	= [$BYTES(2)],	! Size of segment 1
+	XABKEY$H_POS1	= [$BYTES(2)],	! Position of segment 1
+	XABKEY$H_SIZ2	= [$BYTES(2)],	! Size of segment 2
+	XABKEY$H_POS2	= [$BYTES(2)],	! Position of segment 2
+	XABKEY$H_SIZ3	= [$BYTES(2)],	! Size of segment 3
+	XABKEY$H_POS3	= [$BYTES(2)],	! Position of segment 3
+	XABKEY$H_SIZ4	= [$BYTES(2)],	! Size of segment 4
+	XABKEY$H_POS4	= [$BYTES(2)],	! Position of segment 4
+	XABKEY$H_SIZ5	= [$BYTES(2)],	! Size of segment 5
+	XABKEY$H_POS5	= [$BYTES(2)],	! Position of segment 5
+	XABKEY$H_SIZ6	= [$BYTES(2)],	! Size of segment 6
+	XABKEY$H_POS6	= [$BYTES(2)],	! Position of segment 6
+	XABKEY$H_SIZ7	= [$BYTES(2)],	! Size of segment 7
+	XABKEY$H_POS7	= [$BYTES(2)]	! Position of segment 7
+	TES;
+
+! end of XABKEY
+
+!+
+!
+!	XABKEY symbols
+!
+!-
+
+LITERAL
+    XABKEY$K_SIZE = $FIELD_SET_SIZE;
+
+LITERAL
+    XABKEY$K_DTP_STG = 0,			! String (ASCII) data
+    XABKEY$K_DTP_EBC = 1,			! EBCDIC data
+    XABKEY$K_DTP_SIX = 2,			! SIXBIT data
+    XABKEY$K_DTP_PAC = 3,                       ! PACKED DECIMAL data
+    XABKEY$K_DTP_IN4 = 4,                       ![10] INTEGER (1 word, 4 bytes)
+    XABKEY$K_DTP_IN8 = 5;                       ![10] INTEGER (2 word, 8 bytes)
+
+LITERAL
+    XABKEY$M_FLG_DUP = 1 ^ 0,			! Duplicate keys allowed
+    XABKEY$M_FLG_CHG = 1 ^ 1,			! Key change on update allowed
+    XABKEY$M_FLG_HSH = 1 ^ 2;			! Hash indexing
+
+LITERAL
+    XABKEY$K_BLN = 19,				! XABKEY block length
+    XABKEY$K_COD = 0,				! XABKEY block code
+    XABKEY$K_BID = 3;				! XAB block type
+
+!+
+!
+!   $XABKEY_DECL
+!
+!	$XABKEY_DECL allocates space for an key XAB 
+!	without initializing storage.  It is meant
+!	to be used with the $XABKEY_INIT macro.
+!
+!-
+
+MACRO
+    $XABKEY_DECL = BLOCK[XABKEY$K_BLN] FIELD($XABKEY_BLOCK_FIELDS) %;
+
+!+
+!
+!   $XABKEY
+!
+!	$XABKEY allocates space and initializes
+!	storage for a compile-time key XAB.
+!
+!-
+
+KEYWORDMACRO
+    $XABKEY(
+	FLG,		DTP = STG,	KREF = 0,	DAN = 0,
+	IAN = 0,	DFL = 0,	IFL = 0,	KNM = 0,
+	SIZ = <0,0,0,0,0,0,0,0>,	POS = <0,0,0,0,0,0,0,0>,
+	NXT = 0,	LAN = 0) =
+
+	$XABKEY_DECL
+	PRESET(
+	    [XABKEY$H_BLN]	= XABKEY$K_BLN,
+	    [XABKEY$H_BID]	= XABKEY$K_BID,
+	    [XABKEY$Z_COD]	= XABKEY$K_COD,
+	    [XABKEY$A_NXT]	= NXT,
+	    [XABKEY$H_FLG]	= $RMS_BITFLD(XABKEY$M_FLG_, FLG),
+	    [XABKEY$Z_DTP]	= $RMS_CODFLD(XABKEY$K_DTP_, DTP),
+	    [XABKEY$Z_REF]	= KREF,
+	    [XABKEY$Z_LAN]	= LAN,
+	    [XABKEY$Z_IAN]	= IAN,
+	    [XABKEY$Z_DAN]	= DAN,
+	    [XABKEY$H_DFL]	= DFL,
+	    [XABKEY$H_IFL]	= IFL,
+	    $RMS_POSITION(%REMOVE(POS)),
+	    $RMS_SIZE(%REMOVE(SIZ)),
+	    [XABKEY$A_KNM]	= $RMS_STRFLD(KNM)) %;
+
+
+!+
+!
+!   $XABKEY_INIT
+!
+!	$XABKEY_INIT initializes
+!	storage for a key XAB.
+!
+!-
+
+KEYWORDMACRO
+    $XABKEY_INIT(
+
+	XAB,
+
+	FLG,		DTP = STG,	KREF = 0,	DAN = 0,
+	IAN = 0,	DFL = 0,	IFL = 0,	KNM = 0,
+	SIZ = <0,0,0,0,0,0,0,0>,	POS = <0,0,0,0,0,0,0,0>,
+	NXT = 0,	LAN = 0) =
+
+	(BIND $RMS_PTR = XAB: $XABKEY_DECL;
+
+	    CH$FILL(0, XABKEY$K_BLN, CH$PTR($RMS_PTR, 0, 36));
+	    $RMS_PTR [XABKEY$H_BLN]	= XABKEY$K_BLN;
+	    $RMS_PTR [XABKEY$H_BID]	= XABKEY$K_BID;
+	    $RMS_PTR [XABKEY$Z_COD]	= XABKEY$K_COD;
+	    $RMS_PTR [XABKEY$A_NXT]	= NXT;
+	    $RMS_PTR [XABKEY$H_FLG]	= $RMS_BITFLD(XABKEY$M_FLG_, FLG);
+	    $RMS_PTR [XABKEY$Z_DTP]	= $RMS_CODFLD(XABKEY$K_DTP_, DTP);
+	    $RMS_PTR [XABKEY$Z_REF]	= KREF;
+	    $RMS_PTR [XABKEY$Z_LAN]	= LAN;
+	    $RMS_PTR [XABKEY$Z_IAN]	= IAN;
+	    $RMS_PTR [XABKEY$Z_DAN]	= DAN;
+	    $RMS_PTR [XABKEY$H_DFL]	= DFL;
+	    $RMS_PTR [XABKEY$H_IFL]	= IFL;
+	    $RMS_POSITION_INI ($RMS_PTR, %REMOVE (POS));
+	    $RMS_SIZE_INI ($RMS_PTR, %REMOVE (SIZ));
+	    $RMS_PTR [XABKEY$A_KNM]	= $RMS_STRFLD(KNM);
+	    1) %;
+!+
+!
+!   $XABKEY_STORE
+!
+!	$XABKEY_STORE changes storage
+!	fields of an key XAB.
+!
+!-
+
+KEYWORDMACRO
+    $XABKEY_STORE(
+	XAB,
+	FLG,	DTP,	KREF,	DAN,	IAN,	DFL,	IFL,	KNM,
+	SIZ,	POS,	NXT,	LAN) =
+	(BIND $RMS_PTR = XAB: $XABKEY_DECL;
+	    %IF NOT %NULL(NXT)
+	    %THEN
+	    $RMS_PTR [XABKEY$A_NXT]	= NXT;
+	    %FI
+	    %IF NOT %NULL(FLG)
+	    %THEN
+	    $RMS_PTR [XABKEY$H_FLG]	= $RMS_BITFLD(XABKEY$M_FLG_, FLG);
+	    %FI
+	    %IF NOT %NULL(DTP)
+	    %THEN
+	    $RMS_PTR [XABKEY$Z_DTP]	= $RMS_CODFLD(XABKEY$K_DTP_, DTP);
+	    %FI
+	    %IF NOT %NULL(KREF)
+	    %THEN
+	    $RMS_PTR [XABKEY$Z_REF]	= KREF;
+	    %FI
+	    %IF NOT %NULL(LAN)
+	    %THEN
+	    $RMS_PTR [XABKEY$Z_LAN]	= LAN;
+	    %FI
+	    %IF NOT %NULL(IAN)
+	    %THEN
+	    $RMS_PTR [XABKEY$Z_IAN]	= IAN;
+	    %FI
+	    %IF NOT %NULL(DAN)
+	    %THEN
+	    $RMS_PTR [XABKEY$Z_DAN]	= DAN;
+	    %FI
+	    %IF NOT %NULL(DFL)
+	    %THEN
+	    $RMS_PTR [XABKEY$H_DFL]	= DFL;
+	    %FI
+	    %IF NOT %NULL(IFL)
+	    %THEN
+	    $RMS_PTR [XABKEY$H_IFL]	= IFL;
+	    %FI
+	    %IF NOT %NULL(POS)
+	    %THEN
+	    $RMS_POSITION_INI ($RMS_PTR, %REMOVE POS);
+	    %FI
+	    %IF NOT %NULL(SIZ)
+	    %THEN
+	    $RMS_SIZE_INI ($RMS_PTR, %REMOVE SIZ);
+	    %FI
+	    %IF NOT %NULL(KNM)
+	    %THEN
+	    $RMS_PTR [XABKEY$A_KNM]	= $RMS_STRFLD(KNM);
+	    %FI
+	    1) %;
+
+
+!+
+!
+!   $XABKEY_ZERO
+!
+!	$XABKEY_ZERO zeroes a key XAB
+!
+!-
+
+KEYWORDMACRO
+    $XABKEY_ZERO(XAB) =			! Zero a key XAB
+	(BIND $RMS_PTR = XAB: $XABKEY_DECL;
+	CH$FILL(0, XABKEY$K_BLN, CH$PTR($RMS_PTR, 0, 36)))  %;
+
+! XABSUM block
+$FIELD
+    $XABSUM_BLOCK_FIELDS =
+	SET
+	XABSUM$H_BLN	= [$BYTES(2)],	! Block length
+	XABSUM$H_BID	= [$BYTES(2)],	! Block type
+	XABSUM$A_NXT	= [$ADDRESS],		! Address of next XAB in chain
+	XABSUM$Z_COD	= [$BITS(5)],		! XAB-type code
+	XABSUM$Z_UNUSED_0	= [$BITS(13)],		!
+	XABSUM$Z_NOA	= [$BYTE],		! Number of areas
+	XABSUM$Z_NOK	= [$BYTE],		! Number of keys
+	XABSUM$H_UNUSED_1	= [$BYTES(2)],		!
+	XABSUM$G_UNUSED_2	= [$BYTES(4)],		!
+	XABSUM$G_UNUSED_3	= [$BYTES(4)],		!
+	XABSUM$G_UNUSED_4	= [$BYTES(4)]		!
+	TES;
+
+LITERAL
+    XABSUM$K_SIZE = $FIELD_SET_SIZE;
+
+LITERAL
+    XABSUM$K_BLN = 6,				! XABSUM block length
+    XABSUM$K_COD = 3,				! XABSUM block code
+    XABSUM$K_BID = 3;				! XAB block type
+
+!+
+!
+!   $XABSUM_DECL
+!
+!	$XABSUM_DECL allocates space for an summary XAB 
+!	without initializing storage.  It is meant
+!	to be used with the $XABSUM_INIT macro.
+!
+!-
+
+MACRO
+    $XABSUM_DECL = BLOCK[XABSUM$K_BLN] FIELD($XABSUM_BLOCK_FIELDS) %;
+
+!+
+!
+!   $XABSUM
+!
+!	$XABSUM allocates space and initializes
+!	storage for a compile-time summary XAB.
+!
+!-
+
+KEYWORDMACRO
+    $XABSUM(
+	NXT = 0) =
+
+	$XABSUM_DECL
+	PRESET(
+	    [XABSUM$H_BLN]	= XABSUM$K_BLN,
+	    [XABSUM$H_BID]	= XABSUM$K_BID,
+	    [XABSUM$Z_COD]	= XABSUM$K_COD,
+	    [XABSUM$A_NXT]	= NXT )%;
+
+
+!+
+!
+!   $XABSUM_INIT
+!
+!	$XABSUM_INIT initializes storage
+!	for an summary XAB.
+!
+!-
+
+KEYWORDMACRO
+    $XABSUM_INIT(
+
+	XAB,
+
+	NXT = 0) =
+
+	(BIND $RMS_PTR = XAB : $XABSUM_DECL;
+	 CH$FILL(0, XABSUM$K_BLN, CH$PTR($RMS_PTR, 0, 36));
+
+	    $RMS_PTR [XABSUM$H_BLN]	= XABSUM$K_BLN;
+	    $RMS_PTR [XABSUM$H_BID]	= XABSUM$K_BID;
+	    $RMS_PTR [XABSUM$Z_COD]	= XABSUM$K_COD;
+	    $RMS_PTR [XABSUM$A_NXT]	= NXT;
+	    1) %;
+
+
+!+
+!
+!   $XABSUM_STORE
+!
+!	$XABSUM_STORE changes storage
+!	fields of an summary XAB.
+!
+!-
+
+KEYWORDMACRO
+    $XABSUM_STORE(
+
+	XAB,	NXT) =
+
+	(BIND $RMS_PTR = XAB : $XABSUM_DECL;
+
+	%IF NOT %NULL(NXT)
+	%THEN
+	    $RMS_PTR [XABSUM$A_NXT]	= NXT;
+	%FI
+	1) %;
+
+!+
+!
+!   $XABSUM_ZERO
+!
+!	$XABSUM_ZERO zeroes a summary XAB
+!
+!-
+
+KEYWORDMACRO
+    $XABSUM_ZERO(XAB) =			! Zero a summary XAB
+	(BIND $RMS_PTR = XAB : $XABSUM_DECL;
+	 CH$FILL(0, XABSUM$K_BLN, CH$PTR($RMS_PTR, 0, 36)))  %;
+
+
+
+%SBTTL 'NAM definitions'
+!++
+!
+!       NAM definitions
+!
+!--
+
+! Some constants (worst case)
+! Include punctuation & terminating null character
+
+LITERAL
+    RMS$K_NODE_NAME_SIZE=9,             ! 6 Chars + ::
+    RMS$K_USERID_SIZE=40,               ! Phase III allows 39 chars
+    RMS$K_PASSWORD_SIZE=40,             ! 
+    RMS$K_ACCOUNT_SIZE=40,              ! 
+    RMS$K_OPTIONAL_DATA_SIZE=17,        ! Optional data can be 16 chars
+    RMS$K_DEVICE_NAME_SIZE=41,          ! 39 chars (TOPS-20) + :
+    RMS$K_DIRECTORY_NAME_SIZE=82,       ! [ + ((dirname(9)+.) * 8) + ] (VMS)
+    RMS$K_FILE_NAME_SIZE=40,            ! 39 chars (TOPS-20)
+    RMS$K_EXTENSION_SIZE=41,            ! . + 39 chars (TOPS-20)
+    RMS$K_VERSION_SIZE=8;               ! {.|;} + 6 digits (TOPS-20, VMS)
+
+! NAM structure
+
+$FIELD
+    $NAM_BLOCK_FIELDS =
+        SET
+        NAM$H_BLN       = [$BYTES(2)],          ! NAM length
+        NAM$H_BID       = [$BYTES(2)],          ! NAM identifier
+        NAM$A_ESA       = [$POINTER],           ! Expanded string address
+        NAM$H_ESS       = [$SHORT_INTEGER],     ! Expanded string length
+        NAM$H_ESL       = [$SHORT_INTEGER],     ! Exp string area size
+        NAM$A_RLF       = [$ADDRESS],           ! Related NAM block
+        NAM$A_RSA       = [$POINTER],           ! Resultant string address
+        NAM$H_RSL       = [$SHORT_INTEGER],     ! Resultant string length
+        NAM$H_RSS       = [$SHORT_INTEGER],     ! Resultant string area size
+        NAM$G_FNB       = [$BYTES(4)],          ! Status bits
+         $OVERLAY(NAM$G_FNB)
+         NAM$V_FNB_INV  = [$BIT],               ! Ignoring invisible files
+         NAM$V_FNB_XXX  = [$BITS(4)],           ! Reserved
+         NAM$V_FNB_GND  = [$BIT],               ! Ignoring deleted files
+         NAM$V_FNB_TFS  = [$BIT],               ! Temporary file
+         NAM$V_FNB_ACT  = [$BIT],               ! Account given
+         NAM$V_FNB_PRO  = [$BIT],               ! Protection given
+         NAM$V_FNB_ULV  = [$BIT],               ! Lowest generation (-2)
+          NAM$V_FNB_LOWVER = [%FIELDEXPAND(NAM$V_FNB_ULV)],
+         NAM$V_FNB_NHV  = [$BIT],               ! Next higher generation (0,-1)
+         NAM$V_FNB_UHV  = [$BIT],               ! Highest generation (0)
+          NAM$V_FNB_HIGHVER = [%FIELDEXPAND(NAM$V_FNB_UHV)],
+         NAM$V_FNB_VER  = [$BIT],               ! Wildcard generation number
+          NAM$V_FNB_WILD_VER = [%FIELDEXPAND(NAM$V_FNB_VER)],
+         NAM$V_FNB_EXT  = [$BIT],               ! Extension wildcarded
+          NAM$V_FNB_WILD_TYPE = [%FIELDEXPAND(NAM$V_FNB_EXT)],
+         NAM$V_FNB_NAM  = [$BIT],               ! Name wildcarded
+          NAM$V_FNB_WILD_NAME = [%FIELDEXPAND(NAM$V_FNB_NAM)],
+         NAM$V_FNB_DIR  = [$BIT],               ! Directory wildcarded
+          NAM$V_FNB_WILD_DIR = [%FIELDEXPAND(NAM$V_FNB_DIR)],
+         NAM$V_FNB_UNT  = [$BIT],               ! Unit number wildcard (never)
+         NAM$V_FNB_DEV  = [$BIT],               ! Device wildcarded
+          NAM$V_FNB_WILD_DEV = [%FIELDEXPAND(NAM$V_FNB_DEV)],
+         NAM$V_FNB_NODE = [$BIT],               ! Node name in filespec
+         NAM$V_FNB_QUOTED = [$BIT],             ! Filespec has quoted string
+         NAM$V_FNB_EXP_DEV = [$BIT],            ! Explicit device
+         NAM$V_FNB_EXP_DIR = [$BIT],            ! Explicit directory
+         NAM$V_FNB_EXP_NAME = [$BIT],           ! Explicit name
+         NAM$V_FNB_EXP_TYPE = [$BIT],           ! Explicit extension
+         NAM$V_FNB_EXP_VER = [$BIT],            ! Explicit version
+         NAM$V_FNB_UNUSED_2 = [$BITS(9)],       !
+         NAM$V_FNB_MULTIPLE = [$BIT],           ! Multiple filespecs seen
+         NAM$V_FNB_WILDCARD = [$BIT],           ! Somewhere there is a wildcard
+         $CONTINUE
+        NAM$T_NODE      = [$STRING(RMS$K_NODE_NAME_SIZE)], ! Node name
+        NAM$T_USERID    = [$STRING(RMS$K_USERID_SIZE)],
+        NAM$T_PASSWORD  = [$STRING(RMS$K_PASSWORD_SIZE)],
+        NAM$T_ACCOUNT   = [$STRING(RMS$K_ACCOUNT_SIZE)],
+        NAM$T_OPTIONAL_DATA = [$STRING(RMS$K_OPTIONAL_DATA_SIZE)],
+        NAM$T_DVI       = [$STRING(RMS$K_DEVICE_NAME_SIZE)],  ! Device
+         NAM$T_DEV      = [%FIELDEXPAND(NAM$T_DVI)],
+        NAM$T_DIR       = [$STRING(RMS$K_DIRECTORY_NAME_SIZE)], ! Directory
+        NAM$T_NAM       = [$STRING(RMS$K_FILE_NAME_SIZE)],        ! Name
+        NAM$T_EXT       = [$STRING(RMS$K_EXTENSION_SIZE)],        ! Extension
+        NAM$T_VER       = [$STRING(RMS$K_VERSION_SIZE)],    ! Generation number
+        NAM$G_WCC       = [$BYTES(4)],          ! Wildcard context
+         $OVERLAY(NAM$G_WCC)
+         NAM$H_WCC_COUNT= [$BYTES(2)],          ! Number of files found here
+         NAM$H_WCC_NEXT = [$BYTES(2)],          ! Filespec chars eaten so far
+        NAM$Z_CHA       = [$BYTES(2)],          ! What changed
+         $OVERLAY(NAM$Z_CHA)
+         NAM$V_CHA_xxx  = [$BIT],               ! reserved
+         NAM$V_CHA_EXT  = [$BIT],               ! Extension changed
+         NAM$V_CHA_NAM  = [$BIT],               ! Name changed
+         NAM$V_CHA_DIR  = [$BIT],               ! Directory changed
+         NAM$V_CHA_STR  = [$BIT],               ! Structure changed
+          NAM$V_CHA_DEV = [%FIELDEXPAND(NAM$V_CHA_STR)]
+         $CONTINUE
+        TES;
+
+! End of NAM
+
+!++
+!
+!       Symbol definitions for NAM
+!
+!--
+
+LITERAL
+    NAM$K_SIZE = $FIELD_SET_SIZE;
+
+LITERAL
+
+!
+!       Default values
+!
+        NAM$K_BLN       = NAM$K_SIZE,           ! NAM length
+        NAM$K_BID       = 16;                   ! Block type
+
+!
+!       Masks
+!
+
+LITERAL NAM$M_FNB_WILDCARD_BITS=%O'770000';     ![11] Mask for wildcard bits
+
+
+!+
+!
+!  $NAM_DECL
+!
+!	$NAM_DECL allocates space for a NAM
+!	but does not initialize any storage
+!
+!-
+MACRO
+
+    $NAM_DECL = 
+	BLOCK[NAM$K_BLN] FIELD ($NAM_BLOCK_FIELDS) %;
+
+!+
+!
+!  $NAM
+!
+!	$NAM allocates space for a NAM and 
+!	initializes the fields therein.
+!
+!-
+
+KEYWORDMACRO
+
+    $NAM(				! Build a compile-time NAM
+	ESA = 0,	ESS = 0,	RLF = 0,	RSA = 0,
+	RSS = 0) =
+
+	$NAM_DECL
+	PRESET (			! Set up the fields
+		[NAM$H_BLN]		= NAM$K_BLN,
+                [NAM$H_BID]             = NAM$K_BID,
+                [NAM$A_ESA]             = ESA,
+                [NAM$H_ESS]             = ESS,
+                [NAM$A_RLF]             = RLF,
+                [NAM$A_RSA]             = RSA,
+                [NAM$H_RSS]             = RSS
+               ) %;
+
+
+!+
+!
+!  $NAM_INIT
+!
+!	$NAM_INIT dynamically initializes a NAM.
+!
+!-
+
+KEYWORDMACRO
+
+    $NAM_INIT(				! Initialize a NAM
+
+	NAM,
+	ESA = 0,	ESS = 0,	RLF = 0,	RSA = 0,
+	RSS = 0) =
+
+	(BIND $RMS_PTR = NAM : $NAM_DECL;
+	CH$FILL(0, NAM$K_BLN, CH$PTR($RMS_PTR, 0, 36));
+
+		$RMS_PTR [NAM$H_BLN]		= NAM$K_BLN;
+		$RMS_PTR [NAM$H_BID]		= NAM$K_BID;
+		$RMS_PTR [NAM$A_ESA]            = ESA;
+		$RMS_PTR [NAM$H_ESS]            = ESS;
+		$RMS_PTR [NAM$A_RSA]            = RSA;
+         	$RMS_PTR [NAM$H_RSS]            = RSS;
+		$RMS_PTR [NAM$A_RLF]            = RLF;
+		1) %;
+
+
+!+
+!  $NAM_STORE
+!
+!	$NAM_STORE dynamically changes a NAM.
+!
+!-
+
+KEYWORDMACRO
+
+    $NAM_STORE(				! Change a NAM
+        NAM,    ESA,    ESS,    RLF,    RSA,    RSS) =
+
+	(BIND $RMS_PTR = NAM : $NAM_DECL;
+
+	%IF NOT %NULL(ESA)
+	%THEN
+		$RMS_PTR [NAM$A_ESA]		= ESA;
+	%FI
+	%IF NOT %NULL(ESS)
+	%THEN
+		$RMS_PTR [NAM$H_ESS]		= ESS;
+	%FI
+	%IF NOT %NULL(RLF)
+	%THEN
+		$RMS_PTR [NAM$A_RLF]		= RLF;
+	%FI
+	%IF NOT %NULL(RSA)
+	%THEN
+		$RMS_PTR [NAM$A_RSA]		= RSA;
+	%FI
+	%IF NOT %NULL(RSS)
+	%THEN
+		$RMS_PTR [NAM$H_RSS]		= RSS;
+	%FI
+
+
+		1) %;
+
+!+
+!
+!  $NAM_ZERO
+!
+!	$NAM_ZERO dynamically zeroes a NAM.
+!
+!-
+
+KEYWORDMACRO
+
+    $NAM_ZERO(NAM) =				! Zero a NAM
+	(BIND $RMS_PTR = NAM : $NAM_DECL;
+	CH$FILL(0, NAM$K_BLN, CH$PTR($RMS_PTR, 0, 36)))  %;
+
+%SBTTL 'TYP Definitions'
+!++
+!
+!       TYP definitions
+!
+!--
+
+! TYP structure
+
+$FIELD
+    $TYP_BLOCK_FIELDS =
+        SET
+        TYP$H_BLN=[$SHORT_INTEGER],
+        TYP$H_BID=[$BYTES(2)],
+        TYP$H_CLASS=[$SHORT_INTEGER],
+        TYP$H_CODE=[$SHORT_INTEGER],
+        TYP$H_LENGTH=[$SHORT_INTEGER],
+        TYP$B_SCALE=[$TINY_INTEGER],
+        TYP$A_NEXT=[$ADDRESS],          ! Descriptor for next field
+        TYP$A_MORE=[$ADDRESS]           ! Alternate chain (multiple record formats)
+        TES;
+
+!++
+!
+!       Symbol definitions for TYP
+!
+!--
+
+LITERAL
+    TYP$K_SIZE = $FIELD_SET_SIZE;
+
+LITERAL
+
+!
+!       Default values
+!
+        TYP$K_BLN       = TYP$K_SIZE,           ! TYP length
+        TYP$K_BID       = 17;                   ! Block type
+
+LITERAL
+        TYP$K_CLASS_ASCII = 1,          ! ASCII Data
+        TYP$K_CLASS_IMAGE = 2,          ! IMAGE data
+        TYP$K_CLASS_MACY11 = 3;         ! MACY11 (binary) data
+
+LITERAL TYP$K_CLASS_MAX=3;
+!+
+!
+!  $TYP_DECL
+!
+!	$TYP_DECL allocates space for a TYP
+!	but does not initialize any storage
+!
+!-
+MACRO
+
+    $TYP_DECL = 
+	BLOCK[TYP$K_BLN] FIELD ($TYP_BLOCK_FIELDS) %;
+
+!+
+!
+!  $TYP
+!
+!	$TYP allocates space for a TYP and 
+!	initializes the fields therein.
+!
+!-
+
+KEYWORDMACRO
+
+    $TYP(				! Build a compile-time TYP
+         CLASS=0, CODE=0, LENGTH=0
+        )=
+
+	$TYP_DECL
+	PRESET (			! Set up the fields
+		[TYP$H_BLN]		= TYP$K_BLN,
+                [TYP$H_BID]             = TYP$K_BID,
+                [TYP$H_CLASS]           = CLASS,
+                [TYP$H_CODE]            = CODE,
+                [TYP$H_LENGTH]          = LENGTH
+               ) %;
+
+
+!+
+!
+!  $TYP_INIT
+!
+!	$TYP_INIT dynamically initializes a TYP.
+!
+!-
+
+KEYWORDMACRO
+
+    $TYP_INIT(				! Initialize a TYP
+	TYP, CLASS=0, CODE=0, LENGTH=0 ) =
+
+	(BIND $RMS_PTR = TYP : $TYP_DECL;
+	CH$FILL(0, TYP$K_BLN, CH$PTR($RMS_PTR, 0, 36));
+
+		$RMS_PTR [TYP$H_BLN]		= TYP$K_BLN;
+		$RMS_PTR [TYP$H_BID]		= TYP$K_BID;
+		$RMS_PTR [TYP$H_CLASS]          = CLASS;
+		$RMS_PTR [TYP$H_CODE]           = CODE;
+		$RMS_PTR [TYP$H_LENGTH]         = LENGTH;
+		1) %;
+
+
+!+
+!  $TYP_STORE
+!
+!	$TYP_STORE dynamically changes a TYP.
+!
+!-
+
+KEYWORDMACRO
+
+    $TYP_STORE(				! Change a TYP
+        TYP, CLASS, CODE, LENGTH)=
+
+	(BIND $RMS_PTR = TYP: $TYP_DECL;
+
+	%IF NOT %NULL(CLASS)
+	%THEN
+		$RMS_PTR [TYP$H_CLASS]		= CLASS;
+	%FI
+	%IF NOT %NULL(CODE)
+	%THEN
+		$RMS_PTR [TYP$H_CODE]		= CODE;
+	%FI
+	%IF NOT %NULL(LENGTH)
+	%THEN
+		$RMS_PTR [TYP$H_LENGTH]		= LENGTH;
+	%FI
+		1) %;
+
+!+
+!
+!  $TYP_ZERO
+!
+!	$TYP_ZERO dynamically zeroes a TYP.
+!
+!-
+
+KEYWORDMACRO
+
+    $TYP_ZERO(TYP) =				! Zero a TYP
+	(BIND $RMS_PTR = TYP : $TYP_DECL;
+	CH$FILL(0, TYP$K_BLN, CH$PTR($RMS_PTR, 0, 36)))  %;
+%SBTTL 'Status-checking macros'
+!++
+!
+!	RMS status-checking macros
+!
+!--
+
+!+
+!
+!   $RMS_STATUS_OK
+!   $RMS_STATUS_SUC
+!
+!	$RMS_STATUS_OK and $RMS_STATUS_SUCCESS evaluate
+!	the value returned in the STS field of a
+!	specified block for being o.k. (success or informatory)
+!	and unqualified success, respectively,
+!	returning 1 if true.
+!-
+
+MACRO
+    $RMS_STATUS_OK(BLK) =
+	(BIND $RMS_PTR = (BLK);
+	 MAP $RMS_PTR : BLOCK[];
+	 IF .$RMS_PTR[1, 18, 18, 0] GEQ %O'300000'
+	 THEN
+	     0
+	 ELSE
+	     1) %,
+
+    $RMS_STATUS_SUCCESS(BLK) =
+	(BIND $RMS_PTR = (BLK);
+	 MAP $RMS_PTR : BLOCK[];
+	 IF .$RMS_PTR[1, 18, 18, 0] NEQ %O'1000'
+	 THEN
+	     0
+	 ELSE
+	     1) %;
+
+!+
+!
+!   $RMS_STATUS_CHECK
+!
+!	$RMS_STATUS_CHECK checks the status value of
+!	a specified block against a named error condition.
+!	It is called as 
+!
+!		IF $RMS_STATUS_CHECK(RAB = SOME_RAB,
+!		    STATUS = <RNF,REX>)
+!		THEN
+!		    .....
+!
+!			or
+!
+!		IF $RMS_STATUS_CHECK(FAB = SOME_FAB,
+!		    STATUS = <FNF,FEX>)
+!		THEN
+!		    .....
+!
+!	and returns a 1 if any of the named conditions is found
+!	in the STS field of the block.
+!-
+
+MACRO
+    $RMS_STS_OR[] =
+	OR %,
+
+    $RMS_STS_VAL_CHK(VAL_NAM)[] = 
+	.$RMS_PTR [1, 18, 18, 0] EQL %NAME(RMS$_, VAL_NAM)
+	    $RMS_STS_OR(%REMAINING) $RMS_STS_VAL_CHK(%REMAINING) %;
+
+KEYWORDMACRO
+    $RMS_STATUS_CHECK(FAB =, RAB =, STATUS =) =
+	%IF %NULL(STATUS) %THEN 0 %EXITMACRO %FI
+
+	(%IF NOT %NULL(FAB) %THEN
+	    BIND $RMS_PTR = (FAB) : BLOCK [];
+	%ELSE %IF NOT %NULL(RAB) %THEN
+	    BIND $RMS_PTR = (RAB) : BLOCK[];
+	%ELSE ) %ERRORMACRO ('?No block specified for $RMS_STATUS_CHECK')
+	%FI %FI
+	IF
+	    $RMS_STS_VAL_CHK(%REMOVE (STATUS))
+	THEN
+	    1
+	ELSE
+	    0) %;
+
+%SBTTL 'RMS verb definitions'
+!+
+!
+!	RMS calls
+!
+!-
+
+
+MACRO
+    RMS$$VALUE(NAME) =
+	%NAME(RMS$K_, NAME, _VALUE) %;
+
+LITERAL
+    RMS$$VALUE(OPEN) = 0,			! 
+    RMS$$VALUE(CLOSE) = 1,			! 
+    RMS$$VALUE(GET) = 2,			! 
+    RMS$$VALUE(PUT) = 3,			! 
+    RMS$$VALUE(UPDATE) = 4,			! 
+    RMS$$VALUE(DELETE) = 5,			! 
+    RMS$$VALUE(FIND) = 6,			! 
+    RMS$$VALUE(TRUNCATE) = 7,			! 
+    RMS$$VALUE(CONNECT) = 8,			! 
+    RMS$$VALUE(DISCONNECT) = 9,			! 
+    RMS$$VALUE(CREATE) = 10,			! 
+    RMS$$VALUE(DEBUG) = 11,			! 
+    RMS$$VALUE(RELEASE) = 12,			! 
+    RMS$$VALUE(FLUSH) = 13,			! 
+    RMS$$VALUE(MESSAGE) = 14,			! 
+    RMS$$VALUE(NOMESSAGE) = 15,			! 
+    RMS$$VALUE(DISPLAY) = 16,			! 
+    RMS$$VALUE(ERASE) = 17,			! 
+    RMS$$VALUE(FREE) = 18,			! 
+    RMS$$VALUE(UTLINT) = 19;                    !
+
+!+
+!
+!   RMS$CALL
+!
+!	The RMS call linkage is either a PUSHJ
+!	with the parameter passed in Register 1
+!	(on the 10) or a JSYS linkage with the
+!	argblk address passed in Register 1.
+!
+!	In either case registers 2, 3, and 4 are
+!	not preserved.
+!-
+
+
+LINKAGE
+    RMS$CALL = 
+	%IF %SWITCHES(TOPS10)
+	%THEN
+	    PUSHJ
+	%FI
+
+	%IF %SWITCHES(TOPS20)
+	%THEN
+	    JSYS
+	%FI
+
+		(REGISTER = 1) :
+
+			%IF %SWITCHES(TOPS10)
+			%THEN
+			    LINKAGE_REGS(15, 13, 1)
+			%FI
+				NOPRESERVE(2, 3, 4)
+				PRESERVE(0, 5, 6, 7, 8, 9, 10, 11, 12, 14)
+				%IF %SWITCHES(TOPS20)
+				%THEN
+				    SKIP(-1)
+				%FI
+					;
+
+LINKAGE RMS$ERCAL=PUSHJ(REGISTER=1): LINKAGE_REGS(15,13,2);
+
+
+MACRO
+    $INIT =
+	BEGIN
+	EXTERNAL ROUTINE
+	    $$RMS;
+	$$RMS();
+	END; %;
+
+!+
+!
+!   CALL$$VALUE
+!
+!	CALL$$VALUE takes the verb value passed to it and
+!	calculates
+!	    on the 10: the absolute address to which the
+!		RMS routine call is made;
+!
+!	    on the 20: the JSYS value which calls the appropriate
+!		RMS routine
+!-
+
+MACRO
+   CALL$$VALUE(VERB) = 
+	%IF %SWITCHES(TOPS10)
+	%THEN
+	    VERB + RMS$10
+	%FI
+
+	%IF %SWITCHES(TOPS20)
+	%THEN
+	    VERB + RMS$K_INITIAL_JSYS
+	%FI
+	%;
+
+!+
+!
+!   $RMS$DEFINE_CALL
+!
+!	$RMS$DEFINE_CALL defines an RMS verb macro.  If a block type
+!	(RAB or FAB) is passed to the macro, the verb is defined as
+!	a KEYWORDMACRO with name $xxxx; if no block type is present,
+!	a simple macro of name $xxxx is defined, which takes no 
+!	arguments.
+!
+!	The keyword macro form takes the appropriate block type
+!	("RAB = " or "FAB = ") and optional success ("SUC = ") and
+!	failure ("ERR = ") returns.  Moreover, the call returns a
+!	one if the call was a success (or just O.K.) and 0 if an
+!	error of any sort occurred.
+!-
+KEYWORDMACRO
+    $RMS$DEFINE_CALL(NAME, BLK_TYPE = NO_BLOCK, ERRSTR =) =
+
+%IF NOT %IDENTICAL(NO_BLOCK, BLK_TYPE)
+%THEN
+KEYWORDMACRO
+    %NAME($,NAME) (BLK_TYPE, ERR=, SUC=)
+	= (
+	%QUOTE %IF %QUOTE %NULL(BLK_TYPE)
+	%QUOTE %THEN
+		) %QUOTE %ERRORMACRO (ERRSTR)
+	%QUOTE %FI
+
+	IF RMS$CALL(%QUOTE CALL$$VALUE(%NAME(RMS$K_,NAME,_VALUE)), BLK_TYPE)
+        THEN %QUOTE %IF NOT %QUOTE %NULL(SUC)
+             %QUOTE %THEN (SUC)()
+             %QUOTE %ELSE 1
+             %QUOTE %FI
+
+        ELSE (%QUOTE %IF NOT %QUOTE %NULL(ERR)
+              %QUOTE %THEN RMS$ERCAL(ERR,BLK_TYPE,UPLIT((%O'104000000000'
+              %(So Error Routine can see the JSYS )%      +RMS$K_INITIAL_JSYS
+              %(That invoked it, or something like it)%   +%QUOTE CALL$$VALUE(%NAME(RMS$K_,NAME,_VALUE))),
+                                                         0,0)+2);
+              %QUOTE %FI
+              0))
+%QUOTE %
+%ELSE
+MACRO
+    %NAME($,NAME)
+	= (
+	RMS$CALL(%QUOTE CALL$$VALUE(%NAME(RMS$K_,NAME,_VALUE)))) %QUOTE %
+%FI
+	%;			! end of $RMS$DEFINE_CALL macro
+                                ![11] Add paren after _VALUE to match parens
+!+
+!
+!	RMS verbs defined using $RMS$DEFINE_CALL macro
+!
+!-
+
+$RMS$DEFINE_CALL(NAME = OPEN, BLK_TYPE = FAB, ERRSTR = '?No FAB for $OPEN');
+$RMS$DEFINE_CALL(NAME = CLOSE, BLK_TYPE = FAB, ERRSTR = '?No FAB for $CLOSE');
+$RMS$DEFINE_CALL(NAME = GET, BLK_TYPE = RAB, ERRSTR = '?No RAB for $GET');
+$RMS$DEFINE_CALL(NAME = PUT, BLK_TYPE = RAB, ERRSTR = '?No RAB for $PUT');
+$RMS$DEFINE_CALL(NAME = UPDATE, BLK_TYPE = RAB, ERRSTR = '?No RAB for $UPDATE');
+$RMS$DEFINE_CALL(NAME = DELETE, BLK_TYPE = RAB, ERRSTR = '?No RAB for $DELETE');
+$RMS$DEFINE_CALL(NAME = FIND, BLK_TYPE = RAB, ERRSTR = '?No RAB for $FIND');
+$RMS$DEFINE_CALL(NAME = TRUNCATE, BLK_TYPE = RAB,
+			ERRSTR = '?No RAB for $TRUNCATE');
+$RMS$DEFINE_CALL(NAME = CONNECT, BLK_TYPE = RAB,
+			ERRSTR = '?No RAB for $CONNECT');
+$RMS$DEFINE_CALL(NAME = DISCONNECT, BLK_TYPE = RAB,
+			ERRSTR = '?No RAB for $DISCONNECT');
+$RMS$DEFINE_CALL(NAME = CREATE, BLK_TYPE = FAB, ERRSTR = '?No FAB for $CREATE');
+$RMS$DEFINE_CALL(NAME = DEBUG);
+$RMS$DEFINE_CALL(NAME = RELEASE, BLK_TYPE = RAB,
+			ERRSTR = '?No RAB for $RELEASE');
+$RMS$DEFINE_CALL(NAME = FLUSH, BLK_TYPE = RAB, ERRSTR = '?No RAB for $FLUSH');
+$RMS$DEFINE_CALL(NAME = MESSAGE);
+$RMS$DEFINE_CALL(NAME = NOMESSAGE);
+$RMS$DEFINE_CALL(NAME = DISPLAY, BLK_TYPE = FAB,
+			ERRSTR = '?No FAB for $DISPLAY');
+$RMS$DEFINE_CALL(NAME = ERASE, BLK_TYPE = FAB, ERRSTR = '?No FAB for $ERASE');
+$RMS$DEFINE_CALL(NAME = FREE, BLK_TYPE = RAB, ERRSTR = '?No RAB for $FREE');
+$RMS$DEFINE_CALL(NAME = UTLINT, BLK_TYPE = ARGUMENT_BLOCK);
+
+! RMSVRB.REQ -- LAST LINE
+! RMSERR.REQ -- definition of fullword RMS error codes
+
+LITERAL
+    RMSSTS$K_WARNING	= %O'300000',	! Warning
+    RMSSTS$K_SUCCESS	= %O'1000',	! Successful Completion
+    RMSSTS$K_ERROR		= %O'300000',	! Error
+    RMSSTS$K_INFO		= %O'1000',	! Information
+    RMSSTS$K_SEVERE	= %O'300000';	! Severe error
+
+LITERAL
+    RMS$K_SUC_MIN	= %O'1000',
+    RMS$K_ERR_MIN	= %O'300000',
+    RMS$K_SUC_MAX       = RMS$K_SUC_MIN+4,
+    RMS$K_ERR_MAX       = RMS$K_ERR_MIN+332,
+
+    RMSSTS$K_FAC_NUL = 0,
+    RMSSTS$K_FAC_SYS = 1,
+    RMSSTS$K_FAC_RMS = 2;
+
+KEYWORDMACRO
+    RMSSTS$VALUE (
+	SEVERITY = SEVERE,		! Default to severe error
+	CODE) =				! No default code
+	    (CODE + %NAME(RMSSTS$K_, SEVERITY) AND %O'777777') %;
+
+!+
+!	RMS error code definitions
+!-
+LITERAL
+    RMS$_NORMAL = RMSSTS$VALUE(SEVERITY = SUCCESS,
+			CODE = 0),
+
+    RMS$_SUC	= RMS$_NORMAL,
+
+    RMS$_OK_IDX	= RMSSTS$VALUE(SEVERITY = INFO,
+			CODE = 1),
+
+    RMS$_OK_REO	= RMSSTS$VALUE(SEVERITY = INFO,
+			CODE = 2),
+
+    RMS$_OK_RRV	= RMSSTS$VALUE(SEVERITY = INFO,
+			CODE = 3),
+
+    RMS$_OK_DUP	= RMSSTS$VALUE(SEVERITY = INFO,
+			CODE = 4),
+
+    RMS$_AID	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 0),
+
+    RMS$_BKZ	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 4),
+
+    RMS$_BLN	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 5),
+
+    RMS$_BSZ	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 6),
+
+    RMS$_BUG	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 7),
+
+    RMS$_CCF	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 8),
+
+    RMS$_CCR	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 9),
+
+    RMS$_CEF	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 11),
+
+    RMS$_CGJ	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 12),
+
+    RMS$_CHG	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 13),
+
+    RMS$_COD	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 14),
+
+    RMS$_COF	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 15),
+
+    RMS$_CUR	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 16),
+
+    RMS$_DAN	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 17),
+
+    RMS$_DEL	= RMSSTS$VALUE(SEVERITY = ERROR,
+			CODE = 18),
+
+    RMS$_DEV	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 19),
+
+    RMS$_DME	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 22),
+
+    RMS$_DTP	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 23),
+
+    RMS$_DUP	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 24),
+
+    RMS$_EDQ	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 25),
+
+    RMS$_EOF	= RMSSTS$VALUE(SEVERITY = ERROR,
+			CODE = 26),
+
+    RMS$_FAB	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 27),
+
+    RMS$_FAC	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 28),
+
+    RMS$_FEX	= RMSSTS$VALUE(SEVERITY = ERROR,
+			CODE = 29),
+
+    RMS$_FLG	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 30),
+
+    RMS$_FLK	= RMSSTS$VALUE(SEVERITY = ERROR,
+			CODE = 31),
+
+    RMS$_FNC	= RMSSTS$VALUE(SEVERITY = ERROR,
+			CODE = 33),
+
+    RMS$_FNF	= RMSSTS$VALUE(SEVERITY = ERROR,
+			CODE = 34),
+
+    RMS$_FSI	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 96),
+
+    RMS$_FUL	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 37),
+
+    RMS$_IAL	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 38),
+
+    RMS$_IAN	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 39),
+
+    RMS$_IFI	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 43),
+
+    RMS$_IMX	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 45),
+
+    RMS$_IOP	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 46),
+
+    RMS$_ISI	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 48),
+
+    RMS$_JFN	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 49),
+
+    RMS$_KBF	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 50),
+
+    RMS$_KEY	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 51),
+
+    RMS$_KRF	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 52),
+
+    RMS$_KSZ	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 53),
+
+    RMS$_LSN	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 54),
+
+    RMS$_MRS	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 56),
+
+    RMS$_NEF	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 57),
+
+    RMS$_NPK	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 59),
+
+    RMS$_NXT	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 60),
+
+    RMS$_ORD	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 61),
+
+    RMS$_ORG	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 62),
+
+    RMS$_PEF	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 63),
+
+    RMS$_PRV	= RMSSTS$VALUE(SEVERITY = ERROR,
+			CODE = 66),
+
+    RMS$_RAB	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 68),
+
+    RMS$_RAC	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 69),
+
+    RMS$_RAT	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 70),
+
+    RMS$_RBF	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 71),
+
+    RMS$_REF	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 72),
+
+    RMS$_RER	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 73),
+
+    RMS$_REX	= RMSSTS$VALUE(SEVERITY = ERROR,
+			CODE = 74),
+
+    RMS$_RFA	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 75),
+
+    RMS$_RFM	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 76),
+
+    RMS$_RLK	= RMSSTS$VALUE(SEVERITY = ERROR,
+			CODE = 77),
+
+    RMS$_RNF	= RMSSTS$VALUE(SEVERITY = ERROR,
+			CODE = 78),
+
+    RMS$_RSZ	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 84),
+
+    RMS$_RTB	= RMSSTS$VALUE(SEVERITY = WARNING,
+			CODE = 85),
+
+    RMS$_SEQ	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 86),
+
+    RMS$_SIZ	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 87),
+
+    RMS$_UBF	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 90),
+
+    RMS$_UDF	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 91),
+
+    RMS$_WER	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 93),
+
+    RMS$_XAB	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 94),
+
+    RMS$_RRV	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 81),
+
+    RMS$_BEM	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 320),
+
+    RMS$_BFC	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 321),
+
+    RMS$_BHE	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 322),
+
+    RMS$_HNF	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 327),
+
+    RMS$_NOA	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 328),
+
+    RMS$_NOI	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 329),
+
+    RMS$_NOU	= RMSSTS$VALUE(SEVERITY = SEVERE,
+			CODE = 332),
+
+    RMS$_NAM    = RMSSTS$VALUE(SEVERITY = SEVERE,
+                        CODE = 101),            ! **FTS**
+
+    RMS$_NMF    = RMSSTS$VALUE(SEVERITY = ERROR,
+                        CODE = 102),            ! **FTS**
+
+!** Special codes for remote files **FTS**
+
+    RMS$_DPE    = RMSSTS$VALUE(SEVERITY = ERROR,
+                        CODE = 97),
+
+    RMS$_SUP    = RMSSTS$VALUE(SEVERITY = ERROR,
+                        CODE = 98),
+
+    RMS$_CON    = RMSSTS$VALUE(SEVERITY = ERROR,
+                        CODE = 99),     ! Can't connect to FAL
+
+    RMS$_NLB    = RMSSTS$VALUE(SEVERITY = ERROR,
+                        CODE = 100),    ! Network link broken
+
+    RMS$_RTD    = RMSSTS$VALUE(SEVERITY = ERROR,
+                        CODE = 103),    ! Rename -- 2 different devices
+
+    RMS$_RTN    = RMSSTS$VALUE(SEVERITY = ERROR,
+                        CODE = 104);    ! Rename -- 2 different nodes
+
+! RMSERR.REQ -- LAST LINE
+
+MACRO FAB$V_REMOTE=FAB$V_DEV_REMOTE %;
+
+!
+! Directory listing level (/BRIEF, /FULL, /LIST):
+!
+
+LITERAL
+    RMS$K_LIST_DEFAULT = 0,
+    RMS$K_LIST_BRIEF = 1,
+    RMS$K_LIST_NORMAL = 2,
+    RMS$K_LIST_FULL=3,
+    RMS$K_LIST_NAME_ONLY=5;
+
+!
+! Merge flags bits
+!
+LITERAL
+    MERGE$V_CREATE   = 0,
+    MERGE$V_EXPANDED = 1,
+    MERGE$V_RLF      = 2,
+    MERGE$V_CIF      = 3,
+    MERGE$V_POINT    = 4,
+    MERGE$V_DEFAULTS = 5;
+
+LITERAL
+    MERGE$M_CREATE   = 1^0,
+    MERGE$M_EXPANDED = 1^1,
+    MERGE$M_RLF      = 1^2,
+    MERGE$M_CIF      = 1^3,
+    MERGE$M_POINT    = 1^4,
+    MERGE$M_DEFAULTS = 1^5;
+
+!
+! End of RMSUSR
+!

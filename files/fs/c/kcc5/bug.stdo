@@ -1,0 +1,137 @@
+28-Feb-88 03:35:25-PST,1659;000000000000
+Received: from XX.LCS.MIT.EDU by SRI-NIC.ARPA with TCP; Sun 28 Feb 88 03:34:50-PST
+Date: Sat, 27 Feb 1988  19:31 EST
+Message-ID: <SRA.12378183181.BABYL@XX.LCS.MIT.EDU>
+From: Rob Austein <SRA@XX.LCS.MIT.EDU>
+To:   bug-kcc@SRI-NIC.ARPA
+cc:   sra@XX.LCS.MIT.EDU
+Subject: redirected stdout destroys existing files on "quota exceeded"
+
+It seems that, if you redirect stdout to a disk file in a directory
+that is at (or over) quota, KCC will quietly proceed to write and
+CLOSF% an zero-length file.  This is a Very Bad Thing.  If it can't
+write the file it should flame and abort, rather than destroying the
+old copy of the file.  printf() isn't even returning an error when
+this happens.  I expect that the problem also applies to fopen()'d
+files, but I haven't checked.
+
+[PHOTO:  Recording initiated  Sat 27-Feb-88 7:09PM]
+
+ MIT TOPS-20 Command Processor 5(312161)-2
+XX>fxnntp <$nntp$.grep
+soc.women 15048 *BBOARD:SOC_WOMEN.TXT.1
+rec.music.folk 1130 *BBOARD:REC_MUSIC_FOLK.TXT.1
+rec.arts.comics 6178 *BBOARD:REC_ARTS_COMICS.TXT.1
+news.lists 369 *BBOARD:NEWS_LISTS.TXT.1
+news.groups 2661 *BBOARD:NEWS_GROUPS.TXT.1
+news.config 467 *BBOARD:NEWS_CONFIG.TXT.1
+news.announce.conferences 202 *BBOARD:NEWS_ANNOUNCE_CONFERENCES.TXT.1
+news.admin 1655 *BBOARD:NEWS_ADMIN.TXT.1
+XX>fxnntp <$nntp$.grep >bb:$nntp$.status
+XX>i disk bb:
+ XX:<BBOARD>
+ 5000 Pages assigned
+ 5000 Working pages, 5000 Permanent pages allowed
+ 14129 Pages free on XX:, 365871 pages used.
+XX>v bb:$nntp$.status.0
+
+   XX:<BBOARD>
+ $NNTP$.STATUS.161;P777777   0 0(7)      27-Feb-88 19:10:50 SRA       
+XX>pop
+
+[PHOTO:  Recording terminated  Sat 27-Feb-88 7:11PM]
+28-Feb-88 19:00:03-PST,1771;000000000000
+Mail-From: KLH created at 28-Feb-88 18:55:27
+Date: Sun, 28 Feb 88 18:55:21 PST
+From: Ken Harrenstien <KLH@SRI-NIC.ARPA>
+Subject: Re: redirected stdout destroys existing files on "quota exceeded"
+To: SRA@XX.LCS.MIT.EDU, bug-kcc@SRI-NIC.ARPA
+cc: KLH@SRI-NIC.ARPA
+In-Reply-To: <SRA.12378183181.BABYL@XX.LCS.MIT.EDU>
+Message-ID: <12378471603.16.KLH@SRI-NIC.ARPA>
+
+Well, what SHOULD happen?  "flame and abort" is imprecise.  ITS does
+this much better -- it generates an interrupt which DDT knows about,
+and you can proceed once you have freed up enough stuff.  This removes
+the need for every program in the world to have its own
+"check-for-overquota-error-and-tell-user-and-wait" routines.
+
+In other words, this seems like a TOPS-20 problem to me.  How could
+OPENF and CLOSF destroy a file, anyway?  If you have your gen-ret-count
+set to 1, that's your mistake.
+
+I agree the stdio functions should return an error if the output write()
+fails, and the write() should fail if the SOUT%/BOUT% fails.  That,
+I can look into later.  Note that most programs, however, never bother
+to check the return value of putc or printf or any other output function.
+Usual Unix brain damage.
+
+Note that .ICQTA is bound to SIGXFSZ.  It isn't being triggered presumably
+because an ERJMP turns the error condition into a simple error return.
+I could, however, cause it to be invoked, and this could either
+(1) call a user-defined signal handler, if one was specified by signal(),
+or (2) as a default action, "flame and abort" (whatever you want that to be).
+It could presumably ask the user whether to continue or not, although it
+may be hard to know whether that makes sense (there may not be a "user" and
+the channel to use may not be obvious either).
+-------
+28-Feb-88 19:25:03-PST,3104;000000000000
+Received: from XX.LCS.MIT.EDU by SRI-NIC.ARPA with TCP; Sun 28 Feb 88 19:21:11-PST
+Date: Sun 28 Feb 88 22:20:25-EST
+From: Rob Austein <SRA@XX.LCS.MIT.EDU>
+Subject: Re: redirected stdout destroys existing files on "quota exceeded"
+To: KLH@SRI-NIC.ARPA
+cc: bug-kcc@SRI-NIC.ARPA, SRA@XX.LCS.MIT.EDU
+In-Reply-To: <12378471603.16.KLH@SRI-NIC.ARPA>
+Message-ID: <12378476166.17.SRA@XX.LCS.MIT.EDU>
+
+    Date: Sun, 28 Feb 88 18:55:21 PST
+    From: Ken Harrenstien <KLH@SRI-NIC.ARPA>
+
+    Well, what SHOULD happen?  "flame and abort" is imprecise.  ITS does
+    this much better -- it generates an interrupt which DDT knows about,
+    and you can proceed once you have freed up enough stuff.  This removes
+    the need for every program in the world to have its own
+    "check-for-overquota-error-and-tell-user-and-wait" routines.
+
+    In other words, this seems like a TOPS-20 problem to me.  How could
+    OPENF and CLOSF destroy a file, anyway?  If you have your gen-ret-count
+    set to 1, that's your mistake.
+
+I have the generation retention count set to six or something like
+that.  But if a program runs under a batch job every few hours and
+tells that batch job that it successfully completed and writes out a
+new empty file each time, it will eventually cause the last good copy
+of the file to disappear.  I suppose I could devote an entire disk
+pack to the status files of this program so that I could keep a week's
+worth around when I go on vacation, but that seems kind of excessive.
+
+    I agree the stdio functions should return an error if the output write()
+    fails, and the write() should fail if the SOUT%/BOUT% fails.  That,
+    I can look into later.  Note that most programs, however, never bother
+    to check the return value of putc or printf or any other output function.
+    Usual Unix brain damage.
+
+    Note that .ICQTA is bound to SIGXFSZ.  It isn't being triggered
+    presumably because an ERJMP turns the error condition into a
+    simple error return.  I could, however, cause it to be invoked,
+    and this could either (1) call a user-defined signal handler, if
+    one was specified by signal(), or (2) as a default action, "flame
+    and abort" (whatever you want that to be).  It could presumably
+    ask the user whether to continue or not, although it may be hard
+    to know whether that makes sense (there may not be a "user" and
+    the channel to use may not be obvious either).
+
+Is it reasonable to say that if an output (write()) to a file failed,
+the file should be closed with CZ%ABT?  Maybe not, this might screw
+tape programs.
+
+I'd settle for having the error status be reported by printf().  What
+really got me was that there was nothing my program could have done
+differently to detect the error so that it could abort().
+
+Perhaps the right thing to do is call a handler routine if one was specified
+by signal(), else just return an error code from write() back up through
+printf().  I'm not familiar enough with the various unix signal() codes
+to know if SIGXFSZ is the right one for this.
+-------

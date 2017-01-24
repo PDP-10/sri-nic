@@ -1,0 +1,232 @@
+;SRC:<MM-NEW>MMNIC.MAC.5, 14-May-87 11:04:00, Edit by KNIGHT
+; Rework .UNIT just a little
+;SRC:<MM-NEW>MMNIC.MAC.4, 14-May-87 10:39:16, Edit by KNIGHT
+; Add .UNIT, parse printer name
+;SRC:<MM-NEW>MMNIC.MAC.3, 27-Jan-87 15:47:20, Edit by KNIGHT
+; Add SHOPRN for INIT file hacks
+;SRC:<MM-NEW>MMNIC.MAC.2, 27-Jan-87 10:53:19, Edit by KNIGHT
+;SRC:<MM-NEW>MMNIC.MAC.1, 27-Jan-87 09:51:59, Edit by KNIGHT
+; Create this.  Snarl.
+
+	TITLE MMNIC - NIC specific MM routines
+	SUBTTL RMK
+
+	SEARCH MACSYM,MONSYM,QSRMAC
+	SALL			;Suppress macro expansions
+	ASUPPRESS		;Save some symbol table space
+	.DIRECTIVE FLBLST	;Sane listings for ASCIZ, etc.
+	.PSECT CODE		;Enter CODE PSECT
+
+;;;AC's
+
+F==:0				;Flags
+A=:1				;Temp and JSYS
+B=:2				;Ditto
+C=:3				;Ditto
+D=:4				;Ditto
+E=:5				;Temp & local to routine
+T=:6				;Ditto
+U=:7				;Ditto
+V=:10				;Ditto 
+W=:11				;Ditto
+L=:12
+M=:13				;Current message if any
+N=:14
+O=:15
+;CX=:16				;MACSYM temporary AC
+;P=:17
+
+OPDEF UERR [4B8]
+
+DEFINE DEFERR (X,Y) <
+ DEFINE X (Z) <
+  IFB <Z>,<UERR Y,0>
+  IFNB <Z>,<UERR Y,[ASCIZ/Z/]>
+ >;DEFINE X
+>;DEFINE DEFERR
+
+DEFERR WARN,3
+DEFERR JWARN,7
+DEFERR ERROR,11
+DEFERR JERROR,15
+DEFERR FATAL,12
+DEFERR JFATAL,16
+DEFERR SNARL,13			;Snarl = "error, but return to caller"
+DEFERR JSNARL,17
+
+PKTTIM:	-1			; Last write date/time on keyword file
+
+MAPPKT:	ACVAR <PKTJFN>
+	MOVX A,GJ%SHT!GJ%OLD ;Old file
+	HRROI B,[ASCIZ /SYSTEM:PRINTER-KEYWORD-TABLES.BIN.0/]
+	GTJFN%
+	 JSNARL <Cannot map SYSTEM:PRINTER-KEYWORD-TABLES.BIN>
+	MOVE PKTJFN,A
+	MOVE B,[1,,.FBWRT]	;Last write time
+	MOVEI C,B		;In there
+	GTFDB%			;Get it
+	CAML B,PKTTIM		;Is it newer than what we have?
+	IFSKP.			;No...
+	  RLJFN%		;Flush the JFN
+	   TRN
+	  RET			;Get outa here
+	ENDIF.
+	MOVEM B,PKTTIM		;Stash updated date/time
+	MOVX B,FLD(^D36,OF%BSZ)!OF%RD
+	OPENF%			;Open the file
+	 JSNARL <Cannot open SYSTEM:PRINTER-KEYWORD-TABLES.BIN>
+	HRLZ A,PKTJFN		;Get the jfn,,zero
+	MOVEI B,<PKTPAG##_-^D9>	;And the buffer address in page number form
+	HRLI B,.FHSLF		;This process
+	MOVX C,PM%CNT!PM%RD!PM%CPY!PM%PLD!FLD(2,PM%RPT)
+	PMAP%			;Map the file
+	MOVEI A,PKTPAG		;Address of the buffer
+	SETMM (A)		;Make the table private
+	SETMM 1000(A)		;And the strings
+	MOVE A,PKTJFN		;Get the JFN again
+	CLOSF%			;Close the file
+	 TRN
+	RLJFN%			;Release the JFN
+	 TRN			;...
+	ENDAV.
+	MOVEI A,PKTPAG		;Address of the buffer
+	ADDM A,.UTOFF(A)	;The address of the unit names table
+	HRLZ B,@.UTOFF(A)	;Get the number of keywords here
+	IFN. B
+	  MOVNS B		;Make it negative
+	  ADD B,.UTOFF(A)	;And point at the table
+	  DO.
+	    HLRZ C,1(B)		;Get the keyword name address
+	    ADDI C,PKTPAG	;Add in the table address
+	    HRLZS C		;And get it back into the left half
+	    HRR C,1(B)		;Get the value address
+	    ADDI C,PKTPAG	;Add the table address in here, also
+	    MOVEM C,1(B)	;Put back the entry with absolute addresses
+	    AOBJN B,TOP.	;Do all of the entries in the table
+	  ENDDO.
+	ENDIF.
+	RET			;Return
+
+;Parse a printer keyword unit name, interactive user input
+.UNIT::	CALL MAPPKT
+	MOVE C,PKTPAG+.UTOFF	; Get pointer to TBLUK% table
+	MOVEI B,[FLDDB. .CMKEY]
+	MOVEM C,.CMDAT(B)	; Stash pointer
+	CALL CMDFLD##		; Parse the unit name
+	MOVE B,(B)		; Get pointer to printer name
+	MOVE B,(B)		; Get printer name
+	RET			; Return with it in B
+
+; Parse a printer unit name
+PRNINI::CALL MAPPKT		; Map the file if necessary
+	MOVEI A,7		; Maximum of six characters
+	MOVE B,T		; Point to the keyword to parse
+	DO.
+	  ILDB C,B		; Get a character
+	  JUMPE C,ENDLP.	; Null, then punt
+	  CAIN C,.CHCRT		; CR?
+	  IFSKP.		; No
+	    SOJG C,TOP.		; Yes, then go more
+	  ENDIF.
+	  SETZ C,		; Stash a null there
+	  DPB C,B
+	ENDDO.	
+	MOVE A,PKTPAG+.UTOFF	; Pointer to keyword table
+	MOVE B,T		; Point to keyword to parse
+	TBLUK%
+	IFJER.
+	  JSNARL <No such printer unit>
+	ENDIF.
+	IFXN. B,TL%NOM!TL%AMB
+	  SNARL <No such printer unit>
+	  RET
+	ENDIF.
+	HRRZ A,(A)		; Get pointer to the SIXBIT stuff
+	MOVE A,(A)		; Get the SIXBIT stuff
+	MOVEM A,PRNUNT##		; Stash the printer name
+	RET			; Done here
+
+; SHOPRN - Output PRINTER unit-name to the INIT file
+SHOPRN::HRROI B,[ASCIZ/PRINTER /]
+	SETZ C,
+	SOUT%
+	MOVE C,PRNUNT##		; Get the SIXBIT printer name
+	DO.
+	  SETZ B,
+	  LSHC B,6		; Move over a character
+	  ADDI B,40		; Make it ASCII
+	  BOUT%			; Output it
+	  JUMPN C,TOP.		; Continue until done
+	ENDDO.
+	RET
+	SUBTTL LOGEM
+
+logbuf:	block 10
+
+;log examines
+logem::	hrroi 1,logbuf
+	hrrz 2,MSGJFN##
+	move 3,[010000,,0]	;get directory name
+	JFNS%
+	 erjmp logerr
+	movx 1,rc%emo
+	hrroi 2,logbuf
+	RCUSR%
+	 erjmp logerr
+	txne 1,rc%nom		;no match?
+	 ret			;don't log files in files-only directory
+	push p,3
+	GJINF%
+	pop p,3
+	camn 1,3		;user looking at his own stuff?
+	 ret			;yes, who cares
+	move 1,logbuf
+;	camn 1,[asciz /HOSTM/]
+;	 ret
+	camn 1,[asciz /REGIS/]
+	 ret
+	camn 1,[asciz /NIC/]
+	 ret
+	camn 1,[asciz /ACTIO/]
+	 ret
+	camn 1,[asciz /OPERA/]
+	 ret
+
+	movx 1,gj%old!gj%sht
+	hrroi 2,[asciz /MAIL:0-MM.LOG/]
+	GTJFN%
+	 erjmp logerr
+	move 2,[fld(7,of%bsz)+of%app]
+	OPENF%
+	 erjmp logerr
+	seto 2,
+	setz 3,
+	ODTIM%
+	 erjmp logerr
+	movei 2,.chspc
+	BOUT%
+	push p,1
+	GJINF%
+	 erjmp logerr
+	move 2,1
+	pop p,1
+	DIRST%
+	 erjmp logerr
+	hrroi 2,[asciz / looked at /]
+	setz 3,
+	SOUT%
+	 erjmp logerr
+	move 2,MSGJFN
+	move 3,[111110,,000001]
+	JFNS%
+	 erjmp logerr
+	hrroi 2,[asciz /
+/]
+	setz 3,
+	SOUT%
+	 erjmp logerr
+	CLOSF%
+	 erjmp logerr
+logerr:	ret
+
+	END

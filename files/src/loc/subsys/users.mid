@@ -1,0 +1,147 @@
+; -*-MIDAS-*-
+
+TITLE	USERS - Give list of logged-in users
+; EPS, June 1981
+
+	.decsav
+
+A=1				; JSYS ACs
+B=2
+C=3
+D=4
+J=5
+WIDTH=6
+RCOLS==7
+TERMN=7
+UNUM=10
+OPER=11
+MWIDTH=12
+NOLC==7
+UPNT=14
+UP=15
+P=17
+
+PDL:	BLOCK	10
+
+START:	MOVE	P,[-10,,PDL-1]
+	RESET
+REENT:	MOVEI	A,.PRIOU	; get terminal width
+	MOVEI	B,.MORLW
+	MTOPR
+	MOVEI	WIDTH,(C)
+	SETZ	MWIDTH,		; widest uname <- 0
+	MOVE	UPNT,[440700,,USCR]	; byte pointer to first free location
+	MOVEI	UP,UTAB-1	; pointer to table of byte pointers->username
+	HRROI	A,.JOBTT	; get -max job #
+	GETAB
+	 JRST	FATAL
+	HRLZ	J,A		; AOBJN pointer in J
+	SETZ	A,		; Get OPERATOR user #
+	HRROI	B,OPER
+	MOVEI	C,.JIUNO
+	GETJI
+	 JRST	FATAL
+	AOBJP	J,NEXT+2
+LOOP:	HRRZ	A,J		; Look up terminal # and user #
+	MOVE	B,[-2,,TERMN]
+	MOVEI	C,.JITNO
+	GETJI
+	 JRST	NEXT		; Job # not in use
+	JUMPL	TERMN,NEXT	;Terminal inactive.
+	Jumpe UNum,Next		;Not logged in.
+	CAMN	UNUM,OPER	; skip OPERATOR jobs
+	 JRST	NEXT+1
+	MOVE	A,UPNT		; get pointer to first free byte
+	PUSH	UP,UPNT		; put address in vector, increment count
+	MOVE	B,UNUM		; convert user # to string
+	DIRST
+	 JFCL
+	SETZ	D,		; zero count
+DONTLC:	SETO	NOLC,		; don't lowercasify next chr
+LC:	ILDB	C,UPNT		; get chr
+	JUMPE	C,LCDONE	; eos?
+	AOS	D		; bump count
+	CAIE	C,".		; . or - ==> don't lc next
+	 CAIN	C,"-
+	  JRST  DONTLC
+	AOJLE	NOLC,LC		; lc this? (but next time ok)
+	TRON	C,40		; lc character
+	 DPB	C,UPNT
+	JRST	LC
+LCDONE:	IDPB	D,UPNT		; save length with string
+	CAILE	D,(MWIDTH)	; this wider than previous max?
+	 MOVEI	MWIDTH,(D)	; new record
+NEXT:	JFCL			;[GREN] - Why was this next instruction
+;	SETZ	OPER,		;ever being done???
+	AOBJN	J,LOOP
+	AOS	MWIDTH		; +1 for space between columns
+	IDIVI	WIDTH,(MWIDTH)	; # of columns
+	MOVEI	A,.PRIOU	; print number of logged-in users
+	HLRZ	B,UP
+	MOVEI	C,10.
+	NOUT
+	 JRST	FATAL
+	HRROI	A,[ASCIZ / user/]
+	PSOUT
+	SOJE	B,SHOW1		; plural if not exactly one
+	MOVEI	A,"s
+	PBOUT
+	JUMPL	B,DONE		; no users--go away
+SHOW1:	HRROI	A,[ASCIZ /:
+/]
+	PSOUT
+	MOVEI	RCOLS,(WIDTH)	; # of columns left on this output line
+	HLRZ	C,UP		; Bubble sort usernames
+BUB1:	POP	UP,J		; J gets UTAB(C-1)
+	SOJLE	C,SHOW2		; C goes from #users to 1
+	MOVEI	D,(C)
+BUB2:	SOJL	D,SHOW2		; D goes from C-1 to 0
+	MOVE	A,J		; compare strings pointed to by
+	MOVE	B,UTAB(D)	; UTAB(C) and UTAB(D)
+	STCMP
+	TLNN	A,(SC%GTR)	; if >
+	 JRST	BUB2
+	EXCH	J,UTAB(D)	; exchange UTAB(C) with UTAB(D)
+	MOVEM	J,UTAB(C)
+	JRST	BUB2
+SHOW2:	MOVE	A,J		; output username
+	PSOUT
+	TLNN	UP,777777	; last one, all done
+	 JRST	DONE
+	SOSG	RCOLS
+	 JRST	SHOW4
+	ILDB	D,A		; get width of this username
+	SUBM	MWIDTH,D	; subtract it from column width
+	MOVEI	A,40		; and output that many spaces.
+SHOW3:	PBOUT			; eventually we'll get smart
+	SOJG	D,SHOW3		; and use TABs.
+	JRST	BUB1
+SHOW4:	HRROI	A,[ASCIZ /
+/]				; output CRLF
+	PSOUT
+	MOVEI	RCOLS,(WIDTH)
+	JRST	BUB1
+DONE:	HRROI	A,[ASCIZ /
+/]				; output CRLF
+	PSOUT
+	HALTF			; return to superior
+	JRST	REENT
+
+FATAL:	MOVEI	A,"?
+	PBOUT
+	MOVEI	A,.PRIOU
+	HRLOI	B,.FHSLF
+	SETZ	C,
+	ERSTR
+	 JFCL
+	 JFCL
+	HALTF
+	JRST	.-1
+
+	CONSTANTS
+
+UTAB:	BLOCK	100		; vector of pointers to uname strings
+USCR:	BLOCK	1000		; ASCIZ unames, each followed by a
+				; byte containing the length
+
+	END	START

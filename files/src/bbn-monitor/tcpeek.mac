@@ -1,0 +1,3157 @@
+TITLE TCPEEK TO PEEK AT TCP IN OPERATION
+
+VWHO==^D7	; M Beeler, BBN
+VMAJOR==^D5
+VMINOR==^D4
+VEDIT==170	; 30-Nov-84 JDelSignore Print the new histogram headers
+;167	;  6-Nov-84 CLynn Ver 5.4 MNTSEC (INTSEC) ,TCABI (TCABW)
+;142	; 15-Aug-84 CLynn Increased NPAGES
+;141	;  2-Jul-84 CLynn Changes for "DEC" version
+
+	COMMENT $
+
+TCPEEK is run by a user to examine statistics of the TCP and IP
+running on the same machine.  WHEEL capability is needed.
+TCPEEK uses the JSYS SNOOP to obtain the value of various canned
+symbols in the running monitor.  It uses these values to determine
+what monitor pages contain the statistics of interest, and maps
+these into an area called WINDOW in its own address space.
+TCPEEK then enters the main loop, where it accepts a command and
+dispatches to service it.
+
+When the take-a-snapshot command (right angle bracket, >)
+is given, TCPEEK makes a copy (using BLT) of the contents of
+WINDOW in the area called SNAP, and computes the amount each word
+changed from its value at the previous snapshot, storing the change
+in the area called DELTA.  The take-a-snapshot command also prints
+some data from the snapshot.  A header line contains the local
+host name, snapshot number, and time of day.  Then RFNTAB entries
+of interest (see set-RFNTST command, below) are printed.  Then
+message counts from the NCTs (each only if the NCT is present)
+are printed.  For each of these, the count and change
+from previous snapshot are printed, followed by a text string for
+the message type or subtype, followed by the numeric type and
+subtype.  If the count for a type or subtype is zero, that line
+is not printed.  After printing NCT tables, GWTAB is scanned for
+any gateways which have gone up or down since the previous snapshot.
+For each which has, its address and present status are printed.
+TCPEEK initially thinks all gateways are down, so snapshot 1 will
+report all gateways which are up.
+
+The print-status-of-a-symbol command (slash, /)
+prompts the user for a text string, evaluates that string using
+the JSYS STAT, and prints the value of that location in the
+latest snapshot (and its change, found in DELTA).  The symbol
+may be a vector (such as a histogram), for which each element
+is printed.  If the user types no symbol argument, the command
+is executed as if the symbol in the previous execution of this
+command had been typed.  That symbol is printed as a reminder.
+
+The symbol typed by the user may be followed by "+" and a decimal
+number, which is used as an offset (in words) to the value found
+for the symbol.  The next-entry command (N) adds one to this
+offset and then executes as if the previous symbol had been typed
+to the print-status-of-symbol command with the new offset value.
+This makes scanning through consecutive single word statistics
+easier.
+
+After the symbol name, and word offset (if any), the user may
+type a comma and a limit on the number of entries to print.
+This argument, if present, overrides the vector length returned by
+STAT.  The result is reduced by the offset argument (if any),
+to prevent printing beyond the meaningful end of the vector.
+The user's optional limit, and the reduction by the offset, apply
+only to "free format" printout and not to the special formats
+described below.
+
+The user may terminate the print-status-of-symbol command with
+special characters to specify printing in special formats.
+The special characters / and \ specify printing as a
+two-dimensional vector (such as count of message types, with some
+types broken down into subtypes), optionally (\) with text (ARPANET
+type and subtype) annotation.  The special character | specifies
+printing as a histogram with bin limits defined by values in the
+histogram area itself.  This format shows the second header word
+(the first is the number of bins), followed by one line per bin,
+each line showing the snapshot value, the change since the previous
+snapshot, and the bin definition value.  In the special formats
+specified by terminator / or \ or |, the first two words of the
+area in memory are header words; thus, use of the offset option
+together with these formats will execute, but will probably
+produce unexpected results, because the print routine will interpret
+data words as header words.
+
+In summary, the print-status-of-symbol command looks like this:
+	/symbol[+offset][,limit][/ or \ or |]
+where optional arguments are shown [thus].  Not all possible
+combinations of arguments are useful; the useful combinations are:
+   /symbol		prints contents of location or vector
+			(command terminated by CR, LF, ESC, or space)
+   /symbol+offset	"offset" is added to value of symbol
+			before lookup is performed
+   /symbol,limit	only "limit" number of entries are printed
+   /symbol+offset,limit	printing begins at "offset" words
+			into the vector, and ends after "limit" words
+			into the vector; "limit" - "offset" words
+			are printed
+   /symbol/		print as 2-D vector
+   /symbol\		print as 2-D vector with ARPANET annotation
+   /symbol|		print as value-defined histogram
+
+The print-guide command (G) prints the text, evaluation, offset in
+SNAP and DELTA areas, length of the data in words, and number of
+separate areas of memory needed.  The last three of these are
+printed only if relevant (e.g., a symbol which is the length of a
+table has no corresponding area of memory).  The last entry is
+greater than 1 for a symbol such as GWTAB (gateway table), a table
+of tables, so each component table incurs a distinct need for an
+area or "block" of memory.  The guide printout can help in looking
+at statistics in SNAP or DELTA with a debugger, if normal TCPEEK
+mechanisms are not adequate for a particular task.
+
+The print-route command (R) prompts the user for an address
+(in any of three formats: octal, four decimal bytes separated by ".",
+or text name), scans NETHTB (net host table) for matching entries
+(there should be at most one, but all are found), prints the
+corresponding route found in the parallel entry in NETGWY (net
+gateway table), and the prior route if it was different and
+non-zero.  If the NETGWY entry shows routing to a local net
+interface (rather than a gateway), the interface number is printed.
+
+The set-RFNTST command (S) prompts the user for an address in
+any of three formats, and stores this as the value to be matched
+when printing out RFNTAB entries.  Entries are printed which
+match RFNTST exactly, or which are non-zero if RFNTST is zero.
+Thus setting RFNTST to zero causes all non-zero entries to print.
+The initial value of RFNTST is the user's own host, which normally
+matches no entries.  Printing is performed after each snapshot, and
+after each set-RFNTST command.  Typing no new value defaults to the
+current value of RFNTST, an easy way to repeat the latest printing.
+In detail, if the low 24 bits of RFNTAB entry n is "of interest"
+(as above), TCPEEK prints "RFNTAB+n/", the RFNM count fields (in
+decimal).
+
+The TCB print command (tilde, ~)
+prompts the user for a TCB ID and a monitor address, maps some
+monitor memory at that address into TCPEEK, and checks that the
+TCB ID therein is the same as that the user typed.  Then the
+text name, and current value as seen through this window, of
+several locations within a TCB are printed.  Values printed are
+decimal, except those preceded by # are octal.  Once this command
+has been executed, the normal print-status-of-a-symbol command
+can be used to examine these or other TCB locations in the
+windowed TCB.
+Typing escape (ESC) defaults the TCB ID or the monitor
+address to the previous value used by the TCB print command.
+
+The exit command (E) exits.  Whenever TCPEEK does a GTMPG JSYS,
+the arguments may be printed before the monitor page is mapped in.
+This occurs during initial startup, during the TCB print command,
+and during the exit command.  The GTMPG arguments are useful in
+debugging TCPEEK problems, and provide an indication that the
+mapping of monitor pages is proceeding.  Patching location GTMENB
+non-zero enables printing GTMPG arguments.
+
+If a letter (A-Z, a-z) is typed which is not recognized as a command,
+TCPEEK assumes the user may have wanted the print-status-of-symbol
+command, and prints the appropriate command character and prompt,
+re-echoes the user's typein, and enters the print-status-of-symbol
+command service routine.  The user may continue typing the symbol,
+or may abort this with any non-symbol-or-terminator, such as rubout.
+
+	$
+
+
+SEARCH MONSYM,macsym,anaunv
+
+A=1
+B=2
+C=3
+D=4
+E=5
+F=6
+G=7
+R=10
+S=11
+T=12
+U=13
+X=14
+Y=15
+CX=<Z=16>
+P=17
+
+;GTMPG GETS (MAPS) A MONITOR PAGE INTO A WINDOW PAGE IN USER SPACE
+;IT MUST BE PATCHED INTO THE MONITOR
+
+IFNDEF GTMPG,<GTMPG=104000,,762>	;CHARLIE AND ISI'S JSYS 762
+
+IFNDEF STAT,<STAT=104000,,745>		;JSYS TO GET IP STATUS
+
+DEFINE	GREET	(MJ,MN,ED)<
+	HRROI B,[ASCIZ \PEEK at TCP in operation   V'MJ'.'MN(ED)
+\]>
+
+;Structure of entries in the RFNTAB table
+
+DEFSTR(RFNFLG,0,11,12)			; Mask that includes the following
+  DEFSTR(RFNBB,0,0,1)			; Blocked bit (Must be bit 0)
+  DEFSTR(RFNWB,0,1,2)			; Was blocked field
+  DEFSTR(RFNNO,0,5,4)			; Next packet out
+  DEFSTR(RFNDN,0,6,1)			; Host is down bit
+  DEFSTR(RFNWD,0,7,2)			; Host was down field
+  DEFSTR(RFNNB,0,11,4)			; Next packet back
+DEFSTR(RFNHST,0,35,24)			; Host key
+; DEFSTR(RFNPT,0,19,8)			; Port
+  DEFSTR(RFNHT,0,23,4)			; Handling Type:
+    DEFSTR(RFNHP,0,20,1)		;   High Priority bit
+    DEFSTR(RFNNP,0,23,3)		;   Number of Packets (really PIPRC)
+  DEFSTR(RFNNT,0,27,4)			; NCT id
+; DEFSTR(RFNIP,0,35,8)			; IMP number
+
+;GTRFNH
+;Macro to create the pseudo 'host number' from the leader pointed to by T2.
+;Stores value in T1.
+
+DEFINE GTRFNH <
+	LOAD T1,IHADR,(T2)		; Get Port and IMP numbers
+	LOAD CX,IHNET,(T2)		; NCT number
+	STOR CX,RFNNT,+T1		; Goes in the middle
+	LOAD CX,IHHHP,(T2)		; Get Handling Type: High Priority
+	STOR CX,RFNHP,+T1		; Save it
+	LOAD CX,IHHNP,(T2)		; Get Handling Type: Number of
+					;  Packets (Really PIPRC)
+	STOR CX,RFNNP,+T1		; Save it
+>
+REPEAT 0,<
+;Structure of entries in the RFNTAB table
+
+DEFSTR(RFNFLG,0,10,11)			; Mask that includes the following
+  DEFSTR(RFNBB,0,0,1)			; Blocked bit (Must be bit 0)
+  DEFSTR(RFNWB,0,1,2)			; Was blocked field
+  DEFSTR(RFNNO,0,5,4)			; Next packet out
+  DEFSTR(RFNDN,0,6,1)			; Host is down bit
+  DEFSTR(RFNWD,0,7,2)			; Host was down field
+  DEFSTR(RFNNB,0,11,4)			; Next packet back
+DEFSTR(RFNHST,0,35,23)			; Host key
+; DEFSTR(RFNPT,0,19,8)			; Port
+  DEFSTR(RFNNT,0,27,8)			; NCT id
+; DEFSTR(RFNIP,0,35,8)			; IMP number
+
+;GTRFNH
+;Macro to create the pseudo 'host number' from the leader pointed to by B.
+;Stores value in A.
+
+DEFINE GTRFNH <
+	LOAD A,IHADR,-$IHADR(B)		; Get Port and IMP numbers
+	LOAD Z,IHNET,-$IHNET(B)		; NCT number
+	STOR Z,RFNNT,+A			; Goes in the middle
+>
+>; end of repeat 0
+
+LOC 10000	;PAGE ALIGN
+
+;SNPTAB contains symbols to look up via SNOOP/PEEK JSYS
+
+.N==0	; Symbol name in radix-50
+.M==1	; Program name in radix-50
+.V==2	; Value found by SNOOP for the symbol (or 0) (address of ... if F.I)
+.O==3	; Address of offset from .VL for PEEKing
+.C==4	; Contents from PEEKing
+.L==5	; Address of length from .VL for GTMPGing
+.T==6	; -Count,,<pointer to the corresponding NEDTAB entry>, otherwise 0
+.F==7	; Function flags and address of NEEDx routine
+ F.S==040000,,0 ; Perform a SNOOP
+ F.I==020000,,0 ; .VL is address, not data
+ F.P==010000,,0 ; Perform a PEEK
+ F.G==004000,,0 ; Perform a (temporary) windowing
+ F.O==002000,,0 ; Add offset to address
+ F.E==000400,,0 ; Had an error
+ F.N==777777	; Address of NEEDx routine
+SNPTEL==10	; SNPTAB entry length, words
+
+DEFINE SNP(SYM,PROG,datum,OFFSET,content,length,g,funcs)<
+IF2 <	PURGE SYM >
+	RADIX50 0,SYM
+	RADIX50 0,PROG
+IFB  <datum>,<	0 >
+IFNB <datum>,<	datum >
+IFB  <OFFSET>,<	0 >
+IFNB <OFFSET>,<	OFFSET >
+IFB  <content>,<	0 >
+IFNB <content>,<	content >
+IFB  <length>,<	0 >
+IFNB <length>,<	length >
+IFB  <g>,<	0 >
+IFNB <g>,<	g >
+IFB  <funcs>,<	0 >
+IFNB <funcs>,<	funcs >
+SYM=.-SNPTEL>
+
+adr==0
+idx==0
+l==0
+len==0
+lpnct==0
+nct0==0
+nct1==0
+nct2==0
+nct3==0
+nct4==0
+nt==0
+spt==0
+tbl==0
+
+;SNPTAB IS SYMBOLS TO LOOK UP VIA SNOOP JSYS
+
+;    name  ,module,datum     ,offset   ,contents,length   ,g ,flag+funtion
+;     +------+=SNOOP-+ +-------+=PEEK-----+
+;                      +--------------------------+=NEEDA--+       adr     len
+;                                            +----+=NEEDB--+       adr     len
+;                                            +----+=NEEDC--+   -l,,adr
+;                      +--------------------------+= F.G maps it
+;                                            +----+=NEEDD--+   F.G
+;                      +--------------------------+=NEEDE--+ Begin-adr End-adr
+;                      +-------+------------------+=NEEDF--+       adr+off len
+SNPTAB:
+
+; MSECTB is the monitor's section table, used to find SPT index of page tables
+SNP (MSECTB,STG   ,adr       ,         ,        ,         ,  ,F.S)
+SNP  (MSEC1,STG   ,1+idx     ,MSECTB+.V,spt     ,         ,  ,F.S+F.P)
+SNP (MNTSEC,STG   ,5+idx     ,MSECTB+.V,spt     ,         ,  ,F.S+F.P)
+
+; RFNSIZ is the size of the 1822 RFNM tables
+SNP (RFNTSZ,STG   ,100+len   ,         ,        ,         ,  ,F.S)
+SNP (RFNTAB,STG   ,adr       ,         ,        ,RFNTSZ+.V,nt,F.S+NEEDA)
+SNP (RFN8TO,STG   ,adr       ,         ,        ,[1]      ,nt,F.S+NEEDA)
+
+; The NCTs are chained via $ntlnk==0, beginning at NCTVT
+SNP (LUPNCT,STG   ,adr       ,[0]      ,lpnct   ,         ,  ,F.S+F.P)
+SNP  (NCTVT,STG   ,adr       ,[0]      ,nct1    ,         ,  ,F.S+F.P)
+SNP  (.NCT0,STG   ,LUPNCT+.C ,[0]      ,        ,[NCTBAS] ,nt,F.P+F.I+NEEDA)
+SNP  (.NCT1,STG   ,NCTVT+.C  ,[0]      ,nct2    ,[NCTBAS] ,nt,F.P+F.I+NEEDA)
+SNP  (.NCT2,STG   ,.NCT1+.C  ,[0]      ,nct3    ,[NCTBAS] ,nt,F.P+F.I+NEEDA)
+SNP  (.NCT3,STG   ,.NCT2+.C  ,[0]      ,nct4    ,[NCTBAS] ,nt,F.P+F.I+NEEDA)
+
+; The pointer to NCTiA (driver statistics) is contained in NTPSTI
+SNP (NTPSTI,MNETDV,NTPSTI+idx,         ,        ,         ,  ,F.S)
+SNP  (NCT0A,STG   ,LUPNCT+.C ,NTPSTI+.V,-l&adr  ,         ,nt,F.P+F.I+NEEDC)
+SNP  (NCT1A,STG   ,NCTVT+.C  ,NTPSTI+.V,-l&adr  ,         ,nt,F.P+F.I+NEEDC)
+SNP  (NCT2A,STG   ,.NCT1+.C  ,NTPSTI+.V,-l&adr  ,         ,nt,F.P+F.I+NEEDC)
+SNP  (NCT3A,STG   ,.NCT2+.C  ,NTPSTI+.V,-l&adr  ,         ,nt,F.P+F.I+NEEDC)
+
+; The pointer to NCTiC (local net type/sub-types) is contained in NTPSTS
+SNP (NTPSTS,MNETDV,NTPSTS+idx,         ,        ,         ,  ,F.S)
+SNP  (NCT0C,STG   ,LUPNCT+.C ,NTPSTS+.V,-l&adr  ,         ,nt,F.P+F.I+NEEDC)
+SNP  (NCT1C,STG   ,NCTVT+.C  ,NTPSTS+.V,-l&adr  ,         ,nt,F.P+F.I+NEEDC)
+SNP  (NCT2C,STG   ,.NCT1+.C  ,NTPSTS+.V,-l&adr  ,         ,nt,F.P+F.I+NEEDC)
+SNP  (NCT3C,STG   ,.NCT2+.C  ,NTPSTS+.V,-l&adr  ,         ,nt,F.P+F.I+NEEDC)
+
+; The pointer to NCTiG (ring buffer of packet headers sent/received)
+SNP  (NCT0G,STG   ,NCT0C+.C  ,[OMNMXX-OMNMXR],  ,         ,nt,F.I+NEEDF)
+SNP  (NCT1G,STG   ,NCT1C+.C  ,[OMNMXX-OMNMXR],  ,         ,nt,F.I+NEEDF)
+SNP  (NCT2G,STG   ,NCT2C+.C  ,[OMNMXX-OMNMXR],  ,         ,nt,F.I+NEEDF)
+SNP  (NCT3G,STG   ,NCT3C+.C  ,[OMNMXX-OMNMXR],  ,         ,nt,F.I+NEEDF)
+
+; The area between STAT0 and STATZZ contains most of the monitoring information
+SNP (STATZZ,STG   ,adr       ,         ,        ,         ,  ,F.S)
+SNP  (STAT0,STG   ,adr       ,         ,        ,STATZZ+.V,nt,F.S+NEEDE)
+
+; TODCLK contains the monitor's msec clock, useful for comparisons.
+SNP (TODCLK,STG   ,adr       ,         ,        ,[1]      ,nt,F.S+NEEDA)
+
+; The routing tables
+SNP (NETHSZ,STG   ,27+len    ,         ,        ,         ,  ,F.S)
+SNP (NETHTB,STG   ,adr       ,         ,        ,NETHSZ+.V,nt,F.S+NEEDA)
+SNP (NETGWY,STG   ,adr       ,         ,        ,NETHSZ+.V,nt,F.S+NEEDA)
+SNP (NETIFC,STG   ,adr       ,         ,        ,NETHSZ+.V,nt,F.S+NEEDA)
+SNP (NETWHN,STG   ,adr       ,         ,        ,NETHSZ+.V,nt,F.S+NEEDA)
+SNP (NETWHO,STG   ,adr       ,         ,        ,NETHSZ+.V,nt,F.S+NEEDA)
+
+; The gateway tables
+SNP (MAXGWA,IPIPIP,MAXGWA+len,         ,        ,         ,  ,F.S)
+SNP (GWBKSZ,IPIPIP,GWBKSZ+len,         ,        ,         ,  ,F.S)
+SNP  (GWTAB,STG   ,adr       ,[0]      ,tbl     ,         ,  ,F.S+F.P)
+SNP     (GW,      ,GWTAB+.C  ,MAXGWA+.V,        ,GWBKSZ+.V,nt,F.G+F.I+NEEDD)
+
+; The size of a connection's TCB
+SNP (TCBSIZ,TCPTCP,TCBSIZ+len,         ,        ,         ,  ,F.S)
+
+;    name  ,module,datum     ,offset   ,contents,length   ,g ,flag+funtion
+
+	0	; Marks end of SNPTAB
+
+
+
+;NEDTAB TELLS WHAT BLOCKS OF MONITOR MEMORY ARE NEEDED
+;WORD 0 OF EACH ENTRY IS MONITOR ADDRESS OF START OF BLOCK
+;WORD 1 OF EACH ENTRY IS LENGTH OF BLOCK, IN WORDS
+;WORD 2 OF EACH ENTRY IS OFFSET IN USER MEMORY INTO WINDOW,
+;   SNAP, PRIOR, AND DELTA TABLES
+NEDTEL==3	;NEDTAB ENTRY LENGTH, WORDS
+NEDSIZ==100	;MAX NUMBER OF NEEDED BLOCKS
+
+NEDTAB:	BLOCK NEDSIZ*NEDTEL
+
+
+
+GTMENB:	0	;PATCH TO NON-ZERO ENABLES PRINTING GTMPG DEBUG MSGS
+MAPCNT:	0	;NUMBER OF MONITOR PAGES MAPPED INTO WINDOW
+RFNTST:	0	;LOW 32 BITS OF RFNTAB ENTRIES OF INTEREST
+SAVEDG:	0	;G (INDEX) VALUE AFTER LAST NEDTAB ENTRY
+SNPCNT:	0	;COUNT OF SNAPSHOTS
+;MS1SPT:	0	;SPT FOR SECTION ONE
+;MSISPT:	0	;SPT FOR INTERNET SECTION
+MODE:	0	; 0-Normal, -1-Saved
+ROUTEH:	0	;ROUTE ROUTINE HOST VALUE (right justified)
+ROUTEN:	0	;ROUTE ROUTINE NETWORK VALUE (right justified)
+ROUTEC:	0	;ROUTE ROUTINE COUNT OF MATCHES
+
+PATCH:	BLOCK 100
+PDL:	BLOCK 100
+
+
+LOC <.+777>/1000*1000	;PAGE ALIGN
+
+TCBWIN:	BLOCK 2000	;WINDOW INTO MONITOR FOR LOOKING AT TCB
+
+NPAGES==40	;NUMBER OF WINDOW, ETC. PAGES PERMITTED
+WINDOW:	BLOCK 1000*NPAGES	;WINDOW INTO MONITOR
+SNAP:	BLOCK 1000*NPAGES	;SNAPSHOT OF WINDOW
+PRIOR:	BLOCK 1000*NPAGES	;PRIOR CONTENTS OF SNAP
+DELTA:	BLOCK 1000*NPAGES	;CHANGE IN SNAP
+PGSEND==.
+
+
+LOC 400000
+;LOC <.+777>/1000*1000	;PAGE ALIGN
+
+INTCLS::EXP 4B6,4B6,4B6,4B6,6B6,6B6,7B6,7B6
+	POINT 3,CX,6
+INTLNN::POINT 8,CX,11
+	POINT 8,CX,11
+	POINT 8,CX,11
+	POINT 8,CX,11
+	POINT 16,CX,19
+	POINT 16,CX,19
+	POINT 24,CX,27
+	POINT 32,CX,35
+INTNET::EXP 37700000000,37700000000,37700000000,37700000000,37777600000
+	EXP 37777600000,37777777400,37777777777
+
+
+ENTVEC:	JRST BEG
+	JRST RENTR
+	<VWHO>B2+<VMAJOR>B11+<VMINOR>B17+VEDIT
+
+BEG:	TDZA A,A			; Normal mode
+RENTR:	  SETO A,			; Saved EXE with data
+	MOVEM A,MODE
+	RESET
+	MOVEI P,PDL-1
+
+	GREET	\VMAJOR,\VMINOR,\VEDIT ; Give program id
+	CALL DOSOUT
+
+repeat 0,<
+	MOVEI A,0	;ZERO THINGS SO RESTART WILL WORK
+INIT1:	SETZM SNPTAB+.V(A)	;CLEAR SYMBOL VALUE
+	SETZM SNPTAB+.T(A)	;CLEAR POINTER TO NEDTAB ENTRY
+	ADDI A,SNPTEL		; VLMove to next entry
+	SKIPE SNPTAB+.N(A)	;REACHED END OF SNPTABVL?
+	 JRST INIT1	;NO, CONTINUE
+	SETZM NEDTAB
+	MOVE A,[NEDTAB,,NEDTAB+1]
+	BLT A,NEDTAB+<NEDSIZ*NEDTEL>-1
+> ; end of repeat 0
+
+	MOVEI A,400000			; Need WHEEL for SNOOP, PEEK, GTMPG
+	RPCAP
+	TRNN B,400000
+	 JRST CAPERR			; WHEEL not even possible
+	MOVE C,B
+	EPCAP
+	RPCAP
+	TRNN B,400000
+	 JRST CAPERR			; Enable failed
+
+	SKIPN MODE			; Normal MODE?
+	  JRST MODE0			; Yes
+
+	HRROI B,[ASCIZ \READY in saved mode
+\]
+	CALL DOSOUT
+	JRST MAIN			; Initialization all done
+
+MODE0:	SETZM SNAP			; Touch pages so don't fault later
+	MOVE A,[SNAP,,SNAP+1]
+	BLT A,PGSEND-1
+	SETZM SNPCNT
+	SETZM TCBFLG			; No TCB mapped, & no symbol byte pntrs
+	SETZM TCBID.
+	SETZM TCBADR
+	SETZM TCBOAD
+	SETZM ROUTEH			; Initialize to no default
+
+repeat 0,<
+	MOVEI D,0	;EVALUATE SYMBOLS
+SNPLUP:	MOVEI A,.SNPSY	;FUNCTION = SYMBOL LOOKUP
+	SKIPN B,SNPTAB+.N(D)
+	 JRST SNPDUN
+	MOVE C,SNPTAB+.M(D)	;PROGRAM NAME
+	SNOOP
+	 JRST SNPANY
+SNPOK:	MOVEM B,SNPTAB+.V(D)
+SNPMOR:	ADDI D,SNPTEL	;TO NEXT SNPTAB ENTRY
+	JRST SNPLUP
+
+;SNPANY TRIES SNOOP OF A SYMBOL WITH WILD CARD PROGRAM NAME
+;BECAUSE SPECIFIC PROGRAM NAME FAILED
+SNPANY:	MOVEI A,.SNPSY
+	MOVE B,SNPTAB+.N(D)
+	MOVEI C,0	;TRY ANY PROGRAM NAME
+	SNOOP
+	 JRST SNPERR
+	JRST SNPOK
+
+;SNPERR HANDLES ERRORS FROM SNOOP JSYS, AND CONTAINS THE ERROR
+;ROUTINE FOR OTHER ERRORS TO CALL WITH <B> = STRING PNTR
+
+SNPERR:	CAMN B,[RADIX50 0,.NCT1]
+	 JRST SNPMOR	;THAT SYMBOL MAY BE UNDEFINED
+	CAMN B,[RADIX50 0,.NCT2]
+	 JRST SNPMOR	;THAT ONE ALSO
+	HRROI B,[ASCIZ \SYMBOL "\]
+	CALL DOSOUT
+	MOVEI A,.PRIOU
+	MOVE B,SNPTAB+.N(D)
+	CALL PNTR50
+	HRROI B,[ASCIZ \" SNOOP LOOKUP FAILED\]
+ERROR:	CALL DOSOUT
+	CALL CRLF
+	HALTF
+	JRST BEG
+
+GMEERR: HRROI B,[ASCIZ \GTHST OF SELF FAILED\]
+	JRST ERROR
+
+CAPERR:	HRROI B,[ASCIZ \CANNOT ENABLE WHEEL CAPABILITY\]
+	JRST ERROR
+
+;CONTINUE INITIALIZATION -- SET UP SECTION POINTERS
+
+SNPDUN:	MOVE A,ADR0+2	;VALUE OF "MSECTB"
+	ADDI A,1	;FOR SECTION 1
+	HRLI A,1	;TRANSFER ONE WORD
+	MOVEI B,MSEC1+.C;MS1SPT	;READ "SECTION POINTER" INTO HERE
+	PEEK
+	 JRST PEKERR
+	MOVE A,ADR0+2
+	ADD A,ISEC+2	;VALUE OF "MNTSEC", FOR INTERNET SECTION
+	HRLI A,1
+	MOVEI B,MNTSEC+.C;MSISPT
+	PEEK
+	 JRST PEKERR
+
+	MOVEI G,0	;CONSTRUCT NEDTAB
+
+	MOVE A,ADR1+2	;MONITOR ADDRESS OF BLOCK -- RFNTAB
+	MOVE B,LEN1+2	;LENGTH OF BLOCK
+	CALL NEEDA	;ENTER IT IN NEDTAB
+	MOVEM A,ADR1+3	;SAVE POINTER INTO NEDTAB IN SNPTAB
+
+	MOVE A,ADR2+2	;RFN8TO
+	MOVE B,LEN1+2
+	CALL NEEDA
+	MOVEM A,ADR2+3
+
+	MOVE A,ADR3+2	;.NCT0
+	ADD A,OFF3+2	;OFFSET = NTPSTS
+;	MOVEI B,<2*20>+<3*6>
+	CALL NEEDC	;INDIRECT ENTRY INTO NEDTAB
+	MOVEM A,ADR3+3
+
+	MOVE A,ADR4+2	;.NCT1
+	 JUMPE A,NONE1	;IT IS UNDEFINED
+	ADD A,OFF3+2
+;	MOVEI B,<2*20>+<3*6>
+	CALL NEEDC
+	MOVEM A,ADR4+3
+NONE1:
+
+	MOVE A,ADR5+2	;STAT0
+	MOVE B,ADR6+2
+	SUB B,A
+	AOS B
+	CALL NEEDA
+	MOVEM A,ADR5+3
+
+	MOVE A,ADR7+2	;.NCT0 AGAIN, BUT...
+	ADD A,OFF7+2	;OFFSET = NTPSTI THIS TIME
+	CALL NEEDC
+	MOVEM A,ADR7+3
+
+	MOVE A,ADR8+2	;.NCT1
+	 JUMPE A,NONE2	;IT IS UNDEFINED
+	ADD A,OFF7+2
+	CALL NEEDC
+	MOVEM A,ADR8+3
+NONE2:
+
+	MOVE A,ADR9+2	;NETHTB
+	MOVE B,LEN9+2
+	CALL NEEDA
+	MOVEM A,ADR9+3
+
+	MOVE A,ADR10+2	;NETGWY
+	MOVE B,LEN9+2
+	CALL NEEDA
+	MOVEM A,ADR10+3
+
+	MOVE A,ADR11+2	;GWTAB
+	MOVE B,LEN11+2	;LENGTH OF LIST
+	MOVE C,SIZ11+2	;SIZE OF EACH BLOCK
+	CALL NEEDD
+	MOVEM A,ADR11+3
+> ; end of repeat 0
+
+	SETZB D,G		; Beginning of SNPTAB and NEDTAB
+INILUP:	MOVE F,SNPTAB+.F(D)	; Flags and function
+
+	TXNN F,F.S		; Need to SNOOP?
+	  JRST NOSNP		; No
+	MOVE B,SNPTAB+.N(D)	; RAD50 name of symbol
+	SKIPA C,SNPTAB+.M(D)	; First, try RAD50 module of symbol
+SNPL:	  SETZ C,		; Second, try any module
+	MOVEI A,.SNPSY		; SNOOP symbol's value
+	SNOOP
+	 TRNA			; Error
+	  JRST SNPV		; Success
+	JUMPN C,SNPL		; Try any module if haven't already done so
+
+	HRROI B,[ASCIZ \Symbol "\]
+	CALL DOSOUT
+	MOVEI A,.PRIOU
+	MOVE B,SNPTAB+.N(D)
+	CALL PNTR50
+	HRROI B,[ASCIZ \" SNOOP lookup failed\]
+	CALL DOSOUT
+	CALL CRLF
+	JRST NOSNP		; Use default
+
+SNPV:	MOVEM B,SNPTAB+.V(D)	; Save symbol's value
+NOSNP:
+
+	TXNN F,F.P		; Need to PEEK contents?
+	  JRST NOPEK		; No
+
+	TXNN F,F.I		; Indirection needed?
+	 SKIPA A,SNPTAB+.V(D)	; No
+	  MOVE A,@SNPTAB+.V(D)	; Yes
+	JUMPE A,BADPEK		; Stop if get address of zero (end of chain)
+	MOVE B,@SNPTAB+.O(D)	; Possible offset
+	ADD A,B			; Address to be PEEKed
+	HRLI A,1		; Want single word
+	MOVEI B,SNPTAB+.C(D)	; Where to store the contents
+	PEEK
+	  JRST BADPEK			; Error
+	JRST NOPEK		; Ok
+
+BADPEK:	SETZM SNPTAB+.C(D)	; Pretend saw zero
+	TXO F,F.E		; Error
+NOPEK:
+
+	TXNN F,F.G		; "PEEK" outside monitor section?
+	  JRST NOGET		; No
+
+;SNP(GW    ,      ,GWTAB+.C,MAXGWA+.V,        ,GWBKSZ+.V,nt,F.G+F.I+NEEDD)
+;    name  ,module,datum   ,offset   ,contents,length   ,g ,flag+funtion
+
+	MOVE A,@SNPTAB+.O(D)	; "Offset" has table length
+	CAILE A,1001		; Does list cover at most 2 pages?
+	  JRST ND1ERR		; No, error
+	MOVEM A,NEEDDL		; Save length
+
+	TXNN F,F.I		; Indirection needed?
+	 SKIPA B,SNPTAB+.V(D)	; No
+	  MOVE B,@SNPTAB+.V(D)	; Yes
+	MOVEM B,NEEDDA		; save address of list
+
+	HLRZ C,B		; Section number
+	SKIPN C
+	  MOVE C,MSEC1+.V	; section 0 is really 1
+	CAIN C,MSEC1+.V
+	  JRST NEEDD1		; List is in section 1
+	CAME C,MNTSEC+.V	; Value of symbol "MNTSEC"
+	  JRST ND2ERR		; Improper section, not 1 or MNTSEC
+	SKIPA A,MNTSEC+.C;MSISPT	; SPT for MNTSEC
+NEEDD1:	  MOVE A,MSEC1+.C;MS1SPT	; SPT for section one
+	HRLZS A
+	HRRZS B			; Discard list's section number, if any
+	LSH B,-9		; Get page number where list begins
+	HRR A,B			; Build "SPT,,PAGE"
+	MOVEI B,WINDOW		; Use window
+	CALL GTMCHK		; Map in (first) page
+
+	SETZM NEEDDF		; Clear 2nd page flag
+	HRRZ C,NEEDDA		; Address of list
+	ADD C,NEEDDL		; Plus length of list
+	SOS C			; Last address of list
+	LSH C,-9		; Page number where list ends
+	CAIN C,(A)		; Same as page where list begins?
+	  JRST NEEDD2		; Yes -- need only the page we already have
+	AOS NEEDDF		; No -- need a second page, set the flag
+	AOS A
+	TRNE A,777000		; Next page number beyond section end?
+	  JRST ND3ERR		; Yes, list crosses a section boundary
+	ADDI B,1000		; Second page in WINDOW
+	CALL GTMCHK		; Map in second page
+NEEDD2:	jfcl
+NOGET:
+
+	TXNN F,F.I		; Indirection needed?
+	 SKIPA A,SNPTAB+.V(D)	; No
+	  MOVE A,@SNPTAB+.V(D)	; Yes
+	MOVE B,@SNPTAB+.L(D)	; Length
+	TXNN F,F.E		; Error?
+	 TRNN F,-1		; Have a NEEDx routine?
+	  TDZA A,A		; Error or none needed, return 0
+	   CALL (F)		; Call NEEDx routine
+	MOVEM A,SNPTAB+.T(D)	; <-cnt,,first g> for NEDTAB, or 0 if none
+
+	ADDI D,SNPTEL		; Move to next SNPTAB entry
+	SKIPE SNPTAB+.N(D)	; Have another entry?
+	  JRST INILUP		; Yes, back for it
+
+	MOVEM G,SAVEDG
+	JRST GTM
+
+
+
+ERROR:	CALL DOSOUT
+	CALL CRLF
+	HALTF
+	JRST BEG
+
+GMEERR: HRROI B,[ASCIZ \GTHST of self failed\]
+	JRST ERROR
+
+CAPERR:	HRROI B,[ASCIZ \Cannot enable WHEEL capability\]
+	JRST ERROR
+
+;NEED- ROUTINES ADD ELEMENTS TO NEDTAB, DESCRIBING BLOCKS TO MAP.
+;IN ALL NEED-, <G> = POINTER INTO NEDTAB WHERE NEXT ENTRY GOES
+;AND RETURN VALUE <A> = -<NEDTAB ENTRIES MADE>,,<G VALUE OF FIRST>
+
+;NEEDA ARGS ARE <A> = ADDRESS OF START OF BLOCK NEEDED, <B> = LENGTH
+;EXAMPLE USE: "RFNTAB"
+
+NEEDE:	SUB B,A			; End address - start
+
+NEEDA:	TLNN A,37		; Section is zero?
+	  HRL A,MSEC1+.V	; Yes, assume it's really 1
+	MOVEM A,NEDTAB(G)
+	MOVEM B,NEDTAB+1(G)
+	SETZM NEDTAB+2(G)
+	HRRO A,G		; Only one block is NEEDed
+	ADDI G,NEDTEL
+	CAIL G,NEDSIZ*NEDTEL
+	  JRST NAERR
+	RET			; Done
+
+NAERR:	HRROI B,[ASCIZ \Too many blocks NEEDed\]
+	JRST ERROR
+
+
+
+;NEEDB ARGS ARE <A> = INDIRECT ADDRESS OF BLOCK NEEDED, <B> = LENGTH
+;EXAMPLE USE: NONE
+
+NEEDB:	MOVE A,SNPTAB+.C(D)	; Contents has address
+	JRST NEEDA		; Now have NEEDA situation
+
+NBERR:	HRROI B,[ASCIZ \Un-peekable section wanted\]
+	JRST ERROR
+
+
+;NEEDC ARG IS <A> = ADDRESS OF -length,,<real address>
+;EXAMPLE USE: "NCT0A"
+
+NEEDC:	SETZ A,
+	SKIPGE B,SNPTAB+.C(D)	; Contents has -length,,<real address>
+	 CAMN B,[-1]
+	  RET			; Error, return none needed
+	HLROS B
+	MOVNS B			; Positive length
+	CAILE B,0
+	 CAIL B,<NPAGES*1000>
+	  RET			; Error, return none needed
+	HRRZ A,SNPTAB+.C(D)	; Section 0/1 address
+	JRST NEEDA		; Now have NEEDA situation
+
+;NEEDF ARG IS <A> = ADDRESS OF -length,,<real address>
+;EXAMPLE USE: "NCT0G"
+
+NEEDF:	SETZ A,
+	TXNE F,F.I		; Value indirect?
+	 SKIPA C,@SNPTAB+.V(D)	; Yes (therefore .V .ne. 0)
+	  MOVE C,SNPTAB+.V(D)	; No (zero if none)
+	SKIPGE C
+	 CAMN C,[-1]		; Value has -length,,<real address>
+	  RET			; Error, return none needed
+	HLRO B,C
+	MOVNS B			; Positive length
+	CAILE B,0
+	 CAIL B,<NPAGES*1000>
+	  RET			; Error, return none needed
+	HRRZ A,C		; Section 0/1 address
+
+	MOVE C,@SNPTAB+.O(D)	; Get offset
+	ADD A,C			; Add in offset
+	SUB B,C			; Reduce length accordingly
+	JRST NEEDA		; Now have NEEDA situation
+
+
+;NEEDD ARGS ARE <A> = INDIRECT ADDRESS OF LIST OF ADDRESSES OF BLOCKS,
+;swap;<B> = LENGTH OF LIST, <C> = SIZE (= LENGTH) OF EACH BLOCK
+;EXAMPLE OF USE: "GWTAB"
+
+NEEDD:
+;	MOVEM B,NEEDDL	;SAVE LENGTH OF LIST
+;	MOVEM C,NEEDDS	;SAVE SIZE OF EACH BLOCK
+	MOVEM B,NEEDDS	;SAVE SIZE OF EACH BLOCK
+repeat 0,<
+	CAILE B,1001	;DOES LIST COVER AT MOST 2 PAGES?
+	 JRST ND1ERR	;PERHAPS NOT
+	TLNE A,777776
+	 JRST NBERR
+	HRLI A,1
+	MOVEI B,B	;READ ADDRESS OF LIST INTO B
+	PEEK
+	 JRST PEKERR
+	MOVEM B,NEEDDA	;SAVE ADDRESS OF LIST
+	HLRZ C,B	;SECTION NUMBER
+	SKIPN C
+	 MOVEI C,1	;SECTION 0 IS REALLY 1
+	CAIN C,1
+	 JRST NEEDD1	;LIST IS IN SECTION 1
+	CAME C,MNTSEC+.V	;VALUE OF SYMBOL "MNTSEC"
+	 JRST ND2ERR	;IMPROPER SECTION, NOT 1 OR MNTSEC
+	SKIPA A,MNTSEC+.C;MSISPT	;SPT FOR MNTSEC
+NEEDD1:	MOVE A,MSEC1+.C;MS1SPT	;SPT FOR SECTION ONE
+	HRLZS A
+	HRRZS B		;DISCARD LIST'S SECTION NUMBER, IF ANY
+	LSH B,-9	;GET PAGE NUMBER WHERE LIST BEGINS
+	HRR A,B		;BUILD "SPT,,PAGE"
+	MOVEI B,WINDOW	;USE THIS WHILE IN NEEDD
+	CALL GTMCHK
+	SETZM NEEDDF	;CLEAR 2ND PAGE FLAG
+	HRRZ C,NEEDDA	;ADDRESS OF LIST
+	ADD C,NEEDDL	;PLUS LENGTH OF LIST
+	SOS C		;LAST ADDRESS OF LIST
+	LSH C,-9	;PAGE NUMBER WHERE LIST ENDS
+	CAIN C,(A)	;SAME AS PAGE WHERE LIST BEGINS?
+	 JRST NEEDD2	;YES -- NEED ONLY THE PAGE WE GOT
+	AOS NEEDDF	;NO -- NEED A SECOND PAGE, SET THE FLAG
+	AOS A
+	TRNE A,777000	;NEXT PAGE NUMBER BEYOND SECTION END?
+	 JRST ND3ERR	;YES, LIST CROSSES A SECTION BOUNDARY
+	ADDI B,1000	;SECOND PAGE IN WINDOW
+	CALL GTMCHK
+NEEDD2:
+> ; End of repeat 0
+
+	MOVN R,NEEDDL		; -<Length of list>
+	HRLZS R			; Making AOBJN pointer
+	HRR R,NEEDDA		; Address of list
+	TRZ R,777000		; Discard page, making offset in user space
+	MOVEM G,NEEDDG		; Save NEDTAB pointer before any change
+
+NEEDD3:	MOVE B,NEEDDS		; Size (= length) of each block NEEDed
+	SKIPLE A,WINDOW(R)	; Address of block NEEDed, if any
+	  CALL NEEDA		; Now have a NEEDA situation
+	AOBJN R,NEEDD3		; Scan through list of blocks NEEDed
+
+	MOVEI A,0
+	MOVEI B,WINDOW
+	CALL GTMCHK		; Unmap the first window page where list is
+	SKIPN NEEDDF		; Did we map another page?
+	  JRST NEEDD4		; No
+	ADDI B,1000		; Yes, ought to unmap it too
+	CALL GTMCHK
+NEEDD4:
+	MOVE A,NEEDDG		; Compute change in NEDTAB pointer
+	SUB A,G
+	IDIVI A,NEDTEL
+	HRLZS A
+	HRR A,NEEDDG	; -<Count of NEDTAB entries>,,<Pointer to first>
+	RET
+
+
+ND1ERR:	HRROI B,[ASCIZ \List of blocks to map too long\]
+	JRST ERROR
+
+ND2ERR:	HRROI B,[ASCIZ \Attempt to map from improper section\]
+	JRST ERROR
+
+ND3ERR:	HRROI B,[ASCIZ \List of blocks crosses section boundary\]
+	JRST ERROR
+
+
+;VARIABLES LOCAL TO NEEDD ROUTINE
+NEEDDA:	0	;ADDRESS OF LIST OF ADDRESSES OF BLOCKS
+NEEDDF:	0	;FLAG, 0 = NO SECOND WINDOW PAGE NEEDED
+NEEDDG:	0	;NEDTAB POINTER (<G>) BEFORE IT CHANGES
+NEEDDL:	0	;LENGTH OF LIST (SAVED ARG <B>)
+NEEDDS:	0	;SIZE OF EACH BLOCK (SAVED ARG <C>)
+
+
+
+; GTMCHK prints GTMPG args for manual inspection and does the GTMPG
+
+GTMCHK:	SKIPE MODE			; Normal mode?
+	  RET				; No
+	SKIPN GTMENB
+	  JRST GTMGET
+	PUSH P,A
+	PUSH P,B
+	PUSH P,C
+	HRROI B,[ASCIZ \  GTMPG  A[ \]
+	CALL DOSOUT
+	MOVE B,-2(P)
+	CALL DONOUT
+	HRROI B,[ASCIZ \  B[ \]
+	CALL DOSOUT
+	MOVE B,-1(P)
+	CALL DONOUT
+	CALL CRLF
+	DOBE		;<A> = OUTPUT JFN FROM CRLF
+	POP P,C
+	POP P,B
+	POP P,A
+GTMGET:	GTMPG
+	 JRST GTMERR
+	RET
+
+
+PEKERR:	HRROI B,[ASCIZ \PEEK failed\]
+	JRST ERROR
+
+
+;NOW MAP IN ONLY AS MANY MONITOR PAGES AS ABSOLUTELY NEEDED
+;NOTE -- C, D, E AND F CONTAIN <SECTION NUMBER>,,ADDRESS
+;C - Possible address/page
+;E - Next needed address/page, greater than C
+;D - Lowest needed page
+;F - End address of current NEDTAB entry
+
+GTM:	SETZM MAPCNT	;NO PAGES MAPPED YET
+
+	MOVEI C,0	;FIRST PAGE TO CONSIDER ACCEPTING
+GTM1:	HRLOI D,377777	; +infinity in case all NEDTAB entries satisfied
+
+	MOVEI G,0	;SCAN NEDTAB to GET NEXT NEEDED PAGE
+GTM2:	MOVE E,NEDTAB(G)	;START OF BLOCK
+	MOVE F,E
+	ADD F,NEDTAB+1(G)	;PLUS LENGTH
+	SOS F		;LAST ADDR OF BLOCK
+	CAMLE C,F	;BLOCK ENDS BELOW CURRENT ACCEPT PAGE?
+	 JRST GTM3	;YES, THIS BLOCK IS ALREADY SATISFIED
+	CAMGE E,C	; E=max(C,E) GET FIRST PAGE NEEDED AND ACCEPTABLE
+	 MOVE E,C
+	CAMLE D,E	; D=min(E,D) GET LOWEST SUCH PAGE OVER ALL BLOCKS
+	 MOVE D,E
+GTM3:	ADDI G,NEDTEL	;TO NEXT NEDTAB ENTRY
+	CAME G,SAVEDG	;DONE?
+	  JRST GTM2	;NO, CONTINUE
+
+	TLNE D,200000	;ANY MORE PAGES NEEDED?
+	  JRST GTM7	;NO
+	MOVE C,D	;YES
+	ANDCMI C,777	;MOVE NEXT ADDR ONTO PAGE BOUNDARY
+
+	MOVEI G,0	;SCAN NEDTAB FOR BLOCKS STARTING IN THIS PAGE
+GTM4:	MOVE E,NEDTAB(G)	;BOTTOM ADDR OF BLOCK NEEDED
+	MOVE B,C
+	ADDI B,777	;TOP OF CURRENT PAGE
+	CAMG C,E	;PAGE START VERSUS BLOCK START
+	 CAMGE B,E	;PAGE END VERSUS BLOCK START
+	  JRST GTM5	;START OF BLOCK IS NOT IN THIS PAGE
+	MOVE B,MAPCNT	;BLOCK STARTS IN THIS PAGE!
+	LSH B,9
+	ADD B,NEDTAB(G)
+	SUB B,C
+	MOVEM B,NEDTAB+2(G)	;OFFSET INTO TABLES IN USER SPACE
+GTM5:	ADDI G,NEDTEL	;TO NEXT NEDTAB ENTRY
+	CAME G,SAVEDG
+	 JRST GTM4	;LOOK FOR MORE BLOCKS STARTING IN CURRENT PAGE
+
+			; Map in page specified by C
+	HLRZ A,C	;CURRENT SECTION NUMBER
+	SKIPN A		;SECTION ZERO?
+	  MOVE A,MSEC1+.V;1	;YES, ASSUME IT'S REALLY 1
+	CAMN A,MSEC1+.V;1	;SECTION 1?
+	  JRST GTM6	;YES
+	CAME A,MNTSEC+.V;ISEC+2	;INTERNET SECTION?
+	  JRST GTSERR	;NO
+	SKIPA B,MNTSEC+.C;MSISPT
+GTM6:	  MOVE B,MSEC1+.C;MS1SPT
+	HRRZ A,C	;CURRENT ADDRESS
+	LSH A,-9	;GET MONITOR PAGE NUMBER
+	HRL A,B		;BUILD "SPT,,PAGE"
+	MOVE B,MAPCNT
+	CAIL B,NPAGES	;MORE ROOM AVAILABLE?
+	 JRST CNTERR	;NO
+	LSH B,9
+	ADDI B,WINDOW
+	CALL GTMCHK
+	AOS MAPCNT
+
+	ADDI C,1000	;CONSIDER NEXT PAGE
+	JRST GTM1
+
+
+GTM7:	MOVEI A,0	;FUNCTION = GET SIZE AND LOCAL HOST
+	GTHST
+	 JRST GMEERR
+	MOVE A,D
+	CALL BLDRFT
+	  MOVEM A,RFNTST
+
+	HRROI B,[ASCIZ \READY
+\]
+	CALL DOSOUT
+	JRST MAIN			; Initialization all done
+
+GTMERR:	HRROI B,[ASCIZ \GTMPG JSYS FAILED\]
+	JRST ERROR
+
+CNTERR:	HRROI B,[ASCIZ \TOO MANY PAGES NEED MAPPING\]
+	JRST ERROR
+
+GTSERR:	HRROI B,[ASCIZ \MAPPING FROM IMPROPER SECTION\]
+	JRST ERROR
+
+BKJERR:	HRROI B,[ASCIZ \BKJFN FAILED\]
+	JRST ERROR
+
+MAIN:	PBIN		;MAIN WAIT LOOP
+	ANDI A,177
+	CAIL A,141	;a
+	CAILE A,172	;z
+	SKIPA
+	SUBI A,40	;CONVERT TO UPPER CASE
+	CAIN A,12	;LF
+	 JRST MAIN	;IGNORE -- LIKELY FROM A CR
+	CAIN A,15	;CR
+	 JRST MAIN	;IGNORE
+	CAIN A,57	;/
+	 JRST PSTAT
+	CAIN A,76	;>
+	 JRST DOSNAP
+	CAIN A,77	;?
+	 JRST MENU
+	CAIN A,105	;E
+	 JRST EXIT
+	CAIN A,107	; Gateway status
+	 JRST GATWAY
+	CAIN A,"M"	; Map
+	 JRST GUIDE
+	CAIN A,116	;N
+	 JRST NEXT
+	CAIN A,122	;R
+	 JRST ROUTE
+	CAIN A,123	;S
+	 JRST SETRFN
+	CAIN A,176	;~
+	 JRST TCBPNT
+	CAIN A,"X"	;X - Transmission Rate
+	 JRST XRATE
+	CAIL A,101	;A
+	 CAILE A,132	;Z
+	  SKIPA
+	   JRST FAKSYM	;AN UNRECOGNIZED LETTER, MAYBE MEANT /CHAR
+	HRROI B,[ASCIZ \  ?
+\]
+	CALL DOSOUT
+	JRST MAIN
+
+;MENU COMMAND PRINTS A COMMAND MENU
+MENU:	HRROI B,[ASCIZ %  > = take snapshot
+  / = print status of symbol, optional +offset or ,limit
+      end with / = 2-dimensional, \ = 2-D with 1822 text,
+      | = histogram by value
+  ~ = print TCB
+  E = exit, releasing resources
+  G = print gateway information
+  M = print guide map
+  N = next (/sym+) offset
+  R = print route
+  S = set RFNTST
+  X = transmission time, optional NCT number (defaults to 0)
+%]
+	CALL DOSOUT
+	JRST MAIN
+
+;N (NEXT) COMMAND IS LIKE PRINT-STATUS-OF-SYMBOL COMMAND,
+;BUT INCREMENTS THE WORD OFFSET BY ONE, THEN USES SAME VALUES
+;OF SYMBOL AND TERMINATOR CHARACTER AS PREVIOUS COMMAND
+NEXT:	AOS PSTATD
+	JRST PSTAT6
+
+;FAKSYM COMMAND PRETENDS USER TYPED A PRINT-STATUS-OF-SYMBOL
+;COMMAND CHARACTER (/) BEFORE THE LETTER HE REALLY TYPED
+
+FAKSYM:	MOVE D,A	;SAVE THE CHAR
+	MOVEI A,100	;BACK UP TO RE-READ THE CHAR
+	BKJFN
+	 JRST BKJERR
+	HRROI B,[ASCIZ \  /  symbol: \]	;REMIND USER OF "/" COMMAND
+	CALL DOSOUT
+	MOVE A,D
+	PBOUT		;ECHO THE CHAR AGAIN (PBIN DOESN'T)
+	JRST PSTAT0
+
+
+;PRINT-STATUS-OF-SYMBOL COMMAND ACCUMULATES SYMBOL, OPTIONAL
+;OFFSET, AND TERMINATOR, EVLAUATES THE SYMBOL, AND PRINTS THE
+;CONTENTS AS A STRUCTURE SPECIFIED BY THE TERMINATOR
+
+PSTAT:	HRROI B,[ASCIZ \  symbol: \]
+	CALL DOSOUT
+PSTAT0:	SETZM PSTATB
+	SETZM PSTATD
+	SETOM PSTATN
+	SETZM PSTATT
+	MOVE D,[440700,,PSTATB]	;TO ACCUMULATE SYMBOL
+PSTAT1:	PBIN
+	CAIN A,15	;CR
+	 PBIN		;READ THE LF
+	ANDI A,177
+	CAIL A,141	;a
+	CAILE A,172	;z
+	SKIPA
+	SUBI A,40	;CONVERT TO UPPER CASE
+	CAIL A,101	;A
+	 CAILE A,132	;Z
+	 SKIPA
+	 JRST PSTAT3	;SYMBOL CHAR
+	CAIL A,60	;0
+	 CAILE A,71	;9
+	 SKIPA
+	 JRST PSTAT3
+	CAIN A,44	;$
+	 JRST PSTAT3
+	CAIN A,45	;%
+	 JRST PSTAT3
+	CAIN A,53	;+
+	 JRST PSTAT4
+	CAIN A,54	;,
+	 JRST PSTA01
+	CAIN A,56	;.
+	 JRST PSTAT3
+PSTA02:			;ONLY TERMINATORS ARE VALID NOW
+	CAIE A,12	;LF
+	 CAIN A,15	;CR
+	 JRST PSTAT5	;TERMINATOR CHAR
+	CAIE A,33	;ESC
+	 CAIN A,40	;SPACE
+	 JRST PSTAT5
+	CAIE A,57	;/
+	 CAIN A,134	;\
+	 JRST PSTAT5
+	CAIN A,174	;|
+	 JRST PSTAT5
+PSTAT2:
+ABORT:	HRROI B,[ASCIZ \  ...aborted
+\]
+	CALL DOSOUT
+	MOVEI A,-1	;CONTROLLING TERMINAL
+	CFIBF
+	MOVEI P,PDL-1	;IN CASE ABORTED FROM LOWER LEVEL
+	JRST MAIN
+
+;<A> = NEW CHAR TO APPEND TO SYMBOL
+
+PSTAT3:	TLNE D,700000	;SKIP AFTER 5TH CHAR
+	 IDPB A,D
+	JRST PSTAT1	;GET ANOTHER CHAR
+
+;TERMINATOR IS ","
+
+PSTA01:	MOVEI A,100	;READ NUMBER OF ENTRIES USER WANTS
+	MOVEI C,12
+	NIN
+	 JRST ABORT
+	MOVEM B,PSTATN
+	BKJFN		;WANT TO RE-READ TERMINATOR
+	 JRST BKJERR
+	PBIN
+	JRST PSTA02	;CHECK VALIDITY OF TERMINATOR
+
+;TERMINATOR IS "+"
+
+PSTAT4:	MOVEI A,100	;GET SYMBOL + DISPLACEMENT
+	MOVEI C,12	;DISPLACEMENT IS DECIMAL
+	NIN
+	 JRST PSTAT2	;BAD TYPEIN
+	MOVEM B,PSTATD
+	BKJFN		;WANT TO RE-READ TERMINATOR
+	 JRST BKJERR
+	PBIN		;SO CAN SAVE IT...
+	CAIN A,54	;,
+	 JRST PSTA01	;...OR IT MAY SIGNAL A LIMIT ARG
+PSTAT5:	MOVEM A,PSTATT
+	SKIPE PSTATB	;NULL ARGUMENT SYMBOL NAME?
+	 JRST PSTAT6	;NO, PROCEED NORMALLY
+	MOVE A,PSTABB	;YES, DEFAULT TO PRIOR NAME, OFFSET AND LIMIT
+	MOVEM A,PSTATB
+	MOVE A,PSTADD
+	MOVEM A,PSTATD
+	MOVE A,PSTANN
+	MOVEM A,PSTATN
+	MOVEI A,.PRIOU	;AND PRINT IT FOR USER
+	HRROI B,PSTATB
+	MOVEI C,5
+	SOUT
+	SKIPN PSTATD	;ANY DISPLACEMENT?
+	 JRST PSTA05	;NO
+	MOVEI B,53	;+
+	BOUT
+	MOVE B,PSTATD
+	CALL PRNDEC	;PRINT THE DISPLACEMENT
+PSTA05:	SKIPGE PSTATN	;ANY LIMIT?
+	 JRST PSTA06	;NO
+	MOVEI B,54	;,
+	BOUT
+	MOVE B,PSTATN
+	CALL PRNDEC	;PRINT THE LIMIT
+PSTA06:	MOVE B,PSTATT	;PRINT TERMINATOR AGAIN
+	BOUT
+PSTAT6:	MOVE A,PSTATB	;SAVE SYMBOL, OFFSET AND LIMIT
+	MOVEM A,PSTABB
+	MOVE A,PSTATD
+	MOVEM A,PSTADD
+	MOVE A,PSTATN
+	MOVEM A,PSTANN
+
+;PSTATB, PSTATD AND PSTATT ARE SET UP, NOW EVALUATE THE SYMBOL
+
+	MOVE A,[TCP%ST!TCP%SY!TCP%SD!TCP%SL!<TCP%IX+1>]
+	HRROI B,PSTATB
+	HRROI C,E	;WHERE TO PUT BYTE PNTR
+	MOVEI D,F	;WHERE TO PUT VECTOR LENGTH OF SYMBOL
+	STAT
+	 JRST PSTAT8
+		;NOTE -- BYTE PNTR RETURNED BY STAT ASSUMES
+		;<13> = POINTER TO "STAT0" IN MEMORY
+		;SO HAVE TO SET UP <13>, WHICH = U
+		;OR <14> = POINTER INTO "TCB" IN MEMORY
+		;SO HAVE TO SET UP <14>, WHICH = X
+	LDB A,[220400,,E]	;INDEX FIELD IN BYTE POINTER
+	CAIN A,13	;A LOCATION IN STAT0?
+	 JRST PSTA03	;NO, A TCB LOCATION
+	MOVE X,TCBADR	;TCB ADDRESS
+	ANDI X, 777	;OFFSET IN PAGE
+	ADDI X,TCBWIN	;START OF WINDOW
+	ADD X,PSTATD	;DISPLACEMENT TYPED BY USER
+	SKIPE TCBFLG
+	 JRST PSTA04
+	HRROI B,[ASCIZ \
+ TCB SYMBOL BUT NO TCB MAPPED\]
+	CALL DOSOUT
+	JRST ABORT
+
+PSTA03:	MOVE U,STAT0+.T;ADR5+3	;"STAT0" NEDTAB PNTR
+	MOVE U,NEDTAB+2(U)	;OFFSET IN USER SPACE
+	ADDI U,SNAP	;ACTUAL ADDRESS
+	ADD U,PSTATD	;DISPLACEMENT TYPED BY USER
+	MOVEI A,(E)	;OFFSET OF SYMBOL INTO STAT0
+	ADD A,STAT0+.V;ADR5+2	;VALUE OF STAT0
+	ADD A,PSTATD	;AND DISPLACEMENT FROM STAT0
+	CAMLE A,STATZZ+.V;ADR6+2	;VALUE OF STATZZ
+	  JRST PSTAT9	;OUT OF RANGE STAT0-TO-STATZZ
+PSTA04:	MOVE A,PSTATT	;DID TERMINATOR SIGNAL A 2-D PRINTOUT?
+	CAIE A,57	;/
+	 CAIN A,134	;\
+	  JRST P2D	;YES, GO PRINT IT SPECIALLY
+	CAIN A,174	;|
+	  JRST PHV	;OR HISTOGRAM BY VALUE PRINTOUT
+
+	SUB F,PSTATD	;REDUCE LENGTH BY OFFSET WHERE PRINTING STARTS
+	SKIPG F		;Print at least one entry
+	  MOVEI F,1
+	SKIPL PSTATN	;User specified number of entries to be printed
+	 CAMG F,PSTATN
+	  TRNA		;None specified by user, list rest of entry
+	   MOVE F,PSTATN ;Stop after user specified limit
+
+	SKIPL PSTATN	;DID USER LIMIT NUMBER OF ENTRIES?
+	  MOVE F,PSTATN	;YES, PRINT ONLY THAT MANY
+
+PSTAT7:	HRROI B,[ASCIZ \   \]
+	CALL DOSOUT
+	CALL PSPRIN	;PRINT THE VALUE
+	TLNN E,1	;CHEAP "AC FIELD = 13 OR 14?"
+	  JRST PSTA10	;14, SO TCB SYMBOL, SO SKIP PRINTING DELTA
+	HRROI B,[ASCIZ \   [\]
+	CALL DOSOUT
+	ADD U,[DELTA-SNAP]	;ADJUST POINTER TO POINT AT DELTA
+	CALL PSPRIN	;PRINT THE DELTA VALUE
+	SUB U,[DELTA-SNAP]	;UN-ADJUST IN CASE MORE ELEMENTS LEFT
+	HRROI B,[ASCIZ \]\]
+	CALL DOSOUT
+PSTA10:	CALL CRLF
+	SOSG F		;MORE ELEMENTS LEFT IN SYMBOL'S VECTOR?
+	 JRST MAIN	;NO
+	IBP E		;YES, MOVE TO NEXT ELEMENT
+	MOVEI A,-1	;CONTROLLING TERMINAL
+	SIBE
+	 JRST ABORT	;ANY CHAR ABORTS VECTOR PRINT
+	JRST PSTAT7
+
+PSTAT8:	HRROI B,[ASCIZ \  undefined?
+\]
+	CALL DOSOUT
+	JRST MAIN
+
+PSTAT9:	HRROI B,[ASCIZ \  out of sampled range
+\]
+	CALL DOSOUT
+	JRST MAIN
+
+;PSPRIN PRINTS CONTENTS OF ONE ELEMENT OF A STRUCTURE.
+;<E> = RESULT OF SYMBOL EVALUATION, RESULT OF STAT JSYS, LDB PNTR.
+;<U> = TCPEEK MEMORY SPACE ADDRESS OF STAT0, SINCE <E> INDEXES BY U.
+
+PSPRIN:	LDB B,E		;PRINT IT AS OCTAL
+	HLRZS B		;PRINT AS L.H.,,R.H.
+	JUMPE B,PSPRN1	;UNLESS L.H. = 0
+	CALL DONOUT
+	HRROI B,[ASCIZ \,,\]
+	CALL DOSOUT
+PSPRN1:	LDB B,E
+	HRRZS B
+	CALL DONOUT
+	HRROI B,[ASCIZ \ = \]
+	CALL DOSOUT
+	MOVEI A,.PRIOU	;AND PRINT IT AS DECIMAL
+	LDB B,E
+	MOVEI C,12
+	NOUT
+	 0
+	MOVEI B,56	;.
+	BOUT
+	RET
+
+PHV:	LDB A,E		;FIRST ENTRY = NUMBER OF BINS
+	LSH A,1		;GET NUMBER OF WORDS
+	ADDI A,3	;PLUS HEADER
+	CAMN A,F	;= VECTOR LENGTH?
+	 JRST PHV1	;YES
+	HRROI B,[ASCIZ \
+WARNING! \]
+	CALL DOSOUT
+	LDB B,E
+	CALL PRNDEC
+	HRROI B,[ASCIZ \ bins, but vector length is \]
+	CALL DOSOUT
+	MOVE B,F
+	CALL PRNDEC
+	CALL CRLF
+PHV1:	CALL PRNHVH	;Print Histogram Vector Header
+	SUBI F,3	;HEADER 3 WORDS DONE
+PHV2:	HRROI B,[ASCIZ \   \]
+	CALL DOSOUT
+	ILDB B,E	;COUNTS IN THE BIN
+	CALL PRNDEC
+	HRROI B,[ASCIZ \   [\]
+	CALL DOSOUT
+	ADD U,[DELTA-SNAP]
+	LDB B,E		;DELTA COUNTS IN THE BIN
+	CALL PRNDEC
+	SUB U,[DELTA-SNAP]
+	HRROI B,[ASCIZ \]   \]
+	CALL DOSOUT
+	ILDB B,E	;VALUE OF THE BIN LIMIT
+	CALL PRNDEC
+	CALL CRLF
+	SUBI F,2	;COUNTS, VALUE = 2 WORDS
+	JUMPLE F,MAIN	;JUMP IF DONE
+	MOVEI A,-1	;CONTROLLING TERMINAL
+	SIBE
+	 JRST ABORT	;ANY CHAR ABORTS PRINTOUT
+	JRST PHV2	;DO NEXT ENTRY
+
+;VARIABLES LOCAL TO PSTAT COMMAND SERVICE ROUTINE
+PSTATB:	0	;ASCII OF SYMBOL TO GET STATUS OF
+PSTATD:	0	;DISPLACEMENT TO ADD TO VALUE OF SYMBOL
+PSTATN:	0	;NUMBER OF ENTRIES TO PRINT
+PSTATT:	0	;TERMINATOR CHARACTER
+PSTABB:	0	;PRIOR VALUE OF PSTATB
+PSTADD:	0	;PRIOR VALUE OF PSTATD
+PSTANN:	0	;PRIOR VALUE OF PSTATN
+
+;P2D PRINTS A STRUCTURE AS A TWO-DIMENSIONAL VECTOR.
+;IT IS CALLED FROM PSTAT, WHEN THE TERMINATOR CHARACTER TYPED
+;BY THE USER SPECIFIES A 2-D STRUCTURE.  IT FUDGES ARGUMENTS
+;AROUND SO IT CAN USE MOST OF DONCT ROUTINE.
+P2D:	SUBI U,SNAP	;UNDO OFFSET IN PSTAT ROUTINE
+	ADDI U,(E)	;ADD IN OFFSET IN STAT JSYS LDB PNTR
+	MOVE S,U	;MOVE TO WHERE DONCT WANTS IT
+	HRRZ T,STAT0+.T	;STAT0 NEDTAB PNTR
+	MOVN R,NEDTAB(T)	;MONITOR SPACE VALUE OF STAT0
+	ADD R,NEDTAB+2(T)	;USER SPACE INDEX OF STAT0
+	SETZM PNTTF
+	MOVE A,PSTATT
+	CAIE A,134	;\ AS TERMINATOR = PERMIT TEXT STRINGS
+	 SETOM PNTTF	;OTHER TERMINATOR (/) = SUPPRESS TEXT
+	CALL CRLF
+	CALL DONCT1
+	 JRST ABORT	;USER ABORTED PRINTOUT
+	JRST MAIN
+
+; Print Histogram Vector Header
+; Called with E pointing to the first word, E to point to last word
+;  upon return
+PRNHVH:	CALL CRLF
+	LDB B,E			;Get the number of bins
+	CALL PRNDEC
+	CALL PRNHV0		;Print the difference
+	HRROI B,[ASCIZ /Bins, /]
+	CALL DOSOUT
+	ILDB B,E		;Get the sum of the bins
+	CALL PRNDEC
+	CALL PRNHV0		;Print the difference
+	HRROI B,[ASCIZ /Sum, /]
+	CALL DOSOUT
+	ILDB B,E		;Get the count of the number of times called
+	CALL PRNDEC
+	CALL PRNHV0		;Print the difference
+	HRROI B,[ASCIZ /Count /]
+	CALL DOSOUT
+	CALLRET CRLF
+
+PRNHV0:	HRROI B,[ASCIZ / [/]
+	CALL DOSOUT
+	MOVEI B,@E		;Get the address of the SNAP
+	MOVE B,DELTA-SNAP(B)	;Get DELTA
+	CALL PRNDEC
+	HRROI B,[ASCIZ /] /]
+	CALLRET DOSOUT
+
+
+;EXIT COMMAND LEAVES TCPEEK, AFTER UNMAPPING ALL
+;WINDOW PAGES MAPPED FROM THE MONITOR
+
+EXIT:	HRROI B,[ASCIZ \  quitting...
+\]
+	CALL DOSOUT
+	DOBE		;<A> = OUTPUT JFN FROM DOSOUT
+	MOVEI A,0	;UNMAP ALL THE WINDOW PAGES
+	MOVEI B,WINDOW
+	MOVE C,MAPCNT
+EXIT1:	CALL GTMCHK
+	ADDI B,1000
+	SOJG C,EXIT1
+	SKIPE TCBFLG	;TCB MAPPED?
+	  CALL TCB99	;YES, UNMAP IT
+jfcl;	RESET
+	HALTF
+	JRST BEG
+
+;DOSNAP SERVICES THE TAKE-A-SNAPSHOT COMMAND BY COPYING DATA
+;FROM WINDOW INTO SNAP BUFFER, COMPUTING DELTA FROM LAST SNAPSHOT,
+;AND PRINTING VARIOUS DATA OF INTEREST ABOUT THE SNAPSHOT
+
+DOSNAP:	SKIPN MODE			; Normal mode?
+	  JRST DOSNAQ			; Yes
+	HRROI B,[ASCIZ /Cannot take snapshots in this mode.
+/]
+	CALL DOSOUT
+	JRST MAIN
+
+DOSNAQ:	MOVE A,MAPCNT
+	LSH A,9
+	ADDI A,SNAP-1
+	MOVE B,[WINDOW,,SNAP]
+	BLT B,(A)			; This takes the snapshot
+
+	MOVE A,[SIXBIT \LHOSTN\]	; Print host name
+	SYSGT
+	MOVE B,A
+	MOVEI A,.PRIOU
+	CVHST
+	  JRST CVHERR
+	HRROI B,[ASCIZ \ snapshot \]
+	CALL DOSOUT
+	MOVEI A,.PRIOU
+	AOS B,SNPCNT
+	MOVEI C,12
+	NOUT				; Print snapshot number
+	 0
+	HRROI B,[ASCIZ \, \]
+	CALL DOSOUT
+	MOVEI A,.PRIOU
+	SETOM B
+	MOVEI C,0
+	ODTIM				; Print time of day
+
+	HRROI B,[ASCIZ / (/]
+	CALL DOSOUT
+	MOVE B,TODCLK+.T		; Time pointer
+	MOVE B,NEDTAB+2(B)		; Offset in user space
+	MOVE B,SNAP(B)			; Time
+	MOVEM B,TODCLK+.C		; Save it for later
+	CALL PRNDEC
+	HRROI B,[ASCIZ / msec)
+/]
+	CALL DOSOUT
+
+	MOVE A,MAPCNT			; Compute delta
+	LSH A,9
+	ADDI A,DELTA-1
+	MOVE B,[SNAP,,DELTA]
+	BLT B,(A)
+	MOVE A,MAPCNT
+	LSH A,9
+	MOVNS A
+	HRLZS A
+DOS1:	MOVN B,PRIOR(A)
+	ADDM B,DELTA(A)
+	AOBJN A,DOS1
+
+	MOVE A,MAPCNT			; Update prior
+	LSH A,9
+	ADDI A,PRIOR-1
+	MOVE B,[SNAP,,PRIOR]
+	BLT B,(A)
+
+; Print standard things after a snapshot
+
+	HRROI B,[ASCIZ /1822 RFNM status:
+/]
+	CALL DOSOUT
+	CALL RFNPRN			; Print RFNTAB things
+
+; Print 1822 Type/subtype counts
+
+	HRROI B,[ASCIZ /Interface counts:
+/]
+	CALL DOSOUT
+	MOVEI R,NCT1C			; Print .NCT1 things
+	CALL DONCT
+	  JRST ABORT			; User aborted printout
+	MOVEI R,NCT2C			; Print .NCT2 things
+	CALL DONCT
+	  JRST ABORT
+
+; Print GWTAB things
+
+	TDZA T,T			; Remember if find any to print
+GATWAY:	  HRLI T,400000			; Do all gateways	
+	CALL CRLF
+
+	MOVE X,GW+.T			; -Count,,<first index> for GWTAB
+GATWA2:	MOVE S,NEDTAB+2(X)		; Offset of block
+	MOVE C,DELTA(S)			; Up/down
+	TLNN C,700000 
+	 TLNE T,400000			; Want all?
+	  TRNA
+	   JRST GATWA9			; No change
+
+	LOAD B,GWTYP,+SNAP(S)		; Gateway type
+	CAIL B,5
+	  MOVEI B,0
+	HRRO B,[[ASCIZ /?? Gateway/]
+		[ASCIZ /Prime gateway/]
+		[ASCIZ /Dumb gateway/]
+		[ASCIZ /Host gateway/]
+		[ASCIZ /Always-up gateway/]](B)
+	CALL DOSOUT
+
+	LOAD B,GWTYP,+SNAP(S)		; Gateway type
+	CAIN B,GW%AUP
+	  JRST GATWA4			; Enough for ALWAYS-UP
+
+	LOAD B,GWSTS,+SNAP(S)		; Gateway status
+	CAIL B,4
+	  MOVEI B,4
+	HRRO B,[[ASCIZ / down/]		; .GWDN - down
+		[ASCIZ / poor/]		; .GWUN - unknown
+		[ASCIZ / up  /]		; .GWUP - up
+		[ASCIZ / fair/]		; .GWTY - try it
+		[ASCIZ / ??/]](B)
+	CALL DOSOUT
+
+	LOAD U,GWWHO,+SNAP(S)		; Who last reported status
+	JUMPE U,GATWA4
+	HRROI B,[ASCIZ / by /]
+	CALL DOSOUT
+	CALL ROUTE5			; Print as number and name
+	HRROI B,[ASCIZ /  /]
+	CALL DOSOUT
+	MOVE B,TODCLK+.C
+	LOAD U,GWWHN,+SNAP(S)		; When last updated
+	SUB B,U
+	CALL PRNDEC
+	HRROI B,[ASCIZ / msec ago/]
+	CALL DOSOUT
+GATWA4:	CALL CRLF
+
+	LOAD C,GWPNG,+SNAP(S)		; Gateway being pinged?
+	JUMPE C,GATWA6			; No
+	HRROI B,[ASCIZ /   /]
+	CALL DOSOUT
+	LOAD B,GWSPC,+SNAP(S)		; Successful pings
+	CALL DONOUT
+	HRROI B,[ASCIZ / of last 7 pings returned (/]
+	CALL DOSOUT
+	LOAD B,GWHIS,+SNAP(S)		; History
+	MOVE C,[NO%LFL+NO%ZRO+FLD(7,NO%COL)+2]
+	NOUT
+	  JFCL
+	HRROI B,[ASCIZ /)
+/]
+	LOAD C,GWPIP,+SNAP(S)		; Ping in progress
+	SKIPE C
+	  HRROI B,[ASCIZ /), Ping in progress
+/]
+	CALL DOSOUT
+GATWA6:
+
+	LOAD R,GWICT,+SNAP(S)		; Number of interfaces
+	MOVNS R
+	HRLS R
+	HRRI R,.GWILS+SNAP(S)		; Point to interface list
+	HRROI B,[ASCIZ /   Connecting /]
+	SKIPA
+GATWA8:	  HRROI B,[ASCIZ /
+              /]
+	CALL DOSOUT
+	MOVE U,(R)			; Get next interface
+	CALL ROUTE5			; Print it
+	AOBJN R,GATWA8
+
+	CALL CRLF
+	AOS T
+GATWA9:	ADDI X,NEDTEL-1
+	AOBJN X,GATWA2
+	TRNE T,-1
+	  CALL CRLF			; Append CRLF if any lines printed
+
+	JRST MAIN			; DOSNAP is completed
+
+
+CVHERR:	HRROI B,[ASCIZ \SYSGT(LHOSTN) OR CVHST FAILED\]
+	JRST ERROR
+
+;RFNPRN prints RFN8TO and entries in RFNTAB
+;which match the value of RFNTST (or are non-zero with RFNTST zero).
+;It takes no args and returns no values.
+
+RFNPRN:	MOVE F,RFN8TO+.T	; RFN8TO
+	MOVE F,NEDTAB+2(F)
+	ADDI F,SNAP
+; IFIW D,0
+	HRLI F,D
+
+	HRROI B,[ASCIZ \   RFN8TO/   \]
+	CALL DOSOUT
+	MOVE B,@F
+	CALL DONOUT
+	CALL CRLF
+
+	MOVN D,RFNTSZ+.V	; Print any entries of interest
+	HRLZS D			; AOBJN counter for RFNTAB/RFN8TO
+
+	MOVE E,RFNTAB+.T	; RFNTAB
+	MOVE E,NEDTAB+2(E)	; Offset in WINDOW, etc.
+	ADDI E,SNAP		; RFNTAB within SNAP
+; IFIW D,0
+	HRLI E,D		; Index by D
+
+RFNPR1:	MOVE A,@E		; RFNTAB entry
+	ANDX A,RFNHST
+	SKIPE B,RFNTST		; Is entry of interest?
+	 CAMN A,B		; By matching RFNTST or
+	  SKIPN A		; By being nonzero with RFNTST = 0
+	   JRST RFNPR2		; Not of interest
+
+	HRROI B,[ASCIZ \RFNTAB+\]
+	CALL DOSOUT
+	MOVEI B,(D)			; Index into tables
+	CALL DONOUT
+	HRROI B,[ASCIZ \/   \]
+	CALL DOSOUT
+	MOVE Y,@E			; RFNTAB entry for LOADs
+	MOVEI A,.PRIOU
+	LOAD B,RFNBB,+Y			; Blocked bit
+	SKIPN B
+	 TROA B," "			; Not blocked
+	  MOVEI B,"B"			; Blocked
+	BOUT
+	LOAD B,RFNWB,+Y			; Was blocked bit
+	SKIPN B
+	 TROA B," "			; Wasn't blocked
+	  MOVEI B,"b"			; Was blocked
+	BOUT
+	LOAD B,RFNDN,+Y			; Down bit
+	SKIPN B
+	 TROA B," "			; Not down
+	  MOVEI B,"D"			; Down
+	BOUT
+	LOAD B,RFNWB,+Y			; Was down bit
+	SKIPN B
+	 TROA B," "			; Wasn't down
+	  MOVEI B,"d"			; Was down
+	BOUT
+
+	MOVEI B," "
+	BOUT
+
+;	LDB B,[400400,,@E]
+	LOAD B,RFNNO,+Y			; Next out
+	CALL PRNDEC
+	MOVEI B," "
+	BOUT
+	LOAD B,RFNNB,+Y			; Next back
+	NOUT
+	 0
+
+	MOVEI B," "
+	BOUT
+
+;	MOVE B,@E
+;	TLZ B,740000	;LEAVE REMAINING 32. BITS
+	LOAD B,RFNHST,+Y
+	CALL DONOUT
+	CALL CRLF
+RFNPR2:	AOBJN D,RFNPR1
+	RET
+
+
+;DONCT prints entries in an .NCT0-style 2-dimensional vector.
+;<R> = pointer to SNPTAB entry, whose value is the address of the structure.
+
+DONCT:	MOVE F,.F(R)			; Flags
+	TXNE F,F.I			; Value indirect?
+	 SKIPE @.V(R)			; Yes (therefore .V .ne. 0)
+	  SKIPN .V(R)			; No (zero if none)
+	   JRST DONSKP			; no, go to DONCT skip-return
+
+	HRROI B,[ASCIZ \total [delta] counts from \]
+	CALL DOSOUT
+	MOVEI A,.PRIOU
+	MOVE B,.N(R)
+	CALL PNTR50
+	CALL CRLF
+	HRRZ R,.T(R)			; Get pointer into NEDTAB
+	MOVE S,NEDTAB+2(R)		; Offset into SNAP
+	MOVN R,NEDTAB(R)		; Monitor address
+	ADD R,S				; Conversion factor, monitor to user
+	SETZM PNTTF			; Permit text strings
+
+;DONCT1 is an entry point to print 2-dimensional vectors generally.
+;There, <R> = adjustment to add to a monitor address to get the index into
+;user space SNAP or DELTA tables,
+;<S> = address in SNAP where the structure begins, and
+;<PNTTF> = flag to permit or suppress text in printout.
+;Skip-returns on successful completion, and returns +1 if user
+;types anything during printout, thus aborting printout.
+
+DONCT1:
+;	MOVE D,SNAP+1(S)		; Number of flushed packets
+;	SKIPN E,DELTA+1(S)		; And change in that
+;	  JUMPE D,NOFLU			; None of either
+;	SETOB X,Y			; Signal special "type"
+;	CALL PNTTYP
+;	  JRST DONRET			; User aborted printout
+	MOVE E,[POINT 36,SNAP(S),35]	; Get byte ptr to header
+	CALL PRNHVH			; Print it
+NOFLU:	MOVE T,SNAP(S)			; Number of types tabulated
+	JUMPE T,DONNTY			; No types at all
+	MOVNS T
+	HRLZS T
+	HRRI T,SNAP+3(S)		; AOBJN pntr for types
+	SETOM X				; Current type
+DONTL:	AOS X				; Do NCT type loop
+	MOVE D,(T)			; Count for this type
+	SKIPN E,DELTA-SNAP(T)		; And change
+	  JUMPE D,NOTYP			; None of this type to report
+	SETOM Y				; Current subtype
+	CALL PNTTYP
+	  JRST DONRET			; Aborted
+	SKIPN U,1(T)			; Pointer to subtype counts
+	  JRST DONNSU			; No subtypes of this type
+	ADD U,R				; Convert from monitor to user space
+	MOVE D,SNAP(U)			; Number of subtypes
+	MOVNS D
+	ADDI U,SNAP+3			; Addr of subtype 0
+	HRL U,D				; AOBJN pntr for subtypes
+DONSL:	AOS Y				; Do NCT subtype loop
+	MOVE D,(U)			; Count for this subtype
+	SKIPN E,DELTA-SNAP(U)		; And change
+	  JUMPE D,NOSUB			; None of this subtype to report
+	CALL PNTTYP
+	  JRST DONRET			; Aborted
+NOSUB:	AOBJN U,DONSL
+DONNSU:
+NOTYP:	ADDI T,2-1			; 2 words per type entry
+	AOBJN T,DONTL
+DONNTY:	CALL CRLF
+DONSKP:	AOS (P)				; Skip-return on success
+DONRET:	RET
+
+
+;PNTTYP PRINTS ONE LINE, DESCRIBING ONE ENTRY IN A 2-DIMENSIONAL
+;VECTOR.  IT IS CALLED BY DONCT.  IT CLOBBERS ONLY A, B AND C.
+;PNTTYP CALLED WITH <D>, <E> = COUNTS;
+; <X> = TYPE OR -1; <Y> = SUBTYPE OR -1
+;RETURNS +2 NORMALLY, +1 IF USER TYPEIN ABORTS PRINTOUT.
+
+PNTTYP:	JUMPL Y,PNTT1	;PRINT 1822 PACKET TYPE
+	HRROI B,[ASCIZ \      \]	;INDENT SUBTYPE TEXT
+	CALL DOSOUT
+PNTT1:	MOVEI A,.PRIOU
+	MOVE B,D
+	MOVE C,[520006,,12]
+	NOUT
+	 JFCL
+	HRROI B,[ASCIZ \ [\]
+	CALL DOSOUT
+	MOVEI A,.PRIOU
+	MOVE B,E
+	MOVE C,[520006,,12]
+	NOUT
+	 JFCL
+	HRROI B,[ASCIZ \]  \]
+	CALL DOSOUT
+	SKIPE PNTTF	;TEXT STRINGS WANTED?
+	 JRST PNTT4	;NO
+	MOVE A,X	;PREPARE TTTSSS FOR SCAN OF PNTTAB
+	ANDI A,777
+	MOVE B,Y
+	ANDI B,777
+	LSH A,9
+	IOR A,B
+	MOVSI B,-PNTTL
+PNTT2:	HLRZ C,PNTTAB(B)
+	CAMN C,A
+	 JRST PNTT3	;FOUND IT
+	AOBJN B,PNTT2
+	JRST PNTT4	;NO STRING DEFINED FOR THIS CASE
+
+PNTT3:	HRRO B,PNTTAB(B)	;PRINT THE TEXT STRING
+	CALL DOSOUT
+PNTT4:	JUMPL X,PNTT6	;JUMP IF NOT A REAL TYPE
+	HRROI B,[ASCIZ \ (\]
+	CALL DOSOUT
+	MOVEI A,.PRIOU
+	MOVE B,X
+	MOVEI C,12
+	NOUT
+	 0
+	JUMPL Y,PNTT5	;JUMP IF NO SUBTYPE TO PRINT
+	MOVEI B,40
+	BOUT
+	MOVE B,Y
+	NOUT
+	 0
+PNTT5:	MOVEI B,51	;)
+	BOUT
+PNTT6:	CALL CRLF
+	MOVEI A,-1	;CONTROLLING TERMINAL
+	SIBE
+	 SKIPA		;NON-SKIP RETURN = USER TYPEIN TO ABORT
+	AOS (P)		;SKIP-RETURN IS NORMAL
+	RET
+
+PNTTF:	0	;0 = PERMIT, -1 = SUPPRESS TEXT FIELD
+
+
+
+;PNTTAB IS USED BY PNTTYP TO CONVERT NUMERIC TYPE AND SUBTYPE
+;INTO TEXT STRING FOR COUNTS OF ARPANET-STYLE MESSAGES.
+;LEFT HALF = TTTSSS, WHERE TTT IS MESSAGE TYPE AND SSS IS SUBTYPE
+;EXCEPT FOR MAIN CATEGORY OF A TYPE, SSS = 777
+;ALSO TTTSSS = 777777 FOR FLUSHED PACKETS
+
+PNTTAB:	777777,,[asciz \Flushed Packets\]
+	000777,,[asciz \Regular Message\]
+	000000,,[asciz \Standard\]
+	000001,,[asciz \Refusable\]
+	000002,,[asciz \Get Ready\]
+	000003,,[asciz \Uncontrolled\]
+	001777,,[asciz \Error in Leader\]
+	001000,,[asciz \Flipflop\]
+	001001,,[asciz \< 80 Bits\]
+	001002,,[asciz \Ill Type\]
+	001003,,[asciz \Opp Ldr Style\]
+	002777,,[asciz \IMP Going Down\]
+;	003777,,[asciz \unused\]
+	004777,,[asciz \NOP\]
+	005777,,[asciz \RFNM\]
+	005000,,[asciz \Standard\]
+	005001,,[asciz \Refusable\]
+	006777,,[asciz \Dead Host Status\]
+;	006000,,[asciz \unused\]
+	006001,,[asciz \Dropped READY\]
+	006002,,[asciz \Tardy\]
+	006003,,[asciz \Non-ex\]
+	006004,,[asciz \IMP Software\]
+	006005,,[asciz \PM\]
+	006006,,[asciz \Harware Work\]
+	006007,,[asciz \Software\]
+	006010,,[asciz \Emerg Restart\]
+	006011,,[asciz \Power Fail\]
+	006012,,[asciz \BPT\]
+	006013,,[asciz \Hardware Failure\]
+	006014,,[asciz \Sched Down\]
+;	006015,,[asciz \unused\]
+;	006016,,[asciz \unused\]
+	006017,,[asciz \Coming Up\]
+	007777,,[asciz \Dest Host/IMP Dead\]
+	007000,,[asciz \Unreachable\]
+	007001,,[asciz \Host Down\]
+	007002,,[asciz \Leader Obsolete\]
+	007003,,[asciz \Admin Prohibit\]
+	010777,,[asciz \Error in Data\]
+	011777,,[asciz \Incomplete Transmission\]
+	011000,,[asciz \Host Slow\]
+	011001,,[asciz \Msg Too Long\]
+	011002,,[asciz \Host->IMP Timeout\]
+	011003,,[asciz \Msg Lost\]
+	011004,,[asciz \IMP Resource Timeout\]
+	011005,,[asciz \Src IMP Failure\]
+	012777,,[asciz \Interface Reset\]
+	013777,,[asciz \Refused, Try Again\]
+	013000,,[asciz \No IMP Buffer\]
+	013001,,[asciz \No IMP Transmit Block\]
+	014777,,[asciz \Refused, Will Notify\]
+;	014000,,[asciz \unused\]
+;	014001,,[asciz \unused\]
+	014002,,[asciz \No Connection\]
+	014003,,[asciz \No RA Space\]
+	014004,,[asciz \Msg Number Not Avail\]
+	014005,,[asciz \No Transaction Block\]
+	015777,,[asciz \Refused, Still Trying\]
+	016777,,[asciz \Ready\]
+PNTTL==.-PNTTAB
+
+
+
+;TCB PRINT COMMAND SERVICE ROUTINE
+;PROMPTS USER FOR TCB ID AND ADDRESS IN MONITOR SPACE,
+;MAPS IN A BLOCK FROM THERE, CHECKS THAT THE ID MATCHES, AND
+;AUTOMATICALLY PRINTS SEVERAL SYMBOL NAMES AND VALUES.
+;BYTE POINTERS FOR THE SYMBOLS ARE OBTAINED THE FIRST TIME THROUGH.
+
+TCBPNT:	SKIPN MODE			; Normal mode?
+	  JRST TCBPNU			; Yes
+	HRROI B,[ASCIZ /Cannot re-examine TCBs in this mode.
+/]
+	CALL DOSOUT
+	JRST TCB10			; Go display saved data
+
+TCBPNU:	HRROI B,[ASCIZ \ TCB ID(10): \]
+	CALL DOSOUT
+	MOVEI A,100
+	MOVEI C,12
+	MOVE D,TCBID.			; Default value
+	CALL TCBPAR			; Get parameter from user
+	MOVEM B,TCBID.
+	HRROI B,[ASCIZ \ MONITOR ADDR(8): \]
+	CALL DOSOUT
+	MOVEI A,100
+	MOVEI C,8
+	MOVE D,TCBADR			; Default value
+	CALL TCBPAR
+	MOVEM B,TCBADR
+	CALL CRLF
+	HLRZ A,TCBADR
+	CAMN A,MNTSEC+.V;ISEC+2	;MNTSEC VALUE
+	 JRST TCB02	;OK
+	HRROI B,[ASCIZ \ ADDR IS NOT IN MNTSEC\]
+	CALL DOSOUT
+	JRST ABORT
+
+TCBPAR:	MOVE E,C	;SAVE RADIX
+	NIN
+	 SKIPA
+	RET		;GOT NEW PARAMETER VALUE OK
+	BKJFN		;WHAT CHAR WAS TYPED?
+	 JRST BKJERR
+	PBIN
+	CAIE A,33	;ESCAPE MEANS USE DEFAULT IN D
+	 JRST ABORT	;ANYTING ELSE IS GARBAGE
+	MOVE B,D
+	MOVEI A,.PRIOU	;PRINT THE VALUE FOR THE USER
+	MOVE C,E	;RESTORE RADIX
+	NOUT
+	 0
+	RET
+
+TCB01:	HRROI B,[ASCIZ \ TCB SYMBOLS NOT DEFINED\]
+	CALL DOSOUT
+	JRST ABORT
+
+TCB02:	SKIPE TCBFLG	;ALREADY GOT SYMBOLS?
+	 JRST TCB03	;YES
+	MOVE A,[TCP%SY!TCP%SD!<TCP%IX+1>]
+	MOVE B,[-TCBAPL,,TCBAPS]
+	MOVE C,[-TCBAPL,,TCBPTR]
+	STAT
+	 JRST TCB01	;FAILED, MAYBE SYM WAS UNDEFINED
+	SETOM TCBFLG
+TCB03:
+	MOVE A,TCBADR	;IS DESIRED ADDRESS...
+	CAMN A,TCBOAD	;...SAME AS PRIOR VALUE?
+	 JUMPN A,TCB04	;YES, JUMP IF NOT INITIAL VALUE (ZERO)
+	MOVEM A,TCBOAD	;SAVE NEW ADDRESS
+	HRRZ A,TCBADR	;MAP IN THE SPECIFIED MONITOR AREA
+	LSH A,-9
+	HRL A,MNTSEC+.C;MSISPT
+	MOVEM A,TCBGTM	;SAVE FOR UNMAPPING
+	MOVEI B,TCBWIN
+	CALL GTMCHK
+	AOS A
+	TRNE A,777000
+	 JRST TCB04	;NEXT PAGE IS BEYOND SECTION END
+	ADDI B,1000	;SECOND TCB WINDOW PAGE
+	CALL GTMCHK
+	MOVE A,TCBSIZ+.V	;VALUE OF TCBSIZ
+	CAIG A,1000	;TCB BIGGER THAN 1 PAGE?
+	 JRST TCB04	;NO
+	HRROI B,[ASCIZ \ WARNING -- TCB SIZE MAY EXCEED WINDOWED AREA
+\]
+	CALL DOSOUT
+TCB04:
+	MOVE X,TCBADR			; TCB address in X = AC 14
+	ANDI X,777			; Offset in page
+	ADDI X,TCBWIN			; Start of window
+	LDB D,TCBPTR+TCBIDT-TCBAPS	; TCB ID in window
+	CAMN D,TCBID.			; Same as user typed?
+	 JRST TCB10			; Yes
+	HRROI B,[ASCIZ \
+ MAPPED TCB ID DISAGREES, IS \]
+	CALL DOSOUT
+	MOVE B,D
+	CALL PRNDEC
+	JRST ABORT
+
+; Print TCB information
+
+TCB10:	HRROI B,[ASCIZ /  up /]
+	CALL DOSOUT
+	MOVE B,TODCLK+.C
+	CALL PRNDEC
+	HRROI B,[ASCIZ / msec/]
+	CALL DOSOUT
+	CALL CRLF
+TCB11:	SETZM TCB1A			; No symbols printed yet
+	SETOM TCB1B			; Pntr into syms per line table 
+TCB12:	AOS G,TCB1B			; Begin next line(text, data line pair)
+	MOVE G,TCB1C(G)			; How many symbols on this line?
+	JUMPL G,TCB20			; -1 = end flag, done
+	MOVNS G				; Convert into AOBJN pntr
+	HRLZS G
+	ADD G,TCB1A			; Offset past syms already printed
+	MOVE E,[440700,,TCBTXT]		; Text line byte pntr
+	MOVE F,[440700,,TCBDAT]		; Data line byte pntr
+TCB13:	MOVE A,[440700,,TCBAPS(G)]	; Byte pntr for symbol to print
+TCB14:	ILDB B,A			; Pick up next char
+	JUMPE B,TCB15			; Symbol ended
+	IDPB B,E			; Write it to text string
+	TLNE A,700000			; Skips after fifth char
+	 JRST TCB14			; Do another char
+TCB15:	MOVEI B," "			; Space for separator
+	IDPB B,E
+	MOVE A,TCBAPS(G)		; The current symbol
+	MOVEI C,12			; Decimal is standard radix
+	HRLZI B,-TCBOCL			; Scan list of octally printed syms
+	CAMN A,TCBOCT(B)		; Is this symbol one of them?
+	 MOVEI C,8			; Yes
+	AOBJN B,.-2
+	MOVEI B,"#"
+	CAIN C,8			; Using radix 8?
+	 IDPB B,F			; Yes, flag with pound sign
+	MOVE A,F
+	LDB B,TCBPTR(G)			; The current value to print
+	NOUT
+	 0
+	MOVEM A,F			; Save updated data string pntr
+	MOVEI B," "
+	IDPB B,F
+	LDB A,[360600,,E]		; Compute char count in text string
+	MOVNS A
+	ADDI A,44
+	IDIVI A,7
+	MOVEI B,(E)
+	SUBI B,TCBTXT
+	IMULI B,5
+	ADD A,B				; <A> = char count
+	LDB B,[360600,,F]		; Compute char count in data string
+	MOVNS B
+	ADDI B,44
+	IDIVI B,7
+	MOVEI C,(F)
+	SUBI C,TCBDAT
+	IMULI C,5
+	ADD B,C				; <B> = char count
+	MOVEI C," "			; Space as filler char
+	SUB A,B				; Text length - data length
+	JUMPE A,TCB17			; No fill needed
+	JUMPL A,TCB16			; Text needs -<A> chars fill
+	IDPB C,F			; Data needs <A> chars fill
+	SOJG A,.-1
+	JRST TCB17
+
+TCB16:	IDPB C,E
+	AOJL A,.-1
+TCB17:	AOBJN G,TCB13			; Do next symbol on this line
+	MOVEM G,TCB1A			; Finished total of <G> symbols
+	MOVEI B,15			; CR
+	DPB B,E				; Overwrite last space
+	DPB B,F
+	MOVEI B,12			; LF
+	IDPB B,E
+	IDPB B,F
+	MOVEI B,0			; ASCIZ terminator
+	IDPB B,E
+	IDPB B,F
+	MOVEI A,.PRIOU			; Write the text string to user
+	MOVE B,[440700,,TCBTXT]
+	MOVEI C,0
+	SOUT
+	MOVE B,[440700,,TCBDAT]		; Write the data string to user
+	MOVEI C,0
+	SOUT
+	JRST TCB12			; Prepare next text, data line pair
+
+TCB20:	JRST MAIN
+
+TCB99:	MOVEI A,0			; Unmap TCB window page(s)
+	MOVEI B,TCBWIN
+	CALL GTMCHK
+	MOVE C,TCBGTM
+	AOS C
+	TRNE C,777000
+	  RET				; No second page mapped
+	ADDI B,1000
+	CALL GTMCHK
+	RET
+
+; Variables local to TCBPNT
+TCBID.:	0	;ID OF TCB WANTED BY USER
+TCBADR:	0	;MONITOR ADDRESS WHERE USER HOPES A TCB LIVES
+TCBOAD:	0	;OLD TCBADR FROM PREVIOUS COMMAND
+TCBFLG:	0	;NON-0 = SYMBOLS EVALUATED AND TCB MAPPED
+TCBGTM:	0	;<A> FOR GTMPG MAPPING A TCB INTO TCBWIN
+TCB1A:	0	;COUNT OF SYMBOLS PRINTED
+TCB1B:	0	;POINTER INTO TCB1C
+TCB1C:	13	;FIRST LINE-PAIR HAS 11. SYMBOLS
+	3	;SECOND HAS 3
+	7
+	13
+	10
+	11
+	4
+	6
+	7
+	-1	;END MARK
+
+TCBTXT:	BLOCK 50	;TCB SYMBOL TEXT STRING
+TCBDAT:	BLOCK 50	;TCB DATA STRING (ASCII CHARS)
+
+;TCBPNT AUTO-PRINT SYMBOLS THAT WANT OCTAL INSTEAD OF DECIMAL RADIX
+TCBOCT:	ASCII \TFH\
+	ASCII \TFP\
+	ASCII \TLH\
+	ASCII \TLP\
+	ASCII \TRXP\
+	ASCII \TERR\
+	ASCII \TSTAT\
+	ASCII \TVTL\
+	ASCII \TSCB\
+	ASCII \TSCPK\
+	ASCII \TTOS\
+	ASCII \TABTF\
+TCBOCL==.-TCBOCT	;LENGTH OF TCBOCT TABLE
+
+;LIST OF AUTOMATICALLY PRINTED SYMBOLS FOR TCBPNT
+TCBAPS:
+TCBIDT:	ASCII \TCBID\	;TCB ID TAG
+	ASCII \TJCN\
+	ASCII \TOWNR\
+	ASCII \TOFRK\
+	ASCII \TFH\
+	ASCII \TFP\
+	ASCII \TLH\
+	ASCII \TLP\
+	ASCII \TSMRT\
+	ASCII \TRXP\
+	ASCII \TSTO\
+
+	ASCII \TERR\
+	ASCII \TSTAT\
+	ASCII \TVTL\
+
+	ASCII \TRIS\
+	ASCII \TRLFT\
+	ASCII \TRLAK\
+	ASCII \TRWND\
+	ASCII \TRLWN\
+	ASCII \TRURP\
+	ASCII \TRBS\
+
+	ASCII \TCRCV\
+	ASCII \TCRPC\
+	ASCII \TCDUP\
+	ASCII \TCIGN\
+	ASCII \TCROS\
+	ASCII \TCRZW\
+	ASCII \TCEWN\
+	ASCII \TCPCC\
+	ASCII \TCRST\
+	ASCII \TCRPU\
+	ASCII \TCRUR\
+
+	ASCII \TSIS\
+	ASCII \TSLFT\
+	ASCII \TSSEQ\
+	ASCII \TSWND\
+	ASCII \TSURP\
+	ASCII \TSBYT\
+	ASCII \TSCB\
+	ASCII \TSCPK\
+
+	ASCII \TCSND\
+	ASCII \TCSPC\
+	ASCII \TCRXP\
+	ASCII \TCRXF\
+	ASCII \TCPZA\
+	ASCII \TCFWN\
+	ASCII \TCFWT\
+	ASCII \TCSPU\
+	ASCII \TCSUR\
+
+	ASCII \TCICM\
+	ASCII \TCISQ\
+	ASCII \TCIRD\
+	ASCII \TCFWP\
+
+	ASCII \TSMXS\	; was TSMXP
+	ASCII \TCRTM\
+	ASCII \TCATM\
+	ASCII \TCLTM\
+	ASCII \TCBTP\
+	ASCII \TSPRB\
+
+	ASCII \TCSAG\
+	ASCII \TCFAK\
+	ASCII \TIFDF\
+	ASCII \TTTL\
+	ASCII \TTOS\
+	ASCII \TABTF\	;REALLY TABTFX
+	ASCII \TCABI\	; was TCFWA
+TCBAPL==.-TCBAPS	;TCB AUTO-PRINT TABLE LENGTH
+
+TCBPTR:	BLOCK TCBAPL	;BYTE POINTER FOR EACH SYMBOL
+
+
+;XRATE - Compute the transmission rate for the given NCT
+XRATE:	HRROI B,[ASCIZ/  Transmission Rate for NCT: /]
+	CALL DOSOUT
+	MOVX A,.PRIIN		;From TTY:
+	MOVX C,<FLD(^D10,NO%RDX)>  ;Decimal
+	NIN
+	IFJER.			;Woops
+	  BKJFN
+	    ERJMP BKJERR	;Bad...
+	  PBIN
+	  CAIE A,"J"-100	;LF?  NIN eats the CR, and reads the LF
+	    JRST ABORT		;Nope, fail
+	  SETZM XRTNCT		;Use 0 as NCT number
+	ELSE.
+	  MOVEM B,XRTNCT	;Save NCT number
+	  BKJFN
+	    ERJMP BKJERR	;Bad...
+	  PBIN
+	  CAIE A,"J"-100	;LF?  NIN eats the CR, and reads the LF
+	    JRST ABORT		;Nope, fail
+	ENDIF.
+	MOVE A,XRTNCT		;Get NCT Number
+	CALL XRATDO		;Do the work
+	JRST MAIN		;Continue
+
+; Called with NCT number in A
+XRATDO:	SKIPL A			;0 is smallest NCT number
+	  CAILE A,3		;3 is largest NCT number
+	IFNSK.
+	  HRROI B,[ASCIZ/?NCT number must be from 0 to 3
+/]
+	  CALL DOSOUT
+	  JRST ABORT
+	ENDIF.
+	IMULI A,SNPTEL		;Compute <NCT*SNPTEL>
+	SKIPE A,NCT0G+.T(A)	;Get NEDTAB entry, if one
+	IFSKP.
+	  HRROI B,[ASCIZ/?NEDTAB entry for NCT0G+<NCT> nonexistant
+/]
+	  JRST ABORT
+	ENDIF.
+	MOVE A,NEDTAB+2(A)	;Get SNAP offset
+	MOVEI A,SNAP(A)		;Get NCTiG address in user memory
+	CALL XRTGET		;Get the data from the NCTiG block
+	MOVX A,0		;Do Input
+	CALL XRTCMP		;Compute m and b (as in y=mx+b)
+	CALL XRTPRT		;Print the info
+	MOVX A,1		;Do Output
+	CALL XRTCMP		;Compute m and b (as in y=mx+b)
+	CALL XRTPRT		;Print the info
+	RET			;Return
+
+;Get the data from the NCTiG block
+;Called with address of NCTiG in A
+;Sets up XRx$xx SIGMA variables, and XRx.xx list of value variables
+;AC usage:
+;	R/ saved address of NCTiG
+;	S/ ring buffer length from 0(R)
+;	T/ current pointer from 1(R)
+;	U/ contains the last address in the ring buffer for wrap
+;	   around computation
+;	X/ pseudo "AOBJN" pointer into ring buffer
+
+XRTGET:	MOVE R,A		;Save NCTiG Pointer
+	MOVE S,0(R)		;Get ring buffer length
+	SKIPE S			;Anything there?
+	IFSKP.
+	  HRROI B,[ASCIZ/?Snapshot needed for transmission rates
+/]
+	  JRST XRTERR
+	ENDIF.
+	MOVE T,1(R)		;Get current pointer
+	CAML T,S		;Current pointer point beyond end?
+	  SETZ T,		;Yes, adjust to beginning
+	;Form <-Length,,Current offset> "AOBJN" pointer
+	MOVN X,S		;Get -Length
+	HRLZS X			;Get -Length,,0
+	HRR X,T			;Get -Length,,Current Offset
+	ADDI X,2(R)		;Get -Length,,Start Address in NCTiG
+	;Compute the last ring buffer address
+	MOVE U,S		;Get the size of the buffer
+	ADDI U,2-1(R)		;Add in the base address (minus 1)
+	;Init SIGMA statics
+	SETZM XR$BEG		;Clear first word
+	MOVX A,<XWD XR$BEG,XR$BEG+1>  ;BLT Pointer
+	BLT A,XR$BEG+XR$LEN-1	;Clear block
+	;Loop thru block, pairing Begin/End of Input/Output events.
+	;Get length of the packet (X), and time to send (Y);
+	;and accumulate the totals in XRx$xx SIGMA variables
+	DO.
+	  MOVE B,IPDVBF(X)	;Get flags
+	  SETZ A,		;Assume Input, use 0 index into XRI$xx
+	  TXNE B,IPDV%O		;Output event?
+	    MOVX A,1		;Output, use 1 index into XRI$xx (XRO$xx)
+	  TXNN B,IPDV%E		;Processing completed?
+	  IFSKP.		;Yes...
+	    SKIPN B,XRI$TM(A)	;Have a TODCLK Begin Time
+	      JRST XRTGT0	;No, ignore it
+	    ADD B,IPDVTM(X)	;Get elapsed time
+	    JUMPL B,XRTGT0	;Negative???  Error, ignore it
+	    SETZB C,XRI$TM(A)	;Assume canned 0 length packet, clear
+				;begin time
+	    TXNN A,IPDV%R	;Canned message
+	      LOAD C,PIPL,-PKTELI+IPDVLL+MAXLDR(X)  ;No, get length
+	    CALL XRTADD		;Add info to SIGMAs
+	  ELSE.			;Processing begin...
+	    MOVN B,IPDVTM(X)	;Get negative begin time
+	    MOVEM B,XRI$TM(A)	;Save it
+	  ENDIF.
+XRTGT0:	  ADD X,[XWD IPDVSZ,IPDVSZ]  ;Simulate AOBJN
+	  IFL. X		;Still less than 0?
+	    CAIG U,(X)		;Time to wrap around?
+	      SUB X,S		;Yes, subtract the length from the address
+	    LOOP.
+	  ENDIF.
+	ENDDO.
+	RET
+
+;Error path, here with error message in B
+XRTERR:	CALL DOSOUT
+	JRST ABORT
+
+
+;Add X,Y to the SIGMAs (as in y=mx+b), and keep list of values
+;Called with Y in B; X in C; and I/O index in A (Input = 0, Output = 1)
+XRTADD:	AOS XRI$N(A)		;Count this sample
+	ADDM B,XRI$Y(A)		;Sum the Y
+	ADDM C,XRI$X(A)		;Sum the X
+	PUSH P,B		;Save Y
+	PUSH P,C		;Save X
+	IMUL B,C		;Compute X*Y
+	ADDM B,XRI$XY(A)	;Sum the X*Y
+	PUSH P,B		;Save X*Y
+	IMUL C,C		;Compute X*X (X squared)
+	ADDM C,XRI$XX(A)	;Sum the X*X
+	PUSH P,C		;Save X*X
+	; Now update the XRx.xx list of values
+	MOVE B,XRI$N(A)		;Get sample number
+	IMULI A,IPDVNT		;Point to either Input or Output
+	ADDI A,-1(B)		;Get index into array, origin is 0
+	POP P,XRI.XX(A)		;Save X*X
+	POP P,XRI.XY(A)		;Save X*Y
+	POP P,XRI.X(A)		;Save X
+	POP P,XRI.Y(A)		;Save Y
+	RET
+
+;Compute m and b (as in y=mx+b)
+;Called with XRx$xx SIGMA variables set up; I/O index in A
+;Returns XRx$M and XRx$B
+XRTCMP:	; N must be > 1 to complete the calculation meaningfully
+	MOVE B,XRI$N(A)
+	CAILE B,1		;N > 1?
+	IFSKP.			;No, return zeroes
+	  SETZM XRI$M(A)
+	  SETZM XRI$B(A)
+	  RET
+	ENDIF.
+	; Compute b:
+	;     SIGMA(X)*SIGMA(X*Y) - SIGMA(Y)*SIGMA(X*X)
+	; b = -----------------------------------------
+	;     SIGMA(X)*SIGMA(X)   - N*SIGMA(X*X)
+	MOVE B,XRI$X(A)		;SIGMA(X)
+	IMUL B,XRI$XY(A)	;SIGMA(X)*SIGMA(X*Y)
+	MOVE C,XRI$Y(A)		;SIGMA(Y)
+	IMUL C,XRI$XX(A)	;SIGMA(Y)*SIGMA(X*X)
+	SUB B,C			;Numerator
+	MOVE C,XRI$X(A)		;SIGMA(X)
+	IMUL C,C		;SIGMA(X)*SIGMA(X)
+	MOVE D,XRI$N(A)		;N
+	IMUL D,XRI$XX(A)	;N*SIGMA(X*X)
+	SUB C,D			;Denominator
+	IDIV B,C		;b
+	MOVEM B,XRI$B(A)
+	;Compute m:
+	;     SIGMA(Y) - b*N
+	; m = --------------
+	;       SIGMA(X)
+	; Note: m is a fractional value with imaginary binary point at
+	;the half-word
+	IMUL B,XRI$N(A)		;b*N
+	MOVE C,XRI$Y(A)		;SIGMA(Y)
+	SUB C,B			;Numerator
+	HRLZS C			;Make Numerator,,0
+	IDIV C,XRI$X(A)		;m
+	MOVEM C,XRI$M(A)
+	RET
+
+;Print the info, Input/Output B/M
+;Called with XRx.M and XRx.B, I/O index in A
+;AC usage:
+;	R/ Saved I/O index
+XRTPRT:	MOVE R,A
+	MOVE B,[ -1,,[ASCIZ/Input/]
+		 -1,,[ASCIZ/Output/]
+		](R)		;Say either Input or Output
+	CALL DOSOUT
+	HRROI B,[ASCIZ/ Transmission Rate:
+/]				;Transmission rate
+	CALL DOSOUT
+	HRROI B,[ASCIZ/   b (y intercept) = /]
+	CALL DOSOUT
+	MOVX A,.PRIOU
+	MOVE B,XRI$B(R)		;Get b
+	MOVX C,<FLD(^D10,NO%RDX)>  ;Base 10
+	NOUT
+	 ERJMP .+1		;???
+	HRROI B,[ASCIZ/
+   m (slope of line) = /]
+	CALL DOSOUT
+	; N.B. m is in the form <i,,f>, i=integer part; f=fractional part
+	;  Print it as n.nn
+	MOVE D,XRI$M(R)		;Get m
+	MOVX A,.PRIOU
+	HLRZ B,D		;Print Integer part
+	MOVX C,<FLD(^D10,NO%RDX)>  ;Base 10
+	NOUT
+	  ERJMP .+1
+	MOVEI A,"."
+	PBOUT
+	MOVX A,.PRIOU
+	HRRZ B,D		;Get fractional part
+	IMULI B,^D1000		;Get fractional digits in left half
+	HLRZS B
+	MOVX C,<FLD(^D10,NO%RDX)!FLD(^D3,NO%COL)!NO%LFL!NO%ZRO>
+	NOUT
+	  ERJMP .+1
+	HRROI B,[ASCIZ/
+
+  Table of SIGMA values:
+           N           x           y         x*y         x*x
+      ------      ------      ------      ------      ------/]
+	CALL DOSOUT
+DEFINE NOUT..(ADDR)<
+	MOVX A,.PRIOU
+	MOVE B,ADDR
+	MOVX C,<FLD(^D10,NO%RDX)!FLD(^D12,NO%COL)!NO%LFL>
+	NOUT
+	 ERJMP .+1
+>
+	MOVE A,XRI$N(R)		;Get number of samples
+	IFG. A			;More than none?
+	  MOVE D,R		;Get I/O index
+	  IMULI D,IPDVNT	;Get index into array
+	  MOVNS A		;Get -N
+	  HRL D,A		;Make -N,,I/O array index
+	  DO.
+	    HRROI B,[ASCIZ/
+            /]
+	    CALL DOSOUT
+	    NOUT..<XRI.X(D)>
+	    NOUT..<XRI.Y(D)>
+	    NOUT..<XRI.XY(D)>
+	    NOUT..<XRI.XX(D)>
+	    AOBJN D,TOP.
+	  ENDDO.
+	ENDIF.
+
+	HRROI B,[ASCIZ/
+* Totals:
+/]
+	CALL DOSOUT
+	NOUT..<XRI$N(R)>
+	NOUT..<XRI$X(R)>
+	NOUT..<XRI$Y(R)>
+	NOUT..<XRI$XY(R)>
+	NOUT..<XRI$XX(R)>
+PURGE NOUT..
+	CALL CRLF
+	CALL CRLF
+	RET
+
+
+; Local storage for XRATE
+XRTNCT:	BLOCK 1			;Selected NCT
+; ******************************
+; NB. the following words must be paired by Input/Output, in that order
+XR$BEG==.			;Addr of XRx$xx begin, for clearing
+XRI$TM:	BLOCK 1			;Start Input TODCLK, 0 if none
+XRO$TM: BLOCK 1			;Start Output TODCLK
+XRI$N:	BLOCK 1			;Start Input N, number of (X,Y) pairs
+XRO$N:	BLOCK 1			;Start Output N, number of (X,Y) pairs
+XRI$X:	BLOCK 1			;Input SIGMA(X)
+XRO$X:	BLOCK 1			;Output SIGMA(X)
+XRI$Y:	BLOCK 1			;Input  SIGMA(Y)
+XRO$Y:	BLOCK 1			;Output SIGMA(Y)
+XRI$XY:	BLOCK 1			;Input SIGMA(X*Y)
+XRO$XY:	BLOCK 1			;Output SIGMA(X*Y)
+XRI$XX:	BLOCK 1			;Input SIGMA(X*X)
+XRO$XX:	BLOCK 1			;Output SIGMA(X*X)
+XRI$M:	BLOCK 1			;Input M, slope of Least squares line
+XRO$M:	BLOCK 1			;Output M, slope of Least squares line
+XRI$B:	BLOCK 1			;Input B, y intersect of Least squares line
+XRO$B:	BLOCK 1			;Output B, y intersect of Least squares line
+; Tables of individual values
+XRI.X:	BLOCK IPDVNT		;Input list of X values
+XRO.X:	BLOCK IPDVNT		;Output list of X values
+XRI.Y:	BLOCK IPDVNT		;Input list of Y values
+XRO.Y:	BLOCK IPDVNT		;Output list of Y values
+XRI.XY:	BLOCK IPDVNT		;Input list of X*Y values
+XRO.XY:	BLOCK IPDVNT		;Output list of X*Y values
+XRI.XX:	BLOCK IPDVNT		;Input list of X*X values
+XRO.XX:	BLOCK IPDVNT		;Output list of X*X values
+XR$LEN==.-XR$BEG		;Number of XRx$xx locations
+; End of pairing by Input/Output
+;******************************
+
+;GUIDE COMMAND SERVICE ROUTINE PRINTS THE CANNED SYMBOLS
+;EVALUATED BY TCPEEK, AND DATA ABOUT CORRESPONDING MEMORY AREAS.
+
+GUIDE:	HRROI B,[ASCIZ \
+Set <RFNTST> via S command to RFNTAB value of interest.
+OFFSET related to a SYMBOL's VALUE is used to find the CONTENTS.
+RELOCATION related to a SYMBOL is the displacement into snapshot tables:
+   <SNAP> table is latest snapshot through window into monitor;
+   <DELTA> table is difference between <SNAP> and prior <SNAP>.
+SYMBOL        VALUE       OFFSET     CONTENTS   RELOCATION       LENGTH
+\]
+	CALL DOSOUT
+	MOVEI D,0
+GUID1:	MOVE F,SNPTAB+.F(D)		; Flags
+	MOVE B,SNPTAB+.N(D)	;SYMBOL
+
+;	CALL PNTR50
+	HRLI A,-6
+	  IDIVI B,50
+	  PUSH P,C
+	  AOBJN A,.-2
+	MOVEI A,.PRIOU
+	HRLI C,-6
+	  POP P,B
+	  MOVE B,R50ASC(B)
+	  BOUT
+	  AOBJN C,.-3
+
+	TXNN F,F.I		; Indirect value?
+	 SKIPA B,SNPTAB+.V(D)	;VALUE
+	  MOVE B,@SNPTAB+.V(D)	; Yes
+	CALL DONOFW
+
+	SKIPN B,SNPTAB+.O(D)	; Offset?
+	  JRST GUIDOX		; None
+	MOVE B,@B		; Yes
+	CALL DONOFW
+	JRST GUIDOZ
+GUIDOX:	HRROI B,[ASCIZ /             /]
+	CALL DOSOUT
+GUIDOZ:
+	TXNN F,F.P		; PEEK?
+	  JRST GUIDCX		; No
+	MOVE B,SNPTAB+.C(D)	; Yes, get value
+	CALL DONOFW
+	JRST GUIDCZ
+GUIDCX:	HRROI B,[ASCIZ /             /]
+	CALL DOSOUT
+GUIDCZ:
+	SKIPN E,SNPTAB+.T(D)
+	  JRST GUID2	;NO CORRESPONDING BLOCK IN MEMORY
+GUIDTL:	MOVE B,NEDTAB+2(E)	; Relocation
+	CALL DONOFW
+	HRROI B,[ASCIZ \ \]
+	CALL DOSOUT
+	MOVE B,NEDTAB+1(E)	;LENGTH
+	CALL DONOFW
+	AOBJP E,GUID2			; Another block?
+	ADDI E,NEDTEL-1			; Yes, point to it
+	HRROI B,[ASCIZ \
+                                             \]
+	CALL DOSOUT
+	JRST GUIDTL
+GUID2:	CALL CRLF
+	ADDI D,SNPTEL	;TO NEXT SNPTAB ENTRY
+	SKIPE SNPTAB+.N(D)	;DONE?
+	  JRST GUID1	;NO, CONTINUE
+	CALL CRLF	;YES
+	JRST MAIN
+
+;Print-ROUTE command service routine prompts for an address,
+;then prints the gateway or local net interface which the latest
+;snapshot shows would be used to reach that address.
+
+ROUTE:	HRROI B,[ASCIZ \  Routing for host(net): \]
+	CALL DOSOUT
+	MOVE A,ROUTEH			; Default is same as last time
+	HRROI B,[ASCIZ \  Routing to \]
+	CALL TYIHST
+	  JRST MAIN			; Failure
+	LSH A,-4			; Right justify
+	MOVEM A,ROUTEH			; Success, got new host address
+	NETNUM B,A			; Extract net number
+	MOVEM B,ROUTEN			; Net number sought
+	SETZM ROUTEC			; Count of matches found
+	MOVN T,NETHSZ+.V		; Length of NETHTB and NETGWY tables
+	HRLZS T
+ROUTE2:	MOVE A,NETHTB+.T		; NETHTB pntr
+	MOVE A,NEDTAB+2(A)		; Offset in user space
+	ADDI A,(T)			; Index of current scan
+	MOVE A,SNAP(A)			; Entry in NETHTB
+	HRROI D,[ASCIZ \   NETGWY+\]
+	TLZE A,400000			;  "Unused" entry
+	  HRROI D,[ASCIZ \ - NETGWY+\]
+
+	CAME A,ROUTEN			; Does this entry match Net or
+	 CAMN A,ROUTEH			; Host address?
+	  TRNA
+	   JRST ROUTE4			; No
+
+	AOS ROUTEC			; Yes, print routing information
+	MOVE B,D
+	CALL DOSOUT
+	MOVEI B,(T)			; Routing table index
+	CALL DONOUT
+	HRROI B,[ASCIZ \/   \]
+	CALL DOSOUT
+
+	MOVE R,NETGWY+.T		; NETGWY pntr
+	MOVE R,NEDTAB+2(R)		; Offset in user space
+	ADDI R,(T)			; Routing table index
+	SKIPN U,SNAP(R)			; Possible gateway from NETGWY
+	  MOVE U,ROUTEH			; Zero means directly
+	CALL ROUTE5			; Print first hop
+
+	HRROI B,[ASCIZ \, from \]
+	CALL DOSOUT
+	MOVE R,NETIFC+.T		; NETIFC pntr
+	MOVE R,NEDTAB+2(R)		; Offset in user space
+	ADDI R,(T)			; Routing table index
+	MOVE U,SNAP(R)			; Entry in NETIFC
+	CALL ROUTE6			; Print interface
+
+	MOVE R,NETWHO+.T		; NETWHO pntr
+	MOVE R,NEDTAB+2(R)		; Offset in user space
+	ADDI R,(T)			; Routing table index
+	SKIPN U,SNAP(R)			; Entry in NETWHO
+	  JRST ROUTEW
+	HRROI B,[ASCIZ /
+Last updated by /]
+	CALL DOSOUT
+	CALL ROUTE5			; Print interface
+
+	HRROI B,[ASCIZ / /]
+	CALL DOSOUT
+	MOVE R,NETWHN+.T		; NETWHN pntr
+	MOVE R,NEDTAB+2(R)		; Offset in user space
+	ADDI R,(T)			; Routing table index
+	MOVE B,TODCLK+.C		; Time of SNAP
+	SUB B,SNAP(R)			; Entry in NETWHN
+	CALL PRNDEC			; Decimal #
+	HRROI B,[ASCIZ / msec ago
+/]
+	CALL DOSOUT
+ROUTEW:
+; Changes
+	MOVE R,NETGWY+.T		; NETGWY pntr
+	MOVE R,NEDTAB+2(R)		; Offset in user space
+	ADDI R,(T)			; Routing table index
+	MOVE U,SNAP(R)			; Entry in NETGWY (right justified)
+	SKIPN A,DELTA(R)
+	  JRST ROUTE3			; No change from prior value
+	SUB U,A
+	JUMPE U,ROUTE3			; Prior value was zero
+
+	HRROI B,[ASCIZ \ [was \]
+	CALL DOSOUT
+	CALL ROUTE5			; Print first hop
+
+	MOVE R,NETIFC+.T		; NETIFC pntr
+	MOVE R,NEDTAB+2(R)		; Routing table index
+	ADDI R,(T)			; Index of current scan
+	MOVE U,PRIOR(R)			; Entry in netifc
+	CALL ROUTE6			; Print interface
+
+	MOVEI A,.PRIOU
+	MOVEI B,135	;]
+	BOUT
+ROUTE3:	CALL CRLF			; End of this matching entry
+ROUTE4:	AOBJN T,ROUTE2			; Scan for more matches
+	HRROI B,[ASCIZ \  no routing found
+\]
+	SKIPN ROUTEC
+	  CALL DOSOUT
+	JRST MAIN
+
+
+ROUTE5:
+; 	HLRE A,U			; Print gateway addr or interface #
+;	AOJE A,ROUTE6			; L.h. = -1 means on local net
+	MOVEI A,.PRIOU
+	MOVE E,U			; Copy for P4BYTS
+	LSH E,4				; Left justified
+	MOVEI D,E			; Point to it
+	CALL P4BYTS
+	HRROI B,[ASCIZ \ = \]
+	CALL DOSOUT
+	MOVE C,U
+	CALL PHOSTN
+	RET
+
+
+ROUTE6:	HRROI B,[ASCIZ \interface \]	; Print interface
+	CALL DOSOUT
+	HRRZ A,U			; Match to net interface driver addr
+	MOVEI B,0
+	HRRZ C,@.NCT2+.V		; .NCT2
+	CAMN A,C
+	 JRST IFACE2
+	HRRZ C,@.NCT1+.V		; .NCT1
+	CAMN A,C
+	 JRST IFACE1
+	HRRZ C,@.NCT0+.V		; .NCT0
+	CAMN A,C
+	 JRST IFACE0
+	HRROI B,[ASCIZ \unknown\]
+	CALL DOSOUT
+	RET
+
+IFACE2:	AOS B		;COUNT THE INTERFACE
+IFACE1:	AOS B
+IFACE0:	CALL DONOUT
+	RET
+
+
+;Set-RFNTST command service routine prompts user for new value of RFNTST,
+;which defines the address of interest in printing out RFNTAB entries.
+
+SETRFN:	HRROI B,[ASCIZ \  RFNTST now = \]
+	CALL DOSOUT
+	MOVEI A,.PRIOU
+	MOVE E,RFNTST			; Get current value
+	LSH E,4				; Format for P4BYTS
+	MOVEI D,E			; Point to datum
+;cwl only 3
+	CALL P4BYTS
+	HRROI B,[ASCIZ \, new host address: \]
+	CALL DOSOUT
+;	MOVE A,RFNTST
+;	LSH A,4				; Default in format for TYIHST
+	SETO A,				; "Default"
+	HRROI B,[ASCIZ \  New RFNTST is \]
+	CALL TYIHST
+	  JRST MAIN			; Failure
+	CAMN A,[-1]
+	  JRST SETRFO			; Default is no change
+	LSH A,-4			; Back to RFNTST format
+	SKIPE A				; Zero to match all
+	 CALL BLDRFT
+	  MOVEM A,RFNTST
+SETRFO:	CALL RFNPRN			; Print RFNTAB entries with new filter
+	JRST MAIN
+
+
+
+BLDRFT:	NETNUM B,A			; Extract network number
+
+	SKIPN R,.NCT0+.T		; Get relocation for NCT
+	  JRST SETRF0			; Not in configuration
+	MOVE R,NEDTAB+2(R)
+	NETNUM C,NTLADR+WINDOW(R)	; Get network # from NCT
+	CAMN C,B			; Same?
+	  JRST SETRFQ			; Yes
+SETRF0:
+
+	SKIPN R,.NCT1+.T		; Get relocation for NCT
+	  JRST SETRF1			; Not in configuration
+	MOVE R,NEDTAB+2(R)
+	NETNUM C,NTLADR+WINDOW(R)	; Get network # from NCT
+	CAMN C,B			; Same?
+	  JRST SETRFQ			; Yes
+SETRF1:
+
+	SKIPN R,.NCT2+.T		; Get relocation for NCT
+	  JRST SETRF2			; Not in configuration
+	MOVE R,NEDTAB+2(R)
+	NETNUM C,NTLADR+WINDOW(R)	; Get network # from NCT
+	CAMN C,B			; Same?
+	  JRST SETRFQ			; Yes
+SETRF2:
+	HRROI B,[ASCIZ /No NCT on that network.
+/]
+	CALL DOSOUT
+	AOS (P)
+	RET
+
+SETRFQ:	LOAD B,NTHSH,+WINDOW(R)		; NCT hash id
+	STOR B,RFNNT,+A
+	ANDX A,RFNHST
+	RET
+
+
+;TYIHST GETS USER TYPEIN OF A HOST NAME
+;ARGS: <A> = DEFAULT VALUE, <B> = PNTR TO STRING TO PRINT ON SUCCESS
+;RETURNS +1 ON FAILURE, +2 ON SUCCESS WITH <A> = NEW VALUE
+;TAGS IN TYIHST ARE "SEND" BECAUSE IT'S STOLEN FROM PICKLE.MAC
+
+TYIHST:	MOVEM A,SNDDEF	;STORE ARGS
+	MOVEM B,SNDSTR
+;	SETZM DHTBUF
+;	MOVE A,[DHTBUF,,DHTBUF+1]
+;	BLT A,DHTBUF+DHTBSZ-1
+	MOVSI D,-DHTBSZ
+SEND1:	PBIN
+	ANDI A,177
+	CAIN A,15	;CR
+	 PBIN		;READ THE LF
+	CAIN A,6	;CTRL-F
+	 JRST SENDT
+	CAIN A,12	;LF
+	 JRST SENDT
+	CAIN A,15	;CR
+	 JRST SENDT
+	CAIN A,22	;CTRL-R
+	 JRST SENDR
+	CAIN A,25	;CTRL-U
+	 JRST SENDA
+	CAIN A,27	;CTRL-W
+	 JRST SENDA
+	CAIN A,33	;ESC
+	 JRST SENDT
+	CAIN A,40	;SPACE
+	 JRST SENDT
+	CAIN A,77	;?
+	 JRST SENDQ
+	CAIN A,177	;DEL
+	 JRST SENDD
+	CAIGE A,40
+	 JRST SEND1	;IGNORE ALL OTHER CTRL CHARS
+	MOVEM A,DHTBUF(D)	;STORE THE CHAR AS PART OF STRING
+	AOBJN D,SEND1
+	HRROI B,[ASCIZ \
+  Host string too long.
+\]
+	CALL DOSOUT
+	RET		;FAILURE
+
+SENDA:	HRROI B,[ASCIZ \
+  ...aborted
+\]
+	CALL DOSOUT
+	RET		;FAILURE
+
+SENDD:	TRNN D,-1	;DELETE ONE CHAR FROM STRING
+	 JRST SENDA	;CANNOT BACK UP OVER START
+	SUB D,[1,,1]
+	MOVE A,DHTBUF(D)
+	PBOUT
+	MOVEI A,134	;\
+	PBOUT
+	JRST SEND1
+
+			;TELL USER WHAT TO TYPE
+SENDQ:	HRROI B,[ASCIZ \
+  e.g., 1200000005 or 10.0.0.5 or BBNF\]
+	CALL DOSOUT
+SENDR:	CALL CRLF	;RETYPE THE STRING
+	MOVEI C,(D)
+	JUMPE C,SEND1	;NO CHARS IN STRING
+	MOVNS C
+	HRLZS C
+SENDR1:	MOVE A,DHTBUF(C)
+	PBOUT
+	AOBJN C,SENDR1
+	JRST SEND1
+
+;STRING TYPEIN HAS TERMINATED, SO EVALUATE THE STRING
+SENDT:	CAIE A,15	;WAS TERMINATOR CR?
+	 CAIN A,12	;OR LF?
+	 CAIA		;YES
+	 CALL CRLF	;NO, PRINT ONE
+	MOVEI C,(D)	;TRY PARSING AS 32-BIT OCTAL NUMBER
+	MOVNS C
+	HRLZS C
+	MOVEI B,0	;ACCUMULATES NUMBER
+	JUMPE C,SEND2	;NO CHARS = SAME AS BEFORE
+SENDT1:	MOVE A,DHTBUF(C)
+	SUBI A,60	;0
+	TRNE A,777770
+	 JRST SENDT2	;NOT AN OCTAL DIGIT
+	LSH B,3
+	IOR B,A
+	AOBJN C,SENDT1
+	TLNN B,740000	;DON'T WORRY IF SOME BITS LSH'ED OUT
+	 JRST SENDT9	;GOT IT (OCTAL)
+SENDT2:	MOVEI C,(D)	;TRY PARSING AS 4 DECIMAL BYTES
+	MOVNS C
+	HRLZS C
+	MOVEI B,0
+	CALL SENDT3	;GET BYTE
+	CALL SENDT3
+	CALL SENDT3
+	CALL SENDT3
+	JUMPL C,SENDT6	;. AND MAYBE MORE JUNK AFTER 4TH BYTE
+	CAIE C,(D)
+	 JRST SENDT6	;FAIL, PARSE DIDN'T END AT END OF STRING
+	JRST SENDT9	;GOT IT (4 DECIMAL BYTES)
+
+SENDT3:	MOVEI A,0	;ACCUMULATES BYTE VALUE
+SENDT4:	MOVE T,DHTBUF(C)
+	CAIN T,56	;.
+	 JRST SENDT5	;. ENDS BYTE
+	CAIL T,60	;0
+	CAILE T,71	;9
+	 JRST POP6	;CHAR OUT OF RANGE
+	SUBI T,60
+	IMULI A,12
+	ADD A,T
+	TRNE A,777400
+	 JRST POP6	;BYTE VALUE TOO BIG
+	AOBJN C,SENDT4
+	SKIPA
+SENDT5:	AOBJN C,.+1	;ADVANCE OVER THE .
+	LSH B,8		;PUT NEW BYTE INTO RESULT
+	IOR B,A
+	RET
+
+POP6:	POP P,A		;RESTORE P
+SENDT6:	MOVEI C,(D)	;TRY PARSING AS HOST NAME TEXT
+	MOVNS C
+	HRLZS C
+	MOVE B,[440700,,DHSBUF]
+SENDT7:	MOVE A,DHTBUF(C)
+	IDPB A,B
+	AOBJN C,SENDT7
+	MOVEI A,0
+	IDPB A,B	;INSURE TERMINATION WITH 0 BYTE
+	MOVEI A,3	;TRANSLATE STRING TO HOST NUMBER
+	HRROI B,DHSBUF
+	GTHST		;CLOBBERS AC4 ALSO!
+	 JRST SENDT8	;CANNOT PARSE IN ANY WAY
+	MOVE B,C	;HOST NUMBER (= ADDRESS)
+	JRST SENDT9	;GOT IT (HOST NAME STRING)
+
+SENDT8:	HRROI B,[ASCIZ \  ? Cannot parse that as a host.
+\]
+	CALL DOSOUT
+	RET		;FAILURE
+
+SENDT9:	LSH B,4		;PARSED IT, NOW LEFT JUSTIFY
+	JRST SEND3
+
+SEND2:	SKIPE B,SNDDEF	;IS DEFAULT VALUE = 0?
+	 JRST SEND3	;NO, OK TO USE IT
+	HRROI B,[ASCIZ \  No old host to use as default.
+\]
+	CALL DOSOUT
+	RET		;FAILURE
+
+SEND3:	MOVEM B,SNDVAL			; Store the parsed value
+	CAMN B,[-1]			; Special default?
+	  JRST SEND3X			; Yes, don't echo
+	MOVE B,SNDSTR			; Pntr to string to print
+	CALL DOSOUT
+	MOVEI A,.PRIOU
+	MOVE B,SNDVAL
+	LSH B,-4
+	MOVE C,[160013,,8]		; Print as octal number
+	NOUT
+	 0
+	HRROI B,[ASCIZ \ = \]
+	CALL DOSOUT
+	MOVEI A,.PRIOU
+	MOVEI D,SNDVAL
+	CALL P4BYTS			; Print as 4 decimal bytes
+	HRROI B,[ASCIZ \ = \]
+	CALL DOSOUT
+	MOVE C,SNDVAL
+	LSH C,-4
+	CALL PHOSTN			; Print as name
+	CALL CRLF
+SEND3X:
+	MOVE A,SNDVAL	;RETURN VALUE
+	AOS (P)		;SKIP RETURN ON SUCCESS
+	RET
+
+;VARIABLES LOCAL TO TYIHST ROUTINE
+SNDDEF:	0	;DEFAULT VALUE FOR TYIHST
+SNDSTR:	0	;PNTR TO STRING TO PRINT WHEN TYIHST SUCCEEDS
+SNDVAL:	0	;TYIHST SUCCESS RETURN VALUE
+DHTBSZ==100	;DHTBUF SIZE
+DHTBUF:	BLOCK DHTBSZ	;DEST HOST TYPEIN BUF (1 CHAR PER WORD)
+DHSBUF:	BLOCK DHTBSZ/5+1	;DEST HOST STRING BUF, FOR GTHST
+
+
+
+;PRINT RIGHT JUSTIFIED <C> 32. BITS AS HOST NAME
+
+PHOSTN:	MOVEI A,2	;FUNCTION = HOST NUMBER TO STRING
+	MOVEI B,.PRIOU	;DESTINATION = TTY
+	GTHST		;CLOBBERS AC4 ALSO!
+	 SKIPA		;ADDRESS HAS NO KNOWN NAME
+	 RET
+	HRROI B,[ASCIZ \no name\]
+	CALL DOSOUT
+	RET
+
+
+;PRINT @<D> AS 4 DECIMAL BYTES, TO <A>
+
+P4BYTS:	HRLI D,441000
+	MOVEI C,12
+P4BLUP:	ILDB B,D
+	NOUT
+	 0
+	TLNN D,700000			; No skip after 4th ILDB
+	  RET
+	MOVEI B,"."
+	BOUT
+	JRST P4BLUP
+
+
+;PRINT <B> AS RADIX-50 TO JFN <A>
+
+PNTR50:	IDIVI B,50
+	HRLM C,(P)
+	SKIPE B
+	CALL PNTR50
+	HLRZ B,(P)
+	MOVE B,R50ASC(B)
+	BOUT
+	RET
+
+;R50ASC USED BY PNTR50 TO CONVERT FROM RADIX-50 TO ASCII
+
+R50ASC:	40	;0 = SPACE
+	60	;1 = ZERO
+	61
+	62
+	63
+	64
+	65
+	66
+	67
+	70
+	71	;12 = 9
+	101	;13 = A
+	102
+	103
+	104
+	105
+	106
+	107
+	110
+	111
+	112
+	113
+	114
+	115
+	116
+	117
+	120
+	121
+	122
+	123
+	124
+	125
+	126
+	127
+	130
+	131
+	132	;44 = Z
+	56	;45 = .
+	44	;46 = $
+	45	;47 = %
+
+
+;CRLF PRINTS A CARRIAGE RETURN AND LINEFEED ON THE TERMINAL.
+;DOSOUT PRINTS THE STRING <B> POINTS TO, ON THE TERMINAL.
+
+CRLF:	HRROI B,[ASCIZ \
+\]
+DOSOUT:	MOVEI A,.PRIOU
+	MOVEI C,0
+	SOUT
+	RET
+
+
+;PRNDEC PRINTS <B> AS A DECIMAL NUMBER, ON THE TERMINAL
+
+PRNDEC:	MOVEI A,.PRIOU
+	MOVEI C,12
+	NOUT
+	 0
+	RET
+
+
+;DONOUT OUTPUTS <B> AS AN OCTAL NUMBER, ON THE TERMINAL
+
+DONOUT:	SKIPA C,[400000,,8]	;UNSIGNED, OCTAL
+DONOFW:	  MOVE C,[NO%MAG+NO%LFL+FLD(^D13,NO%COL)+^D8]
+	MOVEI A,.PRIOU
+	NOUT
+	 0
+	RET
+
+
+LITS:	LIT
+
+	END	<3,,ENTVEC>

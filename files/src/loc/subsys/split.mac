@@ -1,0 +1,236 @@
+	title	split -- Split large files
+	subttl	McLure / March '79
+;Changed error handler so that it would not bomb on rljfn.  Vivian Neou 3Apr84
+	search	monsym
+	asuppress
+
+
+; Ac's, opdefs
+
+a=1 
+b=2 
+c=3
+d=4
+e=5
+p=17
+
+opdef	call	[pushj	p, 0]
+opdef	ret	[popj	p, 0]
+opdef	uerr	[1b8]
+
+
+; Main routine
+
+go:	reset
+	move	p, [iowd npdl, pdl]	; Set up stack
+	call	getfil			; Get file to be split, and new files
+	call	opnfil			; Open relevant files, ascii mode
+	call	maksm1			; Make small file 1
+	call	maksm2			; And then file 2
+	call	closef			; Close files
+	haltf				; We're done
+	 jrst	go
+
+
+; Read files from terminal
+
+getfil:	hrroi	a, [asciz/
+Name of file to split: /]
+	psout
+getfi1:	move	1,[gj%old+gj%fns+gj%sht+gj%cfm]
+	move	2,[.priin,,.priou]	; From the tty, to the tty
+	gtjfn				; Get his input file
+	 jrst	[hrroi a, [asciz/
+?I can't understand that. Either you are attempting to access a file
+ that doesn't exist, or there was some garbage in your input. Please
+ respecify.
+/]
+		 psout
+		 jrst getfil]
+	movem	a, bigjfn		; Save jfn
+	call	sizbig			; Get info, determine if ascii file
+getfi2:	hrroi	a, [asciz/
+I need names for two files to split this big one into.
+What is the first name? /]
+	psout
+getfi3:	move	1,[gj%new+gj%fns+gj%sht+gj%cfm]
+	move	2,[.priin,,.priou]	; From the tty, to the tty
+	gtjfn				; Get his input file
+	 jrst	[hrroi a, [asciz/
+?I can't understand that. Either you are attempting to make a file
+ that already exists, or there was some garbage in your input. Please
+ respecify.
+/]
+		 psout
+		 jrst getfi2]
+	movem	a, smjfn1		; Save jfn
+getfi4:	hrroi	a, [asciz/
+What is the second name? /]
+	psout
+getfi5:	move	1,[gj%new+gj%fns+gj%sht+gj%cfm]
+	move	2,[.priin,,.priou]	; From the tty, to the tty
+	gtjfn				; Get his input file
+	 jrst	[hrroi a, [asciz/
+?I can't understand that. Either you are attempting to make a file
+ that already exists, or there was some garbage in your input. Please
+ respecify.
+/]
+		 psout
+		 jrst getfi4]
+	movem	a, smjfn2		; Save jfn
+	ret
+
+
+
+
+
+
+; Get size of file to be split
+
+sizbig:	move	a, bigjfn
+	move	b, [1,,.fbsiz]
+	movei	c, 5			; Put its size in ac5
+	gtfdb
+	idivi	5, 2			; Number of approximate bytes for each
+	movem	5, filsiz		; Save size of output files
+getbyt:	move	a, bigjfn		; Make sure it's ascii mode
+	move	b, [1,,.fbbyv]
+	movei	c, filpgs
+	gtfdb
+	ldb	10, [point 6,filpgs,11]	; Get byte size
+	cain	10, 7			; If 7 bit,
+	 ret				; We're ok
+	hrroi	a, [asciz/
+ %Warning: the file you want to split is not in ascii mode. This means
+  that you should get into an editor, preferably a non-line numbered
+  oriented one, and read in the file and then save it. This will write it
+  out as ascii 7-bit mode. Run this program again when you have done this.
+/]
+	psout
+	haltf
+	 jrst	.-1			; Can't continue
+	ret
+
+
+; Open relevant files in ascii mode
+
+opnfil:	move	a, bigjfn
+	move	b, [of%rd+7B5]
+	openf
+	 erjmp	error
+	move	a, smjfn1
+	move	b, [of%wr+7B5]
+	openf
+	 erjmp 	error
+	move	a, smjfn2
+	move	b, [of%wr+7B5]
+	openf
+	 erjmp	error
+	ret
+
+
+; Make first output file, count number of bytes written in e
+
+maksm1:	setz	e,
+	hrroi	a, [asciz/
+Making first file.../]
+	psout
+
+out11:	camle	e, filsiz		; Still below max output?
+	 ret				; Nope, done with it
+	move	a, bigjfn
+	bin				; Get a byte from big file
+	jumpe	b, out12		; A null?? If yes then check eof
+	move	a, smjfn1
+	bout				; And write it out to 1st small file
+	addi	e, 1			; Increment byte count
+	jrst 	out11			; Back for another character
+
+out12:	gtsts
+	tlnn b,(gs%eof)			; Null, did we hit eof?
+	 jrst	out11			; No, spurious
+	aos	(p)			; Yep, then don't bother writing file 2
+	ret
+
+; Make second file
+
+maksm2:	hrroi	a, [asciz/
+now making second file.../]
+	psout
+	
+out21:	move	a, bigjfn
+	bin				; get a byte from big file
+	jumpe	b, out22		; a null?? if yes then check eof
+	move	a, smjfn2
+	bout				; and write it out
+	addi	e, 1			; increment byte count
+	jrst 	out21			; back for another character
+
+out22:	gtsts
+	tlnn b,(gs%eof)			; null, did we hit eof?
+	 jrst	out21			; no, spurious
+	hrroi	a, [asciz/the end.
+/]
+	psout
+	ret
+
+
+
+; Close the i/o files
+closef:	hrrz	a, bigjfn
+	call	releas
+	hrrz	a, smjfn1
+	call	releas
+	hrrz	a,smjfn2
+	call	releas
+	ret
+
+releas:	closf
+	 erjmp	error
+	ret
+
+; Error handler
+
+;ERROR - This subroutine prints out the error message that goes with the
+;	 error number.  A, B and C are mangled in this routine.  It
+;	 is from the book.
+error:	hrroi	a,[asciz/The error is: /]
+	esout			;Start of error message
+	movei	a,.priou	;Send message to terminal
+	hrloi	b,.fhslf	;Get most recent error for current fork
+	movei	c,0		;No limit to byte count
+	erstr			;Get the appropriate text for error
+	 jfcl			;Two error returns...
+	 jfcl
+	hrroi	a,crlf		;end message with CRLF
+	psout
+	haltf			;
+	jrst	go
+
+errh:	hrro	a, 40
+	psout
+	hrroi	a, [asciz/, error is /]
+	psout
+	movei	a, .priou
+	move	b, [.fhslf,,-1]
+	setz	c,
+	erstr
+	 jfcl
+	 jfcl
+	haltf
+
+
+; Data
+
+crlf:	byte	(7)15,12
+npdl==20
+pdl:	block	npdl
+filsiz:	0				; Size for splitted files, bytes
+bigjfn:	0				; Jfn for file to be split
+smjfn1:	0				; Jfn for first output half
+smjfn2:	0				; Jfn for second output half
+filpgs:	0				; Fbbyv word of input file fdb
+buff:	block	70			; Random text buffer
+
+	end	go
+

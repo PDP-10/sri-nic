@@ -1,0 +1,1024 @@
+; Compatible with Multinet V2
+
+	SEARCH PROLOG,PROKL,ANAUNV
+
+	TTITLE (NFEPHY,,<- Driver for Network front-end DTE on Multinet>)
+
+;Dan Tappan
+
+;This impliments a device driver suitable for sending Internet packets
+;out over a DTE to a front-end 11 (hooked up to Fibernet or otherwise)
+;that is compatable with Multinet conventions
+
+
+;10<->11 protocol used
+
+;When one of the machines restarts, it clears the up bit in it's
+;status word, and rings the other's doorbell, when the other receives
+;this, it reinitializes whatever is necessary, and sets it's
+;ACK bit, and rings back. When the first receives this it sets it's
+;up bit clears the other's ACK bit, and allows I/O
+
+;If one machine has a packet to send to the other, then it sets the
+;REQOT bit in it's status word, and the size of the packet in bytes
+;in the PKSIZ field, and rings the other's doorbell, this does what
+;is necessary to receive, interrupting both on completion
+
+;Definitions
+
+MODE16==1				; 0 means 32-bit transfers to/from DTE
+
+DEFSTR PKSIZ,,35,12			; Size of packet to transfer
+DEFSTR REQOT,,20,1			; Output request bit
+DEFSTR UPBIT,,21,1			; Machine is up
+DEFSTR AKBIT,,22,1			; Restart acknowledge
+
+MAXPKL==^D1504				; Max packet length (bytes) allowed
+BYTSIZ==^D8				; Size of transfers across the DTE
+WRDDIV==4				; Divisor, #bytes -> #words(PDP10)
+
+IFN MODE16,<
+MAXPKL==MAXPKL/2
+BYTSIZ==BYTSIZ*2
+WRDDIV==2
+>					; If word mode
+
+
+SIZMSK==7777				; 12 bits of packet size
+
+;Address's of DTE block  (DTEINT and DTEEPW are globals)
+
+;DTEINT==:KIEPT+142			; Interrupt location
+;DTEEPW==:KIEPT+144			; Examine protection word
+;DTEERW==:KIEPT+145			; Examine relocation word
+;DTEDPW==:KIEPT+146			; Deposit protection word
+;DTEDRW==:KIEPT+147			; Deposit relocatiopn word
+;DTEEBP==:KIEPT+140			; To 11 byte pointer
+;DTETBP==:KIEPT+141			; To 10 byte pointer
+
+;CONO STUFF  (Some of these bit definitions are in PROKL)
+;DTESER, DTECER ?
+
+LDTEPI==DTEPI0+DTEPIE+IMPCHN		; Enable all interrupt
+CLTO10==40				; Clear input done bits
+CLTO11==100				; Clear output done bits
+RSTDTE==DTETDB+CLTO10+CLTO11		; Reset relevant bits
+
+;DATAO stuff
+INTBIT==1B23				; Interrupt both 10 & 11 on completion
+
+;Header -- First word is link/size, the last word describes the type
+;of packet.  If > 2^24 then packet is an internet packet, header word
+;is the internet address of the interface it was received on (11->10)
+;or the Internet address of the immediate destination (10->11).
+
+;If the PKTNET is 0 then PKTCMD encodes the packet type further as:
+
+C%NOP==0  ; NOP
+C%RPKT==1 ; Raw network packet, third byte is the interface number.
+C%IRST==2 ; Interface reset. Byte 3  is the interface number,
+;	    byte 4 is the network type code. If this command is sent
+;	    from the 11 to the 10 then the packet data is the local
+;	    address of the interface (size depends on the network type).
+;	    If sent from the 10 to the 11 the first 32 bits of data are
+;	    the internet address to be used on that front-end.
+C%AERR==3 ; Address error (Interface unreachable). Probably only
+;	    11->10. If the 3rd byte is 255 then the first 32 bits of data 
+;	    are the Internet address that can't be reached, otherwise
+;	    it is the interface number that is not-usable
+
+
+.NFEDH==0				; Destination host word
+.NFED0==0				; Word when in the section 0 buffer
+DEFSTR	PKTNET,.NFED0,7,8		; Non-zero if internet address
+DEFSTR	PKTCMD,.NFED0,15,8		; Command byte in word
+DEFSTR	PKTINN,.NFED0,23,8		; Interface number
+DEFSTR	PKTITY,.NFED0,31,8		; Network type
+
+;.NFHDL==1				; Local leader length, words (ANAUNV)
+.NFENU==1				; Net unreachable address
+
+;10 and 11 status word cells, these are in RSVAR because
+;it looks like there may be a bug with the DTE examining 
+;and depositing in NPVAR (past page 700)
+
+RS (NFESTS,10)				; Two words for each potential DTE
+
+	SWAPCD
+;Extensions to the NCT
+DEFHDR(<NCT EXTENSIONS>,NCTBAS,0)
+DEFWRD NTDTEN				; Offset of DTE we use
+
+DEFWRD NTCONI				; CONI DEV,T1
+DEFWRD NTCONO				; CONO DEV,(T1)
+DEFWRD NTCNSO				; CONSO DEV,(T1)
+DEFWRD NTCNSZ				; CONSZ DEV,(T1)
+DEFWRD NTDATO				; DATAO DEV,T1
+
+DEFWRD NTIJSR				; Interrupt state save JSR
+DEFWRD NTIDSP				; Interrupt dispatch
+DEFWRD NTINCT				; NCT pointer
+DEFWRD NTIPCW,4				; PC word
+
+DEFWRD NT11ST				; 11 status word
+DEFWRD NT10ST				; 10 status word
+
+DEFWRD NTINP				; Input pointer
+DEFWRD NTOUP				; Output pointer
+
+DEFWRD NTITIM				; Time when input started
+NCTLEN==..OFST				; Length of NCT
+
+
+
+;Initialization vector
+NFENCT::
+	FLD(NCTLEN,IVLEN)+FLD(NUMINI,IVINI)
+	XWD NTIJSR,[JSR LV6SAV]		; State save instruction
+	XWD NTCONO,[CONO 0,(T1)]	; Prototype I/O instructions
+	XWD NTCONI,[CONI 0,T1]		; ..
+	XWD NTCNSZ,[CONSZ 0,(T1)]	; ..
+	XWD NTCNSO,[CONSO 0,(T1)]	; ..
+	XWD NTDATO,[DATAO 0,T1]		; ...
+	XWD NTPVEC,[XWD MSEC1,NFEVEC]	; default protocol vector
+	XWD NTHVEC,[XWD MSEC1,DTEVEC]	; and hardware vector
+	XWD NTORAT,[^D35]
+NUMINI==.-NFENCT-1
+
+
+;Initialization code starts here
+;T1/	# device numbers
+;T2/	Pointer to device number list
+;Ret+1:	Initilization failed
+;Ret+2:	Success
+
+	CAIN T1,1			; Right number device numbers?
+	IFSKP.
+	  BUG.(CHK,NFEBDN,NFEPHY,SITE,<Bad number of device codes for NFE>,
+<<T1,CNT>,<(T2),DevCod>>,<
+
+Cause:	Exactly 1 DTE device code is required for an NFE.  The entry in
+	the SYSTEM:SITE-ADDRESS.TXT file contains the number specified.
+
+Action:	Edit the site address file.  The device code follows the
+	NETWORK-DTE keyword, separated by a colon, (eg. 
+	NETWORK-DTE:210,...).
+
+Data:	Number of device codes specified in the file, first Device Code.
+
+>)
+	  RET
+	ENDIF.
+
+	MOVE T1,(T2)			; Get the device number
+	LSH T1,-2			; Shift
+	ANDI T1,3			; Isolate DTE number
+	LSH T1,3			; Change to offset within DTE region
+	MOVEM T1,NTDTEN(P1)		; Remember for later
+
+	MOVE T1,(T2)			; Get device back
+	LSH T1,30			; Shift to right position
+	IORM T1,NTCONI(P1)		; Merge into instructions
+	IORM T1,NTCONO(P1)
+	IORM T1,NTCNSO(P1)
+	IORM T1,NTCNSZ(P1)
+	IORM T1,NTDATO(P1)
+
+IFE MODE16,<MOVX T1,MAXPKL>		; Max packet length
+IFN MODE16,<MOVX T1,MAXPKL*2>		; In octets
+	MOVEM T1,NTPSIZ(P1)		; Set as default length
+
+	XMOVEI T1,NFEINT		; Get our interrupt location
+	MOVEM T1,NTIDSP(P1)		; Set dispatch address
+
+	XMOVEI T1,NTIJSR(P1)		; Point to state save instruction
+	MOVEM T1,NTIPCW+3(P1)		; Save in interrupt block and
+	HRRZM P1,NTINCT(P1)		; NCT pointer where routine can find it
+
+
+;Setup the EPT block for this DTE
+	MOVE T2,NTDTEN(P1)		; Get DTE index back
+
+	MOVE T1,T2
+	LSH T1,-2			; Offset in NFESTS
+	MOVEI T1,NFESTS(T1)		; Address of 11 status word
+	MOVEM T1,DTEDRW(T2)		; Set deposit relocation word
+	MOVEM T1,NT11ST(P1)		; Indirect pointer
+
+	AOS T1				; Address of 10 status word
+	MOVEM T1,DTEERW(T2)		; Set examine relocation and
+	MOVEM T1,NT10ST(P1)		; Indirect pointer
+
+	MOVEI T1,2			; Size of region
+	MOVEM T1,DTEDPW(T2)		; Set for deposit region
+	MOVEI T1,1
+	MOVEM T1,DTEEPW(T2)		; And examine
+
+	MOVEI T1,NTIPCW(P1)		; Create XPCW instruction
+	HRLI T1,(XPCW 0)
+	MOVEM T1,DTEINT(T2)		; Store in DTE block
+
+ 	MOVE T1,[XWD .RESP3,MAXPKL/WRDDIV+2] ; Priority,, Size of buffer
+	MOVX T2,.RESGP			; From general pool
+	CALL ASGRES			; Assign it
+	  JSP CX,NOBUFF			; No buffer
+	HRLI T1,(<POINT BYTSIZ,0>)	; Make into a byte pointer
+	MOVEM T1,NTINP(P1)		; Save 
+
+	MOVE T2,NTDTEN(P1)		; Get back DTE index
+	MOVEM T1,DTETBP(T2)		; Set in block
+
+	MOVE T1,[XWD .RESP3,MAXPKL/WRDDIV+2] ; Again for output side
+	MOVX T2,.RESGP
+	CALL ASGRES
+	  JSP CX,NOBUFF
+	HRLI T1,(<POINT BYTSIZ,0>)
+	MOVEM T1,NTOUP(P1)		; And save it for later also
+	MOVE T2,NTDTEN(P1)
+	MOVEM T1,DTEEBP(T2)
+
+	MOVEI T1,NH.NFE			; Hardware is NFE
+	STOR T1,NTDEV,(P1)
+	RETSKP				; Init complete
+
+;Here if insufficent storage for I/O buffers
+
+NOBUFF:	BUG.(HLT,NFENBF,NFEPHY,SOFT,<No resident storage for NFE buffers>,
+<<P1,NCT>,<NTDTEN(P1),DTE#>>,<
+Cause:	ASGRES failed for either the input or output NFE DTE buffer.
+
+Action:	Assuming a reasonable value was passed, then the general
+	free storage pool needs top be increased.
+
+Data:	NCT, DTE number.
+>)
+
+
+
+
+;NFERMV	Called when NCT is being flushed.  Return resident storage.
+
+NFERMV:
+	SETZ T1,
+	EXCH T1,NTINP(P1)		; Get input buffer
+	HRRZS T1			; Just address
+	CALL RELRES			; Release storage
+
+	SETZ T1,
+	EXCH T1,NTOUP(P1)		; Get output buffer
+	HRRZS T1			; Just address
+	CALLRET RELRES			; Release storage
+
+
+	RESCD
+
+;Protocol vector
+
+NFEVEC::
+	NCTVEC(NFEVEC,RSKP,NTPKIL)	; Protocol specific kill function
+	NCTVEC(NFEVEC,R,NTPERR)		; Protocol specific error handler
+	NCTVEC(NFEVEC,NFEEIN,NTIDUN)	; Done with input
+	NCTVEC(NFEVEC,MNTODN,NTODUN)	; Done with output
+	NCTVEC(NFEVEC,NFEHDR,NTLLDR)	; Local leader routine
+	NCTVEC(NFEVEC,RSKP,NTPINI)	; Protocol initialization
+	NCTVEC(NFEVEC,R,NTPMNT)		; Protocol maintainence
+	NCTVEC(NFEVEC,NFERMV,NTPRMV)	; Removing NCT
+
+
+;Functions from the above
+
+;NFEHDR	Construct Network Front-End header.
+
+;T1/	Local net destination address 
+;T2/	Extended pointer to packet
+;T3/	Protocol code
+;Ret+1:	Always, error code in T1.
+
+NFEHDR:	STOR T1,PFLAD,(T2)
+
+	PNTLDR T4,PTPDT,(T2)		; Transport level leader
+	SUBI T4,.NFHDL			; Words in local leader
+	STOR T4,PLNDT,(T2)		; Pointer to local leader
+;	translate standard form address to local net form - identity function
+	LSH T1,4			; Left justify
+	MOVEM T1,.NFEDH(T4)		; Save the local destination
+
+..OF==-1
+REPEAT <MAXLDR-1>,<	SETZM ..OF(T4)	; Clear unused area to aid debugging
+			..OF==..OF-1>
+	PURGE ..OF
+
+	LOAD T4,PTPBZ,(T2)		; Transport level length
+	ADDI T4,.NFHDL*4		; Bytes in local leader
+	STOR T4,PLNBZ,(T2)		; Local net level length
+
+	CAIN T3,NP.IP			; IP protocol?
+	IFSKP.
+	  MOVX T1,<NE%DRP+MNTX20>	; Protocol not supported
+	  RET
+	ENDIF.
+
+;Compare to maximum packet length?
+
+IFE MODE16,<MOVX T3,<MAXPKL>>	; Valid size
+IFN MODE16,<MOVX T3,<MAXPKL*2>>	; Valid size
+	CAMG T4,T3		; Valid size?
+	IFSKP.
+	  BUG.(CHK,NFBGOT,NFEPHY,SOFT,<NFEPHY: Output buffer too big>,
+<<T4,SIZE>,<T3,MAX>,<T2,ADR>,<P1,NCT>>,<
+Cause:	Attempt to output to the NFE DTE a buffer which is too large.
+
+Action:	Try to trace back and determine where the buffer came
+	from, and why it is that size, and why the NTPSIZ
+	field of the NCT wasn't honored.
+
+Data:	Actual size, Maximum size, Packet address, NCT address.
+>)
+	  SKIPGE T3,NTPSTI(P1)		; Collecting statistics?
+	    AOS CELL(MNMSC,6,(T3))	; NFE output packet too long
+	  MOVX T1,MNTX02		; Packet too long error
+	  HRLI T1,-4(T4)		; Max allowed at higher level (header)
+	  TXO T1,NE%DRP			; Not sending packet
+	  RET				; Return failure
+	ENDIF.
+
+	MOVX T1,MNTX00			; No error
+	RET				; Return success
+
+;NFEEIN
+;End of input interrupt handler.
+
+;P1/		Pointer to physical NCT
+;NTIB(P1)/	-1 (flag that input happening)
+
+NFEEIN: SKIPN NTIB(P1)			; Check if input
+	  JRST NFEEI4			; Nothing there (?), restart
+
+	HRRZ T2,NTINP(P1)		; Point to the input buffer
+	
+	JE PKTNET,(T2),NFEEI1		; If not Internet packet, go proc funct
+
+	SKIPGE T3,NTPSTI(P1)		; Collecting statistics?
+	  AOS CELL(MNMRC,1,(T3))	; NFE received IP Packet
+	SKIPL T1,NTPSTS(P1)		; Locate statistics block
+	IFSKP.
+	  SETZ T3,			; Message type message type 0 "regular"
+	  INHSTI(,,T3,T1,T4,2)		; Histogram NFE rec type 0 (CELL(NTCiC)
+	ENDIF.
+
+;Try to get storage for the packet
+
+;Here also at input restart
+
+NFEEI0:
+	MOVE T1,NTDTEN(P1)		; Get DTE number and
+	HRRZ T1,DTETBP(T1)		; Address of last word
+	HRRZ T2,NTINP(P1)		; Address of first word
+	SUB T1,T2			; Get length-1 in words
+	AOS T1				; (Including local leader)
+	PUSH P,T1			; Save it for later
+	ADD T1,PROOVH+NP.IP		; Add in IP overhead (don't bother
+					; correcting for double local leader)
+	MOVX T2,NP.IP			; Protocol code
+	CALL GETBUF			; Get a packet buffer
+	IFE. T1				; No storage
+	  ADJSP P,<-1>			; Clean the stack
+	  SKIPGE T1,NTPSTI(P1)		; Collecting statistics?
+	    AOS CELL(MNMRC,7,(T1))	; No input buffer failure
+	  XMOVEI T1,NFEEI0		; Input restart address
+	  MOVEM T1,NTINRS(P1)		; Set it
+	  CALL MNTWAK			; Wake up the hardware fork
+	  RET
+	ENDIF.
+
+	SETZM NTINRS(P1)		; Got buffer, no need to restart
+
+	MOVEM T1,NTIB(P1)		; Save the address
+					; Initialize global and local net info
+	MOVE T4,NTITIM(P1)		; Time we started this buffer
+	STOR T4,PLNQD,(T1)
+	STOR T4,PLNDB,(T1)
+	MOVE T4,TODCLK			; Time we ended
+	STOR T4,PLNDE,(T1)
+
+	XMOVEI T3,-.NFHDL(T1)		; Move back for local leader
+	ADD T3,PROOVH+NP.IP		; Where to begin local leader
+	STOR T3,PLNDT,(T1)		; Address of local net leader (NTPRNG)
+	
+	MOVE T2,0(P)			; Data length in words (incl lcl ldr)
+	LSH T2,2			; Convert to octet count
+	STOR T2,PLNBZ,(T1)		; Length at local net level
+
+	HRRZ T2,NTINP(P1)		; Where to BLT from (local leader)
+	MOVE T4,.NFED0(T2)		; Local leader has our address
+	LSH T4,-4			; Would like sender's address ...
+	STOR T4,PFLAD,(T1)		; Set local net address
+
+..OF==-1
+REPEAT <MAXLDR-1>,<	SETZM ..OF(T3)	; Clear unused area to aid debugging
+			..OF==..OF-1>
+	PURGE ..OF
+
+	POP P,T1			; How much to BLT
+	CALL XBLTA			; Do it
+
+	MOVE T2,NTIB(P1)		; Get input buffer back
+	TXO T2,IPDV%I!IPDV%E		; End of input
+	CALL NTPRNG			; Into ring
+
+	SETZ T2,
+	EXCH T2,NTIB(P1)		; Input buffer
+
+	MOVX T1,NP.IP			; Protocol is always IP
+	CALL PVNCT			; Physical to Virtual NCT
+
+	MOVX T3,<4*.NFHDL>		; Octets in local leader
+	CALLRET MNTEIN ;(T1,T2,T3,P1)	; Do end of input processing (restarts)
+
+;The packet contains a function
+
+NFEEI1:	SKIPGE T3,NTPSTI(P1)		; Collecting statistics?
+	  AOS CELL(MNMRC,2,(T3))	; Count NFEPHY functions received
+
+	LOAD T3,PKTCMD,(T2)		; Get command
+	CAIGE T3,MAXFCN			; Good?
+	IFSKP.
+	  BUG.(INF,NFEBFN,NFEPHY,SOFT,<Bad function code from NFE>,
+<<T3,CODE>,<P1,NCT>,<NTNET(P1),Net>>,<
+Cause:	A packet from the NFE DTE contained an illegal function code.
+	This could be caused either by version skew, or by packets
+	being garbaged.
+
+Data:	Function code, NCT, Network number.
+>)
+	  SETZ T3,			; NOP
+	ELSE.
+	  CALL @FCNTAB(T3)		; Dispatch
+	ENDIF.
+
+	SKIPL T1,NTPSTS(P1)		; Locate statistics block
+	IFSKP.
+	  INHSTI(,,T3,T1,T4,2)		; Histogram type (CELL(NTCiC))
+	ENDIF.
+
+NFEEI4:	SETZM NTIB(P1)			; Input not active
+	MNTJRST NTISRT			; Restart input
+
+;Function table
+
+FCNTAB:	IFIW!NFINOP			; NOP
+	IFIW!NFIRAW			; Raw network packet
+	IFIW!NFEIUP			; Interface up
+	IFIW!NFENXI			; Interface non-existant
+MAXFCN==.-FCNTAB
+
+;Nop
+
+NFINOP:	MOVX T3,4			; NOP code
+	RET
+
+
+;Raw packet
+
+NFIRAW:	MOVX T3,3			; "Unused" code
+	RET
+
+
+;Handle an "Interface up" message.
+;Packet contains the type and address of the interface
+
+;This should probably check the given address against the NCT's, and
+;complain if different.  Also if type is Ethernet, then should reply
+;with a "set interface address" with the correct internet address.
+
+NFEIUP:	MOVX T3,^D10			; "Interface Reset"
+	RET				; Nothing for now
+
+
+;Handle a "Net unreachable" message
+
+NFENXI:	CALL LGTAD			; Find time
+	MOVE T4,T1			; Save it
+	HRRZ T2,NTINP(P1)		; Point to the input buffer
+	MOVE T3,.NFENU(T2)		; Get the address
+	LSH T3,-4			; Right justify
+	NETNUM T2,T3			; And it's network number
+	XMOVEI T1,[
+		MOVE T1,NTNET(P1)	; Get net
+		CAME T1,T2		; Same?
+		  RET			; No
+		SETZM NETON(P1)		; Mark the network down
+jfcl;		MOVEM T4,NTIDNT(P1)	; Save as when it was turned off
+		CALL MNTWAK		; Wake up hardware fork
+		RET]
+	CALL VNCTFN			; Apply to the NCT's
+	MOVX T3,7			; Unreachable code
+	RET
+
+;Hardware vector
+
+DTEVEC::
+	NCTVEC(DTEVEC,NFEKIL,NTHKIL)	; Shutdown 
+	NCTVEC(DTEVEC,NFERSS,NTRSRT)	; Hardware restart
+	NCTVEC(DTEVEC,NFISRT,NTISRT)	; Input start
+	NCTVEC(DTEVEC,NFOSRT,NTOSRT)	; Output start
+	NCTVEC(DTEVEC,NFESCK,NTSCHK)	; Status check
+	NCTVEC(DTEVEC,R,NTHRMV)		; Nothing to release
+
+;Here when restarting
+
+NFERSS:	SETZM NTTOUT(P1)		; Clear output hung timeout
+	SETZM NTTOUT+1(P1)		; Clear input hung timeout
+
+	XMOVEI T1,NFEINT		; Get our interrupt location
+	MOVEM T1,NTIDSP(P1)		; Reset dispatch address
+
+	SETZM @NT10ST(P1)		; Clear status word
+	SETZM @NT11ST(P1)		; And init the 11 side also
+	CALL RLDHFE			; Cause a front-end reload
+	CALL NFERS1
+	RETSKP
+
+NFERS1:	CALL CLROB			; Flush any output buffer
+	CALL CLRIB			; Flush any input buffer
+	SETZM NTORDY(P1)		; Output not allowed yet
+
+	MOVX T1,RSTDTE			; Get initializing bits
+	MNTXCT NTCONO			; CONO them
+	MOVX T1,LDTEPI			; PI bits
+	MNTXCT NTCONO			; CONO them
+	CALLRET RNGBEL			; Ring the 11's doorbel
+
+;NFISRT
+;Start input routine.
+
+NFISRT:	JE REQOT,<@NT11ST(P1)>,R	; Return if no input	
+
+	PIOFF
+	SKIPE NTIB(P1)			; Anything going?
+	IFNSK.				; No, already been processed
+	  PION
+	  RET
+	ENDIF.
+
+	SETOM NTIB(P1)			; Indicate that it's handled and
+	PION				; Give the machine back
+
+	SETZRO REQOT,<@NT11ST(P1)>	; This one is being processed
+
+	MOVE T3,TODCLK			; Record time local driver began input
+	MOVEM T3,NTITIM(P1)		; (Later moved to packet buffer)
+	ADDI T3,^D10000			; Allow ten seconds for input
+	MOVEM T3,NTTOUT+1(P1)		; Start the timer
+
+	HRRZ T2,NTINP(P1)		; Get start of input buffer
+	TXO T2,IPDV%I!IPDV%B!IPDV%R	; Beginning of input, "canned"
+	CALL NTPRNG			; Into ring buffer
+
+	MOVE T1,NTDTEN(P1)		; Get DTE block offset
+	MOVE T2,NTINP(P1)		; Get byte pointer	
+	MOVEM T2,DTETBP(T1)		; Set in block
+
+	LOAD T1,PKSIZ,<@NT11ST(P1)>	; Get input size in bytes
+	CAILE T1,MAXPKL			; Valid size?
+	  JRST NFEDE2			; No, error
+	MOVNS T1			; Make negative
+	ANDI T1,SIZMSK			; Round to 12 bits
+	TXO T1,INTBIT			; Interrupt both on completion
+	MNTXCT NTDATO			; Do DATAO
+
+	RET
+
+
+;Packet too long for net
+
+NFEDE2:	SKIPGE T2,NTPSTI(P1)		; Collecting statistics?
+	  AOS CELL(MNMRC,6,(T2))	; Overrun
+	  BUG.(CHK,NFEIBG,NFEPHY,SOFT,<NFE input packet too big>,
+<<T1,SIZE>,<P1,NCT>,<NTNET(P1),Net>>,<
+Cause:	An NFE DTE request to input was received that did not fit in the
+	receive buffer. This could be caused by version	skew with the NFE.
+
+Data:	Received size, NCT, Network number.
+>)
+	MNTJRST NTRSRT			; Re-sync us
+
+;Here on input to 10 done interrupt errors
+
+NFEID0:	SKIPGE T3,NTPSTI(P1)		; Collecting statistics?
+	  AOS CELL(MNMRC,^D9,(T3))	; Interrupt error - packet vanished
+	BUG.(CHK,NFEBII,NFEPHY,SOFT,<NFEPHY: Bad Input Interrupt>,
+<<P1,NCT>,<NTNET(P1),Net>>,<
+Cause:	An NFE DTE "to 10 done" interrupt was received when there was no
+	input in progress.  Either there is a problem with remembering
+	when input was started, or the DTE is generating spurious
+	interrupts.
+
+Data:	NCT, Network number.
+>)
+	JRST NFEIDX			; Exit routine
+
+NFEID1:	SKIPGE T3,NTPSTI(P1)		; Collecting statistics?
+	  AOS CELL(MNMRC,3,(T3))	; Packet received
+	MNTXCT NTCONI			; Get the error bits
+	BUG.(INF,NFEIER,NFEPHY,HARD,<NFEPHY: Input error>,
+<<T1,CONIbits>,<P1,NCT>,<NTNET(P1),Net>>,<
+Cause:	NFE DTE "Input error" bit was set. This probably indicates
+	a problem with the DTE.
+
+Data:	DTE CONI bits, NCT, Network number.
+>)
+	JRST NFEIDW			; Exit
+
+
+NFEID2:	SKIPGE T2,NTPSTI(P1)		; Collecting statistics?
+	  AOS CELL(MNMRC,6,(T2))	; Overrun
+	BUG.(HLT,NFEIDV,NFEPHY,HARD,<NFEPHY: Input overflow>,
+<<T1,SIZE>,<P1,NCT>,<NTNET(P1),Net>>,<
+Cause:	More input was received from the NFE DTE then expected. This
+	indicates a bug in the DTE.
+
+Data:	Size received, NCT, Network number
+>)
+
+NFEIDW:	CALL CLRIB			; Clear input buffer
+NFEIDX:	MOVX T1,CLTO10			; Clear input bits
+	MNTXCT NTCONO			; With the appropriate CONO
+	MNTJRST NTISRT			; In case there's another waiting
+
+;Here on input to 10 done interrupt
+
+NFEIDN:	SETZM NTTOUT+1(P1)		; Clear input hung timeout
+
+	SKIPGE T3,NTPSTI(P1)		; Collecting statistics?
+	  AOS CELL(MNMRC,0,(T3))	; Packet received
+
+	SKIPN T2,NTIB(P1)		; Were we doing input?
+	  JRST NFEID0			; No
+
+	MOVX T1,DTETER          	; To 10 error?
+	MNTXCT NTCNSZ			; ?
+	  JRST NFEID1			; Yes, ignore it
+
+	MOVX T1,CLTO10			; Clear input bits
+	MNTXCT NTCONO			; With the appropriate CONO
+
+	MNTJRST NTIDUN			; Do input done processing
+
+
+;NFOSRT	Start output if not already in progress.
+;P1/	NCT address
+;NTOB(P1)	-1 - busy
+
+NFOSRT:	CALL MNTUNQ			; Get next output buffer (PLNDB set)
+	 SETZ T1,			; Nothing to send
+	MOVEM T1,NTOB(P1)		; Save output buffer
+	JUMPE T1,R			; Inactive if nothing to be sent
+
+	SKIPGE T3,NTPSTI(P1)		; Collecting statistics?
+	  AOS CELL(MNMSC,0,(T3))	; One more message output
+
+	SKIPGE T3,NTPSTI(P1)		; Collecting statistics?
+	  AOS CELL(MNMSC,1,(T3))	; One more internet message output
+
+	MOVE T2,NTOB(P1)		; Point to buffer
+	TXO T2,IPDV%O!IPDV%B		; Beginning of output
+	MOVX T1,<0,,.IHREG>		; Regular message
+	CALL NTPOSS			; Into ring
+
+	LOAD T1,PLNBZ,(T2)		; Length at local net level
+	PNTLDR T2,PLNDT,(T2)
+
+IFN MODE16,<
+	AOS T1				; Round up
+	LSH T1,-1			; Convert to 16 bit count
+>
+	STOR T1,PKSIZ,<@NT10ST(P1)>	; Set count
+	ADDI T1,WRDDIV-1		; Round up
+	LSH T1,-WRDDIV/2		; Convert to number of words
+
+	HRRZ T3,NTOUP(P1)		; Get dest ponter
+	CALL XBLTA              	; Transfer down to section 0
+
+	MOVE T2,NTOUP(P1)		; Get pointer back
+	MOVE T1,NTDTEN(P1)		; DTE block index
+	MOVEM T2,DTEEBP(T1)     	; Set as byte pointer
+
+	MOVE T1,TODCLK			; Get clock now
+	ADDI T1,^D10000			; Set ten second timeout
+	MOVEM T1,NTTOUT(P1)		; In NCT
+	SETONE REQOT,<@NT10ST(P1)>	; Request output
+	CALLRET RNGBEL			; Ring the bell
+
+;NFEODN	Here on output to 11 done interrupt
+
+NFEODN:	MOVX T1,CLTO11			; Clear to 11 done bits
+	MNTXCT NTCONO
+	SETZM NTTOUT(P1)		; Clear output hung timeout
+	SKIPG T2,NTOB(P1)		; Really doing standard packet output?
+	IFSKP.				; Yes
+	  TXO T2,IPDV%O!IPDV%E		; End of output
+	  CALL NTPRNG			; Into ring
+
+	  MOVX T1,PT%SLN		; Trace code
+	  MNTCALL NTODUN		; Do output done (and restart)
+	ELSE.
+	  SKIPGE T3,NTPSTI(P1)		; Collecting statistics?
+	   AOS CELL(MNMSC,^D9,(T3))	; NFEPHY output buffer vanished
+	ENDIF.
+	SETZM NTOB(P1)			; Can now do more buffers
+	CALLRET MNOSRT			; Restart output if necessary
+
+
+;NFEINT	Interrupt handler routine.  Called at PI level with all ACs saved.
+
+NFEINT:	MOVX T1,DTETDN!DTETER		; Input done, or error?
+	MNTXCT NTCNSZ
+	  JRST NFEIDN			; Yes
+
+	MOVX T1,DTEEDN			; To 11 done successfully?
+	MNTXCT NTCNSZ
+	  JRST NFEODN			; Output done
+
+	MOVX T1,DTEEER			; To 11 error?
+	MNTXCT NTCNSZ
+	  JRST NFERTX			; Yes, resend packet
+
+	MOVX T1,DTETDB          	; Check doorbell
+	MNTXCT NTCNSZ
+	  JRST NFETDB			; Yes, check it out
+
+	SKIPGE T3,NTPSTI(P1)		; Collecting statistics?
+	  AOS CELL(MNMRC,^D11,(T3))	; Interrupt error
+	MNTXCT NTCONI			; Get the error bits
+	BUG.(HLT,NFEBDI,NFEPHY,HARD,<NFEPHY: Bad interrupt>,
+<<T1,CONIbits>,<P1,NCT>,<NTNET(P1),Net>>,<
+Cause:	NFE DTE vectored interrupt for no apparent reason.
+
+Data:	DTE CONI bits, NCT, Network number.
+>)
+	RET
+
+;NFETDB	10 doorbell handler.
+
+NFETDB:	JN UPBIT,<@NT11ST(P1)>,NFEDB0	; 11 up bit set?
+
+;11 came up
+
+	SETONE <AKBIT,UPBIT>,<@NT10ST(P1)> ; Set 10 ack bit
+	CALL NFERS1			; Reset all
+
+	CALL LGTAD			; Get time and date
+	MOVEM T1,NTXUPP(P1)		; As when 11 came up
+	SETOM NTRDY(P1)			; Hardware is working
+	AOS NTSTCH(P1)			; Log a change of state
+	CALL MNTWAK			; Wake up multinet fork
+
+	JRST DBELLX			; Exit routine
+
+;11 was up, response to ACK
+
+NFEDB0:	JN UPBIT,<@NT10ST(P1)>,NFEDB1	; Has our upness been acked?
+	JE AKBIT,<@NT11ST(P1)>,NFEDBE	; He's not acking, error
+
+;11 was up, 10 is not up
+
+	SETZRO AKBIT,<@NT11ST(P1)>	; Zero 11's ACK bit
+	SETONE UPBIT,<@NT10ST(P1)>	; Set 10's upbit
+	SETOM NTORDY(P1)		; Allow output
+	SETOM NTRDY(P1)			; Flag hardware working
+	CALL LGTAD			; Get time and date
+	MOVEM T1,NTXUPP(P1)		; As when 11 came up
+
+	AOS NTSTCH(P1)			; Indicate change in state
+	CALL MNTWAK			; Signal multinet fork
+
+	SKIPA				; Skip error
+NFEDBE:	 BUG.(CHK,NFENAK,NFEPHY,SOFT,<NFEPHY: Input before Ack>,
+<<P1,NCT>,<NTNET(P1),Net>>,<
+Cause:	An NFE DTE input request was received before the 10 and 11 were
+	completely synced. 
+
+Action:	Determine if there is a bug in the syncing algorthim.
+
+Data:	NCT address, Network number.
+>)
+	CALL RNGBEL			; Bong on 11 again
+	JRST DBELLX			; Exit
+
+;11 up and 10 up
+
+NFEDB1:	SETOM NTORDY(P1)		; Output is allowed at this point
+	CALL MNOSRT			; Do output if possible
+
+	JE REQOT,<@NT11ST(P1)>,DBELLX	; Does he want to start output?
+	MNTCALL NTISRT			; Yes
+
+DBELLX:	MOVX T1,DTETDB			; Clear the doorbell
+	MNTXCT NTCONO			; With cono
+	RET
+
+;CLROB	Free output buffer.
+
+CLROB:	SKIPN T2,NTOB(P1)		; Any output buffer?
+	  RET				; No
+	SKIPGE T1,NTPSTI(P1)		; Collecting statistics?
+	  AOS CELL(MNMSC,^D12,(T1))	; Error - clear output
+	MOVX T1,PT%KOL			; Packet flushed by local net
+	TXNE T2,1B0+IPDV%R		; Standard packet?
+	IFSKP.
+	  MNTCALL NTODUN		; Yes, simulate completion
+	ENDIF.
+	SETZM NTOB(P1)			; Can now do more buffers
+	RET
+
+;CLRIB	Free input buffer.
+
+CLRIB:
+	SKIPGE T1,NTPSTI(P1)		; Collecting statistics?
+	  AOS CELL(MNMRC,^D12,(T1))	; Error - clear input
+	SETZM NTIB(P1)			; Never really a buffer
+	RET
+
+;NFERTX	Here on a to 11 error, clear error and try again.
+
+NFERTX:	MNTXCT NTCONI
+	BUG.(INF,NFEOER,NFEPHY,HARD,<Network FE Output error>,
+<<T1,CONIbits>,<P1,NCT>,<NTNET(P1),Net>>,<
+Cause:	An NFE DTE output error bit was set after "too 11 done".
+	This may indicate a DTE problem.
+
+Data:	DTE CONI bits, NCT, Network number.
+>)
+	SKIPGE T2,NTPSTI(P1)		; Collecting statistics?
+	  AOS CELL(MNMSC,4,(T2))	; NFE to-11 error - clear input
+
+	MOVE T1,NTDTEN(P1)		; Get offset
+	MOVE T2,NTOUP(P1)		; Get pointer
+	MOVEM T2,DTETBP(T1)		; Reset pointer
+	SETONE REQOT,<@NT10ST(P1)>	; Reset request bit
+	MOVX T1,DTEEER!DTEEDN		; Clear to 11 error
+	MNTXCT NTCONO
+	CALLRET RNGBEL			; Ring bell again
+
+;RNGBEL	Ring 11's doorbel.
+
+RNGBEL:	MOVX T1,DTEEDB			; Proper bit
+	MNTXCT NTCONO			; Zap it
+	RET
+
+;NFESCK	Status check routine.
+
+;P1/	Pointer to NCT
+;Skips if interface is alright
+
+NFESCK:	JE UPBIT,<@NT11ST(P1)>,NFESCX	; If 11 is not up
+	JE UPBIT,<@NT10ST(P1)>,NFESCX	; Or hasn't seen us come up
+	JN AKBIT,<@NT10ST(P1)>,NFESCX	; Or hasn't seen our ack yet
+	MOVX T1,DTEEER!DTETER		; Or if an error has occured
+	MNTXCT NTCNSZ
+	  JRST NFESCX			; Return bad, or
+	SKIPE NTINP(P1)			; If couldn't get DTE buffers
+	 SKIPN NTOUP(P1)		; At initialization,
+	  JRST NFESCX			; Return bad, else
+	RETSKP				; Success
+
+NFESCX:	SKIPGE T1,NTPSTI(P1)		; Collecting statistics?
+	  AOS CELL(MNMST,1,(T1))	; NFEPHY status check failed
+	RET
+
+
+;NFEKIL	Turn off the hardware on a Fibernet DTE.
+
+NFEKIL:	SKIPE NETON(P1)			; Network supposed to be on?
+	IFSKP.				; No, so we can disable interrupts
+					; (Otherwise 11 couldn't tell us
+					; when it came back on)
+	  MOVX T1,DTEPIE		; Get Bits to
+	  MNTXCT NTCONO			; Turn PI's off
+	ENDIF.
+
+	SETZM NTORDY(P1)		; Turn off output
+	CALL NCTDWN			; Interface is down
+	RETSKP
+
+;RLDHFE	Reload the appropriate front end.
+
+;P1/	NCT
+
+RLDHFE:
+	SKIPE SKPRLD			; Skip the reload?
+	  RET				; Yes.
+
+	STKVAR <<FILNAM,10>,FORKH,FILH,TTYH>
+	HRROI T1,FILNAM			; First try to find the right file
+	HRROI T2,[ASCIZ /SYSTEM:HOSTFE-/]
+	SETZ T3,
+	SOUT%
+
+	MOVE T2,NTDTEN(P1)		; Get DTE number
+	LSH T2,-3
+	MOVE T3,^D10
+	NOUT%
+	  JRST RLDHFF
+
+	MOVEI T2,[ASCIZ /.BIN/]
+	SETZ T3,
+	SOUT%
+
+;Now get the file
+
+	MOVX T1,GJ%OLD!GJ%SHT
+	HRROI T2,FILNAM
+	GTJFN%
+	  JRST RLDHFF
+
+	MOVEM T1,FILH
+
+	MOVX T2,7B5!OF%RD
+	OPENF%
+	  JRST RLDHF0
+
+	MOVE T3,NTDTEN(P1)		; Get the right terminal to load over
+	LSH T3,-3
+	MOVE T3,RLDTTY(T3)
+
+	MOVE T4,FILH			; and the load file JFN
+
+	MOVX T1,CR%CAP!CR%ACS
+	SETZ T2,			; Same AC's
+	CFORK%
+	  JRST RLDHF0
+	MOVEM T1,FORKH
+
+	MOVX T1,GJ%SHT!GJ%OLD
+	HRROI T2,[ASCIZ /SYSTEM:HFELDR.EXE/]
+	GTJFN%
+	  JRST RLDHF1
+	
+	HRL T1,FORKH
+	GET%
+
+	MOVEI T1,DTESER			; Set the magic finger
+	MNTXCT NTCONO			; ZAP
+	MOVEI T1,1			; keep it down long enough
+	DISMS%
+	MOVEI T1,DTECER			; Then clear it
+	MNTXCT NTCONO
+
+	MOVE T1,FORKH			; Now start up reload fork
+	SETZ T2,
+	SFRKV%
+
+	WFORK%				; Wait for terminate (may not do load)
+	RET
+
+;Here if error
+
+RLDHF1:	MOVE T1,FORKH
+	KFORK%				; If error after fork created
+
+RLDHF0:	MOVE T1,FILH
+	CLOSF%				; If error after file gotten
+	  NOP
+
+RLDHFF:	BUG.(HLT,HFERLD,NFEPHY,SOFT,<Failed trying to reload host front-end>,
+<<T1,Error code>,<T3,Error code>,<P1,NCT>,<NTNET(P1),Net>>,<
+Cause:	
+
+Data:	T1 GTJFN% error code, T3 NOUT% error code, NCT, Network number.
+>)
+	RET
+	ENDSV.
+
+;Flag non-zero to not do routine
+
+SKPRLD:	-1
+
+;Table of TTY's to load each front end over indexed by DTE number
+
+RLDTTY:	0				; Never on DTE 0
+	0				; Or 1
+	400002				; DTE 2 HFE is TTY2
+	0				; Not 3
+
+
+
+	SWAPCD
+
+; Routines to process NFE specific switches in the SITE-ADDRESS.TXT
+; file.
+
+;Local network with Network Front End protocol
+
+ADNFE::
+	MOVX T4,NL.NFE		; Network front-end
+	MOVX T3,MAXLDR-1	; Header size correction
+	XMOVEI T2,NFEVEC	; NFE protocol vector
+	HRROI T1,[ASCIZ /
+% NFE ignored (not in system configuration)./]
+	CALLRET ADPVEC		; Join common code in MNETDV
+
+
+	TNXEND
+	END				; Of NFEPHY

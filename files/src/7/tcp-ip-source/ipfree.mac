@@ -1,0 +1,907 @@
+; Edit= 8897 to IPFREE.MAC on 12-Aug-88 by RASPUZZI
+;Update BUG. documentation.
+; UPD ID= 8530, RIP:<7.MONITOR>IPFREE.MAC.5,   9-Feb-88 16:15:33 by GSCOTT
+;TCO 7.1218 - Update copyright date.
+; UPD ID= 8418, RIP:<7.MONITOR>IPFREE.MAC.4,   4-Feb-88 12:17:39 by GSCOTT
+;TCO 7.1210 - Set IPGCOL normally not dumpable.
+; UPD ID= 112, RIP:<7.MONITOR>IPFREE.MAC.3,  15-Sep-87 18:53:53 by GSCOTT
+;TCO 7.1057 - Change code at GETBB3 to not be so paranoid about block sizes.
+; *** Edit 7478 to IPFREE.MAC by PRATT on 12-May-87, for SPR #21612
+; Fix up occaisional lost IP freespace bug in GETBB0. Change T1 to BLK. 
+; UPD ID= 2087, SNARK:<6.1.MONITOR>IPFREE.MAC.7,   3-Jun-85 14:45:42 by MCCOLLUM
+;TCO 6.1.1406  - Update copyright notice.
+; UPD ID= 1572, SNARK:<6.1.MONITOR>IPFREE.MAC.6,  26-Feb-85 17:17:55 by PAETZOLD
+;Document BUGxxx's
+; UPD ID= 1419, SNARK:<6.1.MONITOR>IPFREE.MAC.5,  29-Jan-85 11:37:43 by PAETZOLD
+;TCO 6.1.1160 - Define USIZE Correctly
+; UPD ID= 1035, SNARK:<6.1.MONITOR>IPFREE.MAC.4,  12-Nov-84 15:24:34 by PAETZOLD
+;TCO 6.1041 - Move ARPANET to XCDSEC
+; UPD ID= 310, SNARK:<TCPIP.5.4.MONITOR>IPFREE.MAC.11,  17-Oct-84 10:25:53 by PAETZOLD
+;Make 1822 buffer sizes and initialization key off INTBSZ and MAXWPM.
+; UPD ID= 297, SNARK:<TCPIP.5.4.MONITOR>IPFREE.MAC.10,  30-Sep-84 23:41:39 by PAETZOLD
+;NI buffers are INTXPW size and not MAXWPM.
+; UPD ID= 285, SNARK:<TCPIP.5.4.MONITOR>IPFREE.MAC.9,  24-Sep-84 13:54:22 by PURRETTA
+;Update copyright notice.
+; UPD ID= 276, SNARK:<TCPIP.5.4.MONITOR>IPFREE.MAC.8,   7-Sep-84 22:54:50 by PAETZOLD
+;Clean up a little.  Remove repeat zeroes.
+; UPD ID= 256, SNARK:<TCPIP.5.4.MONITOR>IPFREE.MAC.7,  26-Aug-84 17:45:45 by PAETZOLD
+;NI buffers are now from IP free space.  Remove RETNIB hack from RETBLK.
+; UPD ID= 227, SNARK:<TCPIP.5.4.MONITOR>IPFREE.MAC.6,   6-Aug-84 19:12:32 by PAETZOLD
+;Rewrite DNGWDS and DNFWDS to use ASGRES and friends.
+; UPD ID= 147, SNARK:<TCPIP.5.4.MONITOR>IPFREE.MAC.5,  30-May-84 14:24:21 by PAETZOLD
+;NIPLKB and NIPULK are here now.  
+;Make DNGWDS and DNFWDS lock and unlock the space.
+; UPD ID= 97, SNARK:<TCPIP.5.4.MONITOR>IPFREE.MAC.4,  12-May-84 11:17:29 by PAETZOLD
+;Forgot about DNFWDS
+; UPD ID= 95, SNARK:<TCPIP.5.4.MONITOR>IPFREE.MAC.3,  12-May-84 10:51:42 by PAETZOLD
+;CLRBLK now in this module.  Add NISRV needed routines.
+; UPD ID= 26, SNARK:<TCPIP.5.4.MONITOR>IPFREE.MAC.2,   5-Apr-84 20:52:04 by PAETZOLD
+;MAXWPM is no longer 400.
+; UPD ID= 4004, SNARK:<6.MONITOR>IPFREE.MAC.4,  28-Mar-84 20:56:45 by PAETZOLD
+;More TCO 6.1733 - Move 1822 buffer stuff to here.
+; UPD ID= 3825, SNARK:<6.MONITOR>IPFREE.MAC.3,  29-Feb-84 18:14:55 by PAETZOLD
+;More TCO 6.1733 - ANBSEC and MNTSEC removal.  Bug fixes.  Cleanup.
+;<TCPIP.5.3.MONITOR>IPFREE.MAC.4,  6-Dec-83 23:51:37, Edit by PAETZOLD
+;<TCPIP.5.1.MONITOR>IPFREE.MAC.7,  5-Jul-83 08:25:34, Edit by PAETZOLD
+;TCP changes for 5.1
+
+;	COPYRIGHT (c) DIGITAL EQUIPMENT CORPORATION 1976, 1988.
+;	ALL RIGHTS RESERVED.
+;
+;	THIS SOFTWARE IS FURNISHED UNDER A  LICENSE AND MAY BE USED AND  COPIED
+;	ONLY IN  ACCORDANCE  WITH  THE  TERMS OF  SUCH  LICENSE  AND  WITH  THE
+;	INCLUSION OF THE ABOVE  COPYRIGHT NOTICE.  THIS  SOFTWARE OR ANY  OTHER
+;	COPIES THEREOF MAY NOT BE PROVIDED  OR OTHERWISE MADE AVAILABLE TO  ANY
+;	OTHER PERSON.  NO  TITLE TO  AND OWNERSHIP  OF THE  SOFTWARE IS  HEREBY
+;	TRANSFERRED.
+;
+;	THE INFORMATION IN THIS  SOFTWARE IS SUBJECT  TO CHANGE WITHOUT  NOTICE
+;	AND SHOULD  NOT  BE CONSTRUED  AS  A COMMITMENT  BY  DIGITAL  EQUIPMENT
+;	CORPORATION.
+;
+;	DIGITAL ASSUMES NO  RESPONSIBILITY FOR  THE USE OR  RELIABILITY OF  ITS
+;	SOFTWARE ON EQUIPMENT THAT IS NOT SUPPLIED BY DIGITAL.
+
+
+	SEARCH	ANAUNV,PROLOG
+	TTITLE	(IPFREE,IPFREE,< - Internet Free Space Handler>)
+	Subttl	Table of Contents
+
+;		     Table of Contents for IPFREE
+;
+;				  Section		      Page
+;
+;
+;    1. IP Free Space Debugging code and storage . . . . . . .   4
+;    2. Internet Free Space Initialization and Misc Routines .   5
+;    3. Internet Free Space Return Code  . . . . . . . . . . .   6
+;    4. Internet Free Space List Handling Code . . . . . . . .   8
+;    5. Internet Free Space Variable Block Assignment Routines   9
+;    6. Internet Free Space Assignment Routines  . . . . . . .  10
+;    7. Internet Free Space Misc Routines  . . . . . . . . . .  11
+;    8. Internet Free Space Block Carver . . . . . . . . . . .  12
+;    9. Internet Free Space Garbage Collector  . . . . . . . .  13
+;   10. Internet Free Space Block Verification Routines  . . .  14
+;   11. Internet Free Space Hash Table Routines  . . . . . . .  15
+;   12. 1822 Buffer Handling . . . . . . . . . . . . . . . . .  16
+;   13. Temporary Free Space Routines for NISRV and Friends  .  18
+;   14. IPNIDV Buffer Handling . . . . . . . . . . . . . . . .  19
+;   15. End of IPFREE  . . . . . . . . . . . . . . . . . . . .  20
+
+; AC redefinitions:
+
+IF1 <
+BLK=1+NTEMPS+NLOCLS-3		; Holds pointer to block in question
+SIZ=1+NTEMPS+NLOCLS-2		; Holds size of block
+LST=1+NTEMPS+NLOCLS-1		; Holds pointer to a list of blocks
+NLOCLS==NLOCLS-3
+>
+
+; Note: INTBLK contains FSIZE,,FLIST;  i.e. a header w/o FNEXT
+; Definitions for FREE block header structure:
+
+DEFSTR(FSIZE,0,17,18)		; (User) Block size (excluding UBLKSZ)
+DEFSTR(FLIST,0,35,18)		; List of other blocks
+DEFSTR(FNEXT,1,35,18)		; Next block higher in memory
+FBLKSZ==2			; Size of a FREE block header
+
+; Definitions for USED block header structure:
+
+DEFSTR(USIZE,0,17,18)		; (User) Block size (excluding UBLKSZ header)
+DEFSTR(UHASH,0,35,18)		; Hash. Guards against user clobbering
+UBLKSZ==1			; Size of a USED block header
+
+; Block size quantitization -- all blocks except very short ones
+; are forced to be a multiple of this size.
+
+BSMALL==10			; Don't quantize this size or smaller
+BSQUAN==10			; Must be a power of 2
+
+	SUBTTL IP Free Space Debugging code and storage
+
+IFN IPFDSW,<
+
+;	Free space event ring buffer entries have the following format
+
+	.IPRFX==0		; word 0/ 525252,,FORKX
+	.IPRBK==1		; word 1/ Address of block
+	.IPFLG==2		; word 2/ Flags from block
+	.IPRTD==3		; word 3/ TODCLK value
+	.IPRHP==4		; word 4/ HP time value
+	.IPSTK==5		; word 4/ Stack Cells
+	.IPSTS==5		; number of stack words to save
+	IPFLEN==<.IPSTK+.IPSTS>-.IPRFX+1 ; Length of ring entry
+	IPFRNN==^D50		; number of entries in ring buffer
+
+RS IPFRNG,<IPFRNN*IPFLEN>	; FREE SPACE EVENT RING BUFFER
+RS IPFADR,1			; CURRENT RING BUFFER ADDRESS
+
+	XRESCD			; THIS CODE IS RESIDENT
+
+IPFTRK:				; TRACK IP FREE SPACE EVENTS
+	PUSH P,T1		; SAVE ACS
+	PUSH P,T2
+	PUSH P,T3
+	PUSH P,T4
+	SETO T3,		; ASSUME PI IS ON
+	CONSO PI,PIPION		; IS PI ON?
+	TDZA T3,T3		; NO SO TURN OFF FLAG
+        PIOFF			; YES SO MAKE THE MACHINE MINE
+	MOVE T1,IPFADR		; GET THE CURRENT RING POINTER
+	ADDI T1,IPFRNG		; OFFSET BY BASE ADDRESS OF THE RING BUFFER
+	HRRZ T2,FORKX		; GET OUR FORKX
+	HRLI T2,525252		; GET THE MAGIC CODE
+	MOVEM T2,.IPRFX(T1)	; SAVE THE FIRST WORD
+	MOVE T2,-3(P)		; GET THE ADDRESS OF THE BLOCK
+	MOVEM T2,.IPRBK(T1)	; SAVE IT
+	SETSEC T2,INTSEC	; EXTENDED POINTER
+	MOVE T2,1(T2)		; GET FLAGS FROM THE BLOCK
+	MOVEM T2,.IPFLG(T1)	; AND SAVE THEM AWAY
+	MOVE T2,TODCLK		; GET THE CURRENT TODLCK
+	MOVEM T2,.IPRTD(T1)	; SAVE TODCLK VALUE ALSO
+	PUSH P,T1		; SAVE T1
+	JSP T4,MTIME		; GET THE HPTIM
+	MOVE T2,T1		; GET THE TIME
+	POP P,T1		; RESTORE T1
+	MOVEM T2,.IPRHP(T1)	; SAVE THE HPTIME VALUE
+				; NOW SAVE THE LAST .IPSTS STACK CELLS
+	HRLI T2,-<.IPSTS+2>(P)	; GET THE ADDRESS OF THE FIRST STACK WORD
+	HRRI T2,.IPSTK(T1)	; GET THE ADDRESS OF THE FIRST RING STACK WORD
+	BLT T2,<.IPSTK+.IPSTS-1>(T1) ; SAVE THE STACK CELLS
+				; NOW MOVE THE RING BUFFER ADDRESS
+	MOVE T1,IPFADR		; GET THE RING ADDRESS AGAIN
+	ADDI T1,IPFLEN		; BUMP THE RING POINTER
+	CAIL T1,<IPFLEN*IPFRNN>	; SHOULD THE POINTER LOOP AROUND?
+	SETZ T1,		; YES SO MAKE IT LOOP
+	MOVEM T1,IPFADR		; SAVE THE NEW RING POINTER
+	SKIPE T3		; SHOULD WE GO PION?
+        PION			; YES SO GIVE BACK THE MACHINE
+	JRST PA4		; POP ACS AND RETURN TO CALLER
+
+	XSWAPCD			; THIS CODE IS SWAPPABLE
+
+>				; end of IPFDSW
+
+	SUBTTL Internet Free Space Initialization and Misc Routines
+
+;FREINI	Initialize the Free Storage area
+;	CALL FREINI
+;Ret+1:	Always.
+
+FREINI::SETZM ODDBLK		; No odd size blocks returned yet
+	MOVE T1,[INTBLK,,INTBLK+1] ; Set for a BLT
+	SETZM INTBLK		; Clear 1st word of table
+	BLT T1,INTBLK+NFIXED-1	; Clear rest
+	MOVE T2,[INTSEC,,INTFRE] ; Pointer to the INT free area
+  	MOVEM T2,BULKST		; Beginning of bulk storage
+	ADDI T2,INTFSZ-1
+	MOVEM T2,BULKND		; End of the bulk storage
+	MOVEI T4,INTFSZ
+	MOVEM T4,INTFSP		; Amount of free space available
+	SETZM MRGFLG		; No block merging possible yet.
+	SETZM INTSVC		; Count of scavenges done
+	SETZM INTSVT		; TODCLK filter of excessive BUGINF's
+	SETZM INTSVR		; Scavenge request flag
+	IFN IPFDSW,<SETZM IPFADR> ; IF DEBUGING RESET THE RING POINTER
+	MOVEI T1,FRELCK		; Free storage lock
+	CALLRET CLRLCK		; Initialize it
+
+;FREAVL	Returns amount of free storage available
+;CALL FREAVL
+;Ret+1:	Always, number of words in T1
+
+FREAVL::MOVE T1,INTFSP
+	RET
+
+	SUBTTL Internet Free Space Return Code
+
+;RETBLK	Return a block to free area
+;T1/	(Extended) Pointer to the user portion of the block
+;	CALL RETBLK
+;Ret+1:	Always
+
+RETBLK::
+	IFN IPFDSW,<CALL IPFTRK> ; IF DEBUGING TRACE THIS EVENT
+	XMOVEI T3,-UBLKSZ(T1)	; Pointer to free header
+	XMOVEI T2,RETBL1	; Get address of worker routine
+	MOVEI T1,FRELCK		; Lock to set
+	CALL LCKCAL		; Lock and call.
+	RET			; AND RETURN TO CALLER
+
+RETBL1:
+	SAVEAC <BLK,SIZ,LST>
+	MOVE BLK,T1		; Set block pointer
+	LOAD SIZ,USIZE,(BLK)	; and size (excluding header)
+	CALL RETBK0		; Do the returning
+	RET
+
+;RETBK0	Workhorse for above.  Called with NOINT & FRELCK set.
+;BLK/	(Extended) Pointer to the block to return
+;SIZ/	Size of the block, excluding header
+;	CALL RETBK0
+;Ret+1:	Always
+
+RETBK0:	CALL CHKBLK		; Make sure header not crashed by user
+	MOVEI T1,UBLKSZ(SIZ)	; Total length of the block
+	ADDM T1,INTFSP		; Amount of free storage now available
+	ADD T1,BLK		; Next location in memory
+	STOR T1,FNEXT,(BLK)	; Save in free block
+	SETZRO FLIST,(BLK)	; Block may become the end of a list
+	SETOB T1,MRGFLG		; Say common size and merging possible
+	CALLRET RETB
+
+
+
+;RETB	Return the block to some list. Called with NOINT & FRELCK set.
+;BLK/	(Extended) Block	; with FSIZE & FNEXT
+;SIZ/	Size of the block	; Excluding header
+;T1/	UserCall Flag		; Non-zero says to create a slot in
+;	CALL RETB
+;Ret+1:	Always
+
+RETB0:				; Indicate not being returned by user
+	SETZ T1,		; Flag it
+RETB:
+	PUSH P,T1		; Save the flag
+	LOAD SIZ,USIZE,(BLK)	; size excluding header
+	CALL HASHX		; Get -1 or index to INTBLK
+	POP P,T2		; Restore the flag
+	JUMPL T1,RETB1		; Jump if there is no slot for this size
+	JUMPE T2,RETB1		; Jump if not a user's block size
+	MOVEI T2,INTBLK(T1)	; Pointer to the list head
+	LOAD LST,FLIST,(T2)	; Pointer to the list itself
+	STOR LST,FLIST,(BLK)	; Make block point to current tail
+	STOR BLK,FLIST,(T2)	; Make head point to new front of list
+	STOR SIZ,FSIZE,(T2)	; Be sure size is right in the table
+	EXIT RETBX
+
+RETB1:	MOVE LST,ODDBLK		; The appropriate (extended) list
+	CALL SPUT		; Put block on that list
+	MOVEM LST,ODDBLK	; New list with block on it
+RETBX:	RET
+
+	SUBTTL Internet Free Space List Handling Code
+
+;SPUT	Put a block on an address ordered list
+;BLK/	(Extended) Block pointer  with FSIZE & FNEXT
+;LST/	(Extended) List pointer
+;	CALL SPUT
+;Ret+1:	Always.  New list containing Block in LST
+
+SPUT:	TEMP <CUR,SUC>
+	TRNE LST,-1
+	 JRST SPUT1		; Jump if not adding to null list
+	SETZRO FLIST,(BLK)	; Clear list pointer in block
+	MOVE LST,BLK		; New list has only this block
+	EXIT SPUTX		; Return LST as new list
+SPUT1:	CAML BLK,LST		; Adding to front of list?
+	 JRST SPUT2		; No. Search for right spot.
+	STOR LST,FLIST,(BLK)	; Make BLK be first on the list
+	MOVE SUC,LST		; Init so rest works
+	MOVE LST,BLK		; Value to be returned
+	MOVE CUR,BLK		; Current block on list
+	JRST SPUT4
+
+SPUT2:	SKIPA CUR,LST		; Start at beginning of list
+SPUT3:	MOVE CUR,SUC		; Advance to next on list
+	LOAD SUC,FLIST,(CUR)	; Get the successor to CUR
+	SETSEC SUC,INTSEC	; Make extended address
+	CAML BLK,SUC		; BLK must be below SUC
+	TRNN SUC,-1		; or SUC must be (INTSEC,,) 0
+				; (CUR is end of list)
+	CAMG BLK,CUR		; and BLK must be above CUR
+	 JRST SPUT3		; Not right place for insert
+	STOR SUC,FLIST,(BLK)	; Patch in BLK between CUR and SUC
+	STOR BLK,FLIST,(CUR)
+SPUT4:	LOAD T4,FNEXT,(BLK)	; Word address following BLK
+	JUMPE T4,SPUT5		; Beware match on INTSEC,,0
+	SETSEC T4,INTSEC	; Make extended address
+	CAME T4,SUC		; Combine BLK and SUC ?
+	 JRST SPUT5		; No
+	LOAD T3,FSIZE,(BLK)	; SUC is real block, not INTSEC,,0
+	LOAD T4,FSIZE,(SUC)	; end pointer
+	ADDI T3,UBLKSZ(T4)	; Size of combined block
+	STOR T3,FSIZE,(BLK)
+	LOAD T4,FNEXT,(SUC)	; End of SUC
+	STOR T4,FNEXT,(BLK)	; Is new end of combined block
+	LOAD SUC,FLIST,(SUC)	; Successor of SUC is new SUC
+	STOR SUC,FLIST,(BLK)	; and successor of combined BLK
+SPUT5:	LOAD T3,FNEXT,(CUR)	; Address following CUR
+	SETSEC T3,INTSEC	; Make extended address
+	CAME T3,BLK		; Combine CUR and BLK?
+	 EXIT SPUTX
+	LOAD T3,FSIZE,(CUR)
+	LOAD T4,FSIZE,(BLK)
+	ADDI T3,UBLKSZ(T4)
+	STOR T3,FSIZE,(CUR)	; Set size of combined block
+	LOAD T4,FLIST,(BLK)	; Successor of BLK
+	STOR T4,FLIST,(CUR)	; Is successor of combined block
+	LOAD T4,FNEXT,(BLK)	; Get thing following BLK in memory
+	STOR T4,FNEXT,(CUR)	; That is what follows compbined block
+SPUTX:	RESTORE
+	RET
+
+	SUBTTL Internet Free Space Variable Block Assignment Routines
+
+;GETBBK	Assign biggest block of free storage
+;T1/	Minimum acceptable size
+;T2/	Maximum usefull size
+;	CALL GETBBK
+;Ret+1:	Always.  T1 has 0 or or size,,pointer
+;***** N.B.:  T1 does not have an extended address *****
+
+;0 may be returned as a value meaning no space was available.
+;The caller is expected to cope with this situation.
+
+GETBBK::DMOVEM T1,T3		; Place args for call via LCKCAL
+	MOVEI T1,FRELCK		; The lock to set
+	XMOVEI T2,[PUSH P,BLK	; Save ACs which will be
+		PUSH P,SIZ	; Used as globals
+		PUSH P,LST
+		MOVE SIZ,T2	; Max size
+		CALL GETBB0	; Do the work
+		MOVE T1,BLK	; Value for caller
+		POP P,LST
+		POP P,SIZ
+		POP P,BLK
+		RET]
+	CALL LCKCAL		; Call the function with the lock set
+	IFN IPFDSW,<CALL IPFTRK> ; IF DEBUGING TRACE THIS EVENT
+	RET			; AND RETURN TO CALLER
+
+;GETBB0	Workhorse for the above. Called with NOINT & FRELCK set.
+;T1/	Min. size
+;SIZ/	Max. size, excluding header
+;FRELCK set
+;	CALL GETBB0
+;Ret+1:	Always.  BLK has 0 or size,,pointer
+
+GETBB0:	LOCAL <MINSIZ>
+	MOVEM T1,MINSIZ
+	CALL GETBK0 		;[7478] (SIZ/BLK) Use normal GETBLK routine
+	JUMPN BLK,GETBBX 	;[7478] Exit if we got the max. size block
+
+;Note  that  the  fail  return  from  GETBK0 indicates that a garbage
+;collect has happened and that all free blocks are now either on  the
+;ODDBLK list or INTBLK+n. Further, no block on ODDBLK is greater than
+;or equal to the MAXSIZ.
+
+	MOVEI SIZ,0		; Init max size seen
+	LOAD T2,FLIST,<+ODDBLK>	; Init pointer to first block
+GETBB1:	JUMPE T2,GETBB2		; Jump if at end of list
+	SETSEC T2,INTSEC	; Make extended address
+	LOAD T3,FSIZE,(T2)	; Get size of current block
+	CAMLE T3,SIZ		; Bigger than seen before?
+	 MOVE SIZ,T3		; Yes.  Save max.
+	LOAD T2,FLIST,(T2)	; Point to next block
+	JRST GETBB1
+
+GETBB2:	CAILE SIZ,BSMALL	;[7.1057] Unless it is a small block,
+	TRNN SIZ,BSQUAN-1	;[7.1057]  or an exact quantum,
+	JRST GETBB3		;[7.1057]   then leave it alone
+	SUBI SIZ,FBLKSZ		;[7.1057] We will need this much extra to split
+	CAILE SIZ,BSMALL	;[7.1057]  and unless it is now a small block
+	ANDCMI SIZ,BSQUAN-1	;[7.1057]   round down to next smaller quant
+
+GETBB3:	CAMGE SIZ,MINSIZ	;[7.1057] Is the biggest block acceptable?
+	 JRST GETBB9		; No.  Tell caller.
+	CALL GETBK0
+	JUMPN BLK,GETBBX	; Return if all went well.
+	BUG.(HLT,INTFR7,IPFREE,SOFT,<Internet Free Space - ODDBLK list fouled>,,<
+
+Cause:	The internet free space facility was called to allocate free space and
+	it was determined that internet free space is corrupted.
+>)
+GETBB9:	SETZB BLK,SIZ		; Failure indication
+GETBBX:	HRL BLK,SIZ		; Place size for caller
+	RESTORE
+	RET
+
+	SUBTTL Internet Free Space Assignment Routines
+
+;GETBLK	Assign a block of free storage
+;T1/	Size
+;	CALL GETBLK
+;Ret+1:	Always. 0 or Extended Pointer to block in T1
+
+;0 may be returned as a value meaning no space was available.
+;The caller is expected to cope with this situation.
+
+GETBL2::SAVEAC <T2>
+GETBLK::MOVE T3,T1		; Place in right ac
+	MOVEI T1,FRELCK		; Lock to set
+	XMOVEI T2,GETBL0	; Address of the jacket routine
+	CALL LCKCAL		; Call routine with lock set
+	IFN IPFDSW,<CALL IPFTRK> ; IF DEBUGING TRACE THIS EVENT
+	RET			; AND RETURN TO CALLER
+
+GETBL0:	SAVEAC <BLK,SIZ,LST>	; jacket routine
+	MOVE SIZ,T1		; get the requested size
+	CALL GETBK0		; Do the work
+	MOVE T1,BLK		; return the address of the block
+	RET
+
+;GETBK0	Workhorse for above. Called with NOINT & FRELCK set.
+;SIZ/	Size of block to be assigned, excluding header
+;	CALL GETBK0
+;Ret+1:	Always.  0 or Extended Pointer to block in BLK. Must save SIZ.
+
+GETBK0:	JUMPG SIZ,GETBK1
+	BUG.(HLT,INTFR4,IPFREE,SOFT,<Internet Free Space - Bad block size request>,,<
+
+Cause:	The internet free space facility made an internal call for a zero 
+	length block.
+
+Action:	Trace back on the stack and determine why the caller wants a 0 length
+	block.
+>)
+	MOVEI SIZ,1		; Min size we ever hand out
+GETBK1:	CAILE SIZ,INTFSZ-UBLKSZ	; Max size
+	BUG.(HLT,INTFR5,IPFREE,SOFT,<Internet Free Space - Bad block size request>,,<
+
+Cause:	The internet free space facility made an internal call for a block
+	larger than the maximum supported size.
+
+Action:	Trace back on the stack and find the caller. There is probably a
+	mathmatical error in that routine when it calculates how much
+	freespace to be obtained.
+>)
+	CAIG SIZ,BSMALL		; Don't quantize Q heads etc.
+	 JRST GETBK2
+	ADDI SIZ,BSQUAN-1	; Round up
+	ANDCMI SIZ,BSQUAN-1	; To nearest bigger multiple
+GETBK2:	CALL GETB		; Get it from somewhere
+	JUMPE BLK,GETBKX	; Couldn't get the block
+	MOVNI T2,UBLKSZ(SIZ)	; Size of block we will hand out
+	ADDM T2,INTFSP		; Decrease amt of free space available
+	CALL HASH		; Get a random number
+	STOR T1,UHASH,(BLK)	; Check this when block returned
+	STOR SIZ,USIZE,(BLK)	; Set the block size
+	XMOVEI BLK,UBLKSZ(BLK)	; Value is user area of the block
+GETBKX:	RET
+
+	SUBTTL Internet Free Space Misc Routines
+
+;GETB	Get a block from somewhere.  Called with NOINT & FRELCK set.
+;SIZ/	Size, excluding header
+;	CALL GETB
+;Ret+1:	Always.   0 or (Extended) Pointer to block in BLK
+
+GETB:	SETZ T1,		; Don't create a slot
+	CALL HASHX		; Get index to INTBLK table
+	JUMPL T1,GETB2		; Not in table.
+	MOVEI T3,INTBLK(T1)	; Address of list head
+	LOAD T4,FLIST,(T3)	; Pointer to list of blocks of this size
+	JUMPE T4,GETB2		; None.  Try something else.
+	SETSEC T4,INTSEC	; Make extended address
+	LOAD T2,FLIST,(T4)	; Successor of 1st block on list
+	STOR T2,FLIST,(T3)	; Is now first thing on list
+	SKIPA BLK,T4		; This block is the result
+GETB2:	  CALL GCARVE		; Look elsewhere for a block
+	RET
+
+;GCARVE	Carve a block of the required size from an odd block.
+;SIZ/	Size, excluding header
+;	CALL GCARVE
+;Ret+1:	Always.   0 or (Extended) Pointer to block in BLK.
+
+GCARVE:	TEMP <PRV>
+	SKIPN ODDBLK		; Are there any odd blocks?
+	 JRST GCARV4		; No.  Try something else
+	XMOVEI PRV,ODDBLK	; Address of pointer to odd block list
+	LOAD BLK,FLIST,(PRV)	; Pointer to first odd block
+
+GCARV1:	SETSEC BLK,INTSEC	; Make extended address
+	LOAD T2,FSIZE,(BLK)	; Get size of this odd block
+	CAME T2,SIZ		; Same as required?
+	 JRST GCARV2		; No.  Keep looking.
+	LOAD T3,FLIST,(BLK)	; Pointer to block after this one
+	STOR T3,FLIST,(PRV)	; Is new successor to one before this
+	EXIT GCARVX
+
+GCARV2:	CAIGE T2,FBLKSZ(SIZ)	; Min we can carve succesffully
+	 JRST GCARV3		; Not big enough.
+	LOAD T3,FLIST,(BLK)	; Successor of this one
+	STOR T3,FLIST,(PRV)	; Snip it out
+	CALL CSPLIT		; Split into required plus extra
+	EXIT GCARVX
+
+GCARV3:	MOVE PRV,BLK
+	LOAD BLK,FLIST,(PRV)	; Move to next odd block
+	JUMPG BLK,GCARV1	; And look at it
+GCARV4:	CALL BULKCV		; Above failed.  Try bulk storage
+GCARVX:	RESTORE
+	RET
+
+;CSPLIT	Split an odd block into required size plus extra.
+;BLK/	(Extended) BLK
+;SIZ/	Required size, excluding header
+;	CALL CSPLIT
+;Ret+1:	Always.  Extended pointer to block of requird size in BLK
+
+CSPLIT:	LOAD T3,FSIZE,(BLK)	; Get size of block to be split
+	MOVE T1,BLK		; Get whole block
+	ADDI T1,UBLKSZ(SIZ)	; Start of fragment
+	SETSEC T1,INTSEC	; Make extended address
+	STOR SIZ,FSIZE,(BLK)	; Store size of block to be returned
+	SUBI T3,UBLKSZ(SIZ)	; Size of fragment
+	STOR T3,FSIZE,(T1)	; Store size of fragment
+	LOAD T4,FNEXT,(BLK)	; Block following this in memory
+	STOR T4,FNEXT,(T1)
+	PUSH P,BLK
+	PUSH P,SIZ
+	MOVE BLK,T1
+	CALL RETB0		; Return the fragment to free area
+	POP P,SIZ
+	POP P,BLK
+	RET
+
+	SUBTTL Internet Free Space Block Carver
+
+;BULKCV	Carve block out of bulk storage. Called with NOINT & FRELCK set.
+;SIZ/	Size required, excluding header
+;	CALL BULKCV
+;Ret+1:	Always.  BLK has 0 or extended pointer to block
+
+BULKCV:	PUSH P,SIZ		; Save SIZ
+	MOVE T2,BULKND		; Current end of free storage
+	JUMPE T2,BULKC3		; Jump if nothing at all left
+	SUB T2,BULKST		; Compute current length
+	JUMPE T2,BULKC3		; Jump if only one word left
+	ADDI T2,1		; Total Length
+	CAIE T2,UBLKSZ(SIZ)	; Exactly what we need?	(-1)
+	 JRST BULKC1		; No.
+	SETZB BLK,BULKND       	; and cancel bulk area
+	EXCH BLK,BULKST		; Get beginning of block to return
+	JRST BULKCX
+
+BULKC1:	MOVE BLK,BULKST		; Start of what's left
+	MOVEI T3,UBLKSZ(SIZ)	; What is needed
+	CAIGE T2,FBLKSZ+1(T3)	; Big enough to carve?	(-1)
+	 JRST BULKC2		; No.
+	ADDM T3,BULKST		; Remove from bulk area
+	JRST BULKCX
+
+BULKC2:
+	CAIGE T2,FBLKSZ		; Big enough to return?
+	 JRST BULKC3		; no so forget it
+	SUBI T2,UBLKSZ		; User SIZ
+	STOR T2,FSIZE,(BLK)	; Convert what is left into a block
+	MOVE T3,BULKND		; Current End (extended)
+	ADDI T3,1		; Next location there after
+	STOR T3,FNEXT,(BLK)	; Fix up the block to be returned
+	CALL RETB0		; Return the piece
+	SETZM BULKST		; Cancel bulk storage
+	SETZM BULKND
+
+BULKC3:	SKIPN MRGFLG		; Merging return blocks possible?
+	 JRST BULKC4		; No.  Try something else.
+	CALL GC			; Yes. Garbage collect. (Save SIZ)
+	MOVE SIZ,0(P)		; Restore SIZ
+	CALL GETB		; Assign the block
+	JRST BULKCX
+
+BULKC4:
+	MOVE T1,TODCLK		; NOW
+	CAMG T1,INTSVT		; OK  to give another typeout?
+	 JRST BULKC5		; No.  Not yet.
+	MOVE T2,0(P)		; get the size desired
+        BUG.(INF,INTFR6,IPFREE,SOFT,<Internet Free Space - Free storage exhausted>,,<
+
+Cause:	Internet free space is totally exhausted. This could be caused
+	by someone not returning freespace or an insufficient amount of
+	Internet freespace available.
+
+Action:	Change this to a BUGHLT and submit an SPR. If you can reliably 
+	reproduce this then include your procedure with the SPR.
+>)
+	ADDI T1,^D60000		; 1 minute interval
+	MOVEM T1,INTSVT		; Next deadline
+BULKC5:	SETOM INTSVR		; And request everybody to do it
+	MOVEI BLK,0		; None available.  Let caller handle it.
+BULKCX:	POP P,SIZ		; Restore SIZ
+	RET
+
+	SUBTTL Internet Free Space Garbage Collector
+
+;GC	Garbage Collector. Called with NOINT & FRELCK set.
+
+GC:	BUG.(INF,IPGCOL,IPFREE,SOFT,<Internet Free Space - Reclaiming internet free space>,,<
+
+Cause:	The internet free space facility is performing a garbage collection to
+	make some space available.
+>,,<DB%NND>)			;[7.1210] 
+	LOCAL <ILST>
+	MOVEI LST,0
+	EXCH LST,ODDBLK		; Get and clear odd block list
+	MOVSI SIZ,-NFIXED      	; AOBJN pointer to INTBLK table
+GC1:	MOVEI T1,INTBLK(SIZ)	; Pointer to current list header
+	LOAD ILST,FLIST,(T1)	; Pointer to first block on list
+	JUMPE ILST,GC2		; Avoid overhead of LCOPY on null list
+	SETSEC ILST,INTSEC	; Make extended address
+LCOPY1:	TRNN ILST,-1		; End of ILST reached?
+	 JRST LCOPYX		; Yes.
+	MOVE BLK,ILST		; First block on list
+	LOAD ILST,FLIST,(BLK)	; Get successor for next time
+	SETSEC ILST,INTSEC	; Make extended address
+	CALL SPUT
+	JRST LCOPY1
+LCOPYX:
+GC2:	SETZM INTBLK(SIZ)      	; Nullify the list
+	AOBJN SIZ,GC1
+	MOVE ILST,LST		; List of all free memory
+RETLS1:	TRNN ILST,-1		; End of list?
+	 JRST RETLSX		; Yes.  Done.
+	MOVE BLK,ILST
+	LOAD ILST,FLIST,(BLK)	; Successor is what to do next time
+	SETSEC ILST,INTSEC	; Make extended address
+	CALL RETB0		; Return first block on the list
+	JRST RETLS1
+RETLSX:
+	SETZM MRGFLG		; No merge possible now.
+	RESTORE
+	RET
+
+	SUBTTL Internet Free Space Block Verification Routines
+
+;CHKBLK	See that the hash mark is still ok, etc.
+;BLK/	(Extended) Pointer to block
+;SIZ/	Size of the block, excluding UBLKSZ header
+;	CALL CHKBLK
+;Ret+1:	Always.
+
+; Note: Ought to remove first CAIL & -UBLKSZ from second
+
+CHKBLK:	CAIL SIZ,UBLKSZ		; Min size block ever handed out
+	CAIL SIZ,INTFSZ-UBLKSZ	; Max size block ever handed out
+	BUG.(HLT,INTFR0,IPFREE,SOFT,<Internet Free Space - Block size clobbered>,,<
+
+Cause:	The internet free space facility has determined that the caller
+	has smashed the begining of a free space block.
+>)
+	CALL HASH
+	LOAD T2,UHASH,(BLK)	; Get the mark we left there
+	CAME T1,T2		; Is it still there?
+	BUG.(HLT,INTFR1,IPFREE,SOFT,<Internet Free Space - Block hash clobbered>,,<
+
+Cause:	The internet free space facility has determined that the caller
+	has smashed the tail of a free space block.
+>)
+	RET
+
+;HASH	Return a random number based on location and size.
+;BLK/	(Extended) Block location
+;SIZ/	Block size
+;	CALL HASH
+;Ret+1:	Always.  Hash value in T1
+
+;This number is stored in the block header (UHASH) while the block is
+;in the hands of the user. When he returns the block, a check is made
+;to see that it has not been clobbered.
+
+HASH:	MOVEI T1,25252(BLK)	; Flush section number and garble a bit
+	IMULI T1,1234(SIZ)	; Mulitply by garbled length
+	TSC T1,T1
+	HRRZS T1
+	RET
+
+;CLRBLK Clear a block to be sure unstuffed fields are 0.
+;T1/	(Extended) pointer to block
+;T2/	Size of block
+;	CALL CLRBLK
+;Ret+1:	Always.
+
+CLRBLK::EXCH T1,T2		; Size to T1, Source to T2
+	SUBI T1,1		; Number of transfers is 1 less
+	XMOVEI T3,1(T2)		; Destination
+	SETZM 0(T2)		; Clear a word.
+	CALL XBLTA		; Clear the rest
+	RET
+
+	SUBTTL Internet Free Space Hash Table Routines
+
+;HASHX	Given a block size, HASHX returns the index to INTBLK
+;SIZ/	Size
+;T1/	CreateFlag	; Non-0 to create slot if not there already
+;	CALL HASHX
+;Ret+1:	Always.  -1 or Index in T1. Saves SIZ.
+
+HASHX:	LOCAL <FLAG>
+	TEMP <I,L,Q,T>		; L must be I+1
+	MOVEM T1,FLAG
+	MOVSI T,-NFIXED		; Set to scan the table
+HASHX1:	MOVE I,SIZ
+	ADDI I,0(T)		; Add probe count
+	IDIVI I,NFIXED		; Rem is the hash function
+	MOVE I,I+1		; (to I and L)
+	MOVEI L,INTBLK(I)	; Pointer to head of list
+	LOAD Q,FSIZE,(L)	; Get size of blocks on this one
+	JUMPN Q,HASHX2		; Jump if slot is in use
+	JUMPE FLAG,HASHXM	; Return -1 if not supposed to create it
+	STOR SIZ,FSIZE,(L)	; Create the list
+	EXIT HASHXX
+
+HASHX2:	CAMN Q,SIZ		; Size we are looking for?
+	 EXIT HASHXX		; Yes.
+	AOBJN T,HASHX1		; Probe again
+HASHXM:	SETO T1,		; Fail
+HASHXX:	RESTORE
+	RET
+
+	SUBTTL 1822 Buffer Handling
+
+NETINI::			; Initialize 1822 buffer area in INTSEC
+	MOVEI T1,BF18SZ		; Get the number of buffers possible
+	MOVEI T2,BF1822		; Get the initial buffer addess
+	MOVE T3,MAXWPM		; Get the number of words per buffer
+	ADDI T3,(T2)		; Get the initial link word
+	SETSEC T2,INTSEC	; Buffer is in INTSEC
+	MOVEM T2,BF18BO		; Save the initial head pointer
+NETIN2:				; Loop for initializing buffers
+	STOR T3,NBQUE,(T2)	; Store the forward link
+	ADD T2,MAXWPM		; Get the address of the next buffer
+	ADD T3,MAXWPM		; Get the new link word
+	SOJG T1,NETIN2		; Initialize all the buffers
+	SUB T2,MAXWPM		; Fix up Buffer address
+	SETZRO NBQUE,(T2)	; This buffer is the last
+	MOVEM T2,BF18BI		; Save the tail pointer word
+	RET			; And return to caller
+
+
+
+;Get an 1822 Buffer. Here via LCKCAL with FRELCK set
+
+GET18B::			; Get an 1822 buffer. 
+	SKIPN T1,BF18BO		; Buffer Available?
+	 RET			; nope.
+	SETSEC T1,INTSEC	; Buffer is in INTSEC
+	LOAD T2,NBQUE,(T1)	; get the buffer's link word
+	MOVEM T2,BF18BO		; set the new head word
+	SKIPN T2		; was the link zero?
+	 SETZM BF18BI		; yes so zero the tail pointer
+	SETZRO NBQUE,(T1)	; clear forward link
+	RET			; and return
+
+;Return an 1822 buffer.  Here via LCKCAL with FRELCK set.
+
+RET18B::			; Return an 1822 Buffer
+	CAML T1,[INTSEC,,BF1822] ; Does this buffer look ok?
+	CAML T1,[INTSEC,,BF1822+<BF18SZ*INTBSZ>] ; ?
+	BUG.(HLT,IMPBAD,IMPDV,SOFT,<IMPDV: Attempt to return a buffer not in range>,,<
+
+Cause:	The internet 1822 buffer facility has been called to return a buffer
+	which is not an 1822 buffer.
+
+Action:	Find the caller of this routine and figure out what kind of packet
+	the caller is realing dealing with.
+>)
+	MOVN T2,[INTSEC,,BF1822] ; Get the begining of the buffer space
+	ADD T2,T1		; Get the offset of this buffer
+	IDIV T2,MAXWPM		; Get the number of this buffer
+	SKIPE T3		; Any remainder?
+	BUG.(HLT,IMPVBD,IPFREE,SOFT,<IMPDV: Attempt to return a buffer with the address smashed>,,<
+
+Cause:	The internet 1822 buffer facility has been called to return a buffer
+	which has a bad address.
+>)
+	SETZRO NBQUE,(T1)	; No forward link on this buffer
+	MOVE T2,BF18BI		; Get the old tail pointer
+	SETSEC T2,INTSEC	; In INTSEC
+	MOVEM T1,BF18BI		; We are the new tail
+	STOR T1,NBQUE,(T2)	; Fix up the old tails queue
+	SKIPN BF18BO		; Any buffers on the head?
+	 MOVEM T1,BF18BO	; no so this is now the head
+	RET			; and return 
+
+	SUBTTL Temporary Free Space Routines for NISRV and Friends
+
+Repeat 0,<
+
+	XRESCD			; THIS CODE IS RESIDENT
+
+DNGWDS::			;Get free space for NISRV. 
+	HRLI T1,.RESP2		;high priority
+	MOVEI T2,.RESNP		;get the space from decnet
+	CALL ASGRES		;get the space
+	 RET			;non skip return means no space available
+	HRLI T1,MSEC1		;in section one
+	RETSKP			;and return to caller
+
+DNFWDS::			;Release free space for NISRV.
+	HRRZS T1		;zero the left half
+	CALL RELRES		;release the space
+	RET			;and return
+
+DNGWDZ::			;Get zeroed free space for NISRV.
+	STKVAR <DNGSZ>		;get some space
+	MOVEM T1,DNGSZ		;save the size
+	CALL DNGWDS		;get the space
+	 RET			;failed to get the space
+	MOVE T2,DNGSZ		;get the size
+	MOVEM T1,DNGSZ		;save the address
+	CALL CLRBLK		;zero the block
+	MOVE T1,DNGSZ		;get the address back
+	RETSKP			;success return
+	ENDSV.
+
+;RELJFR - Release JSB Free Space
+;T2/ Location of Block to Be Returned
+;	CALL RELJFR
+; Returns +1: Always
+
+RELJFR::MOVEI T1,JSBFRE		;Get address of JSB Free Space Header
+	CALLRET RELFRE		;  and call routine to release the space
+
+>				;end of Repeat 0
+
+	SUBTTL IPNIDV Buffer Handling
+
+	XSWAPCD			; THIS CODE IS SWAPPABLE
+
+GETNIB::			; Get an NI Buffer
+	MOVE T1,INTXPW		; input buffer size
+	CALL GETBLK		; get a block of free space
+	RET			; and return to caller
+
+RETNIB::			; Return an NI buffer
+	CALL RETBLK		; return a block of internet free space
+	RET			; and return it to caller
+
+
+;NIPLKB - LOCK BUFFER
+;
+; Called whenever we need a buffer locked.
+;
+; T1/ Address of buffer to lock
+; T2/ Length of buffer
+;
+; Returns + 1 always, T1 and T2 preserved 
+
+	XRESCD			; THIS CODE IS RESIDENT
+
+NIPLKB::SAVEAC <T1,T2>
+	CALL INTLKW		;LOCK THE FIRST ADDRESS
+	ADD T1,T2		;COMPUTE LAST ADDRESS
+	CALL INTLKW		;LOCK DOWN THE LAST ADDRESS
+	RET
+
+;NIPULK - UNLOCK BUFFER
+;
+; Called whenever we need a buffer unlocked.
+;
+; T1/ Address of buffer to unlock
+; T2/ Length of buffer
+;
+; Returns + 1 always, T1 and T2 preserved 
+
+	XRESCD			; THIS CODE IS RESIDENT
+
+NIPULK::SAVEAC <T1,T2>
+	CALL INTULW		;UNLOCK THE FIRST ADDRESS
+	ADD T1,T2		;COMPUTE LAST ADDRESS
+	CALL INTULW		;UNLOCK DOWN THE LAST ADDRESS
+	RET
+	SUBTTL End of IPFREE
+	TNXEND
+	END
+

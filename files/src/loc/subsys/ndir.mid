@@ -1,0 +1,1525 @@
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;; EDIT HISTORY ;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; ~3-1-83 ZZZ: Creation
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; ~3-10-83 ZZZ: Addition of JCL for file specification. Also moved
+;;		  the "don't reap" bit notification to its ITS location.
+;;		  Changed column layout (horizontal position of various
+;;		  columns).
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; ~3-12-83 ZZZ: Added offline and deleted file stuff. Changed
+;;		  order of byte count, byte size, and page columns.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; 3-23-83 ZZZ: Changed it to use COMND parsing of the input line
+;;		 so that it can be called from the EXEC the way
+;;		 FINGER is called. Added the switch handling, and
+;;		 proper exit trapping on deleting of the command line
+;;		 (like with a ^U or ^W or DELETE).
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; 4-21-83 ZZZ: Added file protection column and made it default
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; 5-4-83 ZZZ:	Added reference date and generations-to-keep. Replaced
+;;		protection with read date as default.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; 5-17-83 ZZZ: Changing size notation from Bytes (Bs) Page to
+;;		 (Bs) Page + RemBytes.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; 5-31-83 ZZZ: Now gets entire FDB in one shot, instead of several
+;;		 independent calls for individual words (to save overhead)
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; 6-11-83 ZZZ: Fixed GETDAT to save dates when explicit, and to remove
+;;		 time from days when specifying "- n" days.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; 6-4-83 ZZZ: Fixed Page + Partial counting algorithm to use bytes (it
+;;	       was using words). It shows right stuff now.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; 6-22-83 ZZZ: Suppress output of file writer if it is me (ala ITS' DIRED)
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; 6-25-83 ZZZ: Added /HEADER making header output optional. Dyked extra
+;;		blank lines before first output. Added generic string
+;;		counter to replace all the individual ones that cropped
+;;		up like weeds. Also, put directory info header on one line.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; 6-27-83 ZZZ: Output "..." for last-writer if it is the same as the name
+;;		of the directory it's in.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;  7-1-83 ZZZ: Fixed lots of brain damage in the column frobber. Now only
+;;		takes "+" or "-" for working. Works right.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;  7-4-83 ZZZ: Fixed COMND FDBs to avoid COMND bugginess on order. Removed
+;;		"-" specification, making columns all go on "+" with a "no"
+;;		option. (this really sucked!)
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; 3:26pm  Monday, 11 July 1983 [ZZZ]
+;;		Redid ND%DST bit to mean destruction rather than not.
+;;		Using a non-destructive switch was turning off privious
+;;		  destructive ones.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+	Title @NDirectory -- ITS-style (almost) directory listings
+
+.decsav
+
+	A=1
+	B=2
+	C=3
+	D=4
+	V=5
+	X=10
+	Y=11
+	W=15
+
+	F=6			;constraint flags
+	G=7			;number of JFNs in current block
+	H=12			;column flags
+
+	J=13			;JFN stack pointer
+	ACS==14			;accumulator save stack pointer
+	P=17			;regular stack pointer
+
+.insrt system:symbols
+.insrt system:macros
+.insrt system:prarg
+
+Define .Yuk &string
+	Type "A?"
+	Txne f,ND%DBG		;debugging?
+	  Jrst [Type string
+		Call Barf
+		Jrst Death]
+	Call Barf
+	Jrst Death
+Termin
+
+Define CMD string
+	[Asciz string],,.kark.
+	.kark.==.kark.+1
+Termin
+
+Define INV string
+	[CM%INV
+	 Asciz string],,.kark.
+	.kark.==.kark.+1
+Termin
+
+Define Typ &string
+	Move a,OutJFN
+	Hrroi b,[Asciz string]
+	Setz c,
+	SOUT
+Termin
+
+Define CTyp #char
+	Move a,OutJFN
+	Movei 2,char
+	BOUT
+Termin
+
+Define ATyp loc
+	Move a,OutJFN
+	Hrroi b,loc
+	Setz c,
+	SOUT
+Termin
+
+;; buffers
+MyUser:	0			;my usernumber
+MUText:	Block 10		;my username
+
+FilNam:	Block 30		;various garbage
+FiNLen:	0			;filename length (total)
+
+NDNam:	Block 10		;new directory name
+NDNum:	0			;new directory number
+
+;; directory information
+DirNum:	0
+DirNam:	Block 10
+DevNam:	Block 2
+DirUse:	0
+DirPer:	0
+DirWor:	0
+FDBDat:	Block .fblen+1		;storage for FDB information on files
+FilPgs:	0			;pages in file
+
+Offlin:	0			;offline or not?
+Dleted:	0			;deleted or not?
+Visibl:	0			;visible or not?
+JCLNxt:	0			;is this the JCL on next line?
+
+FName:	Block 10		;file name string
+FNLen:	0			;file name length
+FType:	Block 20		;file type string
+FTLen:	0			;file type length
+FGen:	Block 2			;file generation string
+FGLen:	0			;file generation length
+FUser:	0			;file last-write usernumber
+FUStr:	Block 10		;file last-write username
+
+JFNBlk:	Block 20		;gotta be before the .INSRT call--redefining
+				;  the JFNBlk address...
+.insrt system:comnd
+
+PNmFDB:	Field(.cmfld,CM%FNC) ? 0 ? 0 ? 0
+
+
+C%FFDB:	Field(.cmtok,CM%FNC)\CM%SDH\CM%HPP+F%SFDB
+	-1,,[Asciz "+"]
+	-1,,[Asciz "+" to frob output column]
+	0
+F%SFDB:	Field(.cmfil,CM%FNC)\CM%SDH\CM%HPP+S%FFDB
+	0
+	-1,,[Asciz "filespec"]
+	0
+S%FFDB:	Field(.cmswi,CM%FNC)\CM%HPP
+	SwtchT
+	-1,,[Asciz "switch,"]
+	0
+
+
+CFSFDB:	Field(.cmcfm,CM%FNC)+CmaFDB ? 0 ? 0 ? 0
+CmaFDB:	Field(.cmcma,CM%FNC)\CM%SDH\CM%HPP+ColFDB
+	0
+	-1,,[Asciz "comma to enter another local field"]
+	0
+ColFDB:	Field(.cmtok,CM%FNC)\CM%SDH\CM%HPP+FilFDB
+	-1,,[Asciz "+"]
+	-1,,[Asciz "+" to frob output column]
+	0
+FilFDB:	Field(.cmfil,CM%FNC)\CM%SDH\CM%HPP+SwiFDB
+	0
+	-1,,[Asciz "additional filespec"]
+	0
+SwiFDB:	Field(.cmswi,CM%FNC)\CM%HPP
+	SwtchT
+	-1,,[Asciz "switch,"]
+	0
+
+
+DFukt:	Block 3			;necessary for stupid calls, even if not used
+D%TFDB:	Field(.cmtad,CM%FNC)+DatFDB
+	CM%IDA+CM%ITM+DFukt
+	0 ? 0
+DatFDB:	Field(.cmtad,CM%FNC)+TimFDB
+	CM%IDA+DFukt
+	0 ? 0
+TimFDB:	Field(.cmtad,CM%FNC)+Tk0FDB
+	CM%ITM+DFukt
+	0 ? 0
+Tk0FDB:	Field(.cmtok,CM%FNC)\CM%SDH\CM%HPP
+	-1,,[Asciz "-"]
+	-1,,[Asciz "-" to specify number of days ago]
+	0
+
+
+PgsFDB:	Field(.cmnum,CM%FNC)\CM%SDH\CM%HPP
+	10.
+	-1,,[Asciz "decimal number of pages"]
+	0
+
+
+OutFDB:	Field(.cmfil,CM%FNC) ? 0 ? 0 ? 0
+
+
+NumFDB:	Field(.cmnum,CM%FNC)\CM%SDH\CM%HPP
+	10.
+	-1,,[Asciz "decimal number of days"]
+	0
+
+
+UsrFDB:	Field(.cmusr,CM%FNC)\CM%DPP ? 0 ? 0
+	-1,,MUText		;default to MEEEEE!!!
+
+
+CNmFDB:	Field(.cmkey,CM%FNC) ? ColmnT ? 0 ? 0
+
+
+.kark.==0
+SwtchT:	STLen,,STLen
+	CMD allfiles		;everything
+	CMD before:		;written before specified date
+	CMD by-user:		;last writer is specified user
+	INV d			;synonym for deleted
+	CMD deleted		;deleted
+	CMD directories		;include directories in listing
+	CMD files		;include non-directories in listing
+	CMD fork		;try to fork in background
+	CMD header		;print a header
+	CMD invisible		;invisible
+	CMD jcl-next-line	;JCL is on the next line
+	CMD larger:		;page count greater than specified number
+	CMD normal		;visible, online, and undeleted
+	CMD not-by-user:	;not by a certain user
+	CMD offline		;offline
+	CMD online		;online
+	CMD output:		;direct output to some other JFN
+	CMD since:		;written after specified date
+	CMD smaller:		;page count less than specified number
+	INV testing-mode	;for debugging porpoises
+	CMD undeleted		;undeleted
+	CMD visible		;visible
+STLen==.-SwtchT-1
+
+.kark.==0
+ColmnT:	CTLen,,CTLen
+	CMD all
+	CMD bsize
+	CMD generation-retention-count
+	CMD last-writer
+	[Asciz "no"],,-1
+	CMD normal
+	CMD pages
+	CMD protection
+	CMD read-date
+	CMD write-date
+CTLen==.-ColmnT-1
+
+NC%BSZ==Bit(0)			;byte size
+;;      Bit(1)			;byte count (obsolete)
+NC%GEN==Bit(2)			;generation retention count
+NC%LWR==Bit(3)			;last writer
+NC%PGS==Bit(4)			;page count
+NC%PRO==Bit(5)			;protection
+NC%RDD==Bit(6)			;read date
+NC%WRD==Bit(7)			;write date
+
+CBits:	-1			;set 'em all!
+	NC%BSZ			;byte size
+	NC%GEN			;generation retention count
+	NC%LWR			;last writer
+	NC%LWR+NC%PGS+NC%WRD+NC%RDD	;normal listing
+	NC%PGS			;page count
+	NC%PRO			;protection
+	NC%RDD			;read date
+	NC%WRD			;write date
+
+DefCol:	NC%LWR+NC%PGS+NC%WRD+NC%RDD
+
+First2:	1			;very first column frob this field?
+First1:	1			;very very first header?
+First:	1			;first filespec in the command line?
+Last:	0			;last JFN to grab from JFN queue?
+
+ND%DEL==Bit(0)
+ND%IIN==Bit(1)
+ND%JCL==Bit(2)
+ND%NUS==Bit(3)
+ND%OFF==Bit(4)
+ND%ONL==Bit(5)
+ND%UND==Bit(6)
+ND%VIS==Bit(7)
+ND%ALL==Bit(8)
+ND%LAR==Bit(9)
+ND%SML==Bit(10.)
+ND%OUT==Bit(11.)
+ND%PRE==Bit(12.)
+ND%AFT==Bit(13.)
+ND%USR==Bit(14.)
+ND%DBG==Bit(15.)
+ND%FRK==Bit(16.)
+ND%HDR==Bit(17.)
+ND%DST==Bit(18.)		;"this bit destroys auto-default"
+ND%FIL==Bit(19.)
+ND%DIR==Bit(20.)
+
+SBits:	ND%ALL+ND%DST		;every file
+	ND%PRE+ND%DST		;before some date
+	ND%USR+ND%DST		;done by some user
+	ND%DEL+ND%DST		;(invisible synonym: "d") deleted files
+	ND%DEL+ND%DST		;deleted files
+	ND%DIR+ND%DST		;directories
+	ND%FIL			;non-directories
+	ND%FRK			;forking
+	ND%HDR			;header
+	ND%IIN+ND%DST		;invisible files
+	ND%JCL			;JCL is on the next line
+	ND%LAR+ND%DST		;bigger than something
+Stndrd:	ND%VIS+ND%UND+ND%FIL	;normal (visible, online, & undeleted files)
+	ND%NUS+ND%DST		;not by a certain user
+	ND%OFF+ND%DST		;offline files
+	ND%ONL+ND%DST		;online files
+	ND%OUT			;output somewhere else
+	ND%AFT+ND%DST		;after some date
+	ND%SML+ND%DST		;smaller than something
+	ND%DBG			;debugging flag ("testing-mode")
+	ND%UND+ND%DST		;undeleted files
+	ND%VIS+ND%DST		;visible files
+
+SAct:	0			;all files goes nowhere
+	GetDat			;BEFORE
+	GetUsr			;BY-USER
+	0 ? 0 ? 0 ? 0		;d(eleted)/deleted/dirs/nondirs
+	0 ? 0 ? 0 ? 0		;fork/hdr/inv/jcl
+	GetNum			;LARGER
+	0			;normal
+	GetUsr			;NOT-BY-USER
+	0 ? 0			;offline/online
+	GetOut			;OUTPUT
+	GetDat			;SINCE
+	GetNum			;SMALLER
+	0			;testing-mode
+	0			;undeleted
+	0			;visible
+
+SavJFN:	0			;main JFN with the flags in left half, etc...
+ThisJ:	0			;this JFN
+MissNm:	0			;changed file name fields
+MissXt:	0			;changed file extension fields
+
+ACSLn==100			;accumulator save size
+ACStck:	Block ACSLn		;accumulator save stack
+
+PDLen==30			;standard stack size
+PDList:	Block PDLen		;standard stack
+SaveP:	0			;saved stack pointer
+Looped:	0			;loop control on reparsing
+LoopCd:	0			;loop control for column errors and filenames
+
+OutJFN:	.priou			;output destination
+CFlags:	0			;column flags
+PagLar:	0			;files larger than this
+PagSml:	0			;files smaller than this
+PreDat:	0			;files written before this
+AftDat:	0			;files written after this
+User:	0			;files written by this user
+NoUser:	0			;files not written by this user
+
+
+;; memory-management stuff
+;;
+;;
+;;	JFN BLOCK FORMAT
+;;	================
+;;
+;;0:	number of JFNs,,Address of first
+;;1:	flag word
+;;2:	Output JFN
+;;3:	Column flags
+;;4:	files larger than this
+;;5:	files smaller than this
+;;6:	files written before this
+;;7:	files written after this
+;;10:	files written by this user
+;;11:	files not written by this user
+;;
+MxJFNs==20.			;maximum number of JFN blocks
+.jblen==9.			;size of each JFN block
+JBadd:	JBlks			;address of JFN Blocks
+JBlks:	Block <MxJFNs*.jblen>+5	;JFN Blocks
+EOM:	EOProg			;End Of Memory Point
+E%O%M:	EOProg			;End Of Memory Mark
+
+;;
+;;================================================================
+;;	THE PROGRAM
+;;================================================================
+;;
+Start:	RESET
+	Move p,[-PDLen,,PDList-1]
+	ENABLE
+	GJINF
+	Movem a,MyUser		;get the information on myself
+	Move b,a		;  for defaulting the COMND
+	Hrroi a,MUText		;  stuff in getting usernames
+	DIRST			;  later on...
+	  Erjmp [.Yuk "DIRST (Start): "]
+	Movei a,.rsini
+	RSCAN
+	  Erjmp [.Yuk "RSCAN (Start): "]
+	Move a,[CM%WKF+Repars]
+	Movem a,CmdBlk+.cmflg
+	Movem p,SaveP
+	Jrst Repar1
+
+Repars:	Skipg CmdBlk+.cminc	;if user deletes to end of cmd line, then
+	  .Logout		;  it's back to the exec for us...
+Repar1:	Move p,SaveP
+	Movei a,EOProg		;end of the program
+	Movem a,EOM		;which is the original end of memory point
+	Movem a,E%O%M		;  and end of memory mark
+	Movei a,JBlks		;start of JFN blocks
+	Movem a,JBAdd		;which is the original JFN Block address
+	Setzb f,g		;reset both the flag word and the # of JFNS
+	Setz j,			;  and the number of local blocks
+	Move h,DefCol		;reset the column frobber
+	Movei a,CmdBlk
+	Movei b,PNmFDB
+	COMND
+	Noise "of files"
+
+CLoop:	Setom First		;first for this field
+	Call CLInit
+CLoop1:	Movei a,CmdBlk
+	Movei b,C%FFDB
+	COMND
+	Txne a,CM%NOP
+	  Jrst NoFile
+	Tlz c,-1
+	Cain c,S%FFDB		;switch
+	  Jrst Switch
+	Cain c,F%SFDB		;filename
+	  Jrst Files
+	JSR ColChg		;frob column specification
+	Jrst CLoop		;no files yet, loop again...
+
+NoFile:	Cain b,NPXAMB
+	  Jrst [Txne a,CM%ESC
+		  Jrst [CType ^G
+			Jrst CLoop1]
+		Call Terpri
+		Type "?Ambiguous"
+		Jrst Death]
+IRP foo,,[GJFX32,GJFX16,GJFX17,GJFX18,GJFX19,GJFX20,GJFX24]
+	Cain b,foo		;if it matches this particular error code
+	  Jrst NFile1		;then do the parse-only garbage
+Termin
+	.Yuk "COMND (NoFile): "
+;;no such file, but don't bomb out just for this -- swallow the filespecs and
+;;  go on with the rest
+
+NFile1:	Call CLInit	;fix the rest, but add the new stuff here
+	Hrrz a,JFNBlk+.gjgen	;no other flags needed here...
+	Txo a,GJ%OFG	;parse-only
+	Movem a,JFNBlk+.gjgen
+	Movei a,CmdBlk
+	Movei b,F%SFDB
+	COMND
+	Txne a,CM%NOP
+	  Jrst [.Yuk "COMND (NFile1): "]
+	Jrst 6Opts
+
+
+Switch:	Hrrz d,(b)
+	Tdo f,SBits(d)		;fullword version of our flag
+	Move b,SAct(d)		;get the dispatch address into the table
+	Jumpe b,CLoop		;nowhere for the arguments to go, loop
+	JSR (b)
+	Jrst CLoop		;we haven't gotten the first filename, so loop
+
+;;
+;;================================================================
+;;	COLUMN FROBBER
+;;================================================================
+;;
+CSwtch:	0			;column switch, 0=on, -1=off
+ColChg:	0
+CChg1:	Setzm CSwtch		;turn on columns by default
+CChg2:	Movei a,CmdBlk
+	Movei b,CNmFDB
+	COMND
+	Txne a,CM%NOP
+	  Jrst [Cain b,NPXAMB
+		  Jrst [Txne a,CM%ESC
+			  Jrst [CType ^G
+				Jrst CChg1]
+			Call Terpri
+			Type "?Ambiguous"
+			Jrst Death]
+		.Yuk "COMND (ColChg): "]
+	Hrrz c,(b)
+	Move b,c		;copy it
+	Xori b,-1		;turn RH inside out
+	Trnn b,-1		;skip if not all 0 (keyword was not "no")
+	  Jrst [Setcmm CSwtch	;toggle memory
+		Jrst CChg2]	;get the next keyword
+	Skipe CSwtch		;if = 0, turning on column
+	  Tdza h,CBits(c)	;remove it from the stuff we want
+	 Tdo h,CBits(c)		;add this column
+	Jrst @ColChg
+
+;;
+;;================================================================
+;; SWITCH DISPATCHES
+;;================================================================
+;;
+
+;;
+;; Parse a date, putting it either in the BEFORE or SINCE memory location
+;;
+GetDat:	0
+	Movei a,CmdBlk
+	Movei b,D%TFDB
+	COMND
+	Txne a,CM%NOP
+	  Jrst [.Yuk "COMND (GetDat): "]
+	Tlz c,-1
+	Caie c,Tk0FDB		;if it wasn't a "-", then AC2 already has
+	  Jrst GetD1		;  a time and date in internal format. save it
+	Movei a,CmdBlk
+	Movei b,NumFDB
+	COMND
+	Txne a,CM%NOP
+	  Jrst [.Yuk "COMND (GetDat): "]
+	GTAD
+	Hlrzs a			;move day to right half, zero time
+	Sub a,b			;subtract (B) days
+	Movs b,a		;and move day back to left half, put it in B
+GetD1:	Move a,SBits(d)
+	Txne a,ND%PRE		;was it a /BEFORE: ??
+	  Jrst [Movem b,PreDat	;yes, put the date in the right place
+		Jrst @GetDat]
+	Movem b,AftDat		;no, put the date in the right place
+	Jrst @GetDat
+
+;;
+;; Parse a number, putting it into the LARGER or SMALLER memory location
+;;
+GetNum:	0
+	Movei a,CmdBlk
+	Movei b,PgsFDB
+	COMND
+	Txne a,CM%NOP
+	  Jrst [.Yuk "COMND (GetNum): "]
+	Move a,SBits(d)
+	Txne a,ND%LAR		;was it a /LARGER: ??
+	  Jrst [Movem b,PagLar	;yes, put the page count in the right place
+		Jrst @GetNum]
+	Movem b,PagSml		;no, put the page count in the right place
+	Jrst @GetNum
+
+;;
+;; Parse an output specification, putting it into the OUTPUT memory location
+;;
+GetOut:	0
+	Hrroi a,[Asciz "TTY:"]
+	Movem a,JFNBlk+.gjnam	;set the default filename to "tty:"
+	Setzm JFNBlk+.gjext	;with no default file extension
+	Movx a,GJ%FOU		;output JFN
+	Movem a,JFNBlk+.gjgen
+
+	Movei a,CmdBlk
+	Movei b,OutFDB
+	COMND
+	Txne a,CM%NOP
+	  Jrst [.Yuk "COMND (GetOut): "]
+	Movem b,OutJFN
+	Jrst @GetOut
+
+;;
+;; Parse a username, putting it ingo the USER memory location
+;;
+GetUsr:	0
+	Movei a,CmdBlk
+	Movei b,UsrFDB
+	COMND
+	Txne a,CM%NOP
+	  Jrst [.Yuk "COMND (GetUsr): "]
+	Move a,SBits(d)
+	Txne a,ND%USR		;was it /USER: ???
+	  Jrst [Movem b,User	;yes, save it in the right place
+		Jrst @GetUsr]
+	Movem b,NoUser		;no, save it in the right place
+	Jrst @GetUsr
+
+
+
+;;
+;; FILESPEC DISPATCH
+;;
+Files:	Move a,E%O%M		;get current end-of-memory mark
+	Movem b,(a)		;store the JFN there
+	Aos a			;increment the value
+	Movem a,E%O%M		;and store it as tne new mark
+	Aos g			;increment number of JFNs in this block
+	Jrst 6Opts		;goto the 4-option command parse
+
+6Opts:	Setzm First		;not first filespec in field anymore
+	Call CLInit
+6Opts1:	Movei a,CmdBlk
+	Movei b,CFSFDB
+	COMND
+	Txne a,CM%NOP
+	  Jrst [Cain b,NPXAMB
+		  Jrst [Txne a,CM%ESC
+			  Jrst [CType ^G
+				Jrst 6Opts]
+			Call Terpri
+			Type "%Last field ambiguous, ignoring it..."
+			Jrst Proces]
+IRP foo,,[GJFX32,GJFX16,GJFX17,GJFX18,GJFX19,GJFX20,GJFX24]
+		Cain b,foo	;if it matches this particular error code
+		  Jrst 6OPO	; 6-Options' parse-only loop
+Termin
+		Cain b,GJFX33
+		  Jrst [Skipe Looped	;did we just do this?
+			  Jrst [.Yuk ""]	;yeah, forget it
+			Hrroi a,[Asciz "*"]
+			Movem a,JFNBlk+.gjnam
+			Setom Looped	;we just did this, prevent a loop
+			Jrst 6Opts1]
+		.Yuk "COMND (6Opts): "]
+	Setzm Looped		;we are no longer looping
+	Tlz c,-1
+	Cain c,CFSFDB		;confirmed
+	  Jrst [Call SavBlk
+		Jrst Proces]
+	Cain c,CmaFDB		;comma
+	  Jrst DoComa
+	Cain c,FilFDB		;filename
+	  Jrst Files
+	Cain c,SwiFDB		;switch
+	  Jrst AddSwi
+	JSR ColChg		;column specification
+	Jrst 6Opts
+
+6OPO:	Call CLInit	;suck it in and swallow hard...
+	Hrrz a,JFNBlk+.gjgen	;no other flags needed
+	Txo a,GJ%OFG	;parse-only
+	Movem a,JFNBlk+.gjgen
+	Movei a,CmdBlk
+	Movei b,F%SFDB
+	COMND
+	Txne a,CM%NOP
+	  Jrst [.Yuk "COMND (6OPO): "]
+	Jrst 6Opts
+
+AddSwi:	Hrrz d,(b)		;index of switch in table
+	Tdo f,SBits(d)		;fullword version of our flag
+	Move b,SAct(d)		;get the dispatch address into the table
+	Jumpe b,6Opts		;nothing for arguments to go into, so loop
+	JSR (b)			;do the fuction-dependent operations
+	Jrst 6Opts		;and loop for another
+
+DoComa:	Skipe g			;if no JFNs, don't bother saving the block,
+	  Call SavBlk		;  but reset these fields anyway...
+	Setzb f,g		;clear the flags and reset number of JFNs
+	Move h,DefCol		;reset the column frobber
+	Aos j			;we have one more JFN block
+	Movei a,.priou		;this is the default
+	Movem a,OutJFN		;  for our output JFN
+	Caige j,MxJFNs		;skip if we've had our limit
+	  Jrst CLoop		;not there yet, loop for another block
+	Call Terpri
+	Type "%Reached local block limit, continuing..."
+	Jrst ProcA		;got here, no chance for JCL-next so skip it
+
+SavBlk:	Movem h,CFlags		;column flags for this local field
+	Move a,JBAdd		;get the address of the next JFN Block
+	Hrlm g,(a)		;store the number of JFNs for this Block
+	Move b,EOM		;end-of-memory point (beginning of JFNs)
+	Hrrm b,(a)		;store the beginning of our JFNs
+	Movem f,1(a)		;store the flag word
+	Hrli a,OutJFN
+	Move b,JBAdd
+	Hrri a,2(b)
+	Addi b,.jblen		;fencepost...
+	Blt a,(b)		;saving block of data
+	Move a,JBAdd		;our old block address
+	Addi a,.jblen+1		;add the length of the JBlock
+	Movem a,JBAdd		;  to the address of the next JFN Block
+	Move b,E%O%M		;get the current REAL end-of-memory
+	Movem b,EOM		;which is now the beginning of JFNs
+	Ret
+
+
+;;
+;; This is the command line initialization for the JCL-next switch's
+;;   presence on the initial command line. This will reset the flags and
+;;   the JFN queue, and it will reset the reparse address to eliminate
+;;   the aborting effect of clearing the command line.
+;;
+CInit:	Hrroi a,[Asciz "Filespec: "]
+	Movem a,CmdBlk+.cmrty
+	Movei a,ReparJ		;reset the reparse address
+	Movem a,CmdBlk
+
+	Movei a,CmdBlk
+	Movei b,IniFDB
+	COMND
+	Txne a,CM%NOP
+	  Jrst [.Yuk "COMND init (CInit): "]
+	Movem p,SaveP
+ReparJ:	Move p,SaveP
+	Setzb f,g
+	Setz j,
+	Move h,DefCol		;reset the column frobber
+	Movei a,EOProg		;end of the program
+	Movem a,EOM		;which is the original end of memory point
+	Movem a,E%O%M		;  and end of memory mark
+	Movei a,JBlks		;start of JFN blocks
+	Movem a,JBAdd		;which is the original JFN Block address
+	Jrst CLoop
+
+
+;;
+;; Funeral for the program, time for suicide
+;;
+;;  This formality is necessary to flush the remaining commands
+;;    if there was an error, so something like @NDIR KARK <whatever>
+;;    won't execute <whatever> after erroring on finding a KARK.* file...
+;;
+Death:	Hrroi a,[Asciz ""]
+	RSCAN
+	  Nop
+	.Logout
+
+;;
+;;================================================================
+;;	PROCESSING THE JFN BLOCK QUEUE
+;;================================================================
+;;
+Proces:	Txne f,ND%JCL		;jcl on next line?
+	  Jrst [Skipe JCLNxt	;is THIS the "next line"??
+		  Jrst [Call Terpri
+			Type "?Illegal nesting of JCL-next commands"
+			Jrst ProcA]
+		Setom JCLNxt	;no, but now it is...
+		Jrst CInit]
+	
+ProcA:	Txne f,ND%FRK		;skip if not forking
+	  .Continue		;fork and continue
+	Movei a,.priou
+	Movem a,OutJFN		;this is always the first output jfn, and
+				;  open/close operations are nops
+	Movei a,JBlks		;start of JFN Block queue
+	Movem a,JBAdd		;this is where we are
+	Jrst ProcL1
+
+ProcL:	Movei a,.jblen+1	;length of JFN Block
+	Addm a,JBAdd
+ProcL1:	Hrrz a,OutJFN
+	CLOSF
+	  Jrst [Call Terpri
+		Type "%Unable to close output JFN: "
+		Movei a,.priou
+		Hrrz b,OutJFN
+		Movei c,8.
+		NOUT
+		  Nop
+		Type " because: "
+		Call Terpri
+		Call Barf
+		Jrst .+1]
+	Setzm Last		;no longer last JFN in group
+	Setom First		;but it is the first JFN in the group
+;;;	Setzm DirNum		;enforce header printing with each field change
+	Move a,JBAdd		;address of this block
+	Hlrz g,(a)		;number of JFNs
+	Jumpe g,[.Logout]	;if no JFNs for this block, quit
+	Move f,1(a)
+	Hrrz v,(a)		;address of JFNs
+	Movem v,EOM
+	Hrli v,2(a)		;start with the third word of the JFN block
+	Hrri v,OutJFN		;start of data block
+	Blt v,NoUser		;through end of data block
+	Hrrz a,OutJFN
+	Move b,[Field(7,OF%BSZ)+OF%WR]
+	OPENF
+	  Jrst [Call Terpri
+		Type "%Unable to open ouput file, using primary output: "
+		Call Barf
+		Jrst .+1]
+	Move h,CFlags		;put the column flags in a convenient place
+	Movns g
+	Movss g
+	Hrri g,-1
+Proc1:	Skipe Last
+	  Jrst ProcL
+	Setom First		;first field for this new JFN
+	Aobjn g,.+2
+	  Setom Last
+	Move v,EOM		;EOM pointer
+	Add v,g			;plus index into EOM pointer
+	Move a,(v)		;grab the contents
+	Jumpe a,[.Logout]
+	Movem a,SavJFN
+Proc2:	Call FileOk		;only work if it is okay
+	  Jrst [Move v,ThisJ	;the one we just had -- did it change?
+		Txne v,GN%NAM	;has the filename changed while we been losing?
+		  Setom MissNm	;yes, note it
+		Txne v,GN%EXT	;has the filetype changed while we been losing?
+		  Setom MissXt	;yes, note it
+		Call NxtJFN	;nope, get another JFN
+		  Jrst Proc1	;we need another filespec
+		Jrst Proc2]	;got another JFN, so check it out
+	Hrroi a,NDNam		;new directory name
+	Hrrz b,SavJFN
+	Move c,[Field(1,JS%DEV)+Field(1,JS%DIR)+JS%PAF]
+	JFNS
+	  Erjmp [Call Terpri
+		 Type ~?JFNS death at "PROC2:"~
+		 Jrst .+1]
+	Movx a,RC%EMO		;precise recognition
+	Hrroi b,NDNam
+	Setz c,
+	RCDIR
+	Jumpe c,[Call Terpri
+		 Type ~?RCDIR failed at "PROC2:"~
+		 Jrst .+1]
+	Came c,DirNum		;same as old one?
+	  Call DisDir		;no, print the new directory name
+PFile1:	Typ "
+"
+	Skipe Dleted
+	  Jrst [CTyp "D
+		Jrst TypeIt]
+	Skipn Visibl
+	  Jrst [CTyp "I
+		Jrst TypeIt]
+	CTyp 40
+TypeIt:	CTyp 40
+	Move v,ThisJ
+	Skipe First		;if it was first one in field,
+	  Jrst OutNam		;  we do it all
+	Skipe MissNm		;did we lose on names somewhere?
+	  Jrst OutNam		;yes, go ahead and print the whole thing
+	Txnn v,GN%NAM		;no, but what about this time?
+	  Jrst SpcAdj		;nope, adjust columns
+	Jrst OutNam		;yep, do it all
+
+SpcAdj:	Move c,FNLen
+	Skipe MissXt		;did we lose on types somewhere?
+	  Jrst DoSpcs		;yes, print the extension here
+	Txne v,GN%EXT		;no, but what about this time?
+	  Jrst DoSpcs		;yep, print 'em out
+	Add c,FTLen		;no, add the length,
+	Call PSpace
+	Jrst OutGen
+
+DoSpcs:	Call PSpace
+	Jrst OutExt
+
+PSpace:	Jumple c,CPopJ
+	CTyp 40
+	Soja c,PSpace
+
+OutNam:	Hrroi a,FName
+	Hrrz b,SavJFN
+	Move c,[Field(1,JS%NAM)+JS%PAF]
+	JFNS
+	Setz c,			;count length of string, starting with 0
+	Move a,[440700,,FName]
+	Call CntStr
+	Movem c,FNLen
+	ATyp FName
+OutExt:	Hrroi a,FType
+	Hrrz b,SavJFN
+	Move c,[Field(1,JS%TYP)+JS%PAF]
+	JFNS
+	Setz c,			;count length of string, starting with 0
+	Move a,[440700,,FType]
+	Call CntStr
+	Movem c,FTLen
+	ATyp FType
+OutGen:	Setzm MissNm		;reset these, seeing
+	Setzm MissXt		;  how we won this time...
+	Hrroi a,FGen
+	Hrrz b,SavJFN
+	Move c,[Field(1,JS%GEN)+JS%TMP+JS%PAF]
+	JFNS
+	Setz c,			;count length of string, starting with 0
+	Move a,[440700,,FGen]
+	Call CntStr
+	Movem c,FGLen
+	ATyp FGen
+SumEm:	Move d,FNLen		;start with name length,
+	Add d,FTLen		;  add extension length,
+	Add d,FGLen		;  and generation length.
+	Movei c,23.		;maximum length ***
+	Sub c,d			;max - ours
+	Jumpl c,[Typ "
+"				;if we're too big, then newline
+		 Movei c,25.	;maximum length ***
+		 Jrst .+1]
+	Jumple c,DoCols
+	CTyp 40
+	Sojg c,.-1
+;; do the columns now...
+DoCols:	Setzm First		;takes more time to check; zero every win
+	Skipe Offlin
+	  Jrst Itsoff
+	Call BytSiz
+	Call Pages
+	Call GRCnt
+	Call BkDat
+	Call WrDat
+	Call RdDat
+	Call Prtect
+	Call LstWrt
+ColEnd:	Call NxtJFN
+	  Jrst Proc1		;need another JFN
+	Jrst Proc2
+
+NxtJFN:	Move a,SavJFN
+	GNJFN
+	  Jrst [Cain a,GNJFX1
+		  Ret	;go back for another JFN
+		.Yuk "GNJFN (NxtJFN): "]
+	Movem a,ThisJ		;save this JFN for its flags
+	Jrst PopJ1
+
+;;
+;;================================================================
+;;	DISPLAY DIRECTORY INFORMATION HEADER
+;;================================================================
+;;
+DNLen:	0			;length of directory name
+
+DisDir:	Skipe First1		;skip if very first header
+	  Jrst [Setzm First1	;which is to say, punt the gratuitous lines
+		Jrst DisD1]
+	Typ "
+
+"
+DisD1:	Hrroi a,DirNam
+	Hrrz b,SavJFN
+	Move c,[Field(1,JS%DEV)+Field(1,JS%DIR)+JS%PAF]
+	Setz d,
+	JFNS
+	  Erjmp [.Yuk "JFNS (DisDir): "]
+	Move a,[440700,,DirNam]
+	Setz c,			;starting with 0 chars, count the name
+	Call CntStr
+	Movem c,DNLen		;save it
+	ATyp DirNam
+	Movei c,35.		;35 is all we're tolerating
+	Sub c,DNLen		;difference in lengths
+	Jumple c,[Call Terpri
+		  Jrst DisD2]	;if overflow, make it two lines
+	Call PSpace		;output that many spaces for me
+DisD2:	CTyp "[
+	Movx a,RC%EMO		;precise recognition
+	Hrroi b,DirNam
+	Setz c,
+	RCDIR
+	Jumpe c,[Call Terpri
+		 Type ~?RCDIR failed at "DISDIR:"~
+		 Jrst .+1]
+	Movem c,DirNum
+	Move a,c
+	GTDAL
+	Movem a,DirWor		;save the information
+	Movem b,DirUse
+	Movem c,DirPer
+	Move a,OutJFN
+	Move b,DirUse
+	Movei c,10.
+	NOUT
+	  Nop
+	CTyp "/
+	Move b,DirPer
+	Cail b,100000.
+	  Jrst [Typ "Inf"
+		Jrst Outta]
+	Move a,OutJFN
+	Move b,DirPer
+	Movei c,10.
+	NOUT
+	  Nop
+Outta:	Typ "] ["
+	Hrroi a,DevNam
+	Hrrz b,SavJFN
+	Move c,[Field(1,JS%DEV)+JS%PAF]
+	Setz d,
+	JFNS
+	  Erjmp [.Yuk "JFNS (Outta): "]
+	ATyp DevNam
+	CTyp 40
+	Hrroi a,DevNam
+	STDEV
+	  Nop
+	Move a,b
+	GDSKC
+	Move x,a
+	Move y,b
+	Move a,OutJFN
+	Move b,y
+	Movei c,10.
+	NOUT
+	  Nop
+	CTyp "/
+	Move a,OutJFN
+	Move b,x
+	Movei c,10.
+	NOUT
+	  Nop
+	Typ " free/used]"
+	Txnn f,ND%HDR		;do we want a header?
+	  Ret			;naw, punt it then
+	Call Terpri
+	Typ "
+  -- File Name --        "
+	Txne h,NC%BSZ		;byte size?
+	  Jrst [Typ " BSiz"
+		Jrst .+1]
+	Txne h,NC%PGS		;page?
+	  Jrst [Typ " Size     "
+		Jrst .+1]
+	Txne h,NC%GEN		;generations?
+	  Jrst [Typ " Gen "
+		Jrst .+1]
+	Typ "   "		;for the P!$ columns
+	Txne h,NC%WRD		;write date?
+	  Jrst [Typ "    Write Date     "
+		Jrst .+1]
+	Txne h,NC%RDD		;read date?
+	  Jrst [Typ " Read Date "
+		Jrst .+1]
+	Txne h,NC%PRO		;protection?
+	  Jrst [Typ "Prot  "
+		Jrst .+1]
+	Txne h,NC%LWR		;last writer?
+	  Jrst [Typ " Writer"
+		Jrst .+1]
+	Ret
+
+;;
+;;================================================================
+;;	FILE INFORMATION FIELDS BY COLUMN TYPE
+;;================================================================
+;;
+
+;;
+;; Offline file tape information block
+;;
+ItsOff:	Typ "   [Offline: #"
+	Move c,FDBDat+.fbtp1
+	Call SixOut
+	Typ ", #"
+	Move c,FDBDat+.fbtp2
+	Call SixOut
+	CTyp 40
+	Move a,OutJFN
+	Move b,FDBDat+.fbtdt
+	Movx c,OT%NTM
+	ODTIM
+	CTyp "]
+	Jrst ColEnd		;no other shit, since it's offline
+
+;;
+;; Byte size
+;;
+BytSiz:	Txnn h,NC%BSZ		;did we want byte size for this field?
+	  Ret
+	Typ " ("
+	Hlrz a,FDBDat+.fbbyv
+	Trz a,770077
+	IDivi a,100		;remove right two zeros
+	Move b,a
+	Move a,OutJFN
+	Move c,[Field(2,NO%COL)+NO%LFL+10.]
+	NOUT
+	  Nop
+	CTyp ")
+	Ret
+
+;;
+;; Page count
+;;
+PagSht:	Block 7			;pages garbage buffer
+Pages:	Txnn h,NC%PGS		;did we want pages for this field?
+	  Ret
+	CTyp 40			;a padding space
+	Move a,FDBDat+.fbsiz	;number of bytes
+	Movei b,36.		;bits/word
+	Hlrz d,FDBDat+.fbbyv	;I/O information
+	Trz d,770077
+	Lsh d,-6		;c has byte size
+	IDiv b,d		;put bytes/word in B
+	IMuli b,1000		;1000 octal words/page (B has bytes/page)
+	Move c,b		;copy it
+	IDiv a,c		;number of pages in A, remainder in B
+	Jumpe b,PCOut		;if no remainder, go to output it
+	Move d,b		;save remainder
+	Skipn FilPgs		;if there aren't any pages
+	  Jrst [Move a,[440700,,PagSht]	;  the file is probably (!) open for
+		Movei c,"+	;  write with a PMAP, and just isn't closed...
+		IDpb c,a	;(make sure not to confuse this with pages)
+		Movei c,10.
+		NOUT
+		  Nop
+		Movei c,"?	;can't be QUITE sure we're done yet, tho...
+		IDpb c,a
+		Setz c,
+		IDpb c,a	;terminate it
+		Jrst CNum]
+	Hrroi a,PagSht
+	Move b,FilPgs
+	Sos b			;subtract one from our page count for the
+	Movei c,10.		;  fractional page
+	NOUT
+	  Nop
+	Hrroi b,[Asciz " +"]
+	Setz c,
+	SOUT			;append to text
+	Move b,d		;remainder over integral pages
+	Movei c,10.		;decimal
+	NOUT			;append to text
+	  Nop
+	Setz c,
+	IDpb c,a		;terminate it
+	Jrst CNum
+
+PCOut:	Hrroi a,PagSht
+	Move b,FilPgs
+	Movei c,10.
+	NOUT
+	  Nop
+CNum:	ATyp PagSht
+	Move a,[440700,,PagSht]
+	Setz c,
+	Call CntStr
+	Movei d,8.		;max width of field in spaces
+	Sub d,c			;subtract length from max for adjustments
+	Jumpl d,CPopJ
+	Move a,OutJFN
+	Movei b,40
+	BOUT
+CND1:	Sojge d,.-1		;if there's more space, do it
+	Ret
+;;
+;; Generation Retention Count
+;;
+GRCnt:	Txnn h,NC%GEN		;did we want gen-retention in this field?
+	  Ret			;nope
+	Typ "  "
+	Hlrz b,FDBDat+.fbbyv	;generation count in left half
+	Lsh b,-12.		;only want the top 6 bits
+	Jumpe b,[Type "   "
+		 Jrst CPopJ]
+	Move a,OutJFN
+	Move c,[Field(2,NO%COL)+NO%LFL+10.]
+	NOUT
+	  Nop
+	CTyp 40
+	Ret
+
+;;
+;; Backed-up indication and No-reap indication
+;;
+FB%NDL==Bit(18.)		;goddam thing's not defined!!!
+
+BkDat:	Move a,FDBDAT+.fbctl
+	Txne a,FB%NDL		;can we delete it?
+	  Skipa b,["P]		;nope, this says it's "perpetual"
+	 Movei b,40		;yep, this says nothing at all
+	Move a,OutJFN		;put it on the output JFN
+	BOUT
+	Hlrz a,FDBDat+.fbcnt	;number of writes
+	Hrrz b,FDBDat+.fbbk0	;last number according to DUMPER
+	Came a,b		;are they the same?
+	  Jrst [Move a,FDBDat+.fbctl
+		Txne a,FB%DIR	;is it a directory?
+		  Jrst Bked	;yes, ignore the not-backed-up bit
+		CTyp "!		;no, go ahead
+		Jrst TstNoR]
+Bked:	CTyp 40			;it has been backed up, skip it all
+TstNoR:	Move a,FDBDat+.fbctl
+	Txnn a,FB%DIR		;directory?
+	  Jrst TstNR1		;nope, next part
+	CTyp "*			;yep, tell us it's a directory
+	Ret
+TstNR1:	Move a,FDBDat+.fbbbt	;backup mode word
+	Txnn a,AR%NAR
+	  Txne a,AR%EXM
+	    Jrst [CTyp "$
+		  Jrst CPopJ]
+	CTyp 40			;nothing, hit a space
+	Ret
+
+;;
+;; Last write date
+;;
+WrDat:	Txnn h,NC%WRD		;did we want write date in this field?
+	  Ret
+	Move a,OutJFN
+	Hrrz b,SavJFN
+	Movx c,JS%LWR
+	JFNS
+	CTyp 40
+	Ret
+
+;;
+;; Last read DATE
+;;
+RDInf:	0			;reference date information
+RdDat:	Txnn h,NC%RDD		;did we want read date in this field?
+	  Ret			;nope
+	CTyp "(
+	Move b,FDBDat+.fbref
+	Jumpe b,[Typ "    -    ) "
+		 Jrst CPopJ]
+	Movx c,OT%NTM
+	ODTIM
+	Typ ") "
+	Ret
+
+;;
+;; Protection code
+;;
+PrtBuf:	Block 10
+Prtect:	Txnn h,NC%PRO		;did we want the protection in this field?
+	  Ret
+	Hrroi a,PrtBuf
+	Hrrz b,SavJFN
+	Movx c,JS%PRO
+	JFNS
+Prt1:	Move a,[440700,,PrtBuf]
+	Movei c,6
+Prt2:	ILdb b,a
+	Jumpe b,Prt3
+	Sos c
+	Jrst Prt2
+Prt3:	Jumple c,Prt4
+Prt3a:	CTyp 40
+	Sojg c,Prt3a
+Prt4:	ATyp PrtBuf
+	CTyp 40
+	Ret
+
+;;
+;; Last writer
+;;
+LWJunk:	Block 20		;meaningless garbage...
+LstWrt:	Txnn h,NC%LWR		;did we want the last-writer in this field?
+	  Ret
+	Hrroi a,FUStr		;person who wrote this file
+	Hrroi b,MUText		;my username
+	STCMP			;are they the same? (did I write this file?)
+	Jumpe a,CPopJ		;if yes, skip outputting it
+	Hrroi a,LWJunk
+	Hrroi b,[Asciz "PS:<"]
+	Setz c,
+	SOUT
+	Hrroi b,FUstr
+	SOUT
+	Movei b,">
+	IDpb b,a
+	Setz b,
+	IDpb b,a		;terminate it!
+	Hrroi a,LWJunk
+	Hrroi b,DirNam
+	STCMP			;are the dirname and lastwriter same?
+	Jumpe a,[Typ "..."	;yeah, punt the verbosity
+		 Ret]
+	ATyp FUStr		;file's user-writer string
+	Ret
+
+;;
+;; COMND Init Subroutines
+;;
+CLInit:	Hrroi a,[Asciz "*"]	;have to make sure the COMND JFN handler
+	Movem a,JFNBlk+.gjext	;sets defaults each time it is used
+	Skipe First		;if it is the first time, we want
+	  Jrst [Movem a,JFNBlk+.gjnam	; a default file name, as such
+		Jrst .+2]
+	 Setzm JFNBlk+.gjnam	;otherwise we zero the address
+	Movx a,GJ%OLD\GJ%IFG\GJ%XTN\GJ%DEL
+	Addi a,.gjall
+	Movem a,JFNBlk+.gjgen
+	Movx a,G1%IIN
+	Movem a,JFNBlk+.gjf2
+	Ret
+
+;; 
+;; GENERIC STRING COUNTING ROUTINE
+;; 
+;; This takes an explicit byte pointer in AC1 (if it's a lazy one,
+;;   -1,,something, it makes it compatible with LDB instructions)
+;;   It counts the characters in the string, returning the number in
+;;   AC3. OUTJFN holds destination and is looked at to determine the
+;;   behaviour of control sequences.
+;; 
+;; ** Note: This bashes ACs 1-3
+;; 
+CntStr:	Move b,a		;copy for frobbing
+	Xor b,[-1]		;flip 'em all
+	Tlne b,-1		;do if left half zero (was -1,,something)
+	  Hrli a,440700		;set up standard ascii pointer
+
+CntS1:	ILdb b,a
+	Jumpe b,CPopJ		;null terminates the string
+	Caige b,40		;control character?
+	  Jrst [Move b,OutJFN
+		Caie b,.priou	;to terminal?
+		  Addi c,2	;no, it will have 2 chars for it then
+		Jrst CntS1]	;if to tty, then it will have 0
+	Aos c			;not control char, only one char either way
+	Jrst CntS1
+
+;;
+;;================================================================
+;; Checks out file attributes. Returns +1 if doesn't meet flag word,
+;;	+2 if it does.
+;;================================================================
+;;
+FileOk:	Hrrz a,SavJFN
+	Hrlzi b,.fblen
+	Movei c,FDBDat		;grab the whole fdb for me...
+	GTFDB
+	  Erjmp [.Yuk "GTFDB(FileOk): "]
+	Hrrz a,FDBDat+.fbbyv	;number of pages in file in right half
+	Movem a,FilPgs
+;;get the username and number of the last writer
+	Hrli a,1
+	Hrr a,SavJFN
+	Hrroi b,FUStr
+	GFUST			;shouldn't lose ever
+	Movx a,RC%EMO		;match exactly
+	Hrroi b,FUStr		;here's the username string
+	Setz c,			;with no stepping
+	RCUSR
+	  Erjmp [Setzm FUser	;no such user, set it to zero for matching
+		Jrst FOKCtl]	;  porpoises, and jump to the next area
+	Txne a,RC%NOM		;if no match,
+	  Jrst [Setzm FUser	;no such user, set it to zero for matching
+		Jrst FOKCtl]	;  porpoises, and jump to the next area
+	Movem c,FUser		;it won, save it for reference
+FOKCtl:	Move a,FDBDat+.fbctl
+	Txne a,FB%OFF		;offline?
+	  Jrst [Setom Offlin	;yes
+		Jrst .+2]
+	 Setzm Offlin		;no
+	Txne a,FB%DEL		;skip if not deleted
+	  Jrst [Setom Dleted	;if a file is deleted, then it is visible
+		Setom Visibl
+		Jrst ChekIt]
+	Txne a,FB%INV		;skip if visible
+	  Jrst [Setzm Visibl	;if a file is invisible, it is not deleted
+		Setzm Dleted
+		Jrst ChekIt]
+	Setzm Dleted		;not deleted,
+	Setom Visibl		;and not invisible
+ChekIt:	Skipe f			;if no flags, check the normal case
+	  Txnn f,ND%DST		;if flags didn't affect us, normal case again
+	 Tdo f,Stndrd		;turn on standard bits
+	Txne f,ND%ALL		;looking at EVERY file...
+	  Jrst PopJ1		;passed
+
+;; 
+;; KEEP THE PAIRINGS TOGETHER! The A/~A pairs depend on the order for
+;; the shortcut skipping to work properly.
+;; 
+
+	Txne f,ND%DIR		;looking for directories?
+	  Jrst [Txne f,ND%FIL	;looking for reg'lar ones, too?
+		  Jrst .+3	;yeah, passed
+		Move a,FDBDat+.fbctl
+		Txnn a,FB%DIR	;directory file?
+		  Ret		;nope, punt it then
+		Jrst .+1]	;yeah, passed
+	Txne f,ND%FIL		;looking for reg'lar files?
+	  Jrst [Move a,FDBDat+.fbctl
+		Txne a,FB%DIR	;directory file?
+		  Ret		;yeah, punt
+		Jrst .+1]
+
+	Txne f,ND%DEL		;looking for deleted files
+	  Jrst [Txne f,ND%UND	;looking for both?
+		  Jrst .+3	;yeah, passed
+		Skipn Dleted	;only deleted then
+		  Ret		;not deleted, failed
+		Jrst .+1]	;passed
+	Txne f,ND%UND		;looking for undeleted files
+	  Jrst [Skipe Dleted	;only undeleted
+		  Ret		;deleted, failed
+		Jrst .+1]	;passed
+
+	Txne f,ND%IIN		;looking for invisible files
+	  Jrst [Txne f,ND%VIS	;looking for both?
+		  Jrst .+3	;yeah, passed
+		Skipe Visibl	;only invisible then
+		  Ret		;visible, failed
+		Jrst .+1]	;passed
+	Txne f,ND%VIS		;looking for visible files
+	  Jrst [Skipn Visibl	;only visible
+		  Ret		;invisible, failed
+		Jrst .+1]	;passed
+
+	Txne f,ND%OFF		;looking for offline files
+	  Jrst [Txne f,ND%ONL	;looking for both?
+		  Jrst .+3	;yeah, passed
+		Skipn Offlin	;only offline then
+		  Ret		;online, failed
+		Jrst .+1]	;passed
+	Txne f,ND%ONL		;looking for online files
+	  Jrst [Skipe Offlin	;only online
+		  Ret		;offline, failed
+		Jrst .+1]	;passed
+
+	Txne f,ND%LAR		;comparing size?
+	  Jrst [Move a,PagLar	;yes, here's our minimum number of pages
+		Camle a,FilPgs	;is the file larger than this?
+		  Ret		;no, failed
+		Jrst .+1]	;passed
+	Txne f,ND%SML		;comparing size?
+	  Jrst [Move a,PagSml	;yes, here's our maximum number of pages
+		Camge a,FilPgs	;is the file smaller than this?
+		  Ret		;no, failed
+		Jrst .+1]	;passed
+
+	Txne f,ND%PRE		;comparing dates?
+	  Jrst [Move a,PreDat	;yes, here's the latest date for us
+		Camge a,FDBDat+.fbwrt	;was it written earlier than this?
+		  Ret		;no, failed
+		Jrst .+1]	;passed
+	Txne f,ND%AFT		;comparing dates?
+	  Jrst [Move a,AftDat	;yes, here's the earliest date for us
+		Camle a,FDBDat+.fbwrt	;was it written later than this?
+		  Ret		;no, failed
+		Jrst .+1]	;passed
+
+	Txne f,ND%USR		;comparing users?
+	  Jrst [Move a,User	;yes, here's the user we want
+		Came a,FUser	;was it last written by the one we want?
+		  Ret		;no, failed
+		Jrst .+1]	;passed
+	Txne f,ND%NUS		;comparing users?
+	  Jrst [Move a,NoUser	;yes, here's the user we don't want
+		Camn a,FUser	;was it last written by the one we don't want?
+		  Ret		;yes, failed
+		Jrst .+1]	;passed
+PopJ1:	Aos (p)			;passed 'em all
+CPopJ:	Ret
+
+;;
+;; Sixbit output subroutine
+;;
+SixOut:	Move a,OutJFN
+	Setz b,
+	Lshc b,6
+	Addi b,40
+	BOUT
+	Jumpn c,SixOut
+	Ret
+
+variables
+constants
+
+EOProg:	0
+
+loc 377*1000
+	End Start

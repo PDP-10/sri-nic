@@ -1,0 +1,641 @@
+
+
+
+                             TOPS-20 BEWARE FILE
+
+
+                               November , 1984
+
+
+                               Version 6(6356)
+
+
+
+        COPYRIGHT (C) DIGITAL EQUIPMENT CORPORATION 1976,  1984.   ALL
+        RIGHTS RESERVED.
+
+        THIS SOFTWARE IS FURNISHED UNDER A LICENSE AND MAY BE USED AND
+        COPIED  ONLY  IN ACCORDANCE WITH THE TERMS OF SUCH LICENSE AND
+        WITH THE  INCLUSION  OF  THE  ABOVE  COPYRIGHT  NOTICE.   THIS
+        SOFTWARE  OR  ANY  OTHER COPIES THEREOF MAY NOT BE PROVIDED OR
+        OTHERWISE MADE AVAILABLE TO ANY OTHER PERSON.  NO TITLE TO AND
+        OWNERSHIP OF THE SOFTWARE IS HEREBY TRANSFERRED.
+
+        THE INFORMATION IN THIS SOFTWARE IS SUBJECT TO CHANGE  WITHOUT
+        NOTICE  AND SHOULD NOT BE CONSTRUED AS A COMMITMENT BY DIGITAL
+        EQUIPMENT CORPORATION.
+
+        DIGITAL ASSUMES NO RESPONSIBILITY FOR THE USE  OR  RELIABILITY
+        OF ITS SOFTWARE ON EQUIPMENT WHICH IS NOT SUPPLIED BY DIGITAL.
+                                                                        Page 2
+
+
+
+
+
+
+
+
+
+
+
+        1.0  FUNCTION OF THIS DOCUMENT
+
+
+        This document supplements the TOPS-20 manuals by pointing  out
+        hints and potential problems discovered at the last minute.
+
+
+
+
+
+
+        2.0  CRITICAL LEVEL CAUTIONS (READ THESE CAREFULLY)
+
+        2.1  System Shutdown
+
+
+        It is necessary to issue a HALT command to stop the CI20 after
+        shutting  down  the system with a SHUT or <ctrl-E>CEASE.  This
+        is particularly important for CFS configurations.
+
+
+
+        2.2  Executive DDT And MDDT Now Run In Their Own Section.
+
+
+
+                                     NOTE
+
+            Caution, users executing jsys's in  MDDT  will  use  a
+            global  stack pointer and may crash the system, if the
+            jsys isnt prepared for it.
+
+
+
+
+
+        2.3  Power Fail Restart
+
+        Modifications to the Power Fail Restart  code  must  still  be
+        done  to  deal  with  systems having a CI.  At this time power
+        fail restart does not work for CI configured systems.
+                                                                        Page 3
+
+
+        2.4  Running 5.1 On A Machine With A CI20 Installed
+
+        In order to run 5.1 on a system with a CI, you must patch  the
+        monitor so it ignores the CI's RH20 slots.
+
+        $get system:monitr.exe
+        $dd
+        DDT
+        rh2nxt+4/   CAMLE Q1,LPHYH2#+13 (tab)
+        LPHYH2#+13/   SUMNR2,,0   564000,,0
+        ^Z
+        $
+
+
+
+        2.5  SYSDPY
+
+        The Tool SYSDPY has had significant changes to it.   It  is  a
+        requirement  that the SYSDPY that is shipped with Tops-20 v6.0
+        be run with  that  version  of  the  monitor,  and  no  other.
+        Similarly  the version of SYSDPY that was shipped with Tops-20
+        v5.1 will run with ONLY that version of the monitor.
+
+
+        Failure to run the correct version of SYSDPY  will  CRASH  the
+        system.
+
+
+
+        2.6  FTS And New KL-Ucode
+
+        There is a bad subscript calculation in a BITVECTOR access  in
+        FTS, and this results in a bad (one word global) byte pointer.
+        Note that the function being performed by the LDB  instruction
+        is  insignificant,  and  thus  people would not notice that it
+        always returned a 0 when run under field image microcode.
+
+        New KL-Ucode distributed with Tops-20 v6.0 traps this as a bad
+        byte-pointer.    This   means   that  an  FTS  patch  must  be
+        distributed to systems that are going to be running  microcode
+        350 or later.  The binary patch is:
+
+
+        At FTS$ER+70, change:
+                SUBI 600000
+        to:
+                SUBI 300000
+
+        This is valid for at least FTS 1(46) and 1(53).
+                                                                        Page 4
+
+
+        2.7  BASIC And Autopatch
+
+        Symptom:
+
+
+             With microcode versions 350  and  later,  OLD  file.ext
+        gives ?Illegal Memory Read.
+
+        Diagnosis:
+
+
+             In module KOLD, routine DOOLD, after the file  is  read
+        in, it is closed with the CLOSF% JSYS.  To zero ACs 2-4, the
+        following code sequence was being used.
+
+             JSYS2 _ .JSYS3 _ .JSYS4 _ 0;
+
+             This generated code to do DPB instructions  with  bogus
+        byte pointers.  The old microcode did not trap these.
+
+        Cure:
+
+        Don't dot JSYS3 and JSYS4 so that they  will  be  zeroed  as
+        intended.  This is reflected in Autopatch Edit 335 (DDT patch follows):
+
+        @ENABLE
+        $GET SYS:BASIC.EXE
+        @DDT
+        DDT
+
+        DOOLD+52/   DPB J,JSYS4   SETZ JSYS4
+        DOOLD+53/   DPB J,JSYS3   SETZ JSYS3
+
+        DOOLD+161/   DPB J,JSYS4   SETZ JSYS4
+        DOOLD+162/   DPB J,JSYS3   SETZ JSYS3
+
+        <ctrl-Z>
+        @SAVE SYS:BASIC.EXE 0 120
+         BASIC.EXE.2 Saved
+           --------
+
+
+
+        3.0  LESS CRITICAL PROBLEMS
+
+        3.1  Bundled Software
+
+        The following bundled software shipped with Tops-20 v6.0,  has
+        NOT  had  significant  maintenance updating since the previous
+        Tops-20 release.  It is quite possible that your system has  a
+        version  of  one  or  more of the following programs at higher
+        revision levels than those  included  on  this  tape.   Please
+        review  the  list  and  compare  them  to those on your system
+        before superseding them.
+                                                                        Page 5
+
+
+        1.  MACRO
+
+        2.  MAKLIB
+
+        3.  SCAN
+
+        4.  WILD
+
+
+
+
+        3.2  New Micro-code And One Word Global Byte Pointers
+
+        The microcode shipped for release 6 of the monitor allows  One
+        Word  Global  Byte  Pointers  in  section zero.  User software
+        which has byte pointers with  P  fields  greater  than  44  in
+        section  zero may now fail.  Previous to the current microcode
+        P fields greater than 44 were documented as  giving  undefined
+        results.
+
+        One word global byte pointers are discussed in  the  Processor
+        Reference Manual.
+
+
+
+        3.3  DECNET And VNP36
+
+
+        The changes in the new KL-Ucode making one  word  global  byte
+        pointers  legal  in  section  zero  has uncovered a case of an
+        illegal byte pointer in the DECNET utility VNP36.
+
+        We have included a rebuilt VNP36 on the Tops-20 TOOLS tape and
+        made an entry in the tools documentation about it.
+
+
+
+        3.4  Password Encryption
+
+        In general  do  not  start  using  password  encryption  under
+        Tops-20  v6.0 until you are past the point at which it will be
+        likely that you would have to backoff to 5.1  level  monitors.
+        Passwords encrypted under v6.0 will have to reset under 5.1.
+
+
+
+        3.5  Job Numbers
+
+        With Tops-20 v6.0 the monitor now considers job numbers to  be
+        a CFS-configuration wide resource, and in particular allocates
+        blocks of job numbers to the systems in a  CFS  configuration.
+        This  may  result in a particular system assigning job numbers
+        in ranges in excess of 128, in  particular  up  to  512.   Any
+        programs  using/getting job numbers from Tops-20 will thus now
+        have to be able to deal with  the  entire  number  range  from
+                                                                        Page 6
+
+
+        0-512  and  be  able  to deal with a sparse allocation of such
+        numbers on a particular system.
+
+
+
+        3.6  Swapping Space
+
+        With this  release  we  have  greatly  increased  the  use  of
+        extended  addressing,  This may require some sites to increase
+        the amount of swapping space over the standard  build  amount,
+        depending upon the extended addressing usage at the site.
+
+
+
+        3.7  New 20F
+
+        This kit contains a new version of RSX20F.  This version  must
+        be used in conjunction with Tops-20 v6.0.
+
+
+        This new version is NOT compatible  with  5.1  (and  previous)
+        level  monitors, so any backoff procedures must take this into
+        account.
+
+
+
+        3.8  Spurious KLPERR BUGCHKS
+
+        Some sites may see KLPERR BUGCHKs with first  data  field  202
+        (named buffer error).  These may be ignored.
+
+        In general KLPERR bugchks are not serious.
+
+
+
+        3.9  PDV And SSAVE% Jsys
+
+        The SSAVE Jsys has been changed to save Only those PDV entries
+        associated  with  the  memory being saved.  Previous to this a
+        SAVE which did not include  a  piece  of  memory  with  a  PDV
+        associated  with  it  would result in a SAVEd image with a PDV
+        referencing non-existent memory, and  could  later  result  in
+        INFO VERSION commands complaining about bad PDV's.
+
+
+
+        3.10  MASSBUS Device Designations
+
+        Several utilities are being changed to reference  disks  using
+        Decimal  numbers  rather  than  octal.   This is a result of a
+        change being made as part of rel-6, initiated because  of  the
+        following:
+
+                1)All Ci designators (node numbers/hsc-disk units numbers) are being
+                displayed in decimal
+                                                                        Page 7
+
+
+
+                2)VMS displays all such designators in decimal.
+
+        Given the CI convention we were presented with the prospect of
+        having  some types of disks with decimal unit numbers and some
+        with octal.  It was felt that it was best  to  have  all  such
+        numbers  in  the  same  base.   Thus it was concluded that all
+        displays that are oriented towards operators or regular  users
+        should    use   decimal   base   for   unit/controller/channel
+        number/etc.      This     includes      Galaxy,      utilities
+        (UNITS/CHANS/...), CHECKD, Monitor startup code, SYSDPY.
+
+        Displays at lower levels  (not  general  user  oriented)  will
+        continue   to   show   octal  format,  in  particular,  BUGxxx
+        additional data fields and DDT.
+
+        Sites with RP20's will be the most affected by this change.
+
+
+
+        3.11  Non-wheel Access To Bootable Packs
+
+        Recent edits to MEXEC and FILINI cause jobs to be started with
+        no  special  capabilities.  This means that ALL bootable packs
+        must allow non-wheel access  to  the  file  EXEC.EXE  and  the
+        directory it resides in.
+
+        If you get the NO EXEC message when logging on you can go into
+        the  MX  at  the  CTY and do a GET <SYSTEM>EXEC.EXE (This will
+        work since MX at the CTY gives you wheel).  Use that  EXEC  to
+        change    the    protection    of   DEFAULT-EXEC:    (normally
+        SYSTEM:EXEC.EXE) to 771212 and the protection of  SYSTEM:   to
+        774040.  This should do the trick!
+
+
+
+        3.12  Reconstruction Of Index-Table During Startup
+
+        When the system is first booted with  an  old-style  PS:,  the
+        system  will  take some time to reconstruct the index-table so
+        that it will be able  to  include  the  new  PPN  support.   A
+        message  to  this  effect  will  occur  shortly  after the [PS
+        MOUNTED] message.  Do not be alarmed at the duration  of  this
+        operation.
+
+
+
+        3.13  PDVOP% JSYS Call On .PONAM Function Code May Fail.
+
+        The PDV definition of the .PVNAM symbol (along with other such
+        symbols  previously described as addresses) are now defined to
+        be indirect words.  Hence, the .PONAM function call of  PDVOP%
+        will  not return the name string if the caller is in a nonzero
+        section and the program is using PDV's where the .PVNAM symbol
+        is  using  the  old  address format.  Under the old format, an
+                                                                        Page 8
+
+
+        address of the form 0,,addr used in a  nonzero  section  would
+        cause  a  section  relative  reference to the PDV name string.
+        This change will impact you only in the  rare  event  you  are
+        making  use  of this function code of the PDVOP% JSYS and that
+        the program is in a nonzero section.
+
+
+
+        3.14  ARPANET Protocol Changes
+
+        Release 6 of the  monitor  contains  support  for  the  TCP/IP
+        protocols  for the ARPANET.  The old NCP protocol is no longer
+        supported by the monitor.  In the unlikely event that  a  site
+        is  still  running  with  the  old  arpanet support code major
+        changes will be needed for supporting software subsystems.
+
+
+
+        3.15  PS:  Structure Name And CFS
+
+        CFS requires that all structures on systems  on  the  same  CI
+        have  different and unique names.  In particular, no more than
+        a SINGLE system can have its public structure name called PS:.
+
+
+        This functionality was available  in  5.1.   However,  it  was
+        never  stated  that  it  was  of any advantage to call the PS:
+        disks something other than PS:.  CFS now requires that this be
+        done  for  at  least  one  of  the systems in a dual system CI
+        configuration.
+
+
+        We highly recommend that policies be  established  that  cause
+        ALL public structures to have names other than PS:.
+
+
+
+        3.16  Alternate Password Validation Algorithms
+
+        Release 6 allows customers to select one of  two  methods  for
+        handling password validation errors.
+
+
+        The first method, and the one enabled by default,  is  exactly
+        that  present  in previous versions of TOPS-20.  That is, each
+        time an invalid password is entered, the  process  is  blocked
+        for three seconds and then a JSYS error is produced.
+
+
+        The  second  method,  new  to  release  6,  incorporates  some
+        techniques used by TOPS-20 customers.  This technique does not
+        have a delay when  a  password  is  entered  incorrectly,  but
+        rather the JSYS error is produced immediately.  However, after
+        a predefined number of incorrect guesses in a predefined time,
+        all  subsequent  passwords presented to TOPS-20, be they valid
+                                                                        Page 9
+
+
+        or invalid, will be rejected.  Also, once  this  threshold  is
+        reached,  TOPS-20 issues a BUGINF so that the operator and the
+        administrator will know that there may be an intruder  on  the
+        system.
+
+
+        The specifics of the algorithm are as follows:
+
+
+        The choice of algorithm is made by the resident  word  PSPNTP.
+        If  this  word  is  zero  the old algorithm is used;  if it is
+        non-zero, the new algorithm is used.
+
+
+        The time interval for considering failed passwords  is  MINTVL
+        and  is set to three minutes.  It may be changed by defining a
+        value in PARAMS.
+
+
+        The maximum number of incorrect passwords allowed in MINTVL is
+        MXFLCT  and  this  is set to five in the standard monitor.  It
+        may be changed by defining a new value in PARAMS.
+
+
+        Finally, the value MXLOGO, set to ten in the monitor,  is  the
+        maximum  number of failed or rejected passwords allowed before
+        the job is logged out.  This may be set to  infinity  if  this
+        "service" is not desired.  Setting this to infinity means that
+        password "guessers" will  never  know  for  certain  when  the
+        monitor is unconditionally rejecting passwords.  If one wishes
+        "intruders" logged out instead of allowed to present passwords
+        to  be  rejected,  MXLOGO  should  be set to the same value as
+        MXFLCT.
+
+
+        Whereas setting MXLOGO to infinity may be  desirable,  setting
+        MINTVL  to infinity may unduly penalize poor typists (a common
+        problem).  MINTVL should be selected so  as  to  maximize  the
+        likelihood of trapping intruders and minimizing the likelihood
+        of confounding  poor  typists.   The  preset  value  of  three
+        minutes seems a good compromise.
+
+
+        The BUGINF produced in the second method is called BREAKI  and
+        has two optional data items:  the TTY number and the logged in
+        user number.  The second item, the user number, will  be  zero
+        for a job that has not yet logged in.
+                                                                       Page 10
+
+
+        3.17  RUNOFF Command Scanning Problem
+
+        RUNOFF under Release 6 has problems parsing abbreviations  for
+        legal switches:
+        [Recording initiated at Wed 11-Jan-84 16:03:42]
+
+        LINK FROM SPEER, TTY 32
+
+         TOPS-20 Command processor 6(765)
+
+        @RUNOFF
+        RUNOFF>FC2032.RNO/? one of the following:
+         /BAckspace               /BOld:                    /CHange-bars:
+         /COntents:               /DEbug:                   /DOwn:
+         /Exit                    /Form-size:               /Help
+         /Index:                  /Log                      /Messages:
+         /NOBold                  /NOCHange-bars            /NOCOntents
+         /NODEbug                 /NODOwn                   /NOIndex
+         /NOLog                   /NONspacing-underline:    /NOOutput
+         /NOPause                 /NORight                  /NOSEquence
+         /NOSImulate              /NOUnderline-character    /Output:
+         /PAGes:                  /PAUse                    /Right:
+         /SEParate-underline:     /SEQuence                 /SImulate
+         /Underline-character:    /Variant:
+        RUNOFF>FC2032.RNO/O:<ESC>
+        ?Command line parsing error.  Illegal switch or field.
+        RUNOFF>FC2032.RNO/OUTPUT:FC2032.MEM<CRLF>
+        ?Command line parsing error.  Illegal switch or field.
+        RUNNOFF>fc2032.rno/o<ESC>utput:fc2032.mem       ;Completion works OK!
+        RUNOFF>FC2032.RNO/<ESC>
+        ?Command line parsing error.  Illegal switch or field.
+        RUNOFF>/EX
+        The following Patch should fix the problem:
+
+
+        !DDT PATCH TO DEC STANDARD RUNOFF VERSION 2(103)
+        !
+        $GET SYS:RUNOFF.EXE.1
+        $DDT
+        DDT
+        RNOT20$:
+        P.AEB/   3020,,P.AEC   3000,,P.AEC
+        P.AEF/   3020,,P.AEG   3000,,P.AEG
+        P.AEI/   3020,,P.AEJ   3000,,P.AEJ
+        P.AEN/   3020,,0   3000,,0
+        P.AEQ/   3020,,0   3000,,0
+        P.AFG/   3020,,P.AFH   3000,,P.AFH
+        P.AFK/   3020,,P.AFL   3000,,P.AFL
+        P.AFO/   3020,,P.AFP   3000,,P.AFP
+        P.AFX/   3020,,0   3000,,0
+        P.AGE/   3020,,0   3000,,0
+        P.AGI/   3020,,0   3000,,0
+        P.AGO/   3020,,0   3000,,0
+        <ctrl-Z>
+        $SAVE SYS:RUNOFF.EXE.2
+                                                                       Page 11
+
+
+
+
+
+
+        3.18  MMAILR And The Use Of POBOX:
+
+        The tool MMAILR has not been modified to take advantage of the
+        POBOX:  logical name for use by MS:.  Therefore, if POBOX:  is
+        redefined to something other than PS:, MMAILR  will  not  work
+        correctly.
+
+
+
+        3.19  MAILER
+
+        MAILER has been changed to use the logical  name  POBOX:   for
+        mail  delivery.   In addition, code that was once in MAILER to
+        create the TO:  and CC:  fields has been  moved  to  MAIL.EXE.
+        This  should  allow  both  MS  and  MAIL to use the same local
+        MAILER.  However, MS must be patched to send its  IPCF  packet
+        to  MAILER  and  not  MAILEX.  If MS is patched in such a way,
+        there is no need to use  MAILEX  at  all.   Otherwise,  MAILEX
+        should continue to be used for local mail sent by MS users.
+
+
+
+        4.0  BEWARE ENTRIES FOR THE EXEC
+
+
+        1.  Setting Terminal Type
+
+            Setting terminal type to a video type terminal  no  longer
+            makes PAUSE END-OF-PAGE the default, as it was in 5.1
+
+        2.  New EXEC Commands and Features
+
+            Please refer to the TOPS-20 Commands Reference Manual  for
+            details  of  new EXEC commands.  The EXEC.DOC file, in the
+            documentation saveset on the Distribution Tape, summarizes
+            the changed and new commands.
+
+        3.  PCL EXEC
+
+            The PCL EXEC provided on the  tools  tape  is  edit  level
+            6(1014).   This  EXEC  is  based  on  version  6(1012)  as
+            provided on the installation tape but  also  includes  MIC
+            and PCL features.
+
+        4.  MIC and autopatch
+
+            EXEC's built with tools such as MIC and PCL, because  they
+            are   built   with   non-standard   modules,  may  not  be
+            autopatched.
+                                                                       Page 12
+
+
+        5.  New Abbreviation for LOGOUT
+
+            In the version of the EXEC shipping with Tops-20 v6.0, LOG
+            is taken as the abbreviation for LOGOUT (assuming that you
+            are LOGged in ) and will LOG you OUT without a warning.
+
+        6.  LOGOUT "n" and <ctrl-E>CEASE now require confirmation.
+
+        7.  By default /FAST logins are allowed, if a site  wishes  to
+            restrict    this,   it   must   use   a   <ctrl-E>SET   NO
+            FAST-LOGINS-ALLOWED or SETSPD's DISABLE FAST-LOGIN-OPTION.
+
+
+
+
+        5.0  BEWARE ENTRIES FOR GALAXY V5.
+
+
+        1.  DISMOUNTING  disks  under  a  CFS  configuration  requires
+            additional  steps  to the normal procedure.  See Operators
+            Guide for details.  Failure to following correct procedure
+            could result in users/systems becoming hung.
+
+        2.  MOUNTR.CMD  is  no  longer  examined   by   MOUNTR.    All
+            disk/structure  information  should be entered once as SET
+            STRUCTURE commands in OPR.  The settings  will  remain  in
+            effect  as  long  as  the  DEVICE-STATUS.BIN  file remains
+            intact.   Further  information  can  be   found   in   the
+            documentation.
+
+        3.  Due to late changes in some displays, some of the examples
+            found   in   the   documentation  regarding  disk  status,
+            structure status, and dismount  messages  are  not  up  to
+            date.   For  example,  there is an additional field in the
+            SHOW STATUS STRUCTURE display that contains the open  file
+            count on that structure for this system.
+
+        4.  Two structures of the same name, online  and  not  mounted
+            will  cause  a  MOUNTR failure.  This is a restriction for
+            this tape.  The correct sequence to examine two structures
+            each with the same name is to:
+
+             o  Mount the first structure with  the  second  structure
+                offline.
+
+             o  Place the second structure online.
+
+             o  Mount the second structure with an alias.
+
+
+ 

@@ -1,0 +1,243 @@
+; ************************************************************
+;	C low-level Runtime Support Routines
+;		TOPS-20 Operating System
+;
+;		k. chen  Aug, 1981
+; ************************************************************
+;
+; Parameter TENEX set 1 if code is to run on TENEX or FOONEX
+IFNDEF TENEX,<TENEX==0>		; Default TOPS-20
+
+	EXTERN	RUNTM
+	ENTRY	.START,.EXIT
+	ENTRY	.GETTY,.PUTTY
+	ENTRY	.GETCH,.OPEN,.CLOSE
+	ENTRY	.WRITE,.READ
+	ENTRY	TSKP,SLEEP,DISMIS
+	ENTRY	.CPUTM		; Sigh???
+
+	SEARCH	MONSYM
+
+IFN TENEX,<
+  .SAVBP==60			; Well, where would you suggest??
+  OPDEF ERJMPA [JUMPA]
+	; This macro should really be CPU dependent, not OS dependent.
+  DEFINE CHRBP(TOAC,FRMBP)
+	<	MOVE TOAC,FRMBP
+		ADD TOAC,[110000,,0]
+		CAIG TOAC,
+		 SUB TOAC,[430000,,1]
+	>
+>
+IFE TENEX,<
+  OPDEF ERJMPA [ERJMP]
+  DEFINE CHRBP(TOAC,FRMBP)
+	<	SETO TOAC,
+		ADJBP TOAC,FRMBP
+	>
+>
+
+P==17
+ARG1==-1			; offset of first argument
+ARG2==-2			; offset of second argument
+ARG3==-3			; offset of third argument
+
+; ************************************************************
+;	Initialize stack, call high level initialization.
+; ************************************************************
+;
+;
+.JBSA==120
+STACK==400000
+
+.START:					; entry point for DDT hackers.
+START:	RESET
+	MOVE 	P,.JBSA
+	HLR 	P,P
+	SUB 	P,[STACK,,1]		; allocate stack.
+
+IFE TENEX,<
+	SETZ	1,			
+	RSCAN				; place command line back into the TTY
+	 ERJMP	.EXIT			; input buffer. Get the rescan count
+>
+IFN TENEX,<				; TENEX: fix up JCL
+	SKIPE	.SAVBP			; If superior set us up with string,
+	 JRST START2			;  can just use that string.
+	 GETNM				; Else fake 1st arg here; get 6bit
+	MOVE 2,[440600,,1]
+	MOVE 3,[440700,,.SAVBP+1]
+	MOVEM 3,.SAVBP
+START1:	ILDB 0,2
+	ADDI 0,40
+	IDPB 0,3
+	TLNE 2,770000
+	 JRST START1
+	MOVEI 0,40
+	IDPB 0,3			; Make sure a space exists
+	SETZ 0,
+	IDPB 0,3
+		
+START2:	MOVEI	1,=256			; TENEX: gobble til see EOL.
+>
+	PUSH	P,1			; (AC1) a push into argument list.
+	PUSHJ	P,RUNTM			; call high level runtime routines.
+
+.EXIT:	HALTF				; exit to monitor.
+	JRST	.-1			; don't allow reentry.
+
+; ************************************************************
+;	read a character from the tty. Return in AC0
+; ************************************************************
+;
+.GETTY:
+IFN TENEX,<
+	SKIPE .SAVBP	; Get backed-up chars if any
+	 JRST [	ILDB 0,.SAVBP
+		CAIE 0,0
+		 POPJ P,
+		SETZM .SAVBP
+		JRST .+1]
+>
+	PBIN
+IFN TENEX,<
+	CAIN	1,37		; Idiotic Tenex EOL?
+	 JRST [	MOVE 1,[350700,,[ASCIZ /
+/]]
+		MOVEM 1,.SAVBP
+		MOVEI 0,15	; and return CR for now.
+		POPJ P,]
+>
+	MOVE	0,1
+	POPJ	P,
+
+; ************************************************************
+;	output a character to the tty.
+; ************************************************************
+;
+.PUTTY:	MOVE	1,ARG1(P)
+	PBOUT
+	POPJ	P,
+
+; *************************************************************
+;	Get channel (JFN), return in AC0
+; *************************************************************
+
+.GETCH:	MOVS	1,ARG2(P)
+	CHRBP	2,ARG1(P)	; Get byte ptr from char ptr
+	GTJFN
+	 ERJMPA	BRET		; error, return -1
+	MOVE	0,1		; return JFN
+	POPJ	P,
+
+; *************************************************************
+;	open file, return success or failure in AC0
+;	  argument 1: JFN of file
+;		   2: byte size of open
+;		   3: mode word (OF%RD, OF%WR, etc)
+; *************************************************************
+;
+.OPEN:	MOVE	1,ARG1(P)	; JFN
+	MOVE	2,ARG3(P)	; byte size
+	LSH	2,=30		; shift into position
+	IOR	2,ARG2(P)	; accesses
+	OPENF
+	 ERJMPA	FRET
+	JRST	TRET
+
+; *************************************************************
+;	close file, returns success or failure in AC0
+;	  argument 1: JFN of file
+; *************************************************************
+;
+.CLOSE:	HRRZ	1,ARG1(P)
+	CLOSF
+	 ERJMPA	FRET
+	JRST	TRET
+
+; *************************************************************
+;	write buffer to file, returns status in AC0
+;	  argument 1: JFN of file
+;		   2: pointer to start of buffer
+;		   3: count of number of bytes
+; *************************************************************
+;
+.WRITE:	MOVE	1,ARG1(P)	; JFN.
+	CHRBP	2,ARG2(P)	; Get byte ptr from char ptr
+	MOVN	3,ARG3(P)	; negate byte count.
+	SOUT			; Note that TENEX runtime must provide for
+	 ERJMP	FRET		; int. handling in order to hack this!
+	JRST	TRET
+
+; ****************************************************************
+;	read buffer, returns byte count if successful, in AC0
+;		     returns -1 if failed some way.
+;	  argument 1: JFN of file
+;		   2: byte pointer to start of buffer
+;		   3: buffer byte size
+; ****************************************************************
+;
+.READ:	MOVE	1,ARG1(P)	; JFN.
+	CHRBP	2,ARG2(P)	; Get byte ptr from char ptr
+	MOVN	3,ARG3(P)	; negate count
+	SIN			; TENEX runtime needs int handling here too!
+	ADD	3,ARG3(P)
+	JUMPE	3,FRET		; return -1 if count didn't change
+	MOVE	0,3		; otherwise, return count
+	POPJ	P,
+
+; *************************************************************
+;	Returns false if no character waiting on tty
+;	(check controlling keyboard if JFN is -1)
+;	  argument 1: JFN of TTY
+; *************************************************************
+;
+TSKP:	MOVE	1,ARG1(P)	; JFN of tty
+	CAIG	1,0
+	 MOVEI	1,.PRIIN	; check controlling terminal
+	SIBE
+	 JRST	TRET		; character there, return true
+	JRST	FRET		; no character, return false
+
+; *************************************************************
+;	dismiss process
+;	  argument 1: number milliseconds to dismiss
+; *************************************************************
+;
+DISMIS:	MOVE	1,ARG1(P)	; ms count
+	DISMS
+	POPJ	P,
+
+; *************************************************************
+;	dismiss process
+;	  argument 1: number of seconds to dismiss
+; *************************************************************
+;
+SLEEP:	MOVE	1,ARG1(P)	; second count
+	IMULI	1,=1000		; convert to ms
+	DISMS
+	POPJ	P,
+
+; *************************************************************
+;	Runtime support returns
+; *************************************************************
+;
+TRET:	MOVEI	0,1
+	POPJ	P,			; normal return, AC0 = 1
+FRET:	SETZ	0,
+	POPJ	P,			; error return, AC0 = 0
+BRET:	SETO	0,
+	POPJ	P,			; error return, AC0 = -1
+
+.CPUTM:
+IFN TENEX,<
+	JOBTM
+>
+IFE TENEX,<
+	MOVEI	1,.FHSLF
+	RUNTM
+>
+	MOVE	0,1
+	POPJ	P,
+
+	END	START

@@ -1,0 +1,256 @@
+;<BEEBE.UTILITY>PCSYMB.MAC.18,  7-May-84 13:32:15, Edit by BEEBE
+; [NHFB0031]	If no symbol found, do not update SYMLST (SYMRET-1)
+	TITLE	PCSYMB - Symbol Table Lookup Routine for PCLOOK
+	SEARCH	MONSYM,MACSYM
+	SALL
+	.REQUIRE SYS:MACREL
+	.REQUEST SYS:FORLIB
+	ENTRY	PCSYMB
+
+COMMENT \
+This routine accepts a numeric address and searches the symbol table  of
+the job or fork being watched and returns an ASCIZ string of the form
+
+	"modulename_closestsymbolname+offset<NUL>"
+
+giving the name of the module in which the address is contained and  the
+offset from the  closest symbol.   It has been  shamelessly lifted  from
+Ralph Gorin's  excellent  book "Introduction  to  DECSYSTEM-20  Assembly
+Language Programming",  Digital  Press,  Bedford,  MA  (1981),  p.  424.
+Gorin's version returned the closest  symbol at or preceding the  search
+address, even if it  was not inside the  module.  This version  requires
+the symbol to have a value at least as large as the module address.
+
+It is used as follows:
+
+      CALL PCSYMB (ADDRESS,	   !address to find symbol for
+     X             SYMPTR,	   !symbol table pointer (-count,,firstaddress)
+     X             SYMSTRING,	   !symbol name area (returned)
+     X             STRLEN,	   !symbol length (returned)
+     X             SYMLST)	   !last module index (returned)
+
+with the usual FORTRAN calling  conventions for the argument list.   The
+SYMPTR argument is normally the contents of location .JBSYM (=116),  and
+this will be assumed if it is 0, but it can be set to any desired value.
+It has the form of -count,,begadr, where begadr is the beginning address
+of the symbol  table in  memory containing count/2  symbols.  The  table
+grows downward in memory from location begadr+count-1.
+
+The symbol table consists of word pairs of the form
+
+	 0     3 4	       35
+	|-----------------------|
+n	| Flags | RADIX-50 name	|
+	|-----------------------|
+n+1	| 36-bit symbol value	|
+	| or if Flags = 00, LH =|
+	| negative length of	|
+	| symbol table for	|
+	| module, RH = first	|
+	| address of code for	|
+	| module		|
+	|-----------------------|
+
+The 4-bit flags are as follows:
+
+00	Program name definition
+
+04	Global symbol definition
+
+10	Local symbol definition (different modules may have different
+	local symbols with the same name)
+
+14	Block name (used by Algol, FAIL, SAIL, etc.)
+
+44	Suppressed global definition.  Like type 04, but DDT will not
+	use it in symbolic typeout.
+
+50	Suppressed local definition.  Like type 10, but DDT will not
+	use it in symbolic typeout.
+
+
+Recent versions of TOPS-20  define the following  new entries (found  in
+LNKOLD.MAC):
+
+30	Global left half deferred symbol definition
+
+34	Global both halves deferred symbol definition
+
+70	Global left half deferred DDT suppressed symbol definition
+
+74	Global both halves deferred DDT suppressed symbol definition
+
+These are intended to replace the  44 and 64 codes for these  functions.
+The 44 and 64 blocks will mean:
+
+44	Global DDT suppressed definition, not deferred
+
+64	Global right half deferred DDT suppressed symbol definition
+
+The fourth  argument,  STRLEN,  is  set  on  return  to  the  number  of
+characters stored in the output string, SYMSTRING.
+
+Although the symbol table is ordered by module, with the first loaded at
+the top of memory, local symbols  within the module can have any  order.
+A binary search is therefore not  feasible except on module names.   The
+search is therefore sequential, but the  index of the last module  found
+for which a symbol was accepted is returned in SYMLST and if non-zero on
+entry, it will be  used to restart  the search for  a new address  value
+which is assumed to be not less than the preceding one.  If no symbol is
+found, SYMLST is left unchanged.  SYMLST will automatically be reset  to
+start the search at the top if the indexed module address is larger than
+the search address.
+
+For convenience of assembly-language callers, all registers are preserved.
+\
+
+A==1				; Gorin's register
+B==2				; definitions A..E
+C==3
+D==4
+E==5
+Argptr==16
+P==17
+.JBSYM==116
+MINOFF==10000			; minimum acceptable offset
+XVAL:	0	
+BPROG:	0	
+BSYM:	0	
+LINPTR:	0
+INIPTR:	0
+
+	SIXBIT	/PCSYMB/	; Name for FORTRAN traceback
+PCSYMB:				; entry	point of symbol table
+				; lookup routine. 
+	PUSH	P,A		; Save registers A..E
+	PUSH	P,B
+	PUSH	P,C
+	PUSH	P,D
+	PUSH	P,E
+
+	MOVE	A,@0(Argptr)	; Get numeric address
+	MOVEM	A,XVAL		; Save it locally
+	MOVE	A,2(Argptr)	; A(output string)
+	HLL	A,[POINT 7,0]
+	MOVEM	A,LINPTR	; Byte pointer to output string
+	SETZB	C,BPROG		; No best program name yet
+	SETZM	BSYM		; No best symbol
+	SKIPN	D,@1(Argptr)	; SYMPTR = (-count,,first address)
+	 MOVE	D,.JBSYM	; SYMPTR = 0, so get default one
+	SETZM	B		; SYMLEN = 0 initially
+	SKIPN	D		; SYMPTR = 0?
+	 JRST	SYMRET		; Yes, symbols unavailable so quit.
+	HLRO	A,D		; whole word copy of -count
+	SUB	D,A		; -count,,ending address+1
+	MOVEM	D,INIPTR	; save loop count
+	SKIPN	D,@4(Argptr)	; Get SYMLST from caller
+	 JRST	SYMLK0		; Start from beginning if SYMLST = 0
+	LDB	A,[POINT 4,-2(D),3] ;Symbol type	
+	SKIPE	A		; Program name symbol?
+	 JRST	SYMLK0		; No, start from beginning
+	HRRZ	B,-1(D)		; -size,,symbol value
+	CAMGE	B,XVAL		; Is search address in or after this module?
+	 JRST	SYMLK1		; Yes, use previous index.
+SYMLK0:	MOVE	D,INIPTR	; restore loop count
+
+SYMLK1:	LDB	A,[POINT 4,-2(D),3] ;Symbol type
+	CAILE	A,2		; 0=program name, 1=global, 2=local
+	 JRST	SYMLK2		; none of the kind we want
+	JUMPE	A,SYML1Z	; this is a program name
+	MOVE	A,-1(D)		; this is the value of the symbol
+	CAMN	A,XVAL		; is this an exact match?
+	 JRST	SYML2A		; yes, select it.  Leave loop
+	CAML	A,XVAL		; is this smaller than value sought?
+	 JRST	SYMLK2		; no. too large
+	SKIPN	B,BSYM		; get best one so far
+	 JRST	SYML1A		; no previous best, remember this one
+	CAMG	A,-1(B)		; compare to previous best
+	 JRST	SYMLK2		; previous best was better
+	
+SYML1A:	HRRZ	A,-1(D)		; current symbol is best match so far
+	HRRZ	E,-1(C)		; get symbol value and program value
+	CAMGE	A,E		; symbol inside program?
+	 JRST	SYMLK2		; no, do not save it.
+	MOVEM	D,BSYM		;
+	MOVEM	C,BPROG		; save it and look for a better one
+	JRST	SYMLK2
+
+	
+SYML1Z:	MOVE	C,D		; save pointer to current program name
+SYMLK2:	ADD	D,[2000000-2]	; add 2 in the left, sub 2 in the right
+	JUMPL	D,SYMLK1
+	JRST	SYMLK3
+
+SYML2A:	HRRZ	A,-1(D)		; Here for an exact match.
+	HRRZ	E,-1(C)		; get symbol value and program value
+	CAMGE	A,E		; symbol inside program?
+	 JRST	SYMLK3		; no, do not save it.
+	MOVEM	D,BSYM		;
+	MOVEM	C,BPROG		; Save values of C and D
+SYMLK3:	SKIPN	D,BSYM		; did we find anything helpful?
+	 JRST	SYMDON		; no
+	MOVE	A,XVAL		; desired value
+	SUB	A,-1(D)		; less symbol's value = offset
+	CAIL	A,MINOFF	; is offset small enough?
+	 JRST	SYMDON		; no, not a good enough match
+	MOVE	D,BPROG		; pointer to the program name
+	MOVE	A,-2(D)		; get the program name
+	CALL	R50DOP		; copy program name to output string
+	MOVEI	A, "_"		; add an underscore after the name
+	IDPB	A,LINPTR
+	MOVE	D,BSYM		; get the symbol's address
+	MOVE	A,-2(D)		; symbol name
+	CALL	R50DOP		; copy symbol name
+	MOVE	B,XVAL		; desired value
+	SUB	B,-1(D)		; less symbol's value = offset
+	JUMPE	B,SYMDON	; if no offset, don't print "+0"
+	MOVE	A,LINPTR	; destination
+	MOVX	C,<NO%SGN!FLD(^D8,NO%RDX)>
+	NOUT%			; append "+offset" to string
+	 ERJMP	.+1		; ignore error
+	MOVEM	A,LINPTR	; store updated pointer to line
+
+SYMDON:	MOVEI	A,.CHNUL
+	IDPB	A,LINPTR	; insert trailing NUL
+	MOVE	A,2(Argptr)	; A(output string)
+	HLL	A,[POINT 7,0]
+	MOVEM	A,LINPTR	; Byte pointer to output string
+	SETZ	B,0		; Zero byte count.
+
+SYMCTB:	ILDB	A,LINPTR	; Pick up a byte
+	SKIPE	A		; Skip out when NUL reached
+	AOJA	B,SYMCTB	; Increment byte count and loop
+
+	MOVE	A,BPROG
+	
+	CAIE	B,0		; [NHFB0031] If no symbol, no SYMLST update
+	 MOVEM	A,@4(Argptr)	; Save module index
+SYMRET:	MOVEM	B,@3(Argptr)	; Store string length
+
+	POP	P,E		; restore A..E
+	POP	P,D
+	POP	P,C
+	POP	P,B
+	POP	P,A
+	RET			; return to caller
+;
+; Radix50 output routine.  At entry, A = Radix50 symbol.  At
+; exit, the symbol has been converted to ASCII and appended
+; to the string pointed to by LINPTR.  Registers A..B are
+; destroyed. 
+;	
+R50DOP:	TLZ	A,740000	; clear any symbol flags
+R50DP1:	IDIVI	A,50		; divide by 50
+	PUSH	P,B		; save remainder, a character
+	SKIPE	A		; if A is now zero, unwind
+				; the stack
+	 CALL	R50DP1		; call self again, reduce A
+	POP	P,A		; pop one Radix50-coded character
+	ADJBP	A,[POINT 7,R50TAB,6] ;convert Radix50 code to
+				; byte pointer
+	LDB	A,A		; get ASCII decode of Radix50 character
+	IDPB	A,LINPTR	; store ASCII in string
+	RET			; return to caller
+
+R50TAB:	ASCII	/ 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ.$%/
+	END

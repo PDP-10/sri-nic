@@ -1,0 +1,203 @@
+;-*-Midas-*-
+
+lastch==-1			;What are these doing in this Macro
+chnmsk==0			;file?  *chortle*
+
+IF2,.INEOF			;Only look at this on pass 1
+.NSTGW				;No storage words, please
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Various and sundry useful MACROS
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Define CONCAT a,b,c,d,e,f,g,h,i,j,k
+a!b!c!d!e!f!g!h!i!j!k!Termin
+
+Define INFORM a,b,c,d,e,f,g
+PRINTX /a!b!c!d!e!f!g
+/
+Termin
+
+Define ERSKP
+	Erjmp .+2
+Termin
+
+Define ERNOP
+	Erjmp .+1
+Termin
+
+Define MOVX ac,bits
+IFN <-1,,0>&<bits>,[
+		    IFN <0,,-1>&<bits>,[Move ac,[bits]]
+		    .ELSE [Movsi ac,(<bits>)]
+		   ]
+.ELSE [Movei ac,<bits>]
+Termin
+
+IRP op,,[N,NN,NE,NA,Z,ZN,ZE,ZA,O,ON,OE,OA,C,CN,CE,CA]
+Define TX!op ac,bits
+IFN <-1,,0>&<bits>,[
+		    IFN <0,,-1>&<bits>,[TD!op ac,[bits]]
+		    .ELSE [TL!op ac,(<bits>)]
+		   ]
+.ELSE [TR!op ac,<bits>]
+Termin
+Termin
+
+Define PUSHn ac,mem
+	IRP foo,,[mem]
+	Push ac,foo
+	Termin
+Termin
+
+Define POPn ac,mem
+	IRP foo,,[mem]
+	Pop ac,foo
+	Termin
+Termin
+
+;Define POINT size=7,addr=0,count=0
+;%%%nwd==<count-1>/<36./size>
+;<<<44-<size*<count-%%%nwd*<36./size>>>>_30.>+<size_24.>+addr+%%%nwd>
+;Termin
+
+DEFINE POINT SIZE=7,ADDR=0,COUNT=0
+RADIX 8+2
+..X1==SIZE
+..X2==COUNT
+RADIX 8
+..XX==<..X2-1>/<36./..X1>
+..X2==..X2-..XX*<36./..X1>
+<<<36.-<..X1*..X2>>_30.>+<..X1_24.>+<ADDR>+..X1>
+TERMIN
+
+Define FIELD (data,fname)
+<.DPB data,<.BP fname,>,0,>Termin
+
+Define LOAD ac,mask,loc
+	LDB ac,[.BP mask,loc]
+Termin
+
+Define STOR ac,mask,loc
+	DPB ac,[.BP mask,loc]
+Termin
+
+Define BIT (bitnum)			;Bit(0) -> 400000,,00000 etc
+<1_<35.-bitnum>>Termin
+
+Define VERSION who,maj,min,edit
+	Field(who,<700000,,0>)+Field(maj,<77700,,0>)+Field(min,<77,,0>)+edit
+Termin
+
+Define Internet (a,b,c,d)
+	Field(a,<37700,,0>)+Field(b,<77,,600000>)+Field(c,177400)+Field(d,377)Termin
+
+Define ETYPE &string
+	Hrroi 1,[Asciz string]
+	ESOUT
+Termin
+
+Define TYPE &string
+	Hrroi 1,[Asciz string]
+	PSOUT
+Termin
+
+Define TYPECR *string
+	Hrroi 1,[Asciz string!
+] ?	PSOUT
+Termin
+
+Define CRTYPE *string
+	Hrroi 1,[Asciz 
+!string]
+	PSOUT
+Termin
+
+Define ATYPE loc
+	Hrroi 1,loc
+	PSOUT
+Termin
+
+Define CTYPE #char
+	Movei 1,char
+	PBOUT
+Termin
+
+Define P%ON
+	Movei 1,.PRIOU		;Turn on ^P VTS escape code
+	RTMOD
+	Txo 2,TM%DPY
+	STMOD
+Termin
+
+Define P%OFF
+	Movei 1,.PRIOU
+	RTMOD
+	Txz 2,TM%DPY
+	STMOD
+Termin
+
+Define E%ON
+	Movei 1,.PRIOU
+	RFMOD
+	Txo 2,TT%ECO
+	SFMOD
+Termin
+
+Define E%OFF
+	Movei 1,.PRIOU
+	RFMOD
+	Txz 2,TT%ECO
+	SFMOD
+Termin
+
+Define ENABLE
+	Movei 1,.FHSLF
+	Seto 3,
+	EPCAP
+Termin
+
+Define I%OFF			;turn off selected interrupts
+	Movei 1,.FHSLF
+	RPCAP
+	Txo 3,SC%CTC
+	EPCAP			;Let us trap ^C's
+	  ERNOP
+	Move 1,[ST%DIM -5]
+	Setzb 2,3
+	STIW			;Turn off ^T/^O
+	  ERNOP
+	Movei 1,.PRIIN
+	RFMOD
+	Txz 2,TT%PGM
+	STPAR			;Turn off ^S/^Q
+	  ERNOP
+Termin
+
+Define Channel chnl,level,addr
+	Block <chnl-lastch-1>
+	level,,addr
+	ChnMsk==ChnMsk\Bit(chnl)
+	lastch==chnl
+Termin
+
+Define EndChannel
+	Block 35.-lastch
+Termin
+
+Define BREAK i1=0,i2=0,i3=0,i4=0,chlist
+	%%bmw1==i1 ? %%bmw2==i2 ? %%bmw3==i3 ? %%bmw4==i4
+	IRP char,,[chlist]
+	  %%word==char/32.
+	  %%%bit==<1_<35.-<char-%%word*32.>>>
+	  IFE %%word-0,%%bmw1==%%bmw1#%%%bit
+	  IFE %%word-1,%%bmw2==%%bmw2#%%%bit
+	  IFE %%word-2,%%bmw3==%%bmw3#%%%bit
+	  IFE %%word-3,%%bmw4==%%bmw4#%%%bit
+	Termin
+	%%bmw1 ? %%bmw2 ? %%bmw3 ? %%bmw4
+Termin
+
+.YSTGW				;Allow storage words again

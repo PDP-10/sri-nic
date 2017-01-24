@@ -1,0 +1,99 @@
+comment This page contains the most TOPS20-dependent aspects
+of the METAFONT input routines for TOPS20 installations. It
+is "included" by MFNTRP;
+
+internal saf string array fname[0:2] # file directory, name, and extension;
+internal simp procedure scanfilename # sets up fname[0:2];
+begin integer j,c,cc;
+fname[0]_fname[1]_fname[2]_"";
+j_1;
+while curbuf and chartype[curbuf]=space do c_lop(curbuf);
+loop begin cc_chartype[c_lop(curbuf)];
+	if c="." and j=1 then j_2
+	else if c="<" and j=1 and fname[1]="" then j_0
+	else if (c=">" and j=0) or (c=":" and j=1) then begin end
+	else begin
+		case cc of begin
+		[wxy][digit][letter] ;
+		else done end;
+		end;
+	fname[j]_fname[j]&c;
+	if c=">" and j=0 then j_1
+	else if c=":" and j=1 then begin fname[0]_fname[1]; fname[1]_""; end
+	end;
+end;
+	
+procedure inputfile;
+begin comment "input" has just been scanned. This procedure scans
+the user's file name, employing the TENEX naming conventions, then reads
+in the first line and feeds it to the input system;
+integer chan;
+label abort # if something goes wrong trying to read the file;
+label try # go here to try and try again;
+string flname;
+integer pageno # number of pages successfully read;
+define checkeof=if eof then begin print(")");go to abort end;
+try: scanfilename;
+if noinput then return;
+if fname[2]="" then fname[2]_".mf" # default extension;
+flname_fname[0]&fname[1]&fname[2];
+
+chan_openfile(flname,"RE");
+if chan<0 and fname[0]="" then
+	begin comment if lookup failed and no explicit directory was given,
+		try default directory <METAFONTS>;
+	flname_"PS:<METAFONT>"&flname;
+	chan_openfile(flname,"RE");
+	end;
+if chan<0 then
+	begin error("Lookup failed on file "&flname);
+	go to try;
+	end;
+print(" (",flname);
+setinput(chan,4000,brchar,eof);
+pushinput # save present file status;
+recovery_chan; filename_flname;
+inbuf_input(chan,crffbreak) # get first line of file;
+# DRF ;			IF EOF AND LENGTH(INBUF)>0 THEN BEGIN
+				INBUF_INBUF&'15 # PUT IN DUMMY CR ON INPUT;
+				BRCHAR_'15 # CONVINCE CODE BELOW ABOUT IT;
+				EOF_0 # CATCH IT NEXT TIME;
+				END;
+checkeof; print(" 1");
+if equ(inbuf[1 to 9],"COMMENT ") then
+	begin comment Skip TVedit directory page;
+	while brchar'14 and not eof do inbuf_input(chan,ffbreak);
+	checkeof;
+	inbuf_input(chan,crffbreak) # get first line of second page;
+	checkeof; print(" 2");
+	pageno_2;
+	end
+else pageno_1;
+while brchar='14 do
+	begin comment Ignore empty pages at the beginning of file;
+	inbuf_input(chan,crffbreak); checkeof; pageno_pageno+1;
+	print(" ",pageno);
+	end;
+loc _ (pageno lsh infod) + 1 # line 1 of the current page;
+if pausing then
+	begin integer p # garbage bin;
+	if inbuf='12 then p_lop(inbuf);
+	if length(inbuf)=1 then inbuf_" "&inbuf;
+	print(nextline);
+	outstr(inbuf[1 to -1]) # show inbuf on screen;
+				begin string s; s_inchwl;
+				if s then inbuf_s&inbuf[ to ];
+				end;
+	end;
+curbuf_inbuf;
+
+comment Now define the output file name if it hasn't yet been defined;
+if ofilname=0 then
+	begin ofilname_fname[1]; comment ofilarea_fname[0];
+	end;
+return;
+
+abort: release(chan);
+popinput;
+end;
+

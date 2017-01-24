@@ -1,0 +1,614 @@
+	TITLE	TSTAT	Print status of TCP connections
+	SUBTTL	Definitions
+
+	SEARCH anaunv,MONSYM,MACSYM,CMD
+	.REQUIRE SYS:MACREL,SYS:CMD
+	SALL
+
+VWHO==^D7	; C Lynn, BBN
+VMAJOR==^D5
+VMINOR==^D3
+VEDIT==11	; 18-Nov-83 CLynn Fewer blank lines
+;10	;  3-Aug-83 CLynn Fix default pointers
+;7	; 31-May-83 CLynn Add Job/Line searches
+;6
+;5	;  2-May-83 CLynn Merge in TSMRT & TSMXP
+;4	; 27-Apr-83 CLynn Add TCBAD
+;3	; 21-Apr-83 Fark  Add TCBID
+;2	;  8-Dec-82 CLynn TENEX fixes; preload TCBPT; change RESTRT
+;1	;  9-Jun-82 CLynn Wrote it
+
+	SUBTTL	AC Definitions & Offsets
+
+T1==1		; JSYS args
+T2==2
+T3==3
+T4==4
+
+T5==5
+
+SF==7		; Flags for STAT
+IX==10		; Connection AOBJN counter
+PX==11		; Data pointer index
+
+TCB==14		; TCB image
+
+CX=16
+P=17		;STACK
+
+
+DECRAD==^D10	; Decimal radix
+OCTRAD==^D8	; Octal radix
+
+DEFINE	GREET	(MJ,MN,ED)<
+	HRROI T1,[ASCIZ /TCP Connection Status Program   V'MJ'.'MN(ED)/]>
+
+
+	SUBTTL	Parameters
+
+PDLL==200	; Length of stack
+NPTRS==40	; Maximum # pointers (.ge.NNAM)
+TCBSIZ==^D200	; Larger than last info required
+
+
+
+
+	SUBTTL	Impure Data
+
+CMDSTG
+CFMDDB:  FLDDB. (.CMCFM,<CM%HPP>,,<To get all TCBs, >)
+
+MAXKY:	BLOCK 1		; Maximum TCB IDentification numbers input
+SCHKYI:	BLOCK 10	; Input search key, currently TCBID
+SCHKYJ:	BLOCK 10	; Input search key, Job #
+SCHKYL:	BLOCK 10	; Input search key, Line #
+
+PDL:	BLOCK PDLL	; Control stack
+
+HOSTNO:	BLOCK 1		; Local host internet address
+HOSTNA:	BLOCK 10	; Loacl host name string
+
+MAXOFS:	BLOCK 1		; -(max ofs+1),,TCBIMG
+
+TCBADR:	BLOCK 1		; TCB (monitor) address
+TCBIMG:	BLOCK TCBSIZ	; TCB image
+
+TCBPT:	222214,,6	; The pointers, at one point in time
+	002214,,6	; They will only be used if STAT fails
+	100114,,13
+	050114,,13
+	000114,,13
+	140314,,13
+	004414,,24
+	222214,,26
+	004414,,40
+	004414,,10
+	004414,,12
+	001114,,56
+	230114,,13
+	002214,,175
+	070114,,13
+	040114,,13
+	010114,,13
+	110314,,13
+	004414,,15
+	222214,,17
+	004414,,65
+	004414,,7
+	004414,,11
+	0
+	BLOCK NPTRS	; Pointers
+
+	SUBTTL	Pure Data
+
+KEYFDB:	FLDDB.(.CMKEY,,KEYTAB,,,TIDFDB)
+TIDFDB:	FLDDB.(.CMNUM,<CM%HPP+CM%SDH>,^D10,
+<Enter Unique TCB ID#, line 2, entry 2>,,CFMDDB)
+
+KEYTAB:	NKEY,,NKEY
+	[ASCIZ /JOB/],,JOBK
+	[ASCIZ /LINE/],,LINK
+	[ASCIZ /TCBID/],,IDK
+NKEY==.-KEYTAB-1
+
+DECFDB:	FLDDB.(.CMNUM,,^D10)
+OCTFDB:	FLDDB.(.CMNUM,,^D8)
+CFMFDB:	FLDDB.(.CMCFM)
+
+
+TCBNAM:
+JOBOFS==.-TCBNAM
+	ASCII /TOWNR/	; ASCII name table
+	ASCII /TJCN/
+
+	ASCII /TSUOP/
+	ASCII /TSABT/
+	ASCII /TRURG/
+	ASCII /TRSYN/
+	ASCII /TRLFT/
+	ASCII /TRWND/
+	ASCII /TSMRT/
+	ASCII /TLH/
+	ASCII /TLP/
+
+LINOFS==.-TCBNAM
+	ASCII /TVTL/
+	ASCII /TTVT/
+
+IDOFS==.-TCBNAM
+	ASCII /TCBID/		;Unique TCB IDentification #
+	ASCII /TSOPN/
+	ASCII /TSSV/
+	ASCII /TSURG/
+	ASCII /TSSYN/
+	ASCII /TSSEQ/
+	ASCII /TSWND/
+	ASCII /TSMXP/
+	ASCII /TFH/
+	ASCII /TFP/
+TCBNX:	ASCII /TCBAD/		; Special!
+
+NNAM==.-TCBNAM
+
+ROUT:	IFIW DEC3		; JOB		Routines to print values
+	IFIW DECM3		; JCN
+
+	IFIW IFO		; TSUOP
+	IFIW IFA		; TSABT
+	IFIW IFU		; TRURG
+	IFIW RSYN		; TRSYN
+	IFIW DEC10		; TRLFT
+	IFIW DEC5		; TRWND
+	IFIW DEC6		; TSMRT
+	IFIW SWAR		; TLH
+	IFIW SWARHP		; TLP
+
+	IFIW SWAR		; TVTL
+	IFIW TVTTST		; TTVT
+
+	IFIW DEC5		; TCBID
+	IFIW IFO		; TSOPN
+	IFIW IFV		; TSSV
+	IFIW IFU		; TSURG
+	IFIW SSYN		; TSSYN
+	IFIW DEC10		; TSSEQ
+	IFIW DEC5		; TSWND
+	IFIW DEC6		; TSMXP
+	IFIW SWAR		; TFH
+	IFIW SWARHP		; TFP
+	IFIW OCT8		; TCBAD
+
+	IFN .-ROUT-NNAM,<PRINTX ? ROUT table length differs from TCBNAM>
+
+
+NOIS:	IFIW DOTCMA		; JOB.,		Routines to space fields
+	IFIW DOTR		; JCN. R:
+
+	IFIW SPACE		; TSUOP
+	IFIW SPACE		; TSABT
+	IFIW SPACE		; TRURG
+	IFIW SPACE		; TRSYN
+	IFIW DOTSPC		; TRLFT
+	IFIW DOTDOT		; TRWND
+	IFIW DOTSPL		; TSMRT
+	IFIW TORET		; TLH
+	IFIW CRLF		; TLP
+
+	IFIW TORET		; TVTL
+	IFIW SPACE		; TTVT
+
+	IFIW TABS		; TCBID
+	IFIW SPACE		; TSOPN
+	IFIW SPACE		; TSSV
+	IFIW SPACE		; TSURG
+	IFIW SPACE		; TSSYN
+	IFIW DOTSPC		; TSLFT
+	IFIW DOTDOT		; TSWND
+	IFIW DOTSPF		; TSMXP
+	IFIW TORET		; TFH
+	IFIW CRLF		; TFP
+	IFIW CRLF		; TCBAD
+
+	IFN .-NOIS-NNAM,<PRINTX ? NOIS table length differs from TCBNAM>
+
+ASSYN:	[ASCIZ /NOTSYN/]	; Translate send state to ascii
+	[ASCIZ /  1?  /]
+	[ASCIZ /FINSNT/]
+	[ASCIZ /  3?  /]
+	[ASCIZ /SYNABL/]
+	[ASCIZ /SYNSNT/]
+	[ASCIZ /  6?  /]
+	[ASCIZ /SYNCED/]
+
+ARSYN:	[ASCIZ /NOTSYN/]	; Translate receive state to ascii
+	[ASCIZ /TIMWAT/]
+	[ASCIZ /FINRCV/]
+	[ASCIZ /  3?  /]
+	[ASCIZ /SYNABL/]
+	[ASCIZ /SYNRCV/]
+	[ASCIZ /  6?  /]
+	[ASCIZ /SYNCED/]
+
+PDLP:	IOWD PDLL,PDL		; Control Stack pointer
+
+
+ENTVEC:	JRST START		; Start entry address
+	JRST RSTART		; Restart entry address
+	<VWHO>B2+<VMAJOR>B11+<VMINOR>B17+VEDIT ; Version
+
+	LOC 3000
+	SUBTTL	INITIALIZATION
+
+START:	RESET			; Start here, clean slate
+	MOVE P,PDLP		; SET UP STACK
+
+	CALL CMDINI
+
+	MOVE T1,['PTYPAR']
+	SYSGT
+	CAMN T1,['PTYPAR']	; TENEX or TOPS20?
+	  JRST TNX
+
+	MOVE T1,[SIXBIT /(PRIV)/] ; Set system & name
+	MOVE T2,[SIXBIT /TSTAT/]
+	SETSN
+	 JFCL			; ??
+	JRST GRT
+
+TNX:	MOVE T1,[SIXBIT /TSTAT/]
+	SETNM
+	 JFCL			; ??
+
+GRT:	GREET	\VMAJOR,\VMINOR,\VEDIT ; Give program id
+	PSOUT
+
+	MOVX T1,.GTHSZ		; Get local host address
+	GTHST
+	 JRST [	HRROI T1,HOSTNA	; Unknown
+		HRROI T2,[ASCIZ /Site Unknown/]
+		SETZB T3,HOSTNO
+		SOUT
+		JRST HAVNAM]
+	MOVEM T4,HOSTNO		; Save local host address
+
+	MOVX T1,.GTHNS		; Translate address into name
+	HRROI T2,HOSTNA
+	MOVE T3,HOSTNO
+	GTHST
+	 JRST [	HRROI T1,HOSTNA	; Numeric form
+		HRROI T2,[ASCIZ /Site /]
+		SETZ T3,
+		SOUT
+		MOVE T2,HOSTNO
+		SETO T3,	; No ports
+		CALL HNO2NA
+		JRST HAVNAM]
+HAVNAM:	MOVX T1,<.PRIOU>
+	CALL CRLF
+
+CKID:  SETZ T5,			; Free slot in table
+
+CKID1:	SETOM SCHKYI(T5)	; Clear slot out
+	SETOM SCHKYJ(T5)	; 36-bit -1 will not match anything
+	SETOM SCHKYL(T5)
+
+	MOVX T1,<.PRIOU>
+
+	PROMPT (TCB ID: >)	; Prompt for command
+	MOVEI T1,KEYFDB		; Keyword or TCBID
+	CALL RFIELD		; Prompt for TCBID
+	HRRZS T3		; Actual FDB entered
+	CAIN T3,CFMDDB		; Confirmed end of list?
+	  JRST HVID		; Yes
+	CAIN T3,TIDFDB		; (TCBID) #?
+	  JRST CKID7		; Yes
+				; Must be a keyword
+	HRRZ T3,(T2)		; Get routine
+	CALL (T3)		; Call it
+	MOVEI T1,CFMFDB
+	CALL RFIELD
+	AOJA T5,CKID1		; See if they have want any more
+
+
+CKID7:	MOVEM T2,SCHKYI(T5)	; Save TCBID
+	AOJA T5,CKID1		; See if they have want any more
+
+IDK:	MOVEI T1,DECFDB
+	CALL RFIELD
+	MOVEM T2,SCHKYI(T5)
+	RET
+
+JOBK:	MOVEI T1,DECFDB
+	CALL RFIELD
+	MOVEM T2,SCHKYJ(T5)
+	RET
+
+LINK:	MOVEI T1,OCTFDB
+	CALL RFIELD
+	MOVEM T2,SCHKYL(T5)
+	RET
+
+HVID:	MOVEM T5,MAXKY		; Save number of ID's selected
+	SKIPN MAXKY
+	CALL IDRES		; Processing all TCBs
+
+
+	SUBTTL	Status Initialization
+
+; To save (ascii to pointer lookup) time, get pointers once
+
+	MOVX T1,<TCP%SY!TCP%SD!TCP%IX!1> ; Use first connection as dummy
+	MOVX T2,<-NNAM,,TCBNAM>	; ASCII name table
+	MOVX T3,<-NPTRS,,TCBPT>	; Pointers
+	STAT%
+	  JRST [HRROI T1,[ASCIZ /% Using pre-loaded field definitions since STAT failed.
+/]
+		PSOUT
+		JRST .+1]
+
+; Make sure TCB image is big enough
+
+	MOVX T1,<-NNAM,,TCBPT>	; AOBJN for pointers
+	SETZ T2,		; Largest offset needed
+SLOOP:	HRRZ T3,(T1)		; Get an offset
+	CAMGE T2,T3		; This one larger?
+	 MOVE T2,T3		; Yes, save it
+	AOBJN T1,SLOOP		; Try them all
+	ADDI T2,1		; # words=max offset+1
+	CAILE T2,TCBSIZ		; Hope big enough
+	 JRST [	HRROI T1,[ASCIZ /% Parameter TCBSIZ should be increased to at least /]
+		PSOUT
+		MOVX T1,<.PRIOU>
+		MOVX T3,<DECRAD>
+		NOUT
+		 JFCL
+		HRROI T1,[ASCIZ /. to obtain all data.
+/]
+		PSOUT
+		MOVX T2,TCBSIZ
+		JRST .+1]
+	MOVNS T2
+	HRLZS T2
+	MOVX TCB,TCBIMG
+	HRR T2,TCB
+	MOVEM T2,MAXOFS		; Save for STAT at CLOOP
+
+	MOVX T1,<POINT 23,TCBADR,35> ; Fake pointer for TCB address
+	MOVEM T1,TCBPT+TCBNX-TCBNAM
+
+
+	SUBTTL	Print Host, Time, and Titles
+
+RSTART:	HRROI T1,HOSTNA		; Tell our name
+	PSOUT
+	HRROI T1,[ASCIZ / on /]
+	PSOUT
+	MOVX T1,.PRIOU
+	SETO T2,		; Current time stamp
+	MOVX T3,<OT%DAY+<0*OT%FDY>+OT%NSC+OT%TMZ+OT%SCL>
+	ODTIM			; Format of time
+	HRROI T1,[ASCIZ \
+Job  JCN     OoAvUu State   Sequence   Window RTT/MxP   Net+Host   Port
+\]				; Header line
+;xx.,xxx. R: x x x xxxxxx  xxxxxxxxxx. xxxxx. xxxxxx L: xxx.xxx.xxx.xxx xxx.xxx
+;xxx xxx  S: x x x xxxxxx  xxxxxxxxxx. xxxxx. xxxxxx F: xxx.xxx.xxx.xxx xxx.xxx
+	PSOUT
+
+; Find current number of connections
+
+	MOVX SF,<TCP%IX>	; Assume can get all connections
+	MOVX T1,TCP%NI		; Connection AOBJN counter
+	STAT%
+;	  JRST STER		; It should not fail
+	  MOVX SF,<TCP%JS>	; Can only get those for this job
+	TXNE SF,<TCP%JS>	; Set IX accordingly
+  	  MOVE T2,[<-24,,1>]	; Only Job's connections
+	SKIPL IX,T2		; Save connection AOBJN counter
+	  JRST DONE		; Beware no connections!
+
+	SUBTTL	Get Status info for a connection & print it
+
+; Get (first part of) TCB for next connection
+
+CLOOP:	MOVE T1,SF		; Flags
+	HRR T1,IX		; Next connection
+	MOVE T3,MAXOFS		; -n,,TCBIMG
+	HLLZ T2,T3		; -n,,0
+	STAT%			; Get info from TCB
+	 JRST STERC		; If error, skip this connection
+
+	MOVX T1,<TCP%SY!TCP%IX>	; Value, not definition
+	HRR T1,IX		; Next connection
+	MOVX T2,<-1,,TCBNX>	; TCBAD text
+	MOVX T3,<-1,,TCBADR>	; Where to put the value
+	STAT%			; Get info from TCB
+	  SETZM TCBADR		; If error, use 0
+
+FLOOP:	SKIPN MAXKY		; Processing all TCBs?
+	  JRST PSET		; Yes
+	SETZ T5,
+
+FLOOP1: 
+	LDB T1,TCBPT+IDOFS	; Get TCB ID
+	CAMN T1,SCHKYI(T5)
+	  JRST PSET
+
+	LDB T1,TCBPT+LINOFS	; Get line #
+	CAMN T1,SCHKYL(T5)
+	  JRST PSET
+
+	LDB T1,TCBPT+JOBOFS	; Get job #
+	CAMN T1,SCHKYJ(T5)
+	  JRST PSET
+
+	ADDI T5,1
+	CAMN T5,MAXKY
+	  JRST STERC
+	JRST FLOOP1
+
+PSET:	MOVX T1,<.PRIOU>
+
+; For each datum, get value from TCB image, call print & noise routines
+
+	MOVX PX,<-NNAM,,TCBPT>	; Pointers
+PLOOP:	LDB T2,(PX)		; Get datum
+	CALL @ROUT-TCBPT(PX)	; Call print routine
+	CALL @NOIS-TCBPT(PX)	; Print noise
+	AOBJN PX,PLOOP		; Finish entries for connection
+STERC:
+	AOBJN IX,CLOOP		; Loop to next connection
+
+; All done
+
+DONE:	HALTF
+	JRST RSTART
+
+
+STER:	HRROI T1,[ASCIZ /
+? STAT error
+/]
+	PSOUT
+	JRST DONE
+
+	SUBTTL	Subroutines
+
+SWAR:	EXCH T2,T3		; Stash address in t3 while get port
+TORET:	RET
+
+SWARHP:	EXCH T2,T3		; Address to 2, port to 3, & print
+	CALL HNO2NA
+	RET
+
+SSYN:	ADDI T2,ASSYN-ARSYN	; Translate send state
+RSYN:	HRRO T2,ARSYN(T2)	; Translate receive state
+	SETZ T3,
+	SOUT
+	JRST SPACE		; and space
+
+
+IFA:	MOVX T3,"A"		; Print A if non-zero, else space
+	JRST IFX
+IFO:	MOVX T3,"O"		; Print O if non-zero, else space
+	JRST IFX
+IFU:	MOVX T3,"U"		; Print U if non-zero, else space
+	JRST IFX
+IFV:	MOVX T3,"V"		; Print V if non-zero, else space
+	JRST IFX
+IFX:	SKIPN T2
+SPACE:	 MOVX T3," "		; Print a space
+	EXCH T2,T3
+	BOUT
+	RET
+
+TVTTST:	JUMPE T2,SP3		; Leave if connection isn't a TVT
+	EXCH T2,T3
+	JUMPE T2,SP3		; Or it isn't currently assigned
+	MOVX T3,<NO%LFL!FLD(3,NO%COL)+OCTRAD>
+	JRST NOUTX		; Line numbers are octal
+
+SP3:	HRROI T2,[ASCIZ /   /] ; Ready for send info
+	JRST TOSOUT
+
+OCT8:	MOVX T3,<NO%LFL!FLD(^D8,NO%COL)+OCTRAD>	; Print 8 octal digits
+	JRST NOUTX
+DECM3:	HRROI T3,[ASCIZ / -1/]	; In case minus 1
+	CAIN T2,-1		; Minus 1?
+	 JRST SWSOUT		; Yes, print string
+DEC3:	MOVX T3,<NO%LFL!FLD(3,NO%COL)+DECRAD>	; Print 3 decimal digits
+	JRST NOUTX
+DEC5:	MOVX T3,<NO%LFL!FLD(5,NO%COL)+DECRAD>	; Print 5 decimal digits
+	JRST NOUTX
+DEC6C:	IDIVI T2,^D100
+DEC6:	MOVX T3,<NO%LFL!FLD(6,NO%COL)+DECRAD>	; Print 6 deciaml digits
+	JRST NOUTX
+DEC10:	MOVX T3,<NO%LFL!FLD(^D10,NO%COL)+DECRAD> ; Print 10 decimal digits
+	JRST NOUTX
+NOUTX:	NOUT			; Print a number
+	 JRST [	MOVX T2,"?"	; Error ??
+		BOUT
+		JRST .+1]
+	RET
+
+CRLF:	HRROI T2,[ASCIZ /
+/]				; End line
+	JRST TOSOUT
+
+TABS:	HRROI T2,[ASCIZ /  S: /] 
+	JRST TOSOUT
+
+DOTR:	HRROI T2,[ASCIZ /.  R: /] ; Ready for receive info
+	JRST TOSOUT
+
+DOTSPC:	CALL DOT		; Print a decimal point
+	JRST SPACE		; and a space
+
+DOTDOT:	HRROI T2,[ASCIZ /./]
+	JRST TOSOUT
+
+DOTSPF:	HRROI T2,[ASCIZ / F: /] ; Ready for foreign info
+	JRST TOSOUT
+
+DOTSPL:	HRROI T2,[ASCIZ / L: /] ; Ready for local info
+	JRST TOSOUT
+
+DOTCMA:	CALL DOT		; Print a decimal point
+	MOVX T2,","		; and a comma
+	BOUT
+	RET
+
+DOT:	MOVX T2,"."		; Print a decimal point
+	BOUT
+	RET
+
+SWSOUT:	EXCH T2,T3		; Pointer to T2
+TOSOUT:	SETZ T3,		; Print an ASCIZ string
+	SOUT
+	RET
+
+PROMPT:	HRROI T2,[ASCIZ /TCB ID# >/]
+	JRST TOSOUT
+
+IDRES:	MOVX T1,<.PRIOU>
+	HRROI T2,[ASCIZ /Processing all connections.
+/]
+	JRST TOSOUT
+
+
+; T1/	Destination string pointer
+; T2/	32-bit Internet address
+; T3/	Port number, or -1 to omit
+;	CALL HNO2NA
+; T1/	Updated pointer
+; T2,T3,T4 Killed
+
+HNO2NA:	PUSH P,T2		; Save address
+	LSH T3,^D<36-3*8>	; 16 bits into 2nd+3rd bytes
+	TRO T3,<377B31>		; Stop after ports
+	PUSH P,T3
+	MOVX T4,<POINT 8,-2(P),3> ; First 8 bits
+	PUSH P,T4		; Initial address pointer
+	MOVX T4,<-4,,0>		;  4 bytes of host
+	MOVX T3,DECRAD		; Network virtual radix
+
+HNO2NF:	CAIA			; Skip into loop
+HNO2NH:	  BOUT
+	ILDB T2,0(P)		; Next byte
+	NOUT
+	 JRST [	MOVX T2,"?"	; Error ??
+		BOUT
+		JRST .+1]
+	MOVX T2,"."
+	AOBJN T4,HNO2NH
+	MOVX T2," "
+	BOUT
+
+	MOVX T4,<-2,,0>		; If doing ports
+	ILDB T2,0(P)		; Port/end flag bytes
+	JUMPE T2,HNO2NF		; Go for ports
+
+	POP P,0(P)		; Drop pointer
+	POP P,0(P)		; Port & flags
+	POP P,0(P)		; Address
+	RET
+
+	END <3,,ENTVEC>

@@ -1,0 +1,311 @@
+;XS:<5-GALAXY>IO.MAC.4, 21-Jan-87 16:37:37, Edit by KNIGHT
+; And JRST out of the (*&#(& literal after lossage!!!
+;XS:<5-GALAXY>IO.MAC.3, 21-Jan-87 16:32:32, Edit by KNIGHT
+; Restore the $#(*&@$#(*& JFN if the NOUT and DIRST fail in REPACC!
+;SRC:<5-GALAXY>IO.MAC.2, 10-Sep-86 13:44:38, Edit by KNIGHT
+; Return function results in 1, not 0
+;1) SRC:<GALAXY-SOURCES>IO.MAC.5, 23-Nov-84 15:21:58, Edit by HSS
+;Made IO output a page count, user name, and CRLF to lsract.is.
+;<5-1-GALAXY-SOURCES>IO.MAC.1 20-JUN-83 14:30:00, Edit by Billy
+;make this mess Macro.
+;<JQJOHNSON.NEWIS>IO.FAI.3, 13-May-83 10:19:09, Edit by JQJOHNSON
+;add myexit routine to die badly.
+;<TELDREDGE>IO.FAI.2, 12-May-83 16:14:46, Edit by JQJOHNSON
+;change ttyno and ttynam for Teknowledge (tty26:)
+
+; ************************************************
+;	Raw I/O package for TOPS-20 tty linkage
+;	With CNTR-C trap added by Jan Stoeckenius
+;	4-April-82
+; ************************************************
+;
+;	Bsize call added Feb 3, 1983 by Michael E. Fryd
+	TITLE IO
+	SEARCH MONSYM, MACSYM
+	SEARCH QSRMAC		;1 FIND .EQOID
+	ENTRY OPENRE, CLOSER, GETREM
+	ENTRY PUTREM, WAITRE, FLUREM
+	ENTRY REPACC, BSIZE,  MYEXIT
+
+	EXTERN LOGFD, FCLOSE, PCOUNT, REPORT
+	EXTERN PCNTX, JOBINF	;1 ASCII TEXT PAGE COUNT & JOB INFORMATION
+
+A==1
+B==2
+C==3
+D==4
+P==17
+
+ASCII==70000			;7-BIT ASCII MODE
+BINARY==100000			;8-BIT OPEN
+CHN0==0				;CHANNEL 0
+CHNL0==400000			;1B0, USED TO ACTIVATE INTERRUPT CHANNEL 0.
+
+OPDEF	RET	[POPJ	P,]
+
+; ********************************************************
+;	TTY NUMBER AND DEVICE NAME FOR REMOTE TTY	 *
+;	[SHOULD BE CHANGE TO SUIT SITE]			 *
+;							 *
+TTYNO==.TTDES+25		;controlling terminal	 *
+TTYNAM:	ASCIZ "TTY25:"		;		 	 *
+;							 *
+;							 *
+;	FILE TO HOLD PAGE COUNTS, SHOULD BE SET		 *    
+;	AS APPROPRIATE FOR SITE.			 *
+;							 *
+ACFLNM: ASCIZ 	/PS:<SPOOL>LSRACT.IS
+/;			 				 *
+;							 *
+;							 *
+; ********************************************************
+
+DEVICE:	BLOCK 1			;DEVICE DESIGNATOR
+JFN:	BLOCK 1			;JFN FOR DEVICE
+ACCJFN: BLOCK 1			;JFN FOR ACCOUNTING FILE
+TBUF:	BLOCK 200		;800 BYTE OUTPUT BUFFER
+TPTR:	POINT 8,TBUF		;POINTER TO TBUF
+TCNT:	BLOCK 1			;COUNT OF BYTES
+
+CHNTBL: 3,,CTCTRP		;CHANNEL TABLE, CHANNEL 0 IS USED TO
+	BLOCK ^D35		;HANDLE CTRL-C TRAPS
+LEVTBL: 0			;LEVEL TABLE FOR SOFTWARE INTERRUPTS
+	0			;ONLY LEVEL 3 IS USED
+	PC2
+PC2:	BLOCK 1
+
+
+; ****************************************************************
+;	DIE A HORRIBLE DEATH.
+; ****************************************************************
+
+MYEXIT:	PUSHJ P,CLOSER		;CLOSE TTY LINE
+	PUSH P,LOGFD		;CLOSE LOG FILE
+	PUSHJ P,FCLOSE
+	RESET
+	MOVE 1,-1(P)		;GET ARGUMENT
+	0			;DIE WITH ILLEGAL INSTRUCTION TRAP
+	JRST .-1
+
+; ******************************************************
+;	ROUTINE FOR TRAPPING CTRL-C
+; ******************************************************
+;
+CTCTRP:	PUSHJ P,CLOSER		;CLOSE TTY LINE
+	PUSH P,LOGFD		;CLOSE LOG FILE
+	PUSHJ P,FCLOSE
+	PUSH P,PCOUNT		;REPORT NUMBER OF PAGES PRINTED
+	PUSHJ P,REPORT
+	RESET			;CLOSE ALL OTHER FILES
+	HALTF			;STOP
+	JRST .-1		;NOT RESTARTABLE
+
+
+; ******************************************************
+;	ASSIGN AND OPEN REMOTE TTY FOR INPUT AND OUTPUT
+; ******************************************************
+;
+OPENRE:	HRRZI A,.FHSLF		;CURRENT PROCESS IDENTIFIER
+	RPCAP			;GET OUR CAPABILITIES
+	IOR C,[SC%CTC]		;ENABLE CONTROL-C CAPABILITY
+	EPCAP
+
+; NEXT WE MUST MAKE SURE WE CAN OPEN THE ACCOUNTING FILE
+
+	MOVX A,GJ%OLD!GJ%DEL!GJ%SHT
+	HRROI B,ACFLNM		;ACCOUNTING FILE NAME
+	GTJFN
+	 JRST  [MOVX A,GJ%NEW!GJ%SHT
+		HRROI B,ACFLNM
+		GTJFN
+		 JRST [	HRROI A,ACGER
+			JRST ERRTN ]
+		JRST .+1]
+	MOVE B,[FLD(7,OF%BSZ)!OF%APP]
+	OPENF
+	 JRST [	HRROI A,ACOER
+		JRST ERRTN ]
+	MOVEM A,ACCJFN		;STORE JFN
+	SETZ B,
+
+	HRRZI A,400000
+	IORI A,TTYNO		;FORM DEVICE DESIGNATOR FOR TERMINAL
+	MOVEM A,DEVICE
+	ASND			;ASSIGN TTY
+	 JFCL
+	MOVX A,GJ%SHT
+	HRROI B,TTYNAM
+	GTJFN			;GET JFN FOR TTY
+	 JRST [	HRROI A,JFNER
+		JRST ERRTN ]
+	HRRZM A,JFN
+	HRRI B,OF%RD!OF%WR
+	HRLI B,BINARY
+	OPENF
+	 JRST [	HRROI A,OPENER
+		JRST ERRTN ]
+
+TTYINI:	MOVE A,JFN
+	RFMOD			;GET TTY MODE WORD
+	TRZ B,TT%DAM		;SET TTY TO BINARY MODE
+	SFMOD
+	TRZ B,TT%PGM		;TERMINAL NO PAGE
+	STPAR
+	MOVE B,[525252,,525252]	;SEND ALL CHARACTERS
+	MOVE C,B
+	SFCOC
+	SETZM 0,TCNT
+	MOVEI 1,1
+	RET
+
+ERRTN:
+;[LSRSPL]	PSOUT%			;OUTPUT ERROR MESSAGE AND RETURN
+	SETZ 1,
+	RET
+
+; ****************************************
+;	RELEASE AND CLOSE REMOTE TTY
+; ****************************************
+;
+CLOSER:	MOVE A,JFN
+	CLOSF
+	 JRST [	HRROI A,CLOSR
+		JRST ERRTN ]
+	MOVEI 1,1
+	RET
+
+; *************************************************
+;	RETURN TRUE IF A CHARACTER IS WAITING 
+; *************************************************
+;
+WAITRE:	MOVE A,DEVICE
+	SIBE
+	 JRST [	MOVEI 1,1	;CHARACTER THERE
+		RET ]
+	SETZ 1,	
+	RET
+
+; **************************************************
+;	GET A CHARACTER FROM THE REMOTE TERMINAL
+; **************************************************
+;
+GETREM:	MOVE A,DEVICE
+	BIN
+	MOVE 1,2		;MOVE BYTE TO FUNCTION RETURN VALUE
+	RET
+
+; ****************************************************
+;	OUTPUT A BYTE TO REMOTE TERMINAL
+;	(DEFERRED OUTPUT, PENDING A FLUREM CALL)
+; ****************************************************
+;
+PUTREM:	MOVE B,-1(P)		;BYTE TO SHIP
+	IDPB B,TPTR		;SAVE IN BUFFER
+	AOS TCNT
+	RET
+
+; *********************************************
+;	FLUSH BUFFER TO REMOTE TERMINAL
+; *********************************************
+;
+FLUREM: MOVN C,TCNT
+	JUMPE C,[RET]		;NOTHING IN BUFFER, RETURN
+	MOVE B,[POINT 8,TBUF]	;ADDRESS OF BUFFER
+	MOVE A,DEVICE		;REMOTE TTY DEVICE
+	SOUT
+	SETZM 0,TCNT		;RESET COUNT TO ZERO
+	MOVE B,[POINT 8,TBUF]	;RESET POINTER TO START OF STRING
+	MOVEM B,TPTR
+	RET
+
+; ********************************************* 
+;	REPORT PAGE COUNT TO ACJ
+; *********************************************
+;
+WORD:	BLOCK 2
+REPC==401000			;CODE FOR REPORTING PAGE COUNTS
+
+REPACC:	MOVE A,ACCJFN		;OUTPUT DATE TO ACCOUNTING FILE 
+	MOVNI B,1
+	MOVX C,OT%SPA!OT%12H!OT%TMZ
+	ODTIM
+	HRROI B,[ASCIZ /  /]	;OUTPUT A COUPLE SPACES
+	SETZ C,
+	SOUT
+	SKIPN B,PCNTX		;1 OUTPUT ASCII TEXT PAGE COUNT
+	 MOVE B,PCOUNT		;1 USE IMPRESS FILE PAGE COUNT INSTEAD
+	MOVX C,NO%LFL!FLD(^D6,NO%COL)!^D10	;1
+	NOUT
+	 MOVE A,ACCJFN
+	HRROI B,[ASCIZ /  /]	;1 OUTPUT A COUPLE MORE SPACES
+	SETZ C,			;1
+	SOUT%			;1
+	MOVE B,JOBINF+.EQOID	;1 GET THE USER NUMBER
+	DIRST%			;1 TRANSLATE IT TO A STRING
+	 JRST [
+		MOVE A,ACCJFN
+		HRROI B,[ASCIZ/Bad user name/]
+		SETZ C,
+		SOUT 
+		JRST .+1]		;1
+	HRROI B,[ASCIZ/
+/]				;1
+	MOVEI C,0		;1
+	SOUT			;1 OUTPUT A CRLF
+	CLOSF			; Close file
+	 JRST [ HRROI A,CLSER
+		JRST ERRTN ]
+	RET
+
+
+
+; ****************************************
+;	RETURNS BYTE SIZE OF A FILE (OR -1 ON FAILURE)
+; ****************************************
+;
+BSIZE:
+
+	SETO B,			;ADJUST BYTE POINTER
+	ADJBP B,-1(P)		;TO POINT AT PREVIOUS CHAR
+	MOVX A,GJ%OLD!GJ%SHT
+	GTJFN
+	 JRST BAD
+	MOVE B,[1,,.FBBYV]	;READ THE BYTE SIZE WORD
+	MOVEI C,C		;PUT WORD IN C
+	GTFDB
+	  ERJMP	BAD
+	LSH C,-^D24		;SHIFT IN BYTE SIZE
+	ANDI C,77		;AND OUT EXTRA BITS
+	RLJFN
+	  JRST .+1		;IGNORE ERRORS
+	MOVE 1,C		;PUT BYTE SIZE IN 0
+	SKIPA			;SKIP THE ERR ROUTINE
+BAD:	SETO 1,
+	RET
+
+; ****************************************
+;	ERROR MESSAGES
+; ****************************************
+;
+ACGER:	ASCIZ	/Cannot get JFN for page count file.
+/
+ACOER:	ASCIZ	/Cannot open page count file.
+/
+ASNDER:	ASCIZ	/Cannot assign remote tty.
+/
+CLOSR:	ASCIZ	/Cannot close remote tty.
+/
+CLSER:	ASCIZ	/Cannot close page count file.
+/
+JFNER:	ASCIZ	/Cannot get JFN for remote tty.
+/
+NOUTER:	ASCIZ	/Cannot output page count.
+/
+OPENER:	ASCIZ	/Cannot open remote tty.
+/
+RELDER:	ASCIZ	/Cannot release remote tty.
+/
+TRSLER:	ASCIZ	/Cannot translate user number.
+/
+
+	END

@@ -1,0 +1,84 @@
+	TITLE	STEXEC - Program to create EXEC as a not logged in job
+
+	SALL			; Keep listing uncluttered, no macro expansion
+	SEARCH	MONSYM,MACSYM	; Universals to search
+	.REQUIRE SYS:MACREL	; Make LINK load these automatically
+
+;
+; This program creates a job running NRTSRV to provide a means for
+; network users to login to the system. NRTSRV provides the facility
+; for remote terminals to behave as though they were terminals connected
+; directly to a PTY on the local system.
+
+	SUBTTL	DECLARED SYMBOLS
+
+	T1==1			; AC definitions
+	T2==2
+	T3==3
+	T4==4
+	P==17
+
+	NPDL==10		; Size of pushdown list
+
+	SUBTTL	IMPURE STORAGE
+
+PDL:	BLOCK NPDL		; Pushdown list (stack)
+BUFFER:	BLOCK 100		; For EXEC file name
+
+				; Argument block for CRJOB JSYS
+CRJBLK:	0			; No user name string
+	0			; No password string
+	0			; No account string
+	-1,,[ASCIZ /PS:<6-EXEC>EXEC.EXE/]
+				; Pointer to file name to be placed in job
+	0			; Entry vector offset
+	.NULIO			; Controlling terminal designator is null device
+	0			; (Reserved)
+	0			; Address of AC block
+	0			; Command language processor flags
+	0			; Primary I/O designators for inferior processes
+	0			; CPU runtime limit (0 = no limit)
+	0			; Capability mask for job
+	0			; IPCF PID for logout message
+
+	SUBTTL	START - Start of program
+
+START:	RESET			; Initialize ourself
+	MOVE P,[IOWD NPDL,PDL]	; Initialize PDL pointer
+	Movei T1,.RSINI		;get rscan buffer
+	Rscan%
+	 Jserr
+LOOP:	Pbin%
+	Cain T1,.CHLFD
+	 Jrst NOFILE		;Found EOL, so no file, use default
+	Caie T1," "		;find delimiting space
+	 Jrst Loop
+	Movei T1,.PRIIN		;Now read file to CRJOB
+	Hrroi T2,Buffer
+	Movei T3,100*5
+	Movei T4,.CHLFD
+	Sin%
+	Hrroi T1,Buffer
+	Movem T1,CRJBLK+.CJFIL
+NOFILE:	Seto T1,		;for my job
+	Move T2,[-1,,T4]	;where to put answer
+	Movei T3,.JITNO		;job terminal number
+	Getji%
+	 Jshlt
+	Addi T4,.TTDES		;make correct
+	Movem T4,CRJBLK+.CJTTY	;where CRJOB can see it
+	Dtach%
+	Move T1,T4
+	Asnd%			;and get it back
+	 Jshlt
+	MOVX T1,CJ%FIL!CJ%NPW!CJ%CAP!CJ%WTA!CJ%NUD ; CRJOB flags
+	MOVEI T2,CRJBLK		; Address of argument block
+	Setz T3
+	CRJOB			; Create the job
+	 JSHLT				; Failed
+	Seto T1,		;for myself
+	Lgout%
+	 Jshlt
+	HALTF			; Made it
+
+	END START

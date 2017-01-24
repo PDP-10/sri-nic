@@ -1,0 +1,191 @@
+!	OutByte, OutTwoByte, OutThreeByte, OutFourByte;
+
+
+! This file contains macros to output certain frequently used byte
+  sequences;
+
+require "impdef.sai" source!file; 
+			    ! get current definitions of impress commands;
+
+! The following macros are used for efficient output.  Input file handlers
+  and font handlers usually define similar macros for input.  Note that
+  bytes are left justified in a word;
+
+define OneRshift	   =    -OutBpB,
+       TwoRshift	   =  -2*OutBpB,
+       ThreeRshift	   =  -3*OutBpB,
+       FourRshift	   =  -4*OutBpB;
+
+define OneByteGetSign(byte) = {(((byte land OneByteMsk) lsh (36-OutBpB))
+							  ash -(36-OutBpB))},
+       TwoByteGetSign(byte) = {(((byte land (TwoByteMsk lor OneByteMsk))
+				     lsh (36-2*OutBpB)) ash -(36-2*OutBpB))};
+
+define lastword 	   = {((LastImpPage lsh 9) lor '777)};
+				! last word in output file buffer;
+
+define OutByte(byte) 	   = {if (OutPtr land AddrMask)lastword then 
+				if (OutPtr land AddrMask) > lastword or
+				   (OutPtr lsh -30) = (36 - OutBpB*OutBpW)
+							then ResetOut;
+			      printo9(<nl,"OutByte, OutPtr = ",cvos(OutPtr)>)
+		              iDpB(byte,OutPtr)};
+
+define OutTwoByte(tbyte)   = {OutByte(<tbyte lsh OneRshift>);
+			      OutByte(<tbyte land OneByteMsk>)};
+
+define OutThreeByte(tbyte) = {OutByte(<tbyte lsh TwoRshift>);
+			      OutByte(<(tbyte land TwoByteMsk) lsh OneRshift>);
+			      OutByte(<tbyte land OneByteMsk>)};
+
+define OutFourByte(fbyte)  = {OutByte(<fbyte lsh ThreeRshift>);
+			      OutByte(<(fbyte land ThreeByteMsk) lsh TwoRshift>);
+			      OutByte(<(fbyte land TwoByteMsk) lsh OneRshift>);
+			      OutByte(<fbyte land OneByteMsk>)};
+
+!	StartPage, EndPage, EndOfFile, SetFont, SetGlyph;
+
+
+! The following macros perform certain common typsetting operations;
+
+define StartPage =	{printo4(<nl,"Start page">)
+			 OutByte(I!page)};
+
+define EndPage	=	{printo4(<nl,"End page">)
+			 OutByte(I!endp)};
+
+define EndOfFile =	{printo0(<nl,"End of file">)
+			 OutByte(I!eof)};
+
+define SetFont(fontno) = {printo5(<nl,"Setting current font to ",
+					FI:fname[fntinf[fontno]]>)
+			  OutByte(I!f); curf_fontno;
+			  OutByte(fontno)}; ! Set current font to fontno;
+
+define SetGlyph(char) = {OutByte(char);
+		          printo8(<nl,"Ouputting character ",char,
+						      " (",junk_char,")">)
+			  curx_curx+glyph[curf,char,1];
+			  printo8(<nl,"After setting character, 
+			      current position is (",curx,",",cury,")">)
+			  nothing ! needed here because of printo8;};
+
+!	SetNewLine, SetBaseLineSkip, SetMargin, RelVertMove, OnePixelRight,
+	OnePixelLeft, SetSpace, OneSpace, OneSpacePlus, RelHorzMove;
+
+
+define SetNewLine      = {printo7(<nl,"New line">)
+			  OutByte(I!nl)};
+
+define SetBaseLineSkip(bskip) = {printo6(<nl,"Setting baselineskip to ",
+						TwoByteGetSign(bskip)>)
+				 OutByte(I!bskip);
+				 OutTwoByte(bskip)};
+
+define SetMargin(lmarg) = {printo6(<nl,"Setting left margin to ",
+						  TwoByteGetSign(lmarg)>)
+			   OutByte(I!marg);
+			   OutTwoByte(lmarg)};
+
+define RelVertMove(move) = {printo7(<nl,"Verticle move of amount ",
+						  TwoByteGetSign(move)>)
+			    temp_(move lsh 1) lor '1; ! this is a relative
+							move;
+			    OutByte(I!v);
+			    OutTwoByte(temp)};
+
+define OnePixelRight =	{printo7(<nl,"Right one pixel">)
+			 OutByte(I!mp)}; 
+
+define OnePixelLeft =	{printo7(<nl,"Left one pixel">)
+			 OutByte(I!mm)}; 
+
+define OneSpace	= 	{printo7(<nl,"Space">)
+			 OutByte(I!space)}; 
+
+define OneSpacePlus =	{printo7(<nl,"Space plus one pixel">)
+			OutByte(I!1spac)};
+
+define SetSpace(space) = {printo6(<nl,"Set space to ",TwoByteGetSign(space)>)
+			  OutByte(I!setsp);
+			  OutTwoByte(space)};
+			
+define RelHorzMove(move) = 
+	{if abs(move) < 128 then
+		begin "-- small move --"
+		printo7(<nl,"Small move of amount ",OneByteGetSign(move)>)
+		OutByte(I!mov); 
+		OutByte(move); ! A signed quantity;
+		OutByte(I!mov)
+		end   "-- small move --"
+	 else
+		begin "-- big move --"
+		printo7(<nl,"Big move of amount ",TwoByteGetSign(move)>)
+		temp_(move lsh 1) lor '1; ! this is a relative move;
+		OutByte(I!h); OutTwoByte(temp)
+		end   "-- big move --"};
+
+!	SetRule;
+
+
+define SetRule(width,height,offset) = 
+	{printo5(<nl,"Rule, height ",height,", width ",width,
+      			      ", verticle offset ",TwoByteGetSign(offset)>)
+	 if (height lor width lor abs(2*offset)) < 256 then
+		begin "-- small rule --"
+		OutByte(I!srule); OutByte(width); 
+		OutByte(height); OutByte(offset)
+		end   "-- small rule --"
+	 else 
+		begin "-- big rule --"
+		if abs(offset) > 32768 then Error("Offset too large") else
+			begin "-- ship rule --"
+			OutByte(I!brule); OutTwoByte(width); 
+			OutTwoByte(height); OutTwoByte(offset)
+			end   "-- ship rule --"
+		end "-- big rule --"};
+
+!	DeclareGlyph, DeleteGlyph, DlGlyph;
+
+
+define DeclareGlyph(fontno,charno,advancewidth,width,xoffset,height,yoffset) =
+	{printo3(<nl,"Declaring character #",charno,"(",junk_charno,") in font ",
+		    FI:fname[fntinf[fontno]],":  width ",width,", xoffset ",
+		    xoffset,", height ",height,", yoffset ",yoffset,
+		    ", advancewidth ",advancewidth>)
+	 if (width < 0) or (height < 0) then Error("Glyphs must have
+				      nonnegative height and width") else
+	 if advancewidth < 0 then error("Glyphs must have positive
+							advancewidth") else
+	 if (advancewidth lor width lor height lor abs(2*xoffset) 
+				lor abs(2*yoffset)) < 256 then
+		begin "-- small glyph --"
+		temp_((fontno land '377) lsh 7) lor (charno land '177);
+		OutByte(I!sgly); OutTwoByte(temp); OutByte(advancewidth);
+		OutByte(width);  OutByte(xoffset); 
+		OutByte(height); OutByte(yoffset)
+		end   "-- small glyph --"
+	 else
+		begin "-- big glyph --"
+		temp_((fontno land '377) lsh 7) lor (charno land '177);
+		OutByte(I!bgly); OutTwoByte(temp); OutTwoByte(advancewidth);
+		OutTwoByte(width); OutTwoByte(xoffset); 
+		OutTwoByte(height); OutTwoByte(yoffset)
+		end   "-- big glyph --"};
+
+define DeleteGlyph(fontno,charno) = {printo2(nl,"Deleting character #",
+					        charno," (",junk_charno,") in font ", 
+						FI:fname[fntinf[fontno]]) 
+				     OutByte(I!delg);
+				     temp_((fontno land OneByteMsk) lsh 7) lor (charno land '177);
+				     OutTwoByte(temp)};
+
+! The following is a more efficient delete macro for situations in which one
+  already has the glyph identifier;
+
+define DlGlyph(glyphid)	= {printo2(<nl,"Deleting character #",glyphid land '177,
+	      		        " (",junk_(glyphid land '177),") in font ", 
+	      			FI:fname[fntinf[(glyphid lsh -7) land '177]]>)
+		      	   OutByte(I!delg);
+			   OutTwoByte(glyphid)};
+

@@ -1,0 +1,1009 @@
+;<GROSSMAN.BUILD.NEW>PHYSAT.MAC.4, 24-Jul-85 15:30:12, Edit by RON
+;[2] Changes to density setting/reading, adding 6250
+;<SA10>PHYSAT.MAC.6311, 21-Sep-84 11:04:52, Edit by MRC
+;[1] Change BUG invocations to BUG.
+;<5.ISI.MONITOR>PHYSAT.MAC.6310,  3-May-83 23:36:41, Edit by BILKIS
+;#631 correct things to make sense data flow more smoothly and at right
+;times
+;<5.ISI.MONITOR>PHYSAT.MAC.5160	 1-Dec-82 12:16:26	Edit by SMITH
+;#516 Change PHYSAT SYSERR entry to SEC%SM since DEC now using name SEC%ST
+;<5.ISI.MONITOR>PHYSAT.MAC.5070	24-Nov-82 13:39:53	Edit by SMITH
+;#507 Change skip file function to use same code as SEEK ... ran out of bits
+;#507  for new function.
+;<5.ISI.MONITOR>PHYSAT.MAC.5000	20-Nov-82 09:50:40	Edit by SMITH
+;#500	UDBDDP replaced by UDBDDM
+;#500 	Init tapes in order.  Choose dev addr based on unit.  Find next
+;#500 	free MTCUTB slot.
+;#500	Clear US.BOT at beginning of operations.
+;#500	Fix function table (SATFTB) for new function codes.
+;[USC-ISIC]<ISI.MONITOR>PHYSAT.MAC.3330, 27-Jul-81 16:15:47, Ed: KODA
+;#333 In SATINI, set hardware determined density to unknown
+;[USC-ISIC]<ISI.MONITOR>PHYSAT.MAC.3070, 27-Jul-81 16:08:21, Ed: KODA
+;#307 Don't init a tape unit if someone else already did
+;<4.ISI-MONITOR>PHYSAT.MAC.2440	16-Apr-81 19:45:40	Edit by SMITH
+;#244 Bug fix in SETBOT - clear write-lock bit in UDBSTS
+;<4.ISI-MONITOR>PHYSAT.MAC.260	31-Mar-81 13:08:59	Edit by SMITH
+;#26 Support IBM-3420 compatible Tape drives on SA10 channel
+
+	SEARCH PROLOG,PHYPAR,SERCOD
+	TTITLE (PHYSAT,,< - Device dependent code for magtapes on SA-10>)
+
+	ENTRY SATDSP		; Dispatch entry
+
+	SUBTTL Device dependent table definitions
+
+;UDB EXTENSIONS
+
+	TUXHDN==UDBDDM		;HARDWARE DETERMINED DENSITY
+				;NOTE: DONT CHANGE WITHOUT FIXING MAGTAP
+	U.XSTS==UDBDDM+1	; Status and device address
+	 UE.SNS==1B0		; Sense in progress flag
+	 UE.DEN==1B1		; Sense to read density (leaving BOT)
+
+	 MSKSTR U%DVADR,U.XSTS(P3),.RHALF ; IBM physical device address
+	 MSKSTR UE%SNS,U.XSTS(P3),UE.SNS  ; Sense in progress
+	U.STCH==U.XSTS+1	; TCH to get sense byte program
+	U.EPOS==U.STCH+1	;ERROR POSITION
+	U.EBP==U.EPOS+1		;ERROR BYTE POINTER
+	E.EBC==U.EBP+1		;ERROR BYTE COUNTER
+	U.ETCF==E.EBC+1		;TAPE CLEANER FLAG / Initial SW2
+	U.ETIE==U.ETCF+1	;TIE BYTE / Initial SW1
+
+	LU.SAT==U.ETIE+1	;LENGTH OF UDB
+
+	UDB.NM==1B17		;BIT SET IN UDBERR TO INDICATE
+				; A RECOVERABLE NO MOTION ERROR
+
+;Offsets into sense byte buffer area for certain sense bytes
+
+	SB0.3==0		; Sense bytes 0-3 are in word 0
+	SB4.7==1		; Sense bytes 4-7 are in word 1
+
+;BIT DEFINITIONS FOR SENSE BYTES 0-3
+
+	S0.CR==1B0		;COMMAND REJECT
+	S0.IR==1B1		;INTERVENTION REQUIRED
+	S0.BOC==1B2		;BUS OUT CHECK
+	S0.EC==1B3		;EQUIPMENT CHECK
+	S0.DC==1B4		;DATA CHECK
+	S0.OR==1B5		;OVERRUN
+	S0.WCZ==1B6		;WORD COUNT ZERO
+	S0.DCC==1B7		;CONVERTER CHECK
+	S1.NSE==1B8		;NOISE
+	S1.TUA==1B9		;TU STATUS A
+	S1.TUB==1B10		;TU STATUS B
+	S1.7TK==1B11		;7 TRACK FEATURE
+	S1.BOT==1B12		;BOT - LOAD POINT
+	S1.WS==1B13		;WRITE STATUS
+	S1.FP==1B14		;WRITE PROTECTED
+	S1.NC==1B15		;NOT CAPABLE
+	S2.TIE==377B23		;TRACK IN ERROR REGISTER
+	S3.VRC==1B24		;R/W VRC
+	S3.MTE==1B25		;MTE/LRC
+	S3.SKW==1B26		;SKEW ERROR
+	S3.CRC==1B27		;CRC ERROR
+	S3.ENV==1B28		;VRC ERROR
+	S3.D16==1B29		;1600 BPI
+	S3.BKW==1B30		;BACKWARD STATUS
+	S3.CPC==1B31		;C COMPARE
+
+;Bit definitions for sense byte 4
+
+	S4.TPI==1B2		; Tape position indicator (EOT seen)
+
+;BIT DEFINITIONS FOR SENSE BYTE 6
+
+	S6.7TK==1B16		;7 TRACK DRIVE
+	S6.DD==1B18		;DUAL DENSITY TAPE UNIT
+				; TU IS CAPABLE OF BOTH 1600 AND 6250
+	S6.TMI==7B23		;MODEL ID FIELD
+;	S6M.70==1		;TU70 (ONLY WHEN ONLINE)
+;	S6M.71==1		;TU71 (ONLY WHEN ONLINE)
+;	S6M.72==3		;TU72
+;	S6M.73==13		;TU7x (200 IPS GCR DRIVE)
+	SUBTTL Error recovery definitions
+
+;RETRY COUNTS:
+
+	CLNREC==5		;SP REVERSE THIS NR RECORDS TO HIT CLEANER
+	RTYOP==4		;RETRY OPERATION THIS MANY TIMES BEFORE TAPE CLEAN SEQUENCE
+	RTYCLN==^D10		;RETRY CLEAN SEQUENCE THIS MANY TIMES ON READ
+				; BEFORE GIVING UP
+				; THE TOTAL NR OF RD RETRIES = RTYOP*(RTYCLN+1)
+
+	RTYWRT==^D14		;# WRITE RETRIES MAXIMUM BEFORE ABORT
+
+	RTY.DN==16		;CODE SIGNAL END OF RETRY
+	RTY.CP==17		;CODE TO CHECK POSITION
+
+;ERROR WORDS
+
+;	E.EBC			;ERR BYTE COUNTER (USED IF WE HIT BOT
+				;DURING TAPE CLEAN SEQUENCE)
+;	U.EBP			;ERR BYTE POINTER
+;	U.ETCF			;-1= IN TAPE CLN SEQUENCE, 0= NOT
+;	UDBERR(RH)		;CURRENT FUNCTION (1 - 17)
+				;ON RETRY OF ORIGINAL OPERATION, THIS LOC
+				;MUST BE SET TO THE ORIGINAL OPERATION
+;	UDBERC			;RETRY COUNT
+				;CONVERTED TO # RETRIES DONE AT END
+;	U.EPOS			;WE SHOULD BE HERE WHEN WE'RE
+				;READY TO RETRY OPERATION
+	SUBTTL Dispatch for SA-10 magtapes
+
+SATDSP::JRST SATINI		;0 - INITIALIZATION
+	JRST SATSIO		;1 - START I/O
+	JRST SATINT		;2 - HANDLE INTERRUPT
+	JRST SATERR		;3 - ERROR RECOVERY
+	JRST SATHNG		;4 - HUNG DEVICE
+	RET			;5 - NOT USED
+	RET			;6 - Not used
+	JRST SATSIO		;7 - START POSITION OPERATION
+	JRST SATATN		;10 - ATTENTION INTERRUPT (CALLED AS MANY
+				; TIMES AS THERE ARE SAT0 DRAS BITS UP)
+	JRST SATPRQ		;11 - SKIP IF POSITION REQUIRED
+	RET			;12 - STACK SECOND COMMAND, ALWAYS FAILS
+	JRST EXTUDB		;13 - check legality of a unit
+	RET			;14 - CHECK FOR HALTED KONTROLLER
+	RET			;15 - RELEASE PORT
+
+; Some dummy returns
+
+SATATN:	RET			; No attention interrupts
+
+; Hung device 
+
+SATHNG:	MOVX T1,<IS.DVE!IS.ERR!IS.NRT> ;SET FATAL BITS
+	IORM T1,IRBSTS(P4)	;AND REFRESH IT
+	MOVX T1,UE.SNS		; Reset sense in progress
+	ANDCAM T1,U.XSTS(P3)	; In extra status word
+	MOVE T1,SSACUB(P1)	; Get current active UDB
+	CAIN T1,(P3)		; This UDB?
+	 SETOM SSACUB(P1)	; Yup - not active anymore
+	RET
+
+;HERE TO DETERMINE IF THIS REQUEST SHOULD GO ON PWQ OR TWQ
+
+SATPRQ:	RET		; ###### Always on TWQ !!!!!!
+	SUBTTL Initialize a magtape drive
+; Input:
+;	Q2/ Logical unit number
+;	P1/ CDB address
+
+SATINI:	SETZ P3,		; Say we don't have this unit
+	MOVE T1,SSASCI(P1)	; Get subchannel number
+	CAME T1,SMTSCN		;#500  We only have tapes on this subchannel
+	 RET			; No - end of this routine
+	MOVE T3,[ XWD SATDSP,LU.SAT ] ; Dispatch address,,length of UDB
+	CALL PHYUDB		; Allocate a UDB
+	 RET			; Return now if we failed
+	HRLOI T3,-MTAN-1	;#500 search through MTCUTB
+SATIN1:	AOBJP T3,CPOPJ		;#500 return if all tapes done
+	SKIPE MTCUTB(T3)	;#500 this logical unit in use?
+	 JRST SATIN1		;#500 yes, try next
+	HRLM P1,MTCUTB(T3)	;#500 LH - CDB address
+	HRRM P3,MTCUTB(T3)	;#500 RH - UDB address
+	MOVEI T1,.IDMTA(Q2)	;#500 Get physical device address for this unit
+	STOR T1,U%DVADR		; Save it in UDB
+	HRL T1,CDBADR(P1)	; Channel #,,device address
+	MOVEM T1,UDBDSN(P3)	; Save as serial number of this drive
+	MOVEI T1,3		; Allocated area for sense byte program
+	CALL SSAALC		; Has to be in low core area
+	 BUG.(HLT,SATINR,PHYSAT,HARD,<SATINI - Can't allocate necessary space>)
+	CALL SETSNP		; Set up channel program to get sense bytes
+	MOVEM T1,U.STCH(P3)	; Save TCH to the program for use later
+	SETZ T2,		; Reset this channel
+	CALL SAINGO		;  and start get sense bytes program
+	 JRST [ SETZB T2,T1	; Zero bytes 0-3 and 4-7
+		DMOVEM T1,MTASEN ; Store fake info in sense byte area
+		JRST .+1  ]	; Continue with main stream
+	MOVX T3,US.TAP		; Tape unit associated with this UDB
+	HLLM T3,UDBSTS(P3)	; Save status info
+	MOVE T1,MTASEN+SB4.7	; Get sense bytes 4-7
+	MOVX T2,.UTCT1		; Assume we have Calcomp magtape drives
+				; which are the same as DEC TU70s
+	TXNE T1,S6.7TK		; 7 track drive present?
+	 BUG.(HLT,SATN7T,PHYSAT,HARD,<SATIUN - 7 track drive not implemented yet>)
+	STOR T2,USTYP,(P3)	; Store drive type number
+	MOVE T1,[ UC.800!UC.160!UC.625!UC.CD!UC.AA!UC.IC!UC.HD!UC.PT ] ; Characteristics for
+				; this drive type
+	MOVEM T1,UDBCHR(P3)	; Save them in UDB
+	SETOM TUXHDN(P3)	;#333 Unknown density
+	RET			; End of SATIUN
+
+; SETSNP - Set up channel program to read sense bytes
+;
+; Input:
+;	T1/ Address in low core to store channel program
+;	P1/ CDB address
+;	P3/ UDB address
+;
+; Output:
+;	T1/ Channel transfer word
+
+SETSNP:	MOVE T2,[ DCW <XCT,BYT>,.ICSNS,0 ] ; Execute, byte mode, get sense bytes					   ; and leave device address 0
+	LOAD T3,U%DVADR		; Get physical device address
+	STOR T3,SC%DEV,T2	; Set device address in device command word
+	MOVEM T2,0(T1)		; Store command word in channel program
+	MOVE T3,[ IOW ^D24,MTASEN ] ; Create IOW for this command
+	MOVEM T3,1(T1)		; Store it in channel program
+	SETZM 2(T1)		; End channel program
+	TXO T1,TCH		; Set transfer
+	RET			; All done - sense byte program ready to go
+	SUBTTL Start magtape I/O
+; SATSIO - Start I/O
+;
+; Input:
+;	P4/ IORB address
+
+SATSIO:	HRRZ Q1,UDBERR(P3)	; Get function if in error recovery
+	SKIPN Q1		; Test if in error recovery
+	 LDB Q1,IRYFCN		; If not error then load function from IORB
+	SKIPL IRBSTS(P4)	; Short IORB?
+	SKIPG Q1,SATFTB(Q1)	; Or illegal function
+	 JRST BADSI1		; Return error bits set
+	SKIPE UDBERR(P3)	; Error recovery SIO?
+	 JRST [ LDB T1,IRYFCN	; Yes - get current function from IORB
+		HRRZ T2,UDBERR(P3) ;  and recovery function from UDB
+		CAME T1,T2	; If the same then start up original transfer
+		 JRST .+1	; To mainstream if no same
+		JRST STCHAN ]	; Start original channel program (already set up)
+
+	CALL STCPRG		; Set up channel prog pntr/mode set instruction
+	 JRST BADSI1		; Set error bits on error return
+
+; Q3 has pointer into channel program area
+
+	CALL SETDCW		; Set up function instruction
+	 JRST BADSI1		; Error
+; [2]	MOVX T1,US.BOT		;#500 no longer at beginning of tape
+; [2]	ANDCAM T1,UDBSTS(P3)	;#500 .
+	SKIPE UDBERR(P3)	; Check if error recovery
+	 JRST SATEIO		; Handle it
+	TXNN Q1,TB.DOP		; Is this a data operation?
+	 JRST [ SETZM (Q3)	; No - then end program here
+		JRST STCHAN ]	;    and start it
+	CALL PHYXFL		; Otherwise, get transfer list pointer
+	MOVE Q2,T1		; Copy start address
+	SETZ T3,		; Zero last page number
+	LOAD T4,IRBDM,(P4)	; Get data mode from IORB
+
+; AC usage in following loop to copy from transfer list in IORB to IOWs
+; in channel program area:
+;
+;  T3/ Last physical page number of transfer word
+;  T4/ Data mode for this transfer
+;  Q3/ Current pointer in channel program area
+;  Q2/ Current pointer in transfer list
+
+XLMOV:	SKIPN T2,(Q2)		; Get and test xfer list entry
+	 JRST XLEND		; If 0 then end of list
+	LOAD T1,SC%PAG,T2	; Get physical page number
+	MOVEI T3,(T1)		; Save last page number
+	TXZ T2,SC%LST		; Not the last command
+	CAIE T4,IRM8BT		; Industry compatability mode?
+	 JRST XLOAD		; No - count is correct
+	LOAD T1,SC%CNT,T2	; Yes - we must change word count to byte count
+	LSH T1,2		;       by multiplying by 4.
+	STOR T1,SC%CNT,T2	; Update it in IOW
+XLOAD:	MOVEM T2,(Q3)		; Copy in to channel area
+	ADDI Q3,1		; Increment to next channel entry
+	AOJA Q2,XLMOV		; Next entry in xfer list also
+
+XLEND:	SETZM (Q3)		; End the channel program
+	MOVX T1,SC%LST		; Mark last IOW with last command in chain
+	IORM T1,-1(Q3)		;  bit
+STCHAN:	MOVX T2,UE.SNS		; Reset sense byte wait flag
+	ANDCAM T2,U.XSTS(P3)	;  in status word
+STCHN0:	MOVEI T1,MTCHCL		; Start of channel program
+STCHN1:	TXO T1,TCH		; Make it a transfer word
+	CALL SSAGO		; Start the channel going
+	SETOM SSACUB(P1)	; New I/O so no busy request outstanding
+	RETSKP			; Return success
+
+; Here if anything is wrong with the I/O request.
+
+BADSI1:	MOVX T1,IS.ERR!IS.DVE!IS.NRT ; Set error bits
+	IORM T1,IRBSTS(P4)	;       in IORB
+	RET			; Error return
+
+
+; Here when we are in error recovery
+
+SATEIO:	SETZM (Q3)		; End recovery channel program
+	MOVEI T1,MTRECP		; Start of recovery program
+	JRST STCHN1		; Start it
+; STCPRG - Set channel prog and create the mode set command - if needed
+;
+; Input:
+;	Q1/ Operation code from SATFTB
+;
+; Output:
+;	Q3/ Pointer to place next channel instruction
+;
+; Returns:
+;	+1 Error - incorrect mode
+;	+2 Ok
+
+STCPRG:	MOVEI Q3,MTCHCL		; Get start of channel area for normal I/O
+	SKIPE UDBERR(P3)	; In error recovery?
+	 MOVEI Q3,MTRECP	; Yes - use recovery channel area
+	MOVX T1,US.BOT		; [2] Only needed if leaving beginning of tape
+	TDNN T1,UDBSTS(P3)	; [2] Check BOT against unit status
+	 RETSKP			; [2] Nope, all set
+	MOVX T2,TB.WRT		; [2] And doing a write operation
+	TDNN T2,Q1		; [2] And write operation
+	 RETSKP			; [2] Thats all
+	LOAD T1,IRBDN,(P4)	; Get density
+	MOVX T2,.IC962		; [2] default to 6250
+	CAIN T1,.SJD62		; [2] See what user says...
+	 JRST STDENS		; [2] 6250 it is
+	CAIE T1,.SJDN8		; Only 800 and
+	CAIN T1,.SJD16		;  1600 BPI are acceptable
+	 TRNA			; It was either 800 or 1600
+	RETBAD			; Error return
+	MOVX T2,.IC916		; Assume 1600 BPI, load mode set command code
+	CAIE T1,.SJD16		; 1600?
+	 MOVX T2,.IC908		; It was 800 BPI, load mode set command code
+STDENS:	MOVE T1,[ DCW <XCT,NMX,CHN>,0,0 ] ; Execute, no memory xfer, chain
+	STOR T2,SC%CMD,T1	; Store command code
+	LOAD T2,U%DVADR		; Get physical device address
+	STOR T2,SC%DEV,T1	; Store it to complete DCW
+	MOVEM T1,(Q3)		; Place it in channel area
+	AOJA Q3,RSKP		; Success
+; SETDCW - Set up Device Command Word for the I/O operation
+;
+; Input:
+;	Q3/ Pointer to next free entry in channel program area
+;
+; Output:
+;	Q3/ Updated channel program pointer
+;
+; Returns:
+;	+1 Error
+;	+2 Ok
+
+SETDCW:	LOAD T2,IRBDM,(P4)	; Get data mode
+	CAILE T2,IRMMAX		; Of illegal
+	 RETBAD			; Error
+	MOVX T1,FLD(<.SCXCT!.SCNMX>,SC%CCF) ; Execute and no memory xfer
+	TXNE Q1,TB.DOP		; Data operation?
+	 JRST [ TXZ T1,FLD(.SCNMX,SC%CCF) ; Want to have memory xfer
+		SKIPGE T2,MODSAT(T2) ; Convert software mode to hardware bits
+		 RETBAD		; Error if illegal mode
+		IOR T1,T2	; Set them in DCW
+		TXNE Q1,TB.WRD	; Writing on tape?
+		 TXO T1,FLD(.SCILE,SC%CCF) ; Yes - suppress length error
+		JRST .+1 ]	; Back to mainstream
+	LOAD T2,U%DVADR		; Get physical device address
+	STOR T2,SC%DEV,T1	; Store it
+	STOR Q1,SC%CMD,T1	; Store command code also
+	MOVEM T1,(Q3)		; Place it where it will be executed
+	AOJA Q3,RSKP		; Success return
+	SUBTTL Interrupt handler for magtapes
+; Input:
+;	P1/ CDB address
+;	P3/ UDB address
+
+SATINT:	SETZ P4,		; Assume no IORB
+	MOVE T4,CDBCS1(P1)	; Get status word 1
+	JUMPE P3,[ BUG.(CHK,SATUUN,PHYSAT,HARD,<SATINT - Interrupt from unknown unit>,<<T4,SW1>>)
+		   JRST NOACT1 ] ; Check if we can start I/O
+	MOVX T1,US.ACT		; See if this unit is active
+	TDNE T1,UDBSTS(P3)	; If not active don't get IORB
+	 CALL SETIRB		; Need IORB address in P4
+	TXNE T4,FLD(<.S1BIP!.S1CSE!.S1PIF>,S1%CHS) ; Any funny bits on?
+	 JRST [ BUG.(CHK,SATFSB,PHYSAT,HARD,<SATINT - Bad status in channel>,<<T4,SW1>>)
+		RETSKP ]	; Dismis this interrupt
+	TXNE T4,FLD(.S1SER,S1%CHS) ; Select error?
+	 JRST SELERR		; Handle it
+	JUMPE P4,NOACTV		; Handle the interrupt from non-active unit
+	HRRZ T1,UDBERR(P3)	; Load error function if any
+	SKIPN T1		; Skip if no error recovery
+	 LDB T1,IRYFCN		; Get function from IORB
+	MOVE Q1,SATFTB(T1)	; Get function table entry
+	LOAD T1,S1%DVS,T4	; Get device status byte from status word
+	JN UE%SNS,,SATSNS	; Jump if sense bytes were requested
+	MOVX T2,IS.DTE!IS.DVE	; Get data and device error bits
+	ANDCAM T2,IRBSTS(P4)	; So we can reset them before checking errors
+	CAIE T1,.S1CHE!.S1DVE	; Normal end? (Channel and device end)
+	CAIN T1,.S1CHE!.S1DVE!.S1UEX ; Also ignore unit exception
+	 TRNA			; This is the ok case of no error
+	 JRST NOEASY		; Not a normal ending status
+	CALL UPDINF		; Updated info in UDB and IORB
+	SKIPE UDBERR(P3)	; See if in error recovery
+	 RET			; If so let error recovery know
+; [2]	RETSKP			; All done with a normal end (end of I/O)
+	JRST SBOTCK		; Check for leaving beginning of tape
+
+; handle select error
+
+SELERR:	JUMPN P4,SATFER		; If IORB exists then mark it in error
+	BUG.(CHK,SATSEN,PHYSAT,HARD,<SATINT - Select error from non-active unit>,<<UDBADR(P3),UNIT>>)
+	RETSKP			; Dismis this interrupt
+
+SATDIS:	SETZ P4,		; Flag to dismis this interrupt
+	RETSKP			; Back to PHYINT
+
+; This interrupt is from sense program
+
+SATSNS:	MOVX T2,UE.DEN		; [2] Was this a density sense?
+	TDNE T2,U.XSTS(P3)	; [2] Check it out!
+	 JRST SDENSC		; [2] Guess so, go to it...
+	MOVX T2,UE.SNS		; Clear sense bit
+	ANDCAM T2,U.XSTS(P3)	;  from UDB
+	TXNN T1,.S1CHE		; Channel end (got sense bytes)?
+	 JRST SATFER		; No - error in getting sense bytes
+	TXNE Q1,TB.UNL		; From an unload?
+	 RETSKP			; If so then thats the end of this operation
+	DMOVE T1,MTASEN		; Get sense bytes 0-3 and 4-7
+	TXNE T1,S1.BOT		; At BOT (load point)?
+	 CALL SETBOT		; If so mark IORB and clear position counters
+	TXNE T1,S0.IR!S0.BOC	; Intervention req or bus parity
+	 JRST HRDERR		;   is a device error
+	TXNE T1,S0.CR		; Command reject?
+	 JRST CMDREJ		; Look in it further
+	TXNE T1,S0.DC		; Data check?
+	 JRST CKDATC		; Yes - check further
+	SKIPE UDBERR(P3)	; In error recovery?
+	 JRST SATFER		; If so then make it a fatal data error
+HRDERR:	MOVX T1,IS.ERR!IS.DVE!IS.NRT	; %%%% Temp - handle as device error
+	IORM T1,IRBSTS(P4)
+	RETSKP
+
+CMDREJ:	TXNE T1,S1.FP		; File protected and
+	TXNE Q1,TB.WRT		;  trying to write to tape?
+	 TRNA			; Yes - can't write to protected tape
+	JRST HRDERR		; If not then device error
+	MOVX T1,IS.ERR!IS.WLK!IS.DVE!IS.NRT ; Set appropriate error bits
+	IORM T1,IRBSTS(P4)	; Set error in IORB
+	RETSKP			; End of I/O
+
+CKDATC:	MOVX T1,IS.ERR!IS.DTE	; Set data error bit
+	IORM T1,IRBSTS(P4)	;  in IORB
+	RETSKP			; End of I/O
+
+; Here is the case when we don't have channel and device end (maybe error)
+
+NOEASY:	CAIN T1,.S1CHE		; Only channel end?
+	 JRST CKCHE		; Yes - check it out
+	TXNE T1,.S1DVE		; No - how about device end?
+	 JRST DEVEND		; Yes - handle it
+	TXNE T1,.S1UCK		; No - unit check bit set?
+	 JRST SATUCK		; Yes - handle error
+	TXNE T1,.S1BSY		; No - was TCU or TU busy?
+	 JRST [ HRRZM P3,SSACUB(P1) ; Say that this UDB is active and waiting
+		JRST SATDIS ]	;  for TCU or TU to be free
+	TXNE T1,.S1CUE		; Control unit end?
+	 JRST SATCUE		; Yes - maybe able to start I/O
+
+; Here is above tests don't make it.
+
+SATFER:	MOVX T1,IS.ERR!IS.DTE!IS.NRT ; Set error bits
+	IORM T1,IRBSTS(P4)	;  in IORB
+	RETSKP			; End of I/O, had a fatal error
+
+; Control unit end - means that the TCU is now able to accept a command.
+
+NOACTV:	JN UE%SNS,,SATONL	; Jump if we were asking for sense bytes
+NOACT1:	TXNE T4,FLD(.S1DVE,S1%DVS) ; See if device end (rewind complete)
+	 JRST [ JUMPE P3,.+1	; If unknown unit then back to mainstream
+		MOVX T1,US.REW	; Test if this unit was rewinding
+		TDNE T1,UDBSTS(P3)	;#631 If rewinding 
+;#631 		 JRST SATUC1	; Must be new unit coming on-line, get
+;#631 				; sense bytes 
+		CALL PHYRWD	; Then let PHYSIO know its done
+		JRST SATUC1 ]	;#631 get sense data and dismiss this interrupt
+	TXNN T4,FLD(.S1CUE,S1%DVS) ; Must have Control Unit End
+	 JRST NACTER		; If not then its an error
+SATCUE:	SKIPG T1,SSACUB(P1)	; Get UDB of active request
+	 JRST NACTER		; If none then its an error
+SATDV1:	SAVEP			; Save some ACs
+	MOVE P3,T1		; New UDB address
+	JRST STCHN0		; Start request and dismis this interrupt
+
+SATONL:	MOVX T2,UE%SNS		; Clear sense bytes request flag
+	ANDCAM T2,U.XSTS(P3)	; 
+	TXNN T4,FLD(.S1CHE,S1%DVS) ; See we have sense bytes
+	 JRST [ BUG.(CHK,SATSON,PHYSAT,HARD,<PHYSAT - Can't get sense bytes for a unit coming on-line>,<<T4,SW1>>)
+		JRST SATDIS ]	; Ignore this unit
+	MOVX T2,US.WLK		; Write lock bit
+	ANDCAM T2,UDBSTS(P3)	; Clear it in UDB
+	MOVE T1,MTASEN		; Get first 4 sense bytes
+	TXNE T1,S1.FP		; Write ring?
+	 IORM T2,UDBSTS(P3)	; No - set write lock flag in UDB
+	CALL PHYONL		; Set unit online
+	JRST SATDIS		; Dismis now
+
+NACTER:	JUMPE P4,RSKP		; If no IORB then ignore this interrupt
+	BUG.(CHK,SATUCE,PHYSAT,HARD,<SATINT - Unexpected Control Unit End>,<<T4,SW1>>)
+	JRST SATFER		; If active then abort this request
+
+; Channel end seen
+
+CKCHE:	TXNN Q1,TB.REW		; Are we rewinding?
+	 JRST SATDIS		; No - then dismis this interrupt (need device end)
+	MOVX T1,US.REW		; Yes - mark that this unit is busy
+	IORM T1,UDBSTS(P3)	;       rewinding
+	CALL SETBOT		; Set BOT in IORB and clear position counters
+	RETSKP			; End of I/O
+
+; Device end 
+
+DEVEND:	SKIPLE T1,SSACUB(P1)	; Is there a request pending?
+	 JRST SATDV1		; Yes - start I/O again
+	TXNE T4,FLD(.S1UCK,S1%DVS) ; Unit check?
+	 JRST SATUCK		; Handle error
+	CALL UPDINF		; Update UDB and IORB
+; [2]	RETSKP			; No errors all done
+SBOTCK:	MOVX T1, US.BOT		; [2] Are we leaving beginning of tape?
+	TDNN T1, UDBSTS(P3)	; [2] Check UDB
+	 RETSKP			; [2] Nope, all done for sure!
+	MOVX T1, <UE.SNS!UE.DEN>	; [2] Flag doing density check
+	JRST SATUC2		; [2] Go initiate sense byte read
+
+SDENSC:	MOVX T2, <UE.SNS!UE.DEN>	; [2] Set to clear flags
+	ANDCAM T2, U.XSTS(P3)	; [2] From UDB
+	TXNN T1, .S1CHE		; [2] Channel end (got sense bytes)?
+	 JRST SATFER		; [2] No - error
+	TXNE Q1, TB.UNL		; [2] From unload
+	 RETSKP			; [2] Then bailout
+	DMOVE T1, MTASEN	; [2] Get sense bytes
+	TXNE T1, S1.BOT		; [2] Still at beginning of tape?
+	 JRST [CALL SETBOT	; [2] Say so
+	       RET ]		; [2] And leave...
+	MOVX T3, US.BOT		; [2] Now get status bit
+	ANDCAM T3, UDBSTS(P3)	; [2] Clear in UDB
+;***** Stu goes here!!!********		; [2] Build density status word here
+	RETSKP			; [2] Done at last!
+; Unit check - start error recovery procedure
+
+SATUCK:	TXNE Q1,TB.UNL		; Unloading a tape?
+	 JRST [ CALL CLRPOS	; Clear tape position
+		JRST SATUC1 ]	; Merge to get sense bytes
+	MOVE T1,CDBCS1(P1)	; Get current status word
+	MOVEM T1,U.ETIE(P3)	; Save for error block
+	MOVE T1,CDBCS2(P1)	; Get current status word 2
+	MOVEM T1,U.ETCF(P3)	; Save for later error entry
+	CALL UPDINF		; Update UDB and IORB
+
+; Unit check from a unit that has unloaded a tape will sometimes hang if
+; no sense bytes are retrieved.  Therefore the unload command handling
+; will flow like error handling but will terminate when the sense bytes
+; are read in.
+
+SATUC1:	MOVX T1,UE.SNS		; Get flag bit
+SATUC2:	IORM T1,U.XSTS(P3)	; Set flag requesting sense bytes
+	MOVE T1,U.STCH(P3)	; Tranfser word to sense byte program
+	CALL SSAGO		; Start it
+	JRST SATDIS		; Dismis this interrupt
+
+
+; This routine set IS.BOT in the IORB and clear UDBPS1 and UDBPS2
+
+SETBOT:	MOVX T3,IS.BOT		; If rewind then set at BOT
+	IORM T3,IRBSTS(P4)	;  in IORB
+	MOVX T3,US.BOT		; [2] Also set
+	IORM T3,UDBSTS(P3)	; [2]  in UDB
+	CALL CLRPOS		; Zero tape position
+;#631 	MOVX T1,US.WLK		;#244 Get write-lock bit
+;#631 	ANDCAM T1,UDBSTS(P3)	;#244 Clear it from UDB (assume its writeable)
+	RET			; End of SETBOT
+
+; Routine to zero tape position
+
+CLRPOS:	SETZM UDBPS1(P3)	; Zero file position
+	SETZM UDBPS2(P3)	;  and record position
+	RET			; End of routine
+	SUBTTL Miscellaneous routines needed for interrupt handling
+
+; UPDINF - Update statistical information in UDB and IORB
+;
+; Input:
+;	T4/ Status word 1
+;	Q1/ Function entry from SATFTB
+;	P4/ IORB
+
+
+UPDINF:	TXNN T4,FLD(.S1LNE,S1%CHS) ; Length error reported?
+	 JRST UPDNLE		; No - don't calculate bytes transferred
+	SKIPN UDBERR(P3)	; If in error recovery or
+	TXNE T4,FLD(.S1UCK,S1%DVS) ;   unit check
+	 JRST UPDNLE		; Then don't update transfer count
+	TXNN Q1,TB.DOP		; Must be a data operation
+	 BUG.(HLT,SATULE,PHYSAT,HARD,<SATINT - Length error on a non-data request>,<<T4,SW1>>)
+	CALL GTXFRC		; Get correct number of frames read
+	EXCH T1,IRBCNT(P4)	; Save it in IORB, get desired frame count
+	MOVX T2,IS.DVE!IS.RTL	; Get device error and record too long
+	CAMN T1,IRBCNT(P4)	; Skip if record was short (that's ok)
+	 IORM T2,IRBSTS(P4)	;  Indicate device error and record too long
+UPDNLE:	TXNN Q1,TB.DOP		; Data operation?
+	 JRST UPDIN1		; No - don't update counters
+	MOVE T1,IRBCNT(P4)	; Get frames read/write for this operation
+	TXNE Q1,TB.RD		; Read?
+	 ADDM T1,UDBRED(P3)	; Update frames read count
+	TXNE Q1,TB.WRD		; Write data?
+	 ADDM T1,UDBWRT(P3)	; Update write count
+UPDIN1:	TXNE Q1,TB.ERA		; Erase gap?
+	 JRST UPDIN2		; If so then don't record position change
+	TXNE Q1,TB.REV		; Reverse?
+	 SOSA UDBPS2(P3)	; Record position
+	AOS UDBPS2(P3)		; 
+UPDIN2:	TXNN T4,FLD(.S1UEX,S1%DVS) ; Unit exception?
+	 RET			; No, all done
+	SETZ T1,		; Zero status word
+	TXNE Q1,TB.RD!TB.SPC	; Read or space?
+	 JRST [ TXO T1,IS.TPM	; Yes - must have hit a tape mark
+		TXNE Q1,TB.REV	; Reverse?
+		 SOSA UDBPS1(P3) ; Yup - backup file count
+		AOS UDBPS1(P3)	; Foward - bump file count
+		JRST .+1 ]	; Back to mainstream
+	TXNE Q1,TB.WRT		; Writing?
+	 TXO T1,IS.EOT		; Yes - hit End-of-Tape marker
+	IORM T1,IRBSTS(P4)	; Update info in IORB
+	RET			; All done
+; GTXFRC - Get transfer count
+;
+; Input:
+;	P4/ IORB address
+;
+; Note: This routine is called only in the case of a Read operation with
+;	length error.
+
+GTXFRC:	PUSH P,T4		; Save status word 1
+	MOVEI T4,MTCHCL+1	; Point to to 1st IOW
+	HRRZ T3,CDBCS2(P1)	; Get where the channel program stopped
+	SUBI T3,(T4)		; # of IOWs executed
+	MOVNI T3,(T3)		; Need it negative
+	HRLI T4,(T3)		; We now have: -n,,pointer to 1st IOW
+	HLLZ T3,CDBCS2(P1)	; Get residual count
+	ASH T3,WCSIZ-^D35	; Make it a negative count
+	MOVN T1,T3		; Store as positive count since its number of
+				;  of bytes/words left
+GTXFR1:	MOVE T3,(T4)		; Get IOW
+	TXO T3,SC%LST		; Make sure we get a negative number
+	ASH T3,WCSIZ-^D35	; Get negative count
+	ADD T1,T3		; Count this word
+	AOBJN T4,GTXFR1		; Keep going until done
+	POP P,T4		; Restore status word 1
+	MOVX T2,IS.TPM		; Set or clear Tape mark flag based on count
+	JUMPE T1,[ IORM T2,IRBSTS(P4) ; Zero count is a tape mark
+		   RET ]	; Return to caller
+	ANDCAM T2,IRBSTS(P4)	; Clear TM seen
+	MOVN T1,T1		; Return positive count
+	RET			; Thats all
+	SUBTTL Error recovery
+
+; SATERR - Code to handle magtape errors
+;
+; Input:
+;	Q1/ Syserr block address
+;	P1/ CDB address
+;	P3/ UDB address
+;
+; Output:
+;	P4/ IORB address
+;
+; Returns:
+;	+1 Error recovery in progress
+;	+2 Done with error, fatal or soft error
+
+SATERR:	SAVEQ			; Need Q regs
+	CALL SETIRB		; Get IORB address in P4
+	HRRZ Q1,UDBERP(P3)	;GET ERROR BLOCK IF PRESENT
+	HLLZ T1,IRBSTS(P4)	;GET IORB STATUS
+	HRRZ T4,UDBERR(P3)	;GET FUNCTION IF ERROR RECOVERY
+	SKIPN T4		;IN ERROR RECOVERY?
+	 LDB T4,IRYFCN		;NO, GET FN FROM IORB
+	MOVE T4,SATFTB(T4)	;NOW TABLE ENTRY
+	TXO T4,1B0		;Make T4 look like a local index
+	TXNN T1,<IS.NRT!IS.IER>	;FATAL OR INHIBIT ERR RECOVERY?
+	JRST STERTY		;NO, RETRY THE ERROR
+	SKIPE U.EBP(P3)		;WAS FATAL ERR DURING RETRY?
+	JRST ABTNOS		;YES, WE ALREADY HAVE BEGIN DATA
+	AOS (P)			;SKIP RET FROM BEGLOD - DONE WITH IORB
+	JRST BEGLOD		;LOAD UP ERR BLK FOR FATAL ERR
+
+				;DO RETRY
+STERTY:	HLR T4,T4		;COPY LH OF FNTBL
+	TRZ T4,777770		;SAVE ONLY RETRY INDEX IN RH
+	SKIPE UDBERC(P3)	;1ST TIME FOR HERE?
+	JRST NOT1ST		;NO
+	CALL BEGLOD		;LOAD UP ERR BLK WITH BEGIN DATA
+	SETZM U.ETCF(P3)	;NOT DOING TAPE CLEAN
+	SKIPN T1,RTYBPT(T4)	;GET RETRY BYTE POINTER
+	 JRST [	BUG.(CHK,SATIDX,PHYSAT,HARD,<PHYSAT - Illegal retry byte pointer>)
+		JRST ABTNOS]	;CALL IT FATAL
+	MOVEM T1,U.EBP(P3)	;SAVE IT
+	MOVE T1,UDBPS2(P3)	;GET # RECORDS
+	SUBI T1,1		;WHERE ERROR OCCURRED
+	TXNE T4,TB.REV		;IF IN FORWARD, WE WANT (CUR POSITION-1)
+	ADDI T1,2		;IF REVERSE, WE WANT (CUR POSITION+1)
+	MOVEM T1,U.EPOS(P3)	;WHERE WE SHOULD BE SOMEDAY
+	MOVEI T1,RTYWRT+1	;ON WRITE, THIS MANY RETRIES
+	TXNN T4,TB.WRT		;ARE WE RIGHT (WRITE)?
+	MOVE T1,[RTYCLN+1,,RTYOP+1] ;NO, THIS IS FOR READ
+	MOVEM T1,UDBERC(P3)	;THE RETRY COUNTER
+	JRST NXTBYT		;1ST TIME THRU SATERR
+
+NOT1ST:	MOVE T1,U.EBP(P3)	;GET RETRY BYTE POINTER
+	ILDB T1,T1		;LOOK AT NEXT OPERATION
+	CAIE T1,RTY.DN		;END OF RETRY
+	JRST CKBOT		;NO
+	SKIPE Q1		; Make sure we have error block pointer
+	 AOS SEBDAT+MB%FEC(Q1)	; Count this retry
+	HLLZ T1,IRBSTS(P4)	;GET IORB STATUS
+	TXNN T1,IS.DTE		;WAS THERE DATA ERR?
+	JRST RTYNOE		;NO, WE'VE RECOVERED!
+	MOVE T1,RTYBPT(T4)	;GET BYTE POINTER
+	MOVEM T1,U.EBP(P3)	;RESET IT
+	SETZM U.ETCF(P3)	;NOT DOING TAPE CLN SEQUENCE
+	HRRZ T1,UDBERC(P3)	;GET ABORT COUNTER
+	SUBI T1,1		;ANOTHER RETRY - SEE IF WE'VE LOST
+	HRRM T1,UDBERC(P3)	;SAVE IT
+	JUMPN T1,NXTBYT		;IF NOT 0, TRY AGAIN
+	TXNE T4,TB.DOP		;DATA OPERATION?
+	TXNN T4,TB.RD		;WRITE OR READ?
+	JRST ABTRTY		;NON DATA OR WRITE - WE'VE FAILED
+	HLRZ T1,UDBERC(P3)	;GET TAPE CLNR COUNTER
+	SOJE T1,ABTRTY		;RUN OUT OF RETRIES? - YES
+	HRLM T1,UDBERC(P3)	;NO, UPDATE CLN COUNTER
+	MOVX T1,RTYOP+1		;NOW RESET (RH) COUNTER
+	HRRM T1,UDBERC(P3)	;FOR NEXT CLEAN RETRY
+	MOVE T1,UDBPS2(P3)	; Get current record #
+	CAIGE T1,6		; Must have room to back up 6 records
+	 JRST NXTBYT		; Otherwise no tape clean seq can be done
+	MOVE T1,RTYBPT+1(T4)	;GET CLEANER SEQ BYTE POINTER
+	MOVEM T1,U.EBP(P3)	;SAVE FOR USE LATER
+	SETZM E.EBC(P3)		;RESET COUNT FOR USE IF WE HIT BOT
+	SETOM U.ETCF(P3)	;WE ARE DOING A CLEAN
+	JRST NXTBYT		;NOW DO NEXT OPERATION
+
+CKBOT:	SKIPN U.ETCF(P3)	;DOING TAPE CLEAN?
+	JRST NXTBYT		;NO DON'T CHECK BOT
+	HLLZ T1,IRBSTS(P4)	;GET STATUS
+	TXNE T1,IS.BOT		;OR DID WE HIT BOT?
+	SKIPA T1,[CLNREC]	;YES, FIGURE OUT HOW TO FUDGE BYTE POINTER
+	JRST NXTBYT		;NO, CONTINUE NORM RETRY
+	 LDB T3,IRYFCN		;GET ORIGINAL FN
+	MOVE T3,SATFTB(T3)	;GET FLAGS
+	TXNE T3,TB.WRT		;IS IT A WRITE?
+	JRST NXTBYT		;WRITE RETRY WON'T EVER HIT BOT SO NO FUDGE
+	TXNN T3,TB.REV		;ADD 1 IF FORWARD
+	ADDI T1,1		;DO IT ON FORWARD
+	SUB T1,E.EBC(P3)	;SUBT # RECORDS SPACED
+	LSH T1,1		;TIMES 2 (COMMENTS ASSUME CLNREC=5)
+	ADDI T1,1		;ON FORWARD, SKIP (6-CNT)*2+1 BYTES
+	CAIL T1,1		;ON REVERSE, SKIP (5-CNT)*2+1 BYTES
+	CAILE T1,^D9		;RESULT MUST BE BETWEEN 1 AND 9
+	JSP CX,CNFERR		;BAD INCR, WE ARE CONFUSED
+	ADJBP T1,U.EBP(P3)	;ADJUST POINTER
+	MOVEM T1,U.EBP(P3)	; AND PUT ADJUSTED POINTER BACK
+
+NXTBYT:	AOS E.EBC(P3)		;ANOTHER BYTE FOR THE COUNTER
+	ILDB T3,U.EBP(P3)	;GET NEXT FUNCTION
+	CAIE T3,RTY.CP		;IS IT CHECK POSITION OPERATION?
+	JRST NOTCKP		;NO
+	MOVE T1,UDBPS2(P3)	;YES, GET OUR POSITION
+	CAMN T1,U.EPOS(P3)	;ARE WE WHERE WE WANT TO BE?
+	JRST NXTBYT		;YES, ALL OK
+	JSP CX,CNFERR		;POSITION CONFUSED,SIGNAL ERROR
+	JRST ABTNOS		;BOMB OUT
+
+NOTCKP:	CAIE T3,RTY.DN		;END OF RETRY?
+	SKIPG T3		;IS FUNCTION VALID?
+	 JRST [	BUG.(CHK,SATIRF,PHYSAT,HARD,<PHYSAT - Illegal function during retry>,<<T3,FUNCTION>>)
+		JRST ABTNOS]	;IMAGINE FATAL
+	HRRM T3,UDBERR(P3)	;SAVE FUNCTION
+	HRRZ T1,CDBDSP(P1)	;GET CHANNEL DISPATCH
+	CALL CDSSIO(T1)		;START IO
+	 JRST ABTNOS		;COULDN'T START UP RETRY OPERATION
+	RET			;AND WAIT
+
+
+RTYNOE:	TXNE T1,IS.NRT		;HARD ERRS SHOULDN'T EVER GET HERE
+	 BUG.(HLT,SATNRT,PHYSAT,HARD,<SATERR - IS.NRT set on successful retry>)
+	MOVX T1,IS.ERR		;WE DID IT! CLEAR ERR BIT
+	ANDCAM T1,IRBSTS(P4)	;AND SKP RETURN
+	TXNN T4,TB.WRT		;ARE WE WRTING?
+	AOSA UDBSRE(P3)		;NO, A SOFT READ ERR
+	AOS UDBSWE(P3)		;YES, A SOFT WRITE ERR
+	JRST ABTNOS
+
+
+;HERE WHEN ERROR RECOVERY GETS CONFUSED(FLAKEY HARDWARE W I L L DO IT)
+
+CNFERR:	BUG.(CHK,SATRFU,PHYSAT,HARD,<PHYSAT - ERROR RECOVERY CONFUSED>)
+	MOVSI T1,(IS.ERR!IS.NRT) ;INDICATE RATHER HARD ERR
+	IORM T1,IRBSTS(P4)	; ...
+	JRST ABTNOS		;AND ABORT
+ABTRTY:				;WE RAN OUT OF RETRIES
+	TXNN T4,TB.WRT		;ARE WE WRTING?
+	AOSA UDBHRE(P3)		;NO, A HARD READ ERR
+	AOS UDBHWE(P3)		;YES, A HARD WRITE ERR
+ABTNOS:	AOS (P)			;SKIP RET FROM ENDLOD
+	HRRZ Q1,UDBERP(P3)	;GET ERROR BLOCK
+	SKIPN U.EBP(P3)		;DONE ANY RETRIES?
+	JRST ENDLOD		;NO, LOAD UP ERR BLK WITH END DATA
+	TXNN T4,TB.WRT		;YES, IN A WRITE?
+	JRST RDCNT		;NO
+	MOVEI T1,RTYWRT+1	;YES, CALCULATE # RETRIES DONE
+	SUBM T1,UDBERC(P3)	;RESIDUE
+	JRST ENDLOD		;NOW LOAD UP ERR BLK
+
+RDCNT:	HLRZ T1,UDBERC(P3)	;GET CLN COUNTER
+	IMULI T1,RTYOP		;CONVRT JUST TO # RETRIES
+	ADD T1,UDBERC(P3)	;ADD IN REGULAR RETRIES
+	MOVEI T2,<RTYCLN+2>*RTYOP+1 ;COUNT AT START
+	SUB T2,T1
+	HRRZM T2,UDBERC(P3)	;SAVE # RETRIES
+	JRST ENDLOD		;NOW LOAD UP ERR BLK
+
+;BEGLOD - ROUTINE TO LOAD UP THE ERROR BLOCK AT
+; THE START OF THE ERROR
+; Q1/ERROR BLOCK ADDRESS
+;	CALL BEGLOD
+; RETURN+1: ALWAYS
+
+BEGLOD:	JUMPE Q1,R		;IF NO ERROR BLOCK, PUNT
+	PUSH P,T4		; Save function word
+	MOVE T1,Q1		;COPY ERROR BLOCK
+	MOVE T2,[-NITAB,,ITAB]	;POINTER TO INFORMATION TABLE
+	CALL SEBCPY		;COPY INFORMATION
+	 JFCL
+	MOVS T1,UDBPS1(P3)	;GET FILE 
+	HRR T1,UDBPS2(P3)	;AND RECORD (JUST AFTER ERROR)
+	MOVEM T1,SEBDAT+MB%LOC(Q1) ;AND SAVE AS LOCATION OF ERROR
+	LOAD T1,U%DVADR		; Get device address
+	MOVEM T1,SEBDAT+SM%DVA(Q1) ; Save for SYSERR
+	POP P,T4		; Restore function word
+	RET
+
+
+;ENDLOD - ROUTINE TO LOAD UP THE ERROR BLOCK AT
+; THE END OF THE ERROR
+; Q1/ERROR BLOCK ADDRESS IF ANY
+;	CALL ENDLOD
+; RETURN+1: ALWAYS
+
+ENDLOD:	SETZM U.EBP(P3)		;ZERO, SO IF ERROR WITH IS.NRT
+				; SET ERROR DATA IS LOGGED AS
+				; BEGINNING DATA IN ERROR BLOCK
+	SETZM U.ETIE(P3)	;MAKE SURE TIE FLAG CLEAR
+	RET			; No status is stored at end of error recovery
+	SUBTTL Miscellaneous tables
+REPEAT 0,<			;#500 no longer used
+;Translation table from logical unit number to physical device address
+
+MTPHY:	.IDMTA+0		; Logical 0
+	.IDMTA+1		; Logical 1
+	.IDMTA+2		; Logical 2
+	-1			; Logical 3 is illegal
+	-1			; Logical 4 is illegal
+	-1			; Logical 5 is illegal
+	-1			; Logical 6 is illegal
+	-1			; Logical 7 is illegal
+;;IFL <.-MTPHY>-MTAN,<PRINTX MTAN & MTPHY are inconsistent>
+>				;#500 end of repeat 0
+
+;EACH ENTRY MUST BE NON-0
+
+;1B0				;ILLEGAL FUNCTION
+	TB.WRT==1B1		;THIS FUNCTION WRITES ON TAPE
+	TB.REV==1B2		;THIS OPERATION MOVES TAPEIN REVERSE DIRECTION
+	TB.DOP==1B3		;THIS IS A DATA OPERATION
+	TB.SPC==1B4		;THIS IS A SPACE OPERATION
+	TB.RD==1B5		;THIS IS A READ
+	TB.ERA==1B6		;ERASE OPERATION
+	TB.TM==1B7		;WRITE TAPE MARK
+	TB.NFC==1B8		;DON'T LOAD FRM COUNT WHEN DOING OPERATION
+	TB.REW==1B9		;OPERATION IS A REWIND
+	TB.WRD==1B10		;THIS FUNCTION WRITES DATA ON TAPE
+	TB.UNL==1B11		;UNLOAD COMMAND
+
+;BITS 15,16,17 CONTAIN AN INDEX TO RTYBPT TO TELL US HOW
+;TO RETRY AN OPERATION (0 IF NO RETRY)
+
+;BITS 30-35 HAS MAJOR FUNCTION CODE (IBM codes)
+
+SATFTB:	1B0					;0- ILLEGAL
+	<TB.DOP!TB.RD>!2B17!.ICRDT		;1- READ FORWARD (IRFRED)
+	1B0					;2- ILL (RD FMT)
+	<TB.WRT!TB.WRD!TB.DOP>!1B17!.ICWRT	;3- WRITE FORWARD (IRFWRT)
+	1B0					;4- ILL (WRT FMT)
+	TB.SPC!.ICSKF				;5- Skip foward file ;#500 .
+	TB.SPC!.ICSKB				;6- SKIP FORWARD(BLOCK)
+	<TB.REV!TB.SPC>!.ICBSB			;7- SKIP REVERSE(BLOCK)
+	<TB.WRT!TB.TM>!6B17!.ICWEF		;10- WRITE TAPE MARK (EOF)
+	<TB.WRT!TB.ERA>!.ICERG			;11- ERASE GAP
+	<TB.NFC!TB.REW>!.ICREW			;12- REWIND
+	<TB.NFC!TB.UNL>!.ICRUN			;13- REWIND and UNLOAD
+	<TB.REV!TB.DOP!TB.RD>!4B17!.ICRDR	;14- READ REVERSE
+	1B0					;15- ILL (RECOVERY RD)
+	1B0					;16- ILL ;#500 .
+	1B0					;17- ILL ;#500 .
+
+; Convert software mode to mode bits in DCW for SA-10
+; -1 = Illegal mode (not supported)
+
+MODSAT:	-1			;(0) Default mode is illegal (not possible)
+	FLD(.SCCDM,SC%CCF)	;(1) Core dump (Tape compatibility mode)
+	-1			;(2) Sixbit is illegal
+	-1			;(3) ANSI ASCII is illegal
+	FLD(.SCICM,SC%CCF)	;(4) Industry compatible (Byte mode)
+	FLD(.SCHDM,SC%CCF)	;(5) High density (Natural mode)
+	FLD(.SCWDM,SC%CCF)	;(6) Word mode (The infamous PETIT mode!)
+
+
+; Table of items to copy into error block
+
+ITAB:	SEBPTR 0,SBTEVC,SEC%SM		; Block type (SA10 magtape error)
+	SEBPTR MB%CNI,SBTWD,CDBCNI(P1)	; Initial CONI
+	SEBPTR SM%ES1,SBTWD,U.ETIE(P3)	; Status word 1 (Base+1)
+	SEBPTR SM%ES2,SBTWD,U.ETCF(P3)	; Status word 2 (Base+2)
+	SEBPTR SM%SEN+0,SBTWD,MTASEN+0	; Sense bytes (24 bytes = 6 words)
+	SEBPTR SM%SEN+1,SBTWD,MTASEN+1
+	SEBPTR SM%SEN+2,SBTWD,MTASEN+2
+	SEBPTR SM%SEN+3,SBTWD,MTASEN+3
+	SEBPTR SM%SEN+4,SBTWD,MTASEN+4
+	SEBPTR SM%SEN+5,SBTWD,MTASEN+5
+
+NITAB==.-ITAB
+
+;RETRY TABLES TO TELL HOW TO RETRY
+
+RTYBPT:	0			;ILLEGAL RETRY
+	POINT 4,TBRWRT		;WRITE RETRY
+	POINT 4,TBRRF		;READ FORWARD RETRY
+	POINT 4,TBRRFC		;READ FORWARD TAPE CLEAN
+	POINT 4,TBRRR		;READ REVERSE RETRY
+	POINT 4,TBRRRC		;READ REVERSE TAPE CLEAN
+	POINT 4,TBRWTM		;WRITE TAPE MARK
+	0			;ILLEGAL
+
+;THE FOLLOWING MACROS HELP ME GET AROUND SOME SHORTCOMINGS IN MACRO:
+;NOTE: THE MACRO'S MUST BE FIXED IN THE UNLIKELY EVENT THAT
+;SOMEBODY WANTS TO CHANGE TO A BYTE SIZE WHICH DOESN'T GO
+;EVENLY INTO 36(10). RIGHT NOW IT'S 4.
+
+	DEFINE FOO (XXA) <
+		WD==0
+		BYC==0
+		ZZ==0		;FLIP-FLOP
+	IRP XXA,<
+	IFE ZZ,<RP==XXA>
+	IFN ZZ,<FOO1 RP,XXA>
+	ZZ==ZZ+1
+	IFE ZZ-2,<ZZ==0>>
+	IFN BYC,<EXP WD>>
+
+	DEFINE FOO1 (A1,A2) <
+	REPEAT A1,<
+		WD==WD+<A2>B<4*BYC+3>
+		BYC==BYC+1
+	IFGE BYC-^D9, <
+			EXP WD
+			WD==0
+			BYC==0>>>
+
+TBRWRT:	BYTE (4) IRFBSB,IRFERG,RTY.CP,IRFWRT,RTY.DN
+;WRITE RETRY - SPACE REVERSE, ERASE, CHECK POSITION, WRITE
+
+TBRWTM:	BYTE (4) IRFBSB,IRFERG,RTY.CP,IRFWTM,RTY.DN
+;WRITE TM RETRY - SPACE REVERSE, ERASE, CHECK POS, WTM, EOR
+
+TBRRF:	BYTE (4) IRFBSB,RTY.CP,IRFRED,RTY.DN
+;READ FORWARD RETRY - SPACE REVERSE, CHECK POSITION, READ FORWARD
+
+TBRRR:	BYTE (4) IRFFSB,RTY.CP,IRFRDR,RTY.DN
+;READ REVERSE RETRY - SPACE FORWARD, CHECK POSITION, READ REVERSE
+
+TBRRFC:	FOO<CLNREC+1,IRFBSB, CLNREC,IRFFSB, 1,RTY.CP, 1,IRFRED, 1,RTY.DN>
+;RD FORWARD TAPE CLEAN: 6 SP REVERSE, 5 SP FORWARD, CHECK POSITION, RD FORWARD
+
+TBRRRC:	FOO<CLNREC,IRFBSB, CLNREC+1,IRFFSB, 1,RTY.CP, 1,IRFRDR, 1,RTY.DN>
+;RD REVERSE TAPE CLEAN: 5 SP REVERSE, 6 SP FORWARD, CHECK POSITION, RD REVERSE
+
+
+	TNXEND
+	END

@@ -1,0 +1,118 @@
+;-*-Midas-*-
+
+	Title @MCONNECT - Ask $MICOMS for Micom connect report
+
+.DECSAV
+
+ A=5
+ B=6
+ C=7
+ T=10
+TT=11
+ P=17
+
+PDLen==20
+DatSiz==36	;Length of conversation (ha)
+HBufLn==100
+
+.INSRT MID:SYMBOLS
+.INSRT MID:MACROS
+
+PDL:	-PDLen,,.
+	Block PDLen
+
+Debugp:	0
+
+Pack1:	IP%CPD
+MyPID:	0
+	0		;To INFO
+	4,,SndArg
+PakLen==.-Pack1
+
+Pack2:	0
+	0
+HisPID:	0
+	4,,SndArg
+
+SndArg:	.IPCIW
+	0
+	Asciz "MICOMS"
+
+Pack3:	0
+	0		;From Us
+	0		;To Him
+	1,,0		;RH filled in at runtime
+
+Pack4:	IP%CFV
+	0		;From Him
+	0		;To Us
+	1000,,AnsPag
+
+HLPJFN:	0
+HlpBuf:	Block HBufLn
+	0
+
+.INSRT MID:PRARG
+
+V%MAJOR==1
+V%MINOR==1
+V%EDIT==.FVERS
+V%WHO==4
+
+Evec:	Jrst Begin
+	Jrst Begin
+	Version V%WHO,V%MAJOR,V%MINOR,V%EDIT
+	Jrst Debug
+EvecLn==.-Evec
+
+Debug:	Setom Debugp
+	Skipa
+Begin:	  Setzm Debugp
+	RESET%
+	Move P,PDL
+
+GetPID:	Movei 1,PakLen
+	Movei 2,Pack1
+	MSEND%
+	  .Lose
+	Move 1,MyPID
+	Movem 1,Pack2+.IPCFR	;To me from INFO
+	Movem 1,Pack3+.IPCFS	;To MICOMS
+	Movem 1,Pack4+.IPCFR	;From MICOMS
+
+	Movei 1,PakLen
+	Movei 2,Pack2
+	MRECV%
+	  .Lose
+
+	Ldb T,[.BP IP%CFE,Pack2+.IPCFL]
+	Jumpn T,[TypeCR "?The MICOM status gatherer isn't running"
+		 .Logout]
+	Move 1,SndArg+.IPCI1
+	Movem 1,HisPID
+	Movem 1,Pack3+.IPCFR
+
+Status:	Skipn Debugp
+	  Skipa 1,[[Sixbit "STATUS"]]
+	    Movei 1,[Sixbit "DEBUG"]
+	Hrrm 1,Pack3+.IPCFP
+	Movei 1,PakLen
+	Movei 2,Pack3
+	MSEND%
+	  .Lose
+	Movei 1,PakLen
+	Movei 2,Pack4
+	MRECV%
+	  .Lose
+	AType Answer
+
+Die:	.Logout
+	Jrst Die
+
+Variables
+Constants
+
+AnsPag==<./1000>+1
+Answer=AnsPag*1000
+
+	End EvecLn,,Evec

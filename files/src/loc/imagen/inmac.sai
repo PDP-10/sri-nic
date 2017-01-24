@@ -1,0 +1,148 @@
+!	Inmac: global and external variables;
+
+
+!  This set of macros and routines are used to handle input page mapping;
+
+
+integer     	         inPtr, ! Input file byte pointer;
+        	     InByteCnt, ! Input byte count;
+   		NextInFilePage; ! Pointer to next available page in input
+				   file buffer area;
+
+! The following two arrays implement the page-mapping algorithim for file
+  input.  They are actually local to this module, but are declared external
+  here due to a problem with SAIL's allocation of static arrays;
+
+define Emptymark = -1,
+	  NAmark = -1;
+
+External integer Injfn;			   ! Input file JFN;
+
+
+External safa integer array 
+	InFlPgTbl[0:MAXINSIZE]; 	   ! Table enty x gives the prcess 
+					     page (if any) to which file 
+					     page x is mapped.  If not 
+					     mapped entry is NAmark;
+
+External safa integer array 
+	InAreaTbl[FirstInPage:LastInPage]; ! Table entry x is the input file
+					     page (if any) which is mapped 
+					     to process page x.  If page is
+					     unused entry is Emptymark;
+
+External simp procedure 
+	InMap(integer jfn, filepage, procpage, number);
+					   ! Handles PMAPing of read only
+					     files;
+!	InitIn, GoToByte, InFileByte;
+
+
+!	I N I T I A L I Z E   I N P U T
+!
+! **********************************************************************
+! Initializes input table;
+! **********************************************************************;
+simp procedure InitIn;
+	begin "-- init input tables --"
+	arrclr(InFlPgTbl,NAmark); arrclr(InAreaTbl,Emptymark);
+	NextInFilePage_FirstInPage 
+	end   "-- init input tables --";
+
+
+!	G O   T O   B Y T E
+!
+! **********************************************************************
+! 	This routine accepts as an argument a pointer into the input file,
+! does any necessary paging, and sets InPtr and InByteCnt to point to the
+! desired byte.
+! **********************************************************************;
+simp procedure GoToByte(integer target); if target0 then
+	begin "-- go to byte --"
+	integer byte, word, page;
+
+	page_(target div InBpR); ! Figure out which file page is desired;
+	if InFlPgTbl[page] = NAmark then
+		begin "-- get page --"
+		if InAreaTbl[NextInFilePage]Emptymark then 
+			InFlPgTbl[InAreaTbl[NextInFilePage]]_NAmark;
+		InMap(Injfn,page,NextInFilePage,1);
+		InFlPgTbl[page]_NextInFilePage;
+		InAreaTbl[NextInFilePage]_page;
+		If NextInFilePage = LastInPage then NextInFilePage_FirstInPage
+		else NextInFilePage_NextInFilePage+1
+		end   "-- get page --";
+
+	word_(target div InBpW) + (InFlPgTbl[page] - page)*512; 
+	byte_target mod InBpW;		! which byte in the word;
+	printi5(<nl,"GoToByte ",target," = word: ",cvos(word),
+							", byte: ",byte>)
+
+	InPtr_point(InBpB,memory[word],byte*InBpB-1);
+	InByteCnt_target
+	end   "-- go to byte --";
+
+
+!	I N F I L E B Y T E
+!
+! **********************************************************************
+! Get one byte from the input file.
+! **********************************************************************;
+simp integer procedure InFileByte;
+	begin "-- input byte --"
+	integer b;
+
+	printi9(<nl,"InFIleByte, InPtr = ",cvos(InPtr),", InByteCnt =
+							   ",InByteCnt>)
+	b_ildb(InPtr); InByteCnt_InByteCnt+1;
+	if (InByteCnt mod InBpR) = 0 then gotobyte(InByteCnt);  
+	printi9(<"",", value = ",b>)
+    	return(b)
+	end   "-- input byte --";
+
+
+!	L O O K N E X T B Y T E
+!
+! **********************************************************************
+! Gets one byte from the input file without advancing the byte pointer
+! **********************************************************************;
+simp integer procedure LookNextByte;
+	begin "-- input byte --"
+	integer b,pointer;
+
+	printi9(<nl,"LookNextByte, InPtr = ",cvos(InPtr),", InByteCnt =
+							   ",InByteCnt>)
+	pointer_InPtr;
+	b_ildb(pointer);
+	printi9(<"",", value = ",b>)
+    	return(b)
+	end   "-- input byte --";
+
+!	InFileTwoBytes, InFileThreeBytes, InFileFourBytes, InFileFiveBytes;
+
+
+define twoshift = {(36-2*InBpB)},
+     threeshift = {(36-3*InBpB)},
+      fourshift = {(36-4*InBpB)},
+      fiveshift = {(36-5*InBpB)};
+
+! ***** I N F I L E T W O B Y T E S ********;
+define InFileTwoBytes = 
+   {((((InFileByte lsh InBpB) lor InFileByte) lsh twoshift) ash -twoshift)};
+
+! ***** I N F I L E T H R E E B Y T E S ****;
+define InFileThreeBytes = 
+   {((((((InFileByte lsh InBpB) lor InFileByte) lsh InBpB) lor InFileByte)
+					  lsh threeshift) ash -threeshift)};
+
+! ***** I N F I L E F O U R B Y T E S  *****;
+define InFileFourBytes = 
+   {((((((((InFileByte lsh InBpB) lor InFileByte) lsh InBpB) lor InFileByte) 
+		  lsh InBpB) lor InFileByte) lsh fourshift) ash -fourshift)};
+
+! ***** I N F I L E F I V E B Y T E S  *****;
+define InFileFiveBytes =
+   {((((((((((InFileByte lsh InBpB) lor InFileByte) lsh InBpB) 
+      lor InFileByte) lsh InBpB) lor InFileByte) lsh InBpB) lor InFileByte)
+					     lsh fiveshift) ash -fiveshift)};
+

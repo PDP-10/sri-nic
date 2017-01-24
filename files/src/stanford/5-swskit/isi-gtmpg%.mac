@@ -1,0 +1,42 @@
+;#240 JSYS to get (release) monitor page to (from) user address space
+;#240 
+;#240 Accepts in T1/ <SPT index>  or  <SPT index,,page>  or  <0>
+;#240            T2/ address in user space
+;#240
+;#240 Returns:
+;#240	+1 on error
+;#240	   T1/ error code
+;#240	+2 on success
+;#240
+;#240	Requirres Wheel or Operator capability
+
+.GTMPG::MCENT			;#240 
+	MOVE	T3,CAPMSK	;#240 Get capabilities
+	TXNN	T3,SC%WHL!SC%OPR ;#240 Need not be enabled
+	 RETERR	(CAPX1)		;#240 
+	TRNE	T2,777		;#240 User address on page boundry ?
+	 RETERR	(GTMX01)	;#240 No, must be
+	JUMPE	T1,GTMOK	;#240 No more checks on map out
+	MOVE	T3,T1		;#240 Copy first argument
+	TLNE	T1,-1		;#240 Is it <SPT index,,page> ?
+	 JRST	[		;#240 Yes,
+		 HLRZS	T3	;#240 move SPT index to RH of T3
+		 TRNE	T1,777000 ;#240 Check for legal page #
+		  JRST	GTMUU	;#240 return index error
+		 JRST	.+1 ]	;#240 OK, rejoin the flow
+	CAIGE	T3,NOFN		;#240 Is it an OFN ?
+	 JRST	[ SKIPE T4,SPT(T3) ;#240 Yes, check for existance
+		  CAMN	T4,[ -1 ] ;#240 0 or -1 means it doesn't
+		   JRST	GTMUU	;#240 Return index error
+		  JRST	GTMOK ]	;#240 OK, go map it
+	OPSTR	<SKIPN>,SPTSHC,(T3) ;#240 Check for non-zero share count
+				;#240 This protects against pages in transition
+	 JRST	GTMUU		;#240 No good, index error
+	CAIGE	T3,SSPT		;#240 Final check; In range ?
+	JRST	GTMOK		;#240 Yes, go map it
+
+GTMUU:	RETERR	(GTMX02)	;#240 General index error
+
+GTMOK:	HRLI	T2,(PM%RD+TWUSR);#240 Read only / User space
+	CALL	SETMPG		;#240 Map the page in/out
+	SMRETN			;#240 Skip return for success

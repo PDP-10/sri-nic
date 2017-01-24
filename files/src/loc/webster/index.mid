@@ -1,0 +1,541 @@
+;-*-Midas-*-
+
+	Title @INDEX - Make W7 index
+
+.DECSAV
+
+A=5
+T=10
+TT=11
+T3=12
+L=13
+S=14
+R=15
+F=16
+P=17
+
+PDLen==100
+MaxSiz==40.			;Assume DICTION files are smaller than this
+MaxFil==250.			;Max # of DICTION file's we're expecting
+MaxFun==100.			;Funny-character table
+nDots==6.			;# of ". " thingies...
+
+.SPACE==40
+.COMMA==",
+
+.INSRT LIB:SYMBOLS
+.INSRT LIB:MACROS
+.INSRT W7:5TABLE
+
+Define GETCHR ac
+	Ildb ac,FileBP
+	Aos FilPtr
+Termin
+
+PDList:	-PDLen,,.
+	Block PDLen
+
+InJFN:	0			;JFN on W7:*.DICTION.0 (i)
+OutJFN:	0			;JFN on W7:INDEX.BIN (o)
+
+Time1:	0
+Time2:	0
+
+zbeg::
+nFiles:	0			;# of files in InJFN sequence
+nEntry:	0			;# of entries in all files
+nVars:	0			;# variants
+nRunOn:	0			;# run-ons
+nBytes:	0			;Total # bytes in all files
+nFunny:	0
+	0			;FilEnt-1 must be here and be 0
+FilEnt:	Block MaxFil		;# entries/file
+zend::
+
+Funnys:	Block MaxFun
+FunNum:	Block MaxFun
+FunPtr:	Block MaxFun
+
+nPages:	0
+
+FileBP:	0			;BP into mapped in DICTION file
+FilPtr:	0			;Byte-offset (disk pointer) within file
+FilNam:	Block 40./5		;Space for name of file.
+
+EntFP:	0
+EntBP:	0
+
+BufPtr:	0
+OldLen:	0
+Alphap:	0
+
+	440500,,Word1
+NewBP:	440500,,Word2
+
+	440500,,Word2
+OldBP:	440500,,Word1
+
+Word1:	Block 20
+Word2:	Block 20
+
+BinFil:	Asciz "W7:INDEX.BIN"
+DicFil:	Asciz "W7:*.DICTION.0"
+
+CRLF:	Asciz "
+"
+
+.INSRT LIB:PRARG
+.INSRT LIB:STCMP
+.INSRT LIB:SOUT
+
+Begin:	RESET
+	Move P,PDList
+	Call GetOut		;Get handle on new INDEX.BIN file
+	Call Init		;Get DICTION.* and zero critical memory
+	Type "
+ #   File Name    Entries     Bytes   Bytes/Entry    Time    Entry/s  Bytes/s
+---  ----------  ---------  --------- -----------  --------  -------  --------
+"
+	TIME
+	Movem 1,Time1		;Initial starting time
+
+Loop:	Aos 2,nFiles		;Increment # found files count
+	Movei 1,.PRIOU
+	Move 3,[Field(3,NO%COL)+NO%LFL+NO%OOV+10.]
+	NOUT
+	  Nop
+	Type "  "
+	Hrroi 1,FilNam
+	Hrrz 2,InJFN
+	Movsi 3,001000		;name only
+	JFNS
+	Move T,[440700,,FilNam]
+	Setz TT,
+	Ildb 1,T
+	Skipe 1
+	  Aoja TT,.-2
+	AType FilNam
+	Subi TT,10.
+	Movei 1,40
+	PBOUT
+	Aojl TT,.-1
+	TIME
+	Movem 1,Time2		;Starting time before Gobble
+	Call Gobble
+	TIME
+	Sub 1,Time2		;delta-Time of Goddle
+	FLTR 1,1		;floating-point ms
+	FDVR 1,[1000.0]		;f-p seconds
+	Movem 1,Time2		;re-save over old time
+	Move T,nFiles
+	Movei 1,.PRIOU
+	Move 2,FilEnt-1(T)
+	Sub 2,FilEnt-2(T)
+	Move 3,[Field(10.,NO%COL)+NO%LFL+NO%OOV+10.]
+	NOUT
+	  Nop
+	Move T,2
+	Sos 2,FilPtr
+	Addm 2,nBytes
+	Move 3,[Field(11.,NO%COL)+NO%LFL+NO%OOV+10.]
+	NOUT
+	  Nop
+	IDivi 2,(T)
+	Move 3,[Field(9,NO%COL)+NO%LFL+NO%OOV+10.]
+	NOUT
+	  Nop
+	Move 2,Time2
+	Move 3,[FL%ONE+FL%PNT+Field(10.,FL%FST)+Field(2,FL%SND)]
+	FLOUT
+	  Nop
+	FLTR 2,T		;# of entries
+	FDVR 2,Time2		;entries/second
+	Move 3,[FL%ONE+FL%PNT+Field(7,FL%FST)+Field(1,FL%SND)]
+	FLOUT
+	  Nop
+	FLTR 2,FilPtr
+	FDVR 2,Time2		;bytes/second
+	Move 3,[FL%ONE+FL%PNT+Field(9,FL%FST)+Field(1,FL%SND)]
+	FLOUT
+	  Nop
+	AType CRLF
+
+Next:	Move 1,InJFN
+	GNJFN
+	  Skipa
+	    Jrst Loop
+	TIME
+	Sub 1,Time1		;Total elapsed time
+	FLTR 1,1		;to f-p
+	FDVR 1,[1000.0]		;to f-p seconds
+	Movem 1,Time1
+	TypeCR "                 ---------  --------- -----------  --------  -------  --------"
+	Movei 1,.PRIOU
+	Move 2,nEntry
+	Move 3,[Field(25.,NO%COL)+NO%LFL+10.]
+	NOUT
+	  Nop
+	Move 2,nBytes
+	Move 3,[Field(11.,NO%COL)+NO%LFL+10.]
+	NOUT
+	  Nop
+	IDiv 2,nEntry
+	Move 3,[Field(9.,NO%COL)+NO%LFL+10.]
+	NOUT
+	  Nop
+	Move 2,Time1
+	Move 3,[FL%ONE+Field(10.,FL%FST)+Field(2,FL%SND)]
+	FLOUT
+	  Nop
+	FLTR 2,nEntry
+	FDVR 2,Time1
+	Move 3,[FL%ONE+FL%PNT+Field(7,FL%FST)+Field(1,FL%SND)]
+	FLOUT
+	  Nop
+	FLTR 2,nBytes
+	FDVR 2,Time1
+	Move 3,[FL%ONE+FL%PNT+Field(9.,FL%FST)+Field(1,FL%SND)]
+	FLOUT
+	  Nop
+	Type "
+
+Number of Variants: "
+	Movei 1,.PRIOU
+	Move 2,nVars
+	Movei 3,10.
+	NOUT
+	  Nop
+	Type "
+Number of Run-Ons: "
+	Movei 1,.PRIOU
+	Move 2,nRunOn
+	NOUT
+	  Nop
+	Skiple nFunny		;Any funny characters?
+	  Call OutFun
+	Call MakIdx		;Write out the new index file
+Die:	.Logout
+	Jrst Die
+
+QBarf:	CType "?
+	Call Terpri
+BarfCR:	Call Barf
+	AType CRLF
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Various/Sundry initialization things
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Init:	Movx 1,GJ%SHT\GJ%OLD\GJ%IFG
+	Hrroi 2,DicFil
+	GTJFN
+	  Jrst [Type "?Can't get JFN for "
+		AType DicFil
+		Type " -- "
+		Call BarfCR
+		Jrst Die]
+	Movem 1,InJFN
+	Setzm zbeg
+	Move 1,[zbeg,,zbeg+1]
+	BLT 1,zend-1
+	Movei S,StrAdr
+	Movei F,FunAdr
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Write out a new INDEX.BIN file.  If this is a partial new
+;;	version, then merge the data from the new DICTION files with
+;;	the index tables from the old INDEX.BIN
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+MakIdx:	Move 1,OutJFN
+	Hrr 2,nEntry
+	Hrl 2,nFiles
+	BOUT
+	Move 2,[444400,,FilEnt-1]
+	Movn 3,nFiles
+	Subi 3,1
+	SOUT
+	Movs T,nEntry
+	Movns T
+Loop2a:	Move 1,OutJFN
+	Movs 2,PtrAdr(T)
+	Subi 2,StrAdr-2
+	Add 2,nEntry
+	Add 2,nFiles
+	Movsm 2,PtrAdr(T)
+	Aobjn T,Loop2a
+	Move 2,[444400,,PtrAdr]
+	Movn 3,nEntry
+	SOUT
+	Move 2,[444400,,StrAdr]
+	Movei 3,StrAdr
+	Sub 3,S
+	SOUT
+	Move 1,OutJFN
+	CLOSF
+	  .Lose
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Output the funny-character table
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+OutFun:	Type "[Funny character table:]
+
+Character   #    Words . . .
+--------   ---   --------------------
+"
+	Movs T,nFunny		;#,,0
+	Movns T			;-#,,0
+OutFu0:	Type "   "
+	Move 1,Funnys(T)
+	Caige 1,40
+	  Jrst [Move 2,1
+		CType "^
+		Movei 1,100(2)
+		PBOUT
+		Jrst OutFu1]
+	Cain 1,177
+	  Jrst [CType "^
+		CType "?
+		Jrst OutFu1]
+	PBOUT
+	CType 40
+OutFu1:	Movei 1,.PRIOU
+	Move 2,FunNum(T)
+	Move 3,[Field(8,NO%COL)+NO%LFL+10.]
+	NOUT
+	  Nop
+	Type "    "
+	Move TT,FunPtr(T)
+OutFu2:	CType ""
+	Hlro 1,(TT)
+	PSOUT
+	CType ""
+	Hrrz TT,(TT)
+	Jumpn TT,[Type ", "
+		  Jrst OutFu2]
+	AType CRLF
+	Aobjn T,OutFu0
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Get a handle on a new output index file named INDEX.BIN
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+GetOut:	Movem 1,InJFN
+	Movx 1,GJ%SHT\GJ%FOU
+	Hrroi 2,BinFil
+	GTJFN
+	  .Lose
+	Movem 1,OutJFN
+	Move 2,[Field(36.,OF%BSZ)+OF%WR]
+	OPENF
+	  .Lose
+	Type "[Output file is "
+	Movei 1,.PRIOU
+	Move 2,OutJFN
+	Movx 3,JS%SPC
+	JFNS
+	TypeCR "]"
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Suck in the current DICTION file and parse it up
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Gobble:	Hrrz 1,InJFN
+	Move 2,[Field(36.,OF%BSZ)+OF%RD]
+	OPENF
+	  .Lose
+	SIZEF			;Get the size of this file
+	  .Lose
+	Caile 3,MaxSiz
+	  Jrst [Type "?File is bigger than max size expected ("
+		Movei 1,.PRIOU
+		Move 2,3
+		Movei 3,10.
+		NOUT
+		  Nop
+		TypeCR ")"
+		Jrst Die]
+	Movem 3,nPages		;# of pages
+	Hrlz 1,InJFN		;JFN,,page 0 of file
+	Move 2,[.FHSLF,,EOMpag]
+	Move 3,nPages
+	Txo 3,PM%CNT\PM%RD
+	PMAP			;Map in the file.
+	  .Lose
+	Move T,[440700,,EOM]
+	Movem T,FileBP
+	Setom FilPtr		;FilPtr within file.
+
+Find:	GetChr A		;Entries start with "F:"
+	Cain A,"R
+	  Jrst [Aos nRunOn
+		Jrst Loop1]
+	Cain A,"V
+	  Jrst [Aos nVars
+		Jrst Loop1]
+	Caie A,"F
+	  Jrst Loop1
+	GetChr A
+	Caie A,":
+	  Jrst Loop1
+	Move T,FileBP
+	Movem T,EntBP
+	Move T,FilPtr
+	Movem T,EntFP
+	Setcmm BufPtr
+	Move T,BufPtr
+	Move TT,NewBP(T)
+	Setzb T3,Alphap		;# of characters in new word
+
+Loop0:	GetChr 2
+	Cain 2,";
+	  Jrst Loopz
+IRP low,,["a,"A,"0]high,,["z,"Z,"9]crunch,,[%A,%A,%ZERO]
+	Cail 2,low
+	  Caile 2,high
+	    Skipa
+	   Jrst [Movei 2,-low+crunch(2)
+		 Setom Alphap
+		 Jrst Loop0a]
+TERMIN
+	Cain 2,"-
+	  Jrst [Movei 2,%DASH1
+		Skipn Alphap
+		  Movei 2,%DASH2
+		Jrst Loop0a]
+IRP char,,["',40,54,".,"/,"`]crunch,,[%APOS,%SPACE,%COMMA,%PERIOD,%SLASH,%GRAVE]
+	Cain 2,char
+	  Jrst [Movei 2,crunch
+		Jrst Loop0a]
+TERMIN
+	Call FunChr		;Save funny character for statistics.
+	Jrst Loop0
+
+Loop0a:	Cail 2,%EXTEND		;Extended character?
+	  Jrst [Movei 3,%META
+		Idpb 3,TT	;Yes, so meta prefix
+		Jrst .+1]	;%EXTEND bit will be stripped off by depositing
+	Idpb 2,TT
+	Aoja T3,Loop0
+
+Loopz:	Setz 2,
+	Idpb 2,TT
+Loop0e:	Came T3,OldLen		;Same last as last word?
+	  Jrst [Movem T3,OldLen	;  No, so can't be the same.
+		Jrst Loop0f]
+	Move 1,NewBP(T)
+	Move 2,OldBP(T)
+	$STCMP
+	Jumpe 1,Loop1		;Same word as before, so ignore it.
+Loop0f:	Aos R,nEntry		;New word, so count it
+	Hrlm S,PtrAdr-1(R)	;save pointer to word in LH
+	Move 2,EntFP
+	Sos 2
+	Hrrm 2,PtrAdr-1(R)	;and offset to start of entry in RH
+	Hrrz 1,S		;then copy the word to a permanent place
+	Hrli 1,440500
+	Move 2,NewBP(T)
+	Setz 3,
+	$SOUT
+	Idpb 3,1
+	Movei S,1(1)		;and adjust S to point to next available spot
+
+Loop1:	GetChr A		;Skip ahead to end of line.
+	Jumpe A,Loop2		;If run out, must be end of file.
+	Caie A,^J
+	  Jrst Loop1
+	Jrst Find
+
+Loop2:	Seto 1,			;so unmap the file
+	Move 2,[.FHSLF,,EOMpag]
+	Move 3,nPages
+	Txo 3,PM%CNT
+	PMAP			;Unmap the pages.
+	  .Lose
+	Hrrz 1,InJFN		;Close, but do not release JFN
+	Txo 1,CO%NRJ
+	CLOSF
+	  .Lose
+	Move T,nFiles		;and save the # of entries in this file
+	Move TT,nEntry
+	Movem TT,FilEnt-1(T)
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Here to handle a funny character found in a main entry's
+;;	name.  Build them into a table with counts so we can report
+;;	later about wot's the, uh, deal.  The character is in AC2
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+FunChr:	Push P,2		;Save funny character here
+	Move 1,F
+	Hrli 1,440700
+	Move 2,EntBP
+	Movei 3,80.
+	Movei 4,";
+	$SOUT			;Copy the funny-word.
+	Setz 3,
+	Dpb 3,1			;clobber the ";"
+	Pop P,2
+	Movei T,1(1)		;Next S
+	Skipg 1,nFunny		;Any funny characters stored yet?
+	  Jrst FunCh1		;  No, so make a new entry
+	Movss 1			;#,,0
+	Movns 1			;-#,,0
+FunCh0:	Camn 2,Funnys(1)	;Same as saved one?
+	  Jrst OldFun
+	Aobjn 1,FunCh0		;No, keep checking
+
+FunCh1:	Aos 1,nFunny		;Kick up the # funny-character count
+	Caile 1,MaxFun		;Still viable?
+	  Jrst [Sos nFunny	;  Nope, so back off that count
+		Return]		;  and punt
+	Movem 2,Funnys-1(1)	;Save the new character
+	Movei 3,1
+	Movem 3,FunNum-1(1)	;And initialize the count to 1
+	Movem T,FunPtr-1(1)	;and initialize the head of the list.
+UpdLnk:	Hrlzm F,(T)		;Head of list
+	Movei F,1(T)
+	Return			;and done.
+
+OldFun:	Move 3,FunPtr(1)	;Head of chain
+OldFu0:	Hrrz 2,(3)		;Get next word pointer
+	Jumpn 2,[Move 3,2
+		 Jrst OldFu0]
+	Hrrm T,(3)
+	Jrst UpdLnk
+
+Variables
+Constants
+
+EOMpag==<./1000>+1
+EOM=EOMpag*1000
+
+FunPag==EOMpag+MaxSiz+1
+FunAdr=FunPag*1000
+
+PtrPag==FunPag+1
+PtrAdr=PtrPag*1000
+
+StrPag==PtrPag+150.
+StrAdr=StrPag*1000
+
+	End Begin

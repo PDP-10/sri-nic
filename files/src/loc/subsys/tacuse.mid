@@ -1,0 +1,410 @@
+;-*-Midas-*-
+
+	Title @TACUSE - Print TACnews use statistics
+
+.DECSAV
+
+ A=5
+ B=6
+ C=7
+ T=10
+TT=11
+ E=12
+ P=17
+
+PDLen==100
+MaxSet==100
+BufLen==100
+
+.INSRT LIB:SYMBOLS
+.INSRT LIB:MACROS
+
+Define ASK &string
+	Hrroi T,[Asciz string]
+	Call AskQ
+Termin
+
+PDList:	-PDLen,,.
+	Block PDLen
+
+InBuf:	Block BufLen
+SetBuf:	Block BufLen
+
+ToFile:	0
+OutJFN:	.PRIOU
+
+BufBP:	0
+EOL:	0
+Ignore:	0
+
+FirstZ==.
+StartT:	0
+EndT:	0
+Number:	0
+nLines:	0
+CTime:	0			;Total connect time
+RTime:	0			;and Runtime
+nSets:	0
+Sets:	Block MaxSet
+LastZ==.
+
+LogJFN:	0
+LogFil:	Asciz "PS:<ID>USE-STATS.TACNEWS"
+
+CRLF:	Asciz "
+"
+
+TFacts:	24.*60.*60.		;Days
+	60.*60.			;Hours
+	60.			;Minutes
+	1			;Seconds
+nFacts==.-TFacts
+
+.INSRT LIB:PRARG
+.INSRT LIB:STCMP
+.INSRT LIB:SOUT
+
+Begin:	RESET
+	Move P,PDList
+	Call GetFil
+	Call MapFil
+Reent:	Movei E,EOM
+	Move T,[440700,,Mapadr]
+	Movem T,BufBP
+Beg0:	Ask "Starting date&time? "
+	  Jrst Die
+	Call Getime
+	  Jrst Beg0
+	Movem T,StartT
+Beg1:	Ask "Ending date&time? "
+	  Jrst Die
+	Call Getime
+	  Jrst Beg1
+	Movem T,EndT
+Beg2:	Ask "Output to file? "
+	  Jrst Beg3
+	Call GetOut
+	  Jrst Beg2
+Beg3:	Call OutHdr
+Beg4:	Call GetDate		;Get date from current line
+	  Jrst Done		;  EOF!
+	Camge T,StartT		;.GE. what we want?
+	  Jrst [Call SkpLin	;  Yup, so go to next one.
+		Jrst Beg4]
+	Camle T,EndT		;.LE. what we want?
+	  Jrst Done		;  Nope, so we're done.
+	Call DoLine		;Finish handling this line.
+	Jrst Beg4
+
+Done:	Move 1,OutJFN
+	Hrroi 2,[Asciz "Number of uses = "]
+	Setz 3,
+	SOUT
+	Move 2,nLines
+	Movei 3,10.
+	NOUT
+	  Move 1,OutJFN
+	Hrroi 2,[Asciz "
+Total connect time = "]
+	Setz 3,
+	SOUT
+	Move T,CTime
+	Call Outime
+	Hrroi 2,[Asciz ", Average = "]
+	Setz 3,
+	SOUT
+	Move T,CTime
+	IDiv T,nLines
+	Call Outime
+	Hrroi 2,[Asciz "
+Total runtime = "]
+	Setz 3,
+	SOUT
+	Move T,RTime
+	Call Outime
+	Hrroi 2,[Asciz ", Average = "]
+	Setz 3,
+	SOUT
+	Move T,RTime
+	IDiv T,nLines
+	Call Outime
+	Hrroi 2,[Asciz "
+
+Sets referenced:
+
+Total	%Use	Name
+-------------------------
+"] ?	Setz 3,
+	SOUT
+	Movs A,nSets
+	Movns A
+Done0:	Move 1,OutJFN
+	Hrrz 2,Sets(A)
+	Move 3,[Field(4,NO%COL)+NO%LFL+10.]
+	NOUT
+	  Move 1,OutJFN
+	Imuli 2,100.
+	IDiv 2,nLines
+	Move 3,[Field(7,NO%COL)+NO%LFL+10.]
+	NOUT
+	  Move 1,OutJFN
+	Movei 2,^I
+	BOUT
+	Hlro 2,Sets(A)
+	Setz 3,
+	SOUT
+	Hrroi 2,CRLF
+	SOUT
+	Aobjn A,Done0
+	Skipn ToFile
+	  Jrst Die
+	Move 1,OutJFN
+	CLOSF
+	  Nop
+	Jrst Die	
+
+GetDat:	Move 1,BufBP
+	Move T,1
+	Setz 2,
+	IDTIM
+	  Jrst EOFp
+	Movem 1,BufBP
+	Move T,2
+	Jrst Popj1
+
+EOFp:	Ildb 1,T
+	Jumpe 1,CPopj
+	Jrst Lose
+
+DoLine:	Aos A,nLines		;Increment the # of lines we hit.
+	Move 1,BufBP
+	Movei 3,10.
+	NIN
+	  Jrst Lose
+	Addm 2,CTime		;Connect time
+	NIN
+	  Jrst Lose
+	Addm 2,RTime		;and Runtime
+	Movem 1,BufBP
+	Ldb 1,1			;Peek at next character
+	Caie 1,40		;Start of set names?
+	  Return		;  Naw, so no sets.
+	Setzm EOL
+
+DoL0:	Call GetSet		;Get a set name
+	  Return
+	Skipg nSets
+	  Jrst DoL2
+	Movs B,nSets
+	Movns B
+DoL1:	Hlro 1,Sets(B)
+	Hrroi 2,SetBuf
+	$STCMP
+	Jumpe 1,DoL3
+	Aobjn B,DoL1
+DoL2:	Move B,nSets
+	Aos nSets
+	Hrlzm E,Sets(B)
+	Hrro 1,E
+	Hrroi 2,SetBuf
+	Setz 3,
+	$SOUT
+	Idpb 3,1
+	Movei E,1(1)
+DoL3:	Aos Sets(B)
+	Jrst DoL0
+
+GetSet:	Skipe EOL
+	  Return
+	Move T,[440700,,SetBuf]
+	Setzm SetBuf
+	Setzm Ignore
+GetS0:	Ildb 1,BufBP
+	Jumpe 1,[Setom EOL
+		 Jrst GetS1]
+	Cain 1,40
+	  Jrst GetS1
+	Cain 1,^M
+	  Jrst [Ildb 1,BufBP	;LF
+		Setom EOL
+		Jrst GetS1]
+	Cain 1,"(
+	  Setom Ignore
+	Jrst GetS2
+
+GetS1:	Tdza 1,1
+GetS2:	  Skipn Ignore
+	    Idpb 1,T
+	Jumpn 1,GetS0
+	Skipe SetBuf
+	  Aos (P)
+	Return
+
+OpnErr:	Movei 1,.PRIOU
+	Move 2,LogJFN
+	Move 3,[111110,,JS%PAF]
+	JFNS
+JFNerr:	Type " -- "
+Ferr:	Call Barf
+Die:	HALTF
+	Setzm FirstZ
+	Move 1,[FirstZ,,FirstZ+1]
+	BLT 1,LastZ
+	Jrst Reent
+
+Lose:	Type "?File in bad format, error during parsing: "
+	Jrst Ferr
+
+GetFil:	Movx 1,GJ%SHT\GJ%OLD
+	Hrroi 2,LogFil
+	GTJFN
+	  Jrst [Type "?Can't get log file "
+		AType LogFil
+		Jrst JFNerr]
+	Movem 1,LogJFN
+	Move 2,[Field(7,OF%BSZ)+OF%RD]
+	OPENF
+	  Jrst [Type "?Can't open log file "
+		Jrst OpnErr]
+	Type "Current file is "
+	Movei 1,.PRIOU
+	Move 2,LogJFN
+	Move 3,[111110,,JS%PAF]
+	JFNS
+	AType CRLF
+	Return
+
+AskQ:	Setzm InBuf
+	Hrro 1,T
+	PSOUT
+	Hrroi 1,InBuf
+	Movx 2,RD%BEL\RD%CRF+BufLen*5-1
+	Hrro 3,T
+	RDTTY
+	  Jrst [Call QBarf
+		Jrst AskQ]
+	Setz 3,
+	Dpb 3,1			;Flush the terminator.
+	Tlz 2,-1
+	Caige 2,BufLen*5-2
+Popj1:	  Aos (P)
+Cpopj:	Return
+
+Getime:	Hrroi 1,InBuf
+	Setz 2,
+	IDTNC
+	  Skipa
+	    Jrst Getim0
+	Hrroi 1,InBuf
+	Movx 2,IT%NDA
+	IDTNC
+	  Skipa
+	    Jrst Getim0
+	Hrroi 1,InBuf
+	Movx 2,IT%NTI
+	IDTNC
+	  Jrst QBarf
+Getim0:	IDCNV
+	  Jrst QBarf
+	Move T,2
+	Jrst Popj1
+
+GetOut:	Movx 1,GJ%SHT\GJ%FOU
+	Hrroi 2,InBuf
+	GTJFN
+	  Jrst [Type "?Can't get file -- "
+		Jrst Barf0]
+	Move T,1
+	Move 2,[Field(7,OF%BSZ)+OF%WR]
+	OPENF
+	  Jrst [Type "?Can't open file -- "
+		Call Barf0
+		Move 1,T
+		RLJFN
+		  Nop
+		Return]
+	Movem T,OutJFN
+	Setom ToFile
+	Jrst Popj1
+
+QBarf:	Call Terpri
+	CType "?
+Barf0:	Call Barf
+	AType CRLF
+	Return
+
+MapFil:	Move 1,LogJFN
+	SIZEF
+	  Nop
+	Movs 1,LogJFN		;JFN,,0
+	Move 2,[.FHSLF,,Mapage]	;us,,page to map at
+	Txo 3,PM%CNT\PM%RD\PM%PLD
+	PMAP
+	 Erjmp [Type "?Can't map file "
+		Jrst OpnErr]
+	Return
+
+OutHdr:	Move 1,OutJFN
+	Hrroi 2,[Asciz "TACnews use summary from "]
+	Setz 3,
+	SOUT
+	Move 2,StartT
+	ODTIM
+	Hrroi 2,[Asciz " to "]
+	SOUT
+	Move 2,EndT
+	ODTIM
+	Hrroi 2,[Asciz "
+----------------------------------------------------------------------
+"] ?	SOUT
+	Return
+
+Outime:	IDivi T,1000.		;Get into base seconds.
+	Push P,TT		;Save remainder
+	Setzm Show0s'
+	Setzm Colonp'
+	Movsi A,-nFacts
+Outim0:	IDiv T,TFacts(A)
+	Jumpn T,[Skipe Show0s
+		   Jrst Outim1
+		 Setom Show0s
+		 Movei 3,10.
+		 Jrst Outim2]
+	Skipn Show0s
+	  Jrst Outim3
+Outim1:	Move 3,[Field(2,NO%COL)+NO%LFL+NO%ZRO+10.]
+Outim2:	Movei 1,":
+	Skipe Colonp
+	  PBOUT
+	Setom Colonp
+	Movei 1,.PRIOU
+	Move 2,T
+	NOUT
+	  Nop
+Outim3:	Move T,TT
+	Aobjn A,Outim0
+	CType ".
+	Movei 1,.PRIOU
+	Pop P,2
+	Move 3,[Field(3,NO%COL)+NO%LFL+NO%ZRO+10.]
+	NOUT
+	  Nop
+	Return
+
+SkpLin:	Ildb 1,BufBP
+	Jumpe 1,Cpopj
+	Caie 1,^J
+	  Jrst SkpLin
+	Return
+
+Variables
+Constants
+
+EOM:	0
+
+Mapage==<./777>+2
+Mapadr=Mapage*1000
+
+	Loc 770*1000		;Put symbols up there.
+
+	End Begin

@@ -1,0 +1,374 @@
+;<EXEC.CMU>EXECFO.MAC.1, 13-Feb-85 16:27:28, Edit by VAF
+;CS118 Collection of routines for CS April 1st hack
+
+CS,<				;Entire module
+	SEARCH EXECDE
+	TTITLE EXECFO
+
+;Routine to set FOOFLG at job creation time
+
+FOOCHK::SETO B,			;Current TAD
+	SETZ D,			;No flags
+	ODCNV%			;Get separate numbers for date&time
+	HRRZS B			;Get numeric month in B
+	HLRZS C			;Get day of month in C
+	CAIN B,3		;3=April
+	CAIE C,0		;0=1st
+	IFSKP.			;Yes...
+	  SETOM FOOFLG		;Assume yes...
+	  SETO A,
+	  MOVX B,<-1,,D>	;Where answer goes
+	  MOVEI C,.JICPJ	;Controlling job
+	  GETJI%		;Get controlling job
+	   ERJMP R		;None.
+	  SKIPN D		;Job 0?
+	   SETZM FOOFLG		;Yes - clear the flag, then
+	ENDIF.
+	RET
+
+;Routine to print out initial banner
+
+FOOVER::STKVAR <<TIMBUF,10>>	;Place for time
+	HRROI A,TIMBUF		;Point at it
+	SETO B,			;Current time
+	MOVX C,OT%NDA
+	ODTIM%			;Get time string
+	GJINF%			;Get job info
+	HRROI A,VERNMX		;Get pointer to name
+	HRROI B,TIMBUF		;Time
+	ETYPE <%1\ %2M TTY%4O%%_Please LOGIN or ATTACH%_>
+	RET			;Done
+VERNMX::ASCIZ"CMUCSC 1.0/7.01A-KL-TCP" ;The string...
+
+
+;TOPS-10 emulation of command parser....
+
+FOOTAB:	NFOO,,NFOO
+	T ATTACH,,FOOATT
+	T DAYTIME,,FOODTM
+	T INITIALIZE,,FOOINI
+	T KJOB,,FOOKJB
+	T LOGIN,,FOOLGN
+NFOO=.-FOOTAB-1
+
+FOOCMD::MOVE A,[SIXBIT/EXEC/]
+	MOVE B,[SIXBIT/*EXEC*/]
+	SETSN%
+	TRN
+	TYPE <.>
+	SETZM CBUF		;Clear buffer
+	HRROI A,CBUF		;Where to put input
+	MOVX B,<RD%TOP!RD%CRF!500> ;Break code, # chars
+	HRROI C,
+	SETZ C,
+	RDTTY%			;Read a line
+	TRN			;Ignore error
+	SETZ C,			;Make null
+	DPB C,A			;Flush last character
+	SKIPN CBUF		;Anything there?
+	JRST FOOCMD		;Nope - go again
+	MOVE Q1,[POINT 7,CBUF]	;Point at buffer again
+	MOVE A,[POINT 7,ATMBUF]	;And at atom buffer for first atom
+	DO.
+	  ILDB Q2,Q1		;Get char
+	  MOVE C,Q2		;Get character
+	  CAIN C,"/"		;Switches?
+	   SETZ C,		;Yes - make it terminate ATMBUF
+	  IDPB C,A		;Append character to ATMBUF
+	  CAILE Q2," "		;At end of word?
+	  LOOP.			;Nope. Keep going
+	ENDDO.
+	SETZ B,			;Clear
+	DPB B,Q1		;Kill separator character
+	DPB B,A			;Terminate ATMBUF
+	SKIPE CBUF		;Just punctuation?
+	IFSKP.			;Yes
+	  ETYPE <?%6\?%_>	;Print that character as an error
+	  JRST FOOCMD		;Flush line
+	ENDIF.
+	MOVEI A,FOOTAB		;Table of commands
+	HRROI B,ATMBUF		;Command atom
+	TBLUK%			;Look it up
+	IFXE. B,TL%NOM!TL%AMB	;One of our hackish commands?
+	  HRRZ B,(A)		;Get entry
+	  HRRZ B,(B)		;Get address
+	  JRST (B)		;Go there
+	ENDIF.
+	MOVEI A,CTBL1		;Standard command table address
+	HRROI B,ATMBUF		;Current input
+	TBLUK%			;Look it up
+	IFXN. B,TL%NOM!TL%AMB	;Bad command?
+	  HRROI A,CBUF		;Point at it again
+	  ETYPE <?%1M?%_>	;Do a TOPS-10 error...
+	  JRST FOOCMD		;Back to top level
+	ENDIF.
+	ETYPE <?LOGIN please%_> ;Say must be logged-in
+	JRST FOOCMD
+
+
+;LOGIN command - really works, too!
+
+FOOLGN:	GJINF%			;Get again...
+	HRROI A,VERNMX		;Point at version again...
+	ETYPE <JOB %3Q %1\ TTY%4O%%_>
+	CAIN Q2," "		;Space separator?
+	JRST FOOL01		;Yes - Q1 already points to uname, then
+FOOL00:	SETZM ATMBUF		;Clear
+	TYPE <#>
+	HRROI A,ATMBUF		;Where to put
+	MOVX B,<RD%TOP!RD%CRF!50>
+	SETZ C,
+	RDTTY%			;Get a username
+	TRN
+	SETZ C,
+	DPB C,A			;Flush terminator
+	SKIPN ATMBUF		;Anything?
+	JRST FOOL00		;Redo
+	MOVE Q1,[POINT 7,ATMBUF] ;Where username is
+FOOL01:	MOVE A,Q1		;Copy ptr
+	DO.
+	  ILDB B,A		;Get char
+	  CAILE B," "		;At terminator yet?
+	  LOOP.			;Nope. Keep going
+	ENDDO.
+	SETZ B,
+	DPB B,A			;Flush terminator
+	MOVX A,RC%EMO		;Exact match only
+	MOVE B,Q1		;Pointer to name
+	SETZ C,
+	RCUSR%			;Check for valid user
+	IFXN. A,RC%AMB!RC%NOM	;Failed
+FOOL02:	  ETYPE <?Invalid Entry - Try again%_>
+	  JRST FOOL00		;Go get it
+	ENDIF.
+	MOVE Q1,C		;Copy user number
+	MOVE Q2,A		;Copy flags
+	MOVE A,C		;User number
+	SETZB B,C		;No password or account
+	LOGIN%			;Try login w/o password
+	TRNA			;Failed. Get password
+	JRST FOOL03		;Did login. Go cleanup
+	HRROI A,ATMBUF		;Point at buffer
+	MOVE B,Q1		;Copy usernumber
+	DIRST%			;Translate it back
+	 TRN
+	HRROI A,ATMBUF
+	ETYPE <Password for %1\: >
+	MOVX A,.CTTRM
+	RFMOD%			;Get tty mode
+	PUSH P,B
+	TXZ B,TT%ECO		;Turn off echo
+	SFMOD%			;Set it back
+	SETZM ATMBUF
+	HRROI A,ATMBUF		;Where to put it
+	MOVX B,<RD%TOP!RD%CRF!50>
+	SETZ C,
+	RDTTY%			;Read the password
+	TRN
+	SETZ B,
+	DPB B,A			;Flush end character
+	MOVX A,.CTTRM
+	POP P,B
+	SFMOD%			;Put back echoing
+	ETYPE <%_>		;Type crlf
+	MOVE A,Q1		;User number
+	HRROI B,ATMBUF		;Password ptr
+	SETZ C,			;Default account
+	LOGIN%			;Try to log this guy in...
+	JRST FOOL02		;Nope. Go do it again
+FOOL03:	PUSH P,[PC%USR!CMDIN4]	;Make return address for TRVAR cleanup
+MAXLLS==40			;CS122 Max length of this string
+	TRVAR <LPASP,LOGNO,LERRF,RCBITS,<LDBLK,GTDLN>,LACCT,SAV17,<ACBLK,.ACJOB+1>,LFLAG,<LLLSTR,MAXLLS>,LCJB> ;CS111;CM335;CS90;CS122
+	PUSH P,A		;Preserve LOGIN acs
+	PUSH P,B
+	PUSH P,C
+	ETYPE <*** Happy April fools day! ***%_>
+	SETZM FOOFLG		;Clear special flag...
+	MOVEM Q1,LOGNO		;Save usernumber
+	MOVEM Q2,RCBITS		;Flags from RCUSR
+	SETOM LFLAG		;Normal login
+	MOVE A,[XWD .TICCD,CTDCHN] ;Fix control-D interrupt now
+	ATI%
+	POP P,C
+	POP P,B
+	POP P,A
+	CALL LOGIN0		;Do login initialization
+	RET			;Return to top-level command parsing
+
+;ATTACH command - also really works...
+
+FOOATT:	CAIN Q2," "		;Space separator?
+	JRST FOOAT1		;Yes - Q1 already points to uname, then
+FOOAT0:	TYPE <PPN: >
+	SETZM ATMBUF		;Clear
+	HRROI A,ATMBUF		;Where to put
+	MOVX B,<RD%TOP!RD%CRF!50>
+	SETZ C,
+	RDTTY%			;Get a username
+	TRN
+	SETZ C,
+	DPB C,A			;Flush terminator
+	SKIPN ATMBUF		;Anything?
+	JRST FOOAT0		;Redo
+	MOVE Q1,[POINT 7,ATMBUF] ;Where username is
+FOOAT1:	MOVE A,Q1		;Copy ptr
+	DO.
+	  ILDB B,A		;Get char
+	  CAILE B," "		;At terminator yet?
+	  LOOP.			;Nope. Keep going
+	ENDDO.
+	SETZ B,
+	DPB B,A			;Flush terminator
+	MOVX A,RC%EMO		;Exact match only
+	MOVE B,Q1		;Pointer to name
+	SETZ C,
+	RCUSR%			;Check for valid user
+	IFXN. A,RC%AMB!RC%NOM	;If not...
+	  ETYPE <% Bad PPN%_>
+	  JRST FOOAT0		;Try again
+	ENDIF.
+	MOVE Q3,C		;Copy user number for later
+	HRROI A,ATMBUF		;Where to put username
+	MOVE B,Q3		;Usernumber
+	DIRST%			;Translate it back
+	 TRN
+	MOVEI A,.JOBDIR		;Want JOBDIR table
+	HLLZ B,JOBRT		;Number of jobs
+	HRRI B,BUF1		;Where to put
+	GTBLT%			;Get it...
+	 ERCAL CJERR		;Hmm... Shouldn't happen
+	MOVE B,JOBRT		;AOBJN pointer of jobs
+	HRRZS C			;Only want RH of user number
+	SETZ D,			;Number of jobs found
+	DO.
+	  CAME C,BUF1(B)	;This user?
+	  IFSKP.		;Yes
+	    HRLZ A,B		;Get job number in LH of A
+	    HRRI A,.JOBTT	;Want job/terminal table entry
+	    GETAB%		;Get terminal number
+	     JRST FOOAT4	;Ignore job
+	    JUMPGE A,FOOAT4	;...
+	    HRRZM B,BUF1(D)	;Save job number on list
+	    ADDI D,1		;Increment count found
+	  ENDIF.
+FOOAT4:	  AOBJN B,TOP.		;Do for all jobs
+	ENDDO.
+	SKIPE D			;None found?
+	IFSKP.			;That's right...
+	  HRROI A,ATMBUF	;Name...
+	  ETYPE <% No detached %1\ jobs.%_>
+	  JRST FOOAT0
+	ENDIF.
+	CAIE D,1		;Only one?
+	IFSKP.			;Yes
+	  MOVE Q2,BUF1		;Get job number
+	  ETYPE <Attaching to job %6Q%%_>
+	  JRST FOOAT2		;Go get pword & do it
+	ENDIF.
+FOOAT3:	HRROI A,ATMBUF
+	ETYPE <Detached %1\ jobs: >
+	SETZ A,			;Say none done yet
+	MOVN B,D		;Number there are
+	HRLZS B			;Swap halves
+	DO.
+	  SKIPE A		;Need a comma?
+	   TYPE <, >		;Yes - do it
+	  MOVE C,BUF1(B)	;Get job number
+	  ETYPE <%3Q>		;Print it
+	  SETO A,		;Say been here
+	  AOBJN B,TOP.		;Loop for all
+	ENDDO.
+	ETYPE <%_Which job: >	;Prompt for it
+	HRROI A,ATMBUF+20	;Kluge... Point past username area
+	MOVX B,<RD%TOP!RD%CRF!20>
+	SETZ C,
+	RDTTY%			;Read it
+	TRN
+	HRROI A,ATMBUF+20	;Point at it
+	MOVEI C,^D10
+	NIN%			;Read number
+	 ERJMP FOOAT0		;Bad number - punt
+	MOVE Q2,B		;Copy job number
+	MOVN B,D
+	HRLZS B			;Make AOBJN
+	DO.
+	  CAMN Q2,BUF1(B)
+	  JRST FOOAT2		;OK. Go get pword & do it
+	  AOBJN B,TOP.		;Loop for list
+	ENDDO.
+	JRST FOOAT3		;Not in list - prompt again
+FOOAT2:	MOVE A,Q2		;Job number
+	MOVE B,Q3		;User number
+	SETZ C,			;No password, first time
+	ATACH%			;Try to attach
+	TRNA			;Nope
+	JRST FOOAT5		;Made it
+	HRROI A,ATMBUF
+	ETYPE <Password for %1\: >
+	MOVX A,.CTTRM
+	RFMOD%			;Get tty mode
+	PUSH P,B		;Save mode
+	TXZ B,TT%ECO		;Turn off echo
+	SFMOD%			;Set it back
+	SETZM ATMBUF
+	HRROI A,ATMBUF		;Where to put it
+	MOVX B,<RD%TOP!RD%CRF!50>
+	SETZ C,
+	RDTTY%			;Read the password
+	TRN
+	SETZ B,
+	DPB B,A			;Flush end character
+	MOVX A,.CTTRM
+	POP P,B			;Restore mode
+	SFMOD%			;Turn echoing back on
+	ETYPE <%_>
+	MOVE A,Q2		;Job number
+	MOVE B,Q3		;User number
+	SETZ C,
+	SKIPE ATMBUF
+	HRROI C,ATMBUF		;Password pointer
+	ATACH%			;Try to attach
+	 JRST [	ETYPE <%_? Can't ATT to job%_>
+		JRST FOOCMD]	;Back to top
+FOOAT5:	SETO A,			;Attach done, now flush this job
+	LGOUT%			;Bye
+	 TRN			;Failed?
+	HALTF%			;Die this way, then
+
+
+;DAYTIME command
+
+FOODTM:	SETO A,			;Now
+	ETYPE <%1W%%_>		;Print time of day
+	JRST FOOCMD		;Back for next cmd
+
+;INITIA command - prints version, etc. and restarts
+
+FOOINI:	HRROI A,ATMBUF
+	SETO B,
+	MOVX C,OT%NDA
+	ODTIM%			;Get time string
+	GJINF%
+	HRROI A,VERNMX
+	HRROI B,ATMBUF
+	ETYPE <%_%%1\ %2M TTY%4O%%_>
+	JRST FOOCMD		;Back for next cmd
+
+
+;KJOB command - gives error as if not-logged-in
+
+FOOKJB:	ETYPE <?Not a job%_>
+	JRST FOOCMD
+
+;Special control-T...
+
+USEPS1::ETYPE <?Not a job%_>
+	MOVX A,.CTTRM
+	MOVEI B,.CHCRT
+	STI%			;Make some input happen...
+	CALL RESACS
+	DEBRK%
+
+
+	END
+   >				;End of CS at beginning of module

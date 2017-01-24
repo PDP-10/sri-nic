@@ -1,0 +1,161 @@
+-*- Text -*-
+
+General:
+
+	Is uio.h old hat?  But isn't this the file that you include to
+	declare open()?
+[KLH: Yes, flush uio.h.  Nothing should still use it.  Did you find something
+that does?]
+
+	Not doing anything about O_NDELAY and other blocking issues yet.
+
+	Some code in read() and write() is the only thing that currently
+	thinks about system calls being interrupted in the brain-damaged
+	Unix way.  There is no support for the signal stuff, but the idea
+	is that we have to cause certain SYSCALLn's to return with a
+	negative value.
+
+	It looks like we will need a %PIIOC handler that makes certain IOC
+	errors look like failing .CALL's.  (If the losing PC is .SCALL+2,
+	clobber the error code into AC1 and dismiss to .SCALL+3.)
+
+	Rubout processing isn't finished.  Nor has anything else
+	TTY-related been worked on.
+
+	There are a lot of other little details to be done, and no obvious
+	organized way to go about it.
+
+Compiler:
+
+	ERJMP definitions are output even for ITS.
+[KLH: OK, fixed.]
+	ADJBP macro output for KA is incorrect.
+[KLH: if you meant AC and MEM dummy args, this was already fixed.]
+
+LSEEK:
+
+	On block mode output (_UIO_HANDPACK is set) you can only position
+	from one word boundary to another.  Doesn't know how to do L_XTND.
+	(Usual EOF screw.)  ITS won't let you do any operations if you
+	position yourself beyond the end of the file anyway.
+
+[KLH: hmm, should be able to position at byte boundaries.  This can be
+fixed, right?]
+
+USYSIO.H:
+
+	_UIO_HANDPACK indicates block mode open so we must pack and unpack
+	bytes by hand.  Introduced OPEN_UFX_MAX as distinct from OPEN_MAX.
+	There are only 16 ufxs on ITS, each corresponding to a channel.
+
+OPEN:
+
+	O_ITS_IMAGE and O_ITS_NO_IMAGE are new.  Byte size of 7 implies
+	ascii mode, all others imply image mode, unless these flags are
+	used to force the issue.  Also byte size of 7 implies unit mode,
+	all others imply block (handpacked) mode.
+
+	Should support append mode.  (How?  No reasonable way to find the
+	end of a file...)  Also overwrite?  (Can't truncate!)
+[KLH: don't worry about truncation, that's rarely used.  append is
+a lot more common, tho.  Time to play with ITS?]
+
+	Filenames are hacked in a number of ways.  "/" is a synonym for
+	";", for the benefit of #include.  (In ITS.1617 SOPEN will parse
+	"foo; bar;" as "FOO.BA;".)  Tab is a synonym for " " because people
+	expect it.  ^Q quotes the next character as usual.
+
+	_DVTTY minor device number initialization in open() is commented
+	out right now.  close() will therefore do something random, but
+	harmless.
+
+FREOPE:
+
+	"I" and "I-" added, corresponding to flags above.
+
+FCNTL.H:
+
+	FDF_HANDPACK = _UIO_HANDPACK
+
+MALLOC:
+
+	Removed test for extended addressing and call to EXTEND [XBLT] on
+	ITS (mostly) because FAIL didn't have XBLT predefined.
+
+[KLH: KCC includes a definition of XBLT in its header.]
+
+	There is a bug in _setup() that touches nonexistent memory.  I did
+	not fix it, because the temptation to re-write the entire MALLOC
+	module would be too great.  Instead I broke brk() to always keep at
+	least 4 extra words existent so that I wouldn't have to think about
+	problems like this unless they were really bad ones.
+
+SIGDAT:
+
+	_sigtrigpend() is just a stub.  Should never get called until we do
+	something about interrupts.
+
+WAIT:
+
+	wait() is just a stub.  Should never get called since we don't hack
+	inferiors (yet?).
+
+STAT:
+
+	stat(), fstat(), etc., don't work.  The file currently only exists
+	to define _dvtype().
+
+SYSCAL:
+SYSITS.H:
+
+	SYSCALLn("name") performs system call.
+	SYSCALLn_LOSE("name") performs system call that should not fail.
+
+STRERR:
+
+	This doesn't do anything yet.  Nedds to be converted to use ERR:
+	device someday.
+
+ERRNO.H:
+
+	Shouldn't _ERRNO_T20_LAST be ECLOSE?
+[KLH: yeah, fixed.]
+	What do we do about ITS error codes?  Add 400000?
+[KLH: that would be OK.  There isn't any good way to combine Unix error
+numbers with OS errors.  Having strerror recognize OS numbers is an
+extension, but the actual strerror call in this case has to be conditionalized.
+An argument of -1 (another extension) gets the last OS error; this lets me
+define LASTERROR to be either "errno" (on a real Unix) or "-1" (for KCC)]
+
+STDIO.H:
+
+	On ITS SYS_OPEN is 16.  Should perhaps set L_cuserid to 6?
+
+EXIT:
+
+	The reasons for waiting for a subfork are different on ITS?
+
+URT:
+
+	Command line starts with XJNAME.  ^Q instead of ^V.
+
+CRT:
+
+	Initialization of P is wrong everywhere but ITS.
+	Enabled %PIPDL interrupt to make it fatal.
+	Had to create pages of zeros in the data segment that the linker
+		left nonexistent.
+	Set code segment pages pure.
+	Set %TBNVR so that opening the TTY will fail rather than hanging
+		forever if we are started without it.  (This does have the
+		odd effect that if we are ^Ped during startup we never open
+		the TTY.  It is a deficiency in ITS that you cannot open
+		the TTY without owning it.  We could compensate for this
+		ourselves someday.)
+
+CPU:
+
+	FAIL can't assemble this because $BADL6, $BADL7, $BADL8, $BADL9,
+	$BADLH are EXTERNals after ==.
+
+[KLH: Right.  Use MACRO for that.  We use MACRO for most of the library.]

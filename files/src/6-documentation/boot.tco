@@ -1,0 +1,331 @@
+                               TCO-number:  6.1495
+
+
+
+Written-by:  WACHS                            Creation-date:   4-Feb-83 05:03:11
+Edited-by:   LEACHE                           Edit-date:      25-Apr-84 14:44:34
+
+
+Edit-checked:         No     Document:          No     TCO-tested:  No 
+Maintenance-release:  No     Hardware-related:  Yes
+
+
+Program:  Monitor
+  Routines-affected:   	BOOT
+
+
+
+
+Problem:  BOOT wipes out KLIPA/KLNI microcode
+Diagnosis:  DATAO/DATAI to read drive type register writes the
+microcode.
+Solution:  test CONI bits. If bits 0,16, and 17 are on then don't
+read the drive type register
+
+                               [End of TCO 6.1495]
+
+                               TCO-number:  6.1498
+
+
+
+Written-by:  LEACHE                           Creation-date:   9-Feb-83 17:21:47
+Edited-by:   PURRETTA                         Edit-date:      25-Apr-84 15:03:16
+
+
+Edit-checked:         No     Document:          Yes    TCO-tested:  No 
+Maintenance-release:  No     Hardware-related:  No 
+
+
+Program:  MONITOR
+  Routines-affected:   	BOOT
+
+
+
+
+Problem:  BOOT is very sensitive to transient IO errors.
+Diagnosis:  Unlike the monitor, BOOT does not have error-correction logic and 
+head-repositioning logic.
+Solution:  1.  Up the IO retry count from 5 to 15.
+2.  On an IO error, display the channel status, drive status, and the
+    contents of drive error-registers one and two.
+3.  When an IO error occurs during a dump, print out the page number(s)
+    on which the error(s) occurred.
+
+                               [End of TCO 6.1498]
+
+                               TCO-number:  6.1549
+
+
+
+Written-by:  WACHS                            Creation-date:  16-Mar-83 04:08:27
+Edited-by:   PURRETTA                         Edit-date:      25-Apr-84 15:07:21
+
+
+Edit-checked:         No     Document:          Yes    TCO-tested:  No 
+Maintenance-release:  No     Hardware-related:  Yes
+
+
+Program:  MONITOR
+  Routines-affected:   	BOOT
+
+
+
+
+Problem:  BOOT doesn't load the KLIPA or KLNI microcode
+Diagnosis:  no code
+Solution:  Add code to load them
+
+                               [End of TCO 6.1549]
+
+                               TCO-number:  6.1969
+
+
+
+Written-by:  LEACHE                           Creation-date:  15-Feb-84 10:03:33
+Edited-by:   LEACHE                           Edit-date:       7-Mar-84 11:47:13
+
+
+Edit-checked:         No     Document:          Yes    TCO-tested:  No 
+Maintenance-release:  No     Hardware-related:  No 
+
+
+Program:  MONITOR  
+
+  Routines-affected:   	BOOT	MTBOOT	MEXEC	PAGUTL
+
+
+
+
+Problem:  -
+
+	In  order  to make room in MONITOR.EXE, some PSECTS are now relocated
+	above the first  256K  in the EXE core-image.  BOOT must be taught to
+	load these PSECTS above its own core-image into physical memory above
+	the first 256K.
+
+
+Diagnosis:  -
+
+	As above
+
+
+Solution:  -
+
+	Change BOOT to load DDT and the swappable monitor into physical memory
+	above the first 256K.
+
+	This change will require contiguous physical memory of 512K in order
+	to boot the monitor.
+
+	With this change, BOOT will load V6 (or later) monitors in one pass.
+  
+
+	Since the swappable monitor is now in section 1 of the .EXE file,
+	mapping games must be played in order to patch MONITR.EXE under
+	timesharing.  The mapping is transparent to the user, and so the
+	monitor is patched as always:
+
+
+	@GET MONITR.EXE
+	@START 140
+	  DDT
+	FOOBAR/  new data
+	^Z
+	@
+
+
+
+                               [End of TCO 6.1969]
+
+                               TCO-number:  6.2011
+
+
+
+Written-by:  LEACHE                           Creation-date:  26-Mar-84 10:31:33
+Edited-by:   PURRETTA                         Edit-date:      25-Apr-84 15:08:53
+
+
+Edit-checked:         No     Document:          No     TCO-tested:  No 
+Maintenance-release:  No     Hardware-related:  No 
+
+
+Program:  MONITOR
+  Routines-affected:   	BOOT
+
+
+
+
+Problem:  -
+
+Other systems cannot access a dual-ported RP04567 while BOOT is reading from
+or writing to it.
+Diagnosis:  -
+
+BOOT categorically seizes the port and the other system never has access to it.
+Solution:  -
+
+Have BOOT release the port after each IO operation, and conditionally (based
+on the drive's availability) re-seize the port immediately before the next
+seek begins.  A timeout value is used to prevent BOOT from endlessly attempting
+to seize a stuck port.
+
+                               [End of TCO 6.2011]
+
+                               TCO-number:  6.2051
+
+
+
+Written-by:  LEACHE                           Creation-date:  29-Apr-84 17:25:06
+Edited-by:   LEACHE                           Edit-date:       2-May-84 08:51:09
+
+
+Edit-checked:         No     Document:          No     TCO-tested:  No 
+Maintenance-release:  No     Hardware-related:  No 
+
+
+Program:  MONITOR
+  Routines-affected:   	BOOT	MTBOOT
+
+
+
+
+Problem:        
+	Depending on configuration, it can take an order of magnitude longer
+	for monitor startup to occur when the monitor has been loaded with
+	MTBOOT.
+
+Diagnosis:        
+	The channel initialization code for certain channels with RP20
+	DX20's repeatedly times out, significantly slowing up system
+	startup.  When the system finally does come up, the RP20's in
+	question are not available until DX20LD is run for the parent DX20.
+
+	As it turns out, MTBOOT successfully loads and start all DX20's on
+	the system prior to beginning its search for a loaded mag tape unit.
+	Part of this search includes doing a MASSBUS reset for each channel
+	and (as a side affect of this) the DX20 micro-processor is halted.
+	MTBOOT takes this into account and restarts the DX20 when the units
+	on that channel are identified.  Unfortunately, the restart code was
+	never updated to include the (then) new device type for RP20 DX20's.
+	Thus, if MTBOOT terminates its mag-tape search on channel N, all RP20
+	DX20's on channel N-1 and below will be halted when the system
+	comes up.
+
+Solution:        
+	Include RP20 DX20's in MTBOOT's DX20 restart logic.
+
+
+                               [End of TCO 6.2051]
+
+                               TCO-number:  6.2105
+
+
+
+Written-by:  LEACHE                           Creation-date:  22-Jun-84 17:20:40
+
+
+Edit-checked:         No     Document:          No     TCO-tested:  No 
+Maintenance-release:  No     Hardware-related:  No 
+
+
+Program:  Monitor
+  Routines-affected:   	BOOT	MTBOOT
+
+
+
+
+Problem:    The monitor will soon have a PDVOP.
+
+Diagnosis:    The PDVOP will generate an EXE-directory entry that is unknown to
+BOOT, causing BOOT to declare the EXE-file format to be bad.
+
+Solution:    Teach BOOT to ignore this entry.
+
+
+                               [End of TCO 6.2105]
+
+                               TCO-number:  6.2172
+
+
+
+Written-by:  LEACHE                           Creation-date:  13-Aug-84 16:37:19
+
+
+Edit-checked:         No     Document:          No     TCO-tested:  No 
+Maintenance-release:  No     Hardware-related:  No 
+
+
+Program:  MONITOR
+  Routines-affected:   	BOOT
+
+
+
+
+Problem:   On a 2-pass load, BOOT can sometimes fail to restore the IO
+channels correctly.
+
+Diagnosis:    If the channel has suffered a register-access error prior
+to entering the channel-restore code, the restore will fail, causing
+PH2PIM or ILMNRF bughlts when the swappable monitor has been loaded.
+
+Solution:    Reset the channel before attempting to restore it.
+
+
+                               [End of TCO 6.2172]
+
+                               TCO-number:  6.2179
+
+
+
+Written-by:  LEACHE                           Creation-date:  17-Aug-84 15:32:18
+
+
+Edit-checked:         No     Document:          No     TCO-tested:  No 
+Maintenance-release:  No     Hardware-related:  No 
+
+
+Program:  Monitor
+  Routines-affected:   	BOOT
+
+
+
+
+Problem:    
+BOOT cannot load long files.
+
+Diagnosis:    
+No code to do so.
+
+Solution:    
+Add the code.
+
+
+                               [End of TCO 6.2179]
+
+                               TCO-number:  6.2207
+
+
+
+Written-by:  LEACHE                           Creation-date:  29-Aug-84 16:48:37
+
+
+Edit-checked:         No     Document:          No     TCO-tested:  No 
+Maintenance-release:  No     Hardware-related:  No 
+
+
+Program:  Monitor
+  Routines-affected:   	BOOT
+
+
+
+
+Problem:    BOOT sometimes prints out error messages with null directory names.
+
+Diagnosis:    The output routine is fetching the byte pointer from the wrong
+location.
+
+Solution:    Get it from the correct location.
+
+
+                               [End of TCO 6.2207]
+

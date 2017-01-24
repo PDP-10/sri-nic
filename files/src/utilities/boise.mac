@@ -1,0 +1,754 @@
+	TITLE BOISE Print files on the Boise printer
+	SUBTTL Written by Mark Crispin/MRC	3-Jun-83
+
+	SEARCH MACSYM,MONSYM	; system definitions
+	SALL			; suppress macro expansions
+	.DIRECTIVE FLBLST	; sane listings for ASCIZ, etc.
+	.TEXT "/NOINITIAL"	; suppress loading of JOBDAT
+	.TEXT "BOISE/SAVE"	; save as BOISE.EXE
+	.TEXT "/SYMSEG:PSECT:CODE" ; put symbol table and patch area in CODE
+	.REQUIRE MM:HSTNAM	; host name routines
+	.REQUIRE MM:TCPIO	; TCP/IP I/O routines
+	.REQUIRE SYS:MACREL	; MACSYM support routines
+
+; Version components
+
+BOIWHO==4			; who last edited BOISE (4=MRC)
+BOIVER==5			; BOISE's release version (matches monitor's)
+BOIMIN==2			; BOISE's minor version
+BOIEDT==^D45			; BOISE's edit version
+
+IFNDEF FILPGS,FILPGS==^D10	; number of file pages to map at a time
+
+; Routines invoked externally
+
+	EXTERN $GTPRO,$GTNAM,$GTLCL,$RMREL,$CPYST
+	EXTERN $GTHSN,$GTHNS,$PUPSN,$PUPNS,$CHSSN,$CHSNS,$DECSN,$DECNS
+	EXTERN $TCOPN,$TCPSI,$TCCLS,$TCABT,$TCSOU,$TCBOU,$TCSND,$TCSIN,$TCBIN
+	SUBTTL Definitions
+
+; AC definitions
+
+A=1				; temporary, JSYS AC's
+B=2
+C=3
+D=4
+P=17				; stack pointer
+
+IFNDEF PDLLEN,PDLLEN==^D100	; stack length
+IFNDEF STRBSZ,STRBSZ==^D515	; string buffer length
+IFNDEF PERNSZ,PERNSZ==^D19	; number of characters in personal name
+IFNDEF FILNSZ,<FILNSZ==^D<2*39+1+1+2*39+1+2*39+1+2*39+1+6>>
+IFNDEF USRNSZ,USRNSZ==^D39	; number of characters in a user name
+IFNDEF CMDBSZ,CMDBSZ==^D200	; size of command text buffer
+
+	; *** Temporary definitions ***
+SUNETN==:^D36			; SUnet's Internet network number
+	; *** End temporary definitions
+
+; EMSG string
+; Outputs an error message
+
+DEFINE EMSG (STRING) <
+ HRROI A,[ASCIZ&STRING&]
+ ESOUT%
+>;DEFINE EMSG
+	SUBTTL Boise definitions
+
+Magic==:<BYTE (8) 164,61,115,241> ; Boise magic number: 74 31 4D A1
+
+	RADIX ^D10		; Boise definitions are defined in decimal
+
+BOIPRT==:35			; TCP port Boise listens on
+
+AEnd==:0			; end of attributes
+AFiller==:1			; filler before next attribute
+AUserName==:2			; user (personal) name
+AHostName==:3			; host name
+AFileName==:4			; file name
+APrintMode==:5			; print mode
+ PmLinePrinter==:0		; LPT format
+ PmDvi==:1			; DVI format
+ PmPress==:2			; Press format
+ PmHpSpoolFile==:3		; HP spool file format
+ANotification==:6		; notification option
+ NNever==:0			; never notify
+ NFailure==:1			; notify on failure
+ NAlways==:2			; always notify
+ NNothing==:0			; nothing in notification
+ NSend==:1			; Send notification
+ NSendOrMail==:2		; Send or Mail notification
+ NSendAndMail==:3		; Send and Mail notification
+ACharacterSet==:7		; character set to use
+ CsAscii==:0			; use ASCII character set
+ CsSail==:1			; use SAIL character set
+ANewLine==:8			; what constitutes newline
+ NlLf==:0			; LF is newline
+ NlCr==:1			; CR is newline
+ NlCrLf==2			; CRLF is newline
+ARotation==:9			; what rotation to use
+ RPortrait==:0			; portrait
+ RLandscape==:1			; landscape
+ALeftMargin==:10		; left margin in 1/16 inch increments
+ALineLength==:11		; line length in number of characters
+ATopMargin==:12			; top margin in 1/16 inch increments
+ALinesPerPage==:13		; lines per page in number of lines
+AFontSize==:14			; font size
+AUserId==:15			; user (login) id
+
+	RADIX ^D8		; back to octal
+	SUBTTL Data area
+
+	.PSECT DATA,1000	; impure data
+
+MEMBEG==.			; first location zeroed at initialization time
+MONCMP:	BLOCK 1			; non-zero if command line invocation
+PDL:	BLOCK PDLLEN		; stack
+STRBUF:	BLOCK <STRBSZ/5>+1	; string buffer
+CMDBUF:	BLOCK <CMDBSZ/5>+1	; command buffer
+CMDBLK:	BLOCK .CMGJB+1		; COMND% block
+GTJBLK:	BLOCK .GJATR+1		; GTJFN% block
+TCPJCN:	BLOCK 1			; TCP JFN
+FILJFN:	BLOCK 1			; JFN on file to output
+FILSIZ:	BLOCK 2			; .FBBYV and .FBSIZ words from FDB
+CURPAG:	BLOCK 1			; current page being PMAP%'d
+HSTNAM:	BLOCK 15		; local host name
+HSTLEN:	BLOCK 1			; local host length
+PERNAM:	BLOCK <PERNSZ/5>+1	; personal name
+PERLEN:	BLOCK 1			; personal name length
+FILNAM:	BLOCK <FILNSZ/5>+1	; file name
+FILLEN:	BLOCK 1			; file name length
+CHRSET:	BLOCK 1			; character set
+NEWLIN:	BLOCK 1			; newline
+ROTATE:	BLOCK 1			; rotation
+USRNAM:	BLOCK <USRNSZ/5>+1	; user name
+USRLEN:	BLOCK 1			; user name length
+ MEMEND==.-1			; last location zeroed at initialization time
+
+LEVTAB::LEV1PC			; PSI level 1 PC
+	0			; PSI level 2 PC
+	0			; PSI level 3 PC
+
+LEV1PC:	BLOCK 1			; level 1 PC stored here
+
+CHNTAB::PHASE 0
+TCPCHN::!0			; TCP/IP PSI channel
+	REPEAT <^D36-.>,<0>
+	DEPHASE
+
+	.ENDPS
+
+	.PSECT DATPAG,600000	; enter paged data
+
+FNGPAG:	BLOCK 1000		; shared page with FINGER
+FILPAG:	BLOCK FILPGS*1000	; pages of file to print
+
+	.ENDPS
+	SUBTTL Printing options
+
+	.PSECT CODE,400000	; pure code
+
+SWITAB:	SWITBL,,SWITBL		; table of switches
+	[ASCIZ/CHARACTER-SET:/],,ACharacterSet
+	[ASCIZ/NEW-LINE:/],,ANewLine
+	[ASCIZ/ROTATION:/],,ARotation
+SWITBL==<.-SWITAB>-1		; number of switches
+
+CHSTAB:	CHSTBL,,CHSTBL		; table of character sets
+	[ASCIZ/ASCII/],,CsAscii
+	[ASCIZ/SAIL/],,CsSail
+CHSTBL==<.-CHSTAB>-1		; number of character sets
+
+NWLTAB:	NWLTBL,,NWLTBL		; table of new lines
+	[ASCIZ/ALTO/],,NlCr
+	[ASCIZ/CRLF/],,NlCrLf
+	[ASCIZ/LINEFEED-ONLY/],,NlLf
+	[ASCIZ/RETURN-ONLY/],,NlCr
+	[ASCIZ/TOPS-20/],,NlCrLf
+	[ASCIZ/UNIX/],,NlLf
+NWLTBL==<.-NWLTAB>-1		; number of new lines
+
+ROTTAB:	ROTTBL,,ROTTBL		; table of rotations
+	[ASCIZ/LANDSCAPE/],,RLandscape
+	[ASCIZ/PORTRAIT/],,RPortrait
+ROTTBL==<.-ROTTAB>-1		; number of rotations
+	SUBTTL Start of program
+
+BOISE:	RESET%			; initialize fork
+	SETZM MEMBEG		; clear data area
+	MOVE A,[MEMBEG,,MEMBEG+1]
+	BLT A,MEMEND
+	MOVE P,[IOWD PDLLEN,PDL]
+	MOVX A,.FHSLF		; set up PSI tables
+	MOVE B,[LEVTAB,,CHNTAB]
+	SIR%
+	EIR%			; enable PSI system
+	HRROI A,HSTNAM		; get local host name
+	CALL $GTLCL
+	IFNSK.
+	  EMSG <Unable to get local host name>
+	  JRST STOP
+	ENDIF.
+	MOVEI B,HSTNAM		; figure out its length
+	CALL STRLEN
+	MOVEM A,HSTLEN		; save for later
+	GJINF%			; get user number
+	MOVE B,A		; set up for DIRST%
+	HRROI A,USRNAM		; put user name in USRNAM
+	DIRST%
+	IFJER.
+	  EMSG <Unable to get user name - >
+	  CALL LSTERR
+	  JRST STOP
+	ENDIF.
+	MOVEI B,USRNAM		; figure its length
+	CALL STRLEN
+	MOVEM A,USRLEN		; save for later
+
+; falls through
+	SUBTTL Set up default attributes
+
+	MOVX A,CsAscii		; default Character set
+	MOVEM A,CHRSET
+	MOVX A,NlCrLf		; default New Line
+	MOVEM A,NEWLIN
+	MOVX A,RLandscape	; default Rotation
+	MOVEM A,ROTATE
+
+; falls through
+	SUBTTL Get personal name from FINGER if possible
+
+	MOVX A,GJ%OLD!GJ%SHT	; look up FINGER
+	HRROI B,[ASCIZ/SYS:FINGER.EXE/]
+	GTJFN%
+	IFNJE.
+	  PUSH P,A		; save JFN
+	  MOVX A,CR%CAP		; create a new fork
+	  CFORK%
+	  IFJER.
+	    EMSG <Failed to get a fork for FINGER - >
+	    CALL LSTERR
+	    JRST STOP
+	  ENDIF.
+	  EXCH A,(P)		; save fork handle, get JFN
+	  HRL A,(P)		; get prog into fork
+	  GET%
+	  MOVE A,[.FHSLF,,FNGPAG/1000] ; map page FNGPAG of this fork
+	  HRLZ B,(P)		; from page 777 of FINGER
+	  HRRI B,777
+	  MOVX C,PM%RD!PM%WR!PM%PLD ; read/write/preload
+	  PMAP%
+	  HRROI A,USRNAM	; give our user name to FINGER
+	  HRROI B,FNGPAG
+	  MOVX C,USRNSZ		; up to this many characters
+	  CALL $CPYST
+	   JRST STOP		; can't happen
+	  MOVE A,(P)		; get back fork handle
+	  MOVEI B,3		; start inferior at offset 3
+	  SFRKV%
+	  RFORK%		; resume, in case it didn't get going
+	  WFORK%		; sleep until fork is finished
+
+; falls through
+
+; drops in
+
+	  MOVX A,SIXBIT/BOISE/	; restore our name
+	  SETNM%
+	  MOVE A,(P)		; see if it finished okay
+	  RFSTS%
+	  LOAD A,RF%STS,A	; just get status
+	  CAIE A,.RFHLT		; fork halted normally?
+	  IFSKP.
+	    HRROI A,FNGPAG	; now copy personal name into PERNAM
+	    HRROI B,PERNAM
+	    MOVX C,PERNSZ	; up to this many characters
+	    CALL $CPYST
+	     JRST STOP		; can't happen
+	    MOVE A,B		; get current destination
+	    MOVEI B,PERNAM	; figure its length
+	    CALL STRLEN
+	    MOVEM A,PERLEN	; save for later
+	  ENDIF.
+	  SETO A,		; unmap shared page
+	  MOVE B,[.FHSLF,,FNGPAG/1000] ; mapped to this fork's FNGPAG
+	  SETZ C,
+	  PMAP%
+	  POP P,A		; now kill the fork
+	  KFORK%
+	ENDIF.
+
+; falls through
+	SUBTTL Rescan EXEC command
+
+; Process BOISE "monitor" command
+
+	MOVX A,.RSINI		; get RSCAN% buffer if any
+	RSCAN%
+	 ERJMP STOP
+	IFN. A			; have an RSCAN% buffer?
+	  DO.			; yes
+	    PBIN%		; flush leading whitespace
+	    CAIE A,.CHTAB
+	     CAIN A,.CHSPC
+	      JRST TOP.
+	  ENDDO.
+	  DO.
+	    CAIE A,.CHFFD
+	     CAIN A,.CHLFD	; this shouldn't happen, but...
+	      EXIT.
+	    CAIE A,"B"		; look like a BOISE command?
+	     CAIN A,"b"
+	      TDZA B,B		; yes, alright to scan for delimiters
+	       SETO B,		; no, just flush command line
+	    DO.
+	      PBIN%		; flush to LF or delimiter
+	      CAIE A,.CHFFD
+	       CAIN A,.CHLFD
+		EXIT.		; obviously no command
+	      JUMPN B,TOP.
+	      CAIE A,.CHTAB	; saw whitespace?
+	       CAIN A,.CHSPC
+		SOSA MONCMP	; yes, flag a command seen
+		 LOOP.		; otherwise keep on looking
+	    ENDDO.
+	  ENDDO.
+	ENDIF.
+	SUBTTL Parse command
+
+; Initialize COMND% block
+
+	MOVX A,<.PRIIN,,.PRIOU>	; use primary I/O
+	MOVEM A,CMDBLK+.CMIOJ
+	SKIPE MONCMP		; monitor command?
+	 SKIPA A,[-1,,[ASCIZ//]] ; yes, no prompt
+	  HRROI A,[ASCIZ/BOISE>/] ; otherwise set up standard prompt
+	MOVEM A,CMDBLK+.CMRTY	; ^R buffer
+	HRROI A,CMDBUF		; start of text buffer
+	MOVEM A,CMDBLK+.CMBFP
+	MOVEM A,CMDBLK+.CMPTR	; and initial pointer to next input
+	MOVX A,CMDBSZ		; size of command buffer
+	MOVEM A,CMDBLK+.CMCNT
+	SETZM CMDBLK+.CMINC	; initially no unparsed characters
+	HRROI A,STRBUF		; start of atom buffer
+	MOVEM A,CMDBLK+.CMABP
+	MOVX A,STRBSZ		; size of atom buffer
+	MOVEM A,CMDBLK+.CMABC
+	MOVEI A,GTJBLK		; GTJFN% block
+	MOVEM A,CMDBLK+.CMGJB
+
+; Start parse
+
+	DO.
+	  MOVEI A,CMDBLK	; pointer to command block
+	  MOVEI B,[FLDDB. .CMINI] ; initialize parser
+	  COMND%
+	  DO.
+	    MOVEI B,ENDLP.	; reparse address
+	    MOVEM B,CMDBLK+.CMFLG
+	  ENDDO.
+	  RESET%		; flush JFN's in event of reparse
+
+; falls through
+
+; Parse file name
+
+	  MOVEI B,[FLDDB. .CMNOI,,<-1,,[ASCIZ/FILE/]>]
+	  COMND%
+	  TXNN A,CM%NOP
+	  IFSKP.
+	    EMSG <>
+	    CALL LSTERR
+	    SKIPE MONCMP	; monitor command?
+	     JRST STOP		; yes, return to EXEC
+	    LOOP.
+	  ENDIF.
+	  MOVEI B,[FLDDB. .CMIFI] ; get an input file
+	  COMND%
+	  TXNN A,CM%NOP		; error?
+	  IFSKP.
+	    EMSG <Unable to parse file name - >
+	    CALL LSTERR		; output error string
+	    SKIPE MONCMP	; monitor command?
+	     JRST STOP		; yes, return to EXEC
+	    LOOP.
+	  ENDIF.
+	  MOVEM B,FILJFN	; save JFN for later
+
+; drops in
+
+; Parse switches
+
+	  DO.
+	    MOVEI B,[FLDDB. .CMCFM,,,,,<[FLDDB. .CMSWI,,SWITAB,<attribute switch,>]>]
+	    COMND%
+	    TXNE A,CM%NOP	; error?
+	     EXIT.		; yes, don't go any further
+	    LOAD C,CM%FNC,(C)	; no, get the function code which parsed
+	    CAIN C,.CMCFM	; confirmation?
+	     EXIT.		; yes, send file
+	    HRRZ B,(B)		; get attribute type
+	    CAIE B,ACharacterSet ; specifying character set?
+	    IFSKP.
+	      MOVEI B,[FLDDB. .CMKEY,,CHSTAB,<character set,>,ASCII]
+	      COMND%
+	      TXNE A,CM%NOP	; error?
+	       EXIT.		; lose
+	      HRRZ B,(B)	; get attribute data
+	      MOVEM B,CHRSET
+	      LOOP.
+	    ENDIF.
+	    CAIE B,ANewLine	; specifying new line type?
+	    IFSKP.
+	      MOVEI B,[FLDDB. .CMKEY,,NWLTAB,<new line type,>,TOPS-20]
+	      COMND%
+	      TXNE A,CM%NOP	; error?
+	       EXIT.		; lose
+	      HRRZ B,(B)	; get attribute data
+	      MOVEM B,NEWLIN
+	      LOOP.
+	    ENDIF.
+
+; falls through
+
+; drops in
+
+	    CAIE B,ARotation ; specifying rotation?
+	    IFSKP.
+	      MOVEI B,[FLDDB. .CMKEY,,ROTTAB,<rotation,>,LANDSCAPE]
+	      COMND%
+	      TXNE A,CM%NOP	; error?
+	       EXIT.	; lose
+	      HRRZ B,(B)	; get attribute data
+	      MOVEM B,ROTATE
+	      LOOP.
+	    ENDIF.
+	    JRST STOP		; can't happen
+	  ENDDO.
+	  TXNN A,CM%NOP		; last atom parsed successfully?
+	  IFSKP.
+	    EMSG <>		; no, error
+	    CALL LSTERR		; output error string
+	    SKIPE MONCMP	; monitor command?
+	     JRST STOP		; yes, return to EXEC
+	    LOOP.
+	  ENDIF.
+	ENDDO.
+
+; drops in
+	SUBTTL Open file and compute size
+
+	MOVE A,FILJFN		; open file
+	MOVX B,OF%RD		; for read
+	OPENF%
+	IFJER.
+	  EMSG <Unable to open file - >
+	  CALL LSTERR
+	  MOVE A,FILJFN		; flush the losing JFN
+	  RLJFN%
+	   NOP
+	  JRST DONE		; restart
+	ENDIF.
+
+; Depends upon .FBSIZ=.FBBYV+1
+
+	MOVE B,[2,,.FBBYV]	; get file I/O and byte size info
+	MOVEI C,FILSIZ		; into FILSIZ/FILSIZ+1
+	GTFDB%
+	LOAD C,FB%BSZ,FILSIZ	; get file byte size
+	CAIN C,7		; seven-bit bytes?
+	IFSKP.
+	  MOVEI B,^D36		; no, compute total bytes per word
+	  IDIVI B,(C)
+	  EXCH B,FILSIZ+1
+	  IDIV B,FILSIZ+1	; compute number of words
+	  IMULI B,5		; compute # of bytes
+	ELSE.
+	  MOVE B,FILSIZ+1	; use exact byte count if 7 bit bytes
+	ENDIF.
+	MOVEM B,FILSIZ		; save file size
+	HRROI A,FILNAM		; put file name in FILNAM
+	MOVE B,FILJFN		; JFN to output
+	MOVX C,JS%SPC		; output entire specification
+	JFNS%
+	MOVEI B,FILNAM		; figure its length
+	CALL STRLEN
+	MOVEM A,FILLEN		; save for later
+
+; falls through
+	SUBTTL Get Boise's address and open connection
+
+	HRROI A,[ASCIZ/SU-BOISE/] ; get Boise's Internet address
+	CALL $GTHSN
+	IFSKP.
+	  MOVE A,B		; success, get address in A for $TCOPN
+	ELSE.
+	  HRROI A,[ASCIZ/Boise/] ; failed, look up in Pup registry
+	  CALL $PUPSN
+	  IFNSK.
+	    EMSG <Can't get Boise's host address>
+	    JRST STOP
+	  ENDIF.
+;;; This code assumes SUnet is an Internet Class A network, which will not
+;;;always be the case.
+	  HRRZ A,B		; copy Ethernet host address
+	  HLRZS B		; get Ethernet network number
+	  DPB B,[POINT 8,A,19]	; set as subnet number
+	  MOVX B,SUNETN		; get Stanford Ethernet's IP network number
+	  DPB B,[POINT 8,A,11]	; set it
+	ENDIF.
+	MOVX B,BOIPRT		; port Boise listens on
+	SETZ C,			; needn't bother with unique code
+	CALL $TCOPN		; open connection to Boise
+	IFNSK.
+	  EMSG <Boise is not up, try again later>
+	  JRST DONE		; restart
+	ENDIF.
+	MOVEM A,TCPJCN		; save TCP JCN
+	MOVX B,TCPCHN		; set up PSI's
+	CALL $TCPSI
+	IFNSK.
+	  EMSG <$TCPSI failed>
+	  JRST STOP		; failed, give up
+	ENDIF.
+
+; falls through
+	SUBTTL Get Boise greeting message
+
+	MOVE A,TCPJCN		; get greeting message
+	HRROI B,STRBUF		; into string buffer
+	MOVX C,STRBSZ		; up to this many bytes
+	MOVX D,.CHLFD		; or end of line
+	CALL $TCSIN		; get greeting message
+	IFNSK.
+	  EMSG <Failed to get greeting message from Boise>
+	  JRST ABTCON
+	ENDIF.
+	MOVE A,[POINT 7,STRBUF]	; pointer to buffer
+	SETZ B,			; initial reply code
+	DO.
+	  ILDB C,A		; get byte of reply code
+	  CAIL C,"0"		; out of range?
+	   CAILE C,"9"
+	    EXIT.		; yes, punt
+	  IMULI B,^D10		; no, add this digit to the tally
+	  ADDI B,-"0"(C)
+	  LOOP.			; try for another digit
+	ENDDO.
+	CAIN B,^D220		; print server ready?
+	IFSKP.
+	  ESOUT%		; no, output Boise's human-readable string
+	  JRST ABTCON		; give up
+	ENDIF.
+	SKIPN MONCMP
+	 PSOUT%			; output greeting message
+
+; falls through
+	SUBTTL Send header for Boise file
+
+	MOVE A,TCPJCN		; output Boise "magic number"
+	MOVE B,[POINT 8,[Magic]]
+	MOVNI C,4		; 4 bytes to output
+	CALL BOISOU
+
+; Send attributes
+
+	MOVX B,AUserNAME	; output personal name
+	CALL BOIBOU
+	SKIPN B,PERLEN		; personal name length
+	IFSKP.
+	  CALL BOIBOU
+	  HRROI B,PERNAM	; send personal name
+	  CALL BOISOU
+	ELSE.
+	  MOVE B,USRLEN		; user name length
+	  CALL BOIBOU
+	  HRROI B,USRNAM	; send user name
+	  CALL BOISOU
+	ENDIF.
+	MOVX B,AHostName	; output host name
+	CALL BOIBOU
+	MOVE B,HSTLEN		; host name length
+	CALL BOIBOU		; send it
+	HRROI B,HSTNAM		; send host name
+	CALL BOISOU
+	MOVX B,AFileName	; output file name
+	CALL BOIBOU
+	MOVE B,FILLEN		; file name length
+	CALL BOIBOU
+	HRROI B,FILNAM		; send file name
+	CALL BOISOU
+
+; falls through
+
+; drops in
+
+	MOVX B,ACharacterSet	; output character set
+	CALL BOIBOU
+	MOVX B,1		; 1-byte attribute length
+	CALL BOIBOU
+	MOVE B,CHRSET		; get character set
+	CALL BOIBOU
+	MOVX B,ANewLine		; output newline type
+	CALL BOIBOU
+	MOVX B,1		; 1-byte attribute length
+	CALL BOIBOU
+	MOVE B,NEWLIN		; get newline type
+	CALL BOIBOU
+	MOVX B,ARotation	; output rotation
+	CALL BOIBOU
+	MOVX B,1		; 1-byte attribute length
+	CALL BOIBOU
+	MOVE B,ROTATE		; get rotation
+	CALL BOIBOU
+	MOVX B,AUserID		; output user name
+	CALL BOIBOU
+	MOVE B,USRLEN		; user name length
+	CALL BOIBOU
+	HRROI B,USRNAM		; send user name
+	CALL BOISOU
+	MOVX B,AEnd		; end of attributes
+	CALL BOIBOU
+
+; falls through
+	SUBTTL Send file to Boise
+
+; Note: this routine isn't very robust in dealing with holey files.  Tough.
+
+	DO.
+	  MOVS A,FILJFN		; file to map from
+	  HRR A,CURPAG		; current page to map from (initially 0)
+	  MOVX B,<.FHSLF,,<FILPAG/1000>> ; map into this process at FILPAG
+	  MOVX C,PM%CNT!PM%RD!PM%PLD!FILPGS ; preload FILPGS pages for read
+	  PMAP%			; map the pages
+	  MOVE A,TCPJCN		; where to send the data to
+	  HRROI B,FILPAG	; 7-bit bytes
+	  MOVX C,FILPGS*5*^D512	; number of bytes in this page set
+	  EXCH C,FILSIZ		; bytes to do yet in C
+	  CAMG C,FILSIZ		; more bytes after this page set?
+	  IFSKP.
+	    SUB C,FILSIZ	; yes, account for this page set in count
+	    EXCH C,FILSIZ	; full page set to output
+	  ELSE.
+	    SETZM FILSIZ	; no, this is the last page set to do
+	  ENDIF.
+	  MOVNS C		; output exactly that number of bytes
+	  CALL BOISOU		; send it out
+	  SKIPE MONCMP
+	  IFSKP.
+	    MOVEI A,"!"		; indicate progress
+	    PBOUT%
+	  ENDIF.
+	  SKIPG FILSIZ		; more to do yet?
+	  IFSKP.
+	    MOVEI A,FILPGS	; yes, bump CURPAG by number of pages just done
+	    ADDM A,CURPAG
+	    LOOP.		; do next set of pages
+	  ENDIF.
+	ENDDO.
+	MOVE A,TCPJCN		; force out buffer
+	CALL $TCSND
+	 JRST OUTERR
+
+; falls through
+	SUBTTL Close connection and get reply
+
+	MOVE A,TCPJCN		; close the connection
+	CLOSE%
+	 ERJMP .+1		; don't worry about failure
+	MOVE A,TCPJCN		; get ready to read reply
+	SETZ C,			; initial reply code
+	DO.
+	  CALL $TCBIN	
+	   EXIT.
+	  CAIL B,"0"		; out of range?
+	   CAILE B,"9"
+	    EXIT.		; yes, punt
+	  IMULI C,^D10		; no, add this digit to the tally
+	  ADDI C,-"0"(B)
+	  LOOP.			; try for another digit
+	ENDDO.
+	CAIN C,^D221		; success?
+	IFSKP.
+	  EMSG <>		; no, output error indication
+	  DO.
+	    MOVE A,TCPJCN	; get byte of error info
+	    CALL $TCBIN
+	     EXIT.		; once closed, can punt
+	    MOVX A,.PRIOU	; output it to terminal
+	    BOUT%
+	    LOOP.
+	  ENDDO.
+	ELSE.
+	  DO.
+	    MOVE A,TCPJCN	; get byte of success info
+	    CALL $TCBIN	
+	     EXIT.		; once closed, can punt
+	    SKIPE MONCMP
+	    IFSKP.
+	      MOVX A,.PRIOU	; type it
+	      BOUT%
+	    ENDIF.
+	    CAIE B,.CHLFD	; saw the last byte (known to be LF)?
+	     LOOP.		; continue reading until closed
+	  ENDDO.
+	ENDIF.
+ABTCON:	MOVE A,TCPJCN		; get JCN back
+	CALL $TCABT		; abort the connection
+DONE:	SKIPE MONCMP		; exit if invoked by monitor command
+STOP:	 HALTF%			; end of program
+	SETZM MONCMP		; not invoked by monitor command any more
+	JRST BOISE		; get another command
+	SUBTTL Subroutines
+
+STRLEN:	SAVEAC <B,C>
+	SUBI A,-1(B)		; number of words in string +1
+	LDB B,[POINT 6,A,5]	; get position of byte within last word
+	IDIVI B,^D7		; get number of unused bytes in this word
+	HRRZS A			; discard byte pointer stuff
+	IMULI A,5		; convert words into number of bytes
+	SUBI A,(B)		; minus unused bytes
+	RET
+
+BOIBOU:	CALL $TCBOU		; output byte
+	 JRST OUTERR
+	RET
+
+BOISOU:	CALL $TCSOU		; output string
+	 JRST OUTERR
+	RET
+
+OUTERR:	EMSG <Output to Boise failed>
+	JRST ABTCON
+
+; Output last JSYS error
+
+LSTERR:	MOVX A,.PRIOU		; output to terminal
+	HRLOI B,.FHSLF		; this fork,,last error
+	SETZ C,			; no limit
+	ERSTR%
+	 JRST ERRUND		; undefined error number
+	 NOP			; can't happen
+	RET
+
+ERRUND:	EMSG <Undefined error >
+	MOVX A,.FHSLF		; get error number
+	GETER%
+	MOVX A,.PRIOU		; output it
+	HRRZS B			; only right half where error code is
+	MOVX C,^D8		; in octal
+	NOUT%
+	 ERJMP R		; ignore error here
+	RET
+	SUBTTL Other stuff
+
+EVEC:	JRST BOISE		; START address
+	JRST BOISE		; REENTER address
+	<FLD BOIWHO,VI%WHO>!<FLD BOIVER,VI%MAJ>!<FLD BOIMIN,VI%MIN>!<FLD BOIEDT,VI%EDN>
+EVECL==.-EVEC
+
+...LIT:	XLIST
+	LIT
+	LIST
+
+END <EVECL,,EVEC>

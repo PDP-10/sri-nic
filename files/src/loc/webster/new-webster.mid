@@ -1,0 +1,3476 @@
+;-*-Midas-*-
+
+	Title @WEBSTER - Show word definitions from Webster's 7th
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Things yet to do / Wish list:
+;;
+;;	o  Include variants and run-ons in the index, as pointers
+;;	   to the main entry.  This will make INDEX.MID much more
+;;	   difficult, and force a re-think of the index structure.
+;;
+;;	o  Handle labels AFTER their associated definitions (Yuk).
+;;	   Lots of weird cases.  Maybe the entire record out to be
+;;	   buffered some way and only after gobbling the entire
+;;	   thing try and output any of it.  Bleh.
+;;
+;;	o  Do what we can with Q-font-encoded characters.  Breve
+;;	   can perhaps be "u" above the character, but sub-dot??
+;;	   Define an 8bit code for the funny characters, so that
+;;	   people with bit-map displays can define a dictionary font
+;;	   and receive 8bit funny-character codes (with Q-encoded
+;;	   characters being looked up and translated)
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+.DECSAV
+
+;1-5 for JSYSi
+A=6
+B=7
+C=10
+D=11
+E=12
+F=13
+T=14
+TT=15
+T3=16
+P=17
+
+IFNDEF CS, CS==0
+IFN CS, CS==1 ? PRINTX "(Chaosnet server version) "
+IFNDEF IS, IS==0
+IFN IS, IS==1 ? PRINTX "(Internet server version) "
+U==CS+IS-1 ? S==#U
+IFG U, .FATAL Can't be both!
+IFN S, PRINTX "
+"
+
+IFNDEF $$DEBUG, $$DEBUG==0
+IFN $$DEBUG, PRINTX "(Debugging output included)
+"
+
+PDLen==100			;PDL size
+WrdLen==20			;Word buffer size
+MaxMat==300.			;Maximum # of saved matches
+MaxVar==20			;Maximum # of variants
+DefWid==79.			;Default terminal width
+MaxWid==132.			;Maximum line width
+BufLen==MaxWid/5		;Line/random buffer size
+
+XRefLn==100			;Space for permanent x-references
+nFrePg==5			;# of pages for FreeSp area
+MaxEnt==6			;Maximum size (pages) of a single raw entry
+MaxFil==50.			;Maximum size of a .DICTION file
+
+Width1==80./4			;Column width for parital matches
+Width2==80./5			;the same for when displaying for "?"
+
+GeeChn==0			;Channel for Control-Gee to hit on.
+
+IFN CS, NL==200\^M
+IFN IS, NL==^M
+
+;Variant record breakdown:
+
+VNAMEBP==0			;BP to variant name (or 0 if none)
+VDOTS==1			;BP to variant DOTS string
+VACCENT==2			;BP to variant ACCENTS string
+VPRONBP==3			;BP to pronunciation string
+VLABEL==4			;BP to label
+VLEVEL==5			;LEVEL1,,LEVEL2
+
+.LSTOFF
+.INSRT MID:SYMBOLS		;Call, Return, etc
+.INSRT W7:5TABLE		;5bit encoding stuff
+IFN CS,.INSRT MID:CHSDEF	;Chaosnet symbols
+.INSRT MID:MACROS		;Type, Movx, etc
+.LSTON
+
+Define ERRET
+	Erjmp CPopj
+Termin
+
+Define UC ac			;lc --> UC
+	Cail ac,"a
+	  Caile ac,"z
+	    Skipa
+	   Trz ac,40
+Termin
+
+Define SQUASH *string		;Construct a 5bit encoded string
+	.BYTE 5
+IRPC char,,[string]
+	%A+"!char-"a
+TERMIN
+	0 ? .BYTE
+Termin
+
+IFN U,[
+Define .Lost
+	.Lose
+Termin
+
+Define ERROR &string
+	TypeCR string
+Termin
+
+Define FATAL &string
+	Jrst [Type string
+	      Jrst Die]
+Termin
+];User
+
+IFN S,[
+Define .Lost
+	Ercal Losage
+Termin
+
+Define ERROR &string
+	Hrroi T,[Asciz string]
+	Call TmpErr
+Termin
+
+Define FATAL &string
+	Jrst [Hrroi T,[Asciz string]
+	      Jrst FatErr]
+Termin
+
+Define NTYPE address
+	Movei 1,.PRIOU
+	Move 2,address
+	Movei 3,10.
+	NOUT%
+	  Nop
+Termin
+];S
+
+PDL:	-PDLen,,.
+	Block PDLen
+
+Once:	0			;Non-0 if only one pass through program.
+RAWp:	0			;Don't want formatted output, just raw record.
+
+; *** THESE MUST BE IN THE SAME ORDER AS IN THE ENTRY VECTOR! ***
+Pick1p:	0			;Non-0 if we're randomly picking a word
+
+;;	Server stuff
+
+IFN S,[
+SrvJFN:	0			;JFN on connection
+Serve:	0			;Address of command handler (given by Parse)
+
+ArgBP:	0			;BP to command argument
+ArgLen:	0			;and length of that arg
+
+Header:	0			;BP to header string for 1st-match output
+
+FatalE:	0			;Fatal-p error?  Non-0 if so
+ErrBuf:	Block WrdLen		;Where the error message is accumulated
+
+SrvCmd:	nSCmds,,nSCmds		;Server command table
+	[Asciz "COMPLETE"],,ServeC
+	[Asciz "DEFINE"],,ServeD
+	[Asciz "ENDINGS"],,ServeE
+	[Asciz "HELP"],,DoHelp
+	[Asciz "SPELL"],,ServeS
+nSCmds==.-SrvCmd-1
+
+IFN CS,[
+Option:	nOptions,,nOptions
+	[Asciz "RAW"],,RAWp
+nOptions==.-Options-1
+
+Packet:	Block %CPMXW
+];CS
+				;The HELP command types out this file.
+HlpFIL:	Asciz "DOC:DICTIONARY-PROTOCOL.DOC"
+];S
+
+;;	Input processing stuff
+
+JCLBP:	0			;BP to real meat of JCL
+JCLbuf:	Block BufLen
+
+5bitp:	0			;Source to Process is 5bit, not 7bit
+Alphap:	0			;Non-0 if any alpha (A-Z, etc) found
+NonDig:	0			;Non-0 if any non-digits found
+InpNum:	0			;If input was a #, this is it.
+Spacep:	0			;<SPACE> encountered in source.
+Wildp:	0			;Wildcards in string?
+
+WordBP:	0			;BP to target string for BSF
+Escp:	0			;For <ESC>/? handling, which it is.
+
+Digitp:	0			;Busy accumulating a digit
+DigExp:	0			;Busy expanding a digit
+Old2BP:	0			;When doing so, this is the old W2 BP
+Funp:	0			;Funny (non-A-Z) characters in mainent?
+FunBuf:	Block WrdLen		;Yes, they're saved here.
+NumNam:	Block WrdLen		;Number-Name is put here
+
+;;	Dictionary/Index file stuff
+
+IdxJFN:	0			;JFN on DICTIONARY.INDEX file
+IdxSiz:	0			;# pages in that file
+
+OldDF:	-1			;Index of last diction file mapped in (or -1)
+NewDF:	0			;Index of diction file we need for new word
+Index:	0			;Offset into index for new word
+
+File:	Asciz "W7:" ? Block 5	;Constructed filename of .DICTION file
+FilJFN:	0			;JFN on current .DICTION file.
+FilSiz:	0			;Length in pages of that file.
+FilByt:	0			;# of bytes in file
+
+;;	Matching/match-output stuff
+
+ShoMat:	0			;Should MAYBE show matches as made?
+SavMat:	0			;In Wild2, saving matches?
+NumWid:	0			;Width of prefix match #
+
+MatCol:	0			;Column we ended on during last Maybe print.
+ColWid:	0			;Column width Maybe's printing at.
+LeadSp:	0			;# leading spaces needing to columnate
+Spellp:	0			;Non-zero if "Maybe you mean..." else "Matches"
+
+nMatch:	0			;# matches (not necessarily all saved)
+Matchs:	Block MaxMat		;DF,,index or -1,,index if DF not known
+
+1Match:	0			;When not saving, this is the index/etc
+mMatch:	0			;of the last match, this the # of matches.
+
+;;	Cross-reference stuff
+
+nXrefs:	0			;# of interesting xrefs for this entry.
+1stXrf:	0			;Offset into Matchs of 1st xref
+XType:	0			;In x-ref handler, type of x-ref (#)
+XrefBP:	0			;BP to xref storage area.
+
+;;	Mis-spelling stuff
+
+WerdBP:	0			;Temporary garbage for trying to
+SavChr:	0			;figure out what you mean when
+BP1:	0			;you can't spell right ya twit
+BP2:	0			;why don't you get a decent
+ChrCnt:	0			;education fercrissakes?
+
+;;	Record hacking
+
+Entry2:	0			;BP to start of raw entry
+Entry3:	0			;Length of entry, or 0 if runs to EOF
+
+NeedGR:	0			;Need to do a GetRec?
+
+RecTyp:	0			;Type of record (the record character)
+RecLen:	0			;Length of sub-record
+
+nArgs:	0			;Number of arguments
+RecArg:	Block 8.		;BP to arg string or 0 if none.
+LinLen:	0			;Length of actual line.
+MaxSub:	0			;Maximum # of subrecords for this rectyp
+
+TempBP:	0			;Silly temporary BP storage
+
+;;	Output primitive stuff
+
+FromBP:	0			;BP to character source
+SpaceOK:0			;OK to have spaces in column 3, etc.
+
+Column:	0			;Current output column
+LineBP:	0			;BP to main accumulation output buffer
+
+nChars:	0			;Total # characters in output buffer
+Fonter:	0			;Address of font hacking routine or 0 if none.
+
+HackLn:	0			;Current line have super characters?
+OldCol:	0			;Last column super-character was over.
+HackBP:	0			;BP to super-character output line.
+
+BegCh:	0			;Requested character to string string.
+EndCh:	0			;Requested ending character for String
+EndStr:	0			;Hit the end of the source string yet?
+ToBP:	0			;BP to destination buffer
+
+EntEnd:	0			;Requested character to end Entry
+PostBS:	0			;In OvrStr, the character after the BS
+FunBP:	0			;BP to expansion string if any, else 0.
+OldFBP:	0			;BP from before reading this character.
+
+;;	Higher-level output stuff
+
+SumDef:	0			;Any body yet?
+1stSpc:	0			;Umm, crufty need-to-space flag.
+
+NoMore:	0			;Any more source?
+FreeSp:	0			;Free-space pointer.
+
+;;	"F" record hacking
+
+zbeg::
+NAMEBP:	0			;BP to ENTNAME - 1st word zeroed each time.
+DOTSBP:	0			;BP to DOTS-position string (or 0)
+ACCEBP:	0			;BP to accent-marks string (or 0)
+
+HOMONO:	0			;Homonym# of entry (or 0)
+PREFIX:	0			;Prefix character ("p" or "s") (or 0)
+POS:	0			;Part Of Speech
+POSJ:	0			;Joiner
+POS2:	0			;2nd (alternate) POS
+
+PRONBP:	0			;BP to main pronunciation string
+ETYMBP:	0			;BP to etymology string
+
+LSNSNUM:0			;SNS number
+LSNSLET:0			;SNS letter and
+LSNSSUB:0			;SNS subnumber
+LABELBP:0			;BP to label text
+
+n0VARs:	0			;Number of 1st-level-0 Variants
+0VARS:	Block MAXVAR
+
+nOVARs:	0			;Number of other variants
+OVARS:	Block MAXVAR
+
+LEVEL1:	0
+LEVEL2:	0
+OLDVAR:	0
+VARPRO:	0
+
+EOFP:	0			;Last word zeroed each time.
+VARP:	0
+zend::
+
+;;	Definition body hacking
+
+SNSNUM:	0			;[Last] Sense number,
+SNSLET:	0			;letter,
+SNSSUB:	0			;and sub-number.
+NUMBER:	0			;[Current] versions of the same.
+LETTER:	0
+SUBNUM:	0
+
+PPos:	0			;Part Of Speech, 1st
+PPosj:	0			;joiner
+PPos2:	0			;and 2nd
+
+;;	Misc. other stuff
+
+Width:	DefWid			;Width of TTY
+CCOC2:	0			;Returned AC2 and 3 of RFCOC, since
+CCOC3:	0			;ASKHIM turns of echoing of ESC.
+ModWrd:	0			;TTY mode word with TT%OSP off
+
+TmpPtr:	0			;BP into TmpBuf (copy of dictionary entry)
+DefPtr:	0			;and into DefBuf (where the output is placed)
+
+HlpJFN:	0			;JFN on help file.
+
+SVPTR:	0			;Variables for stolen monitor WILD% code
+SVMSK:	0
+
+.INSRT W7:DICTION-FILE		;First words of files / filenames.
+
+FilEnt:	Block nStarts		;# words in each file, BLT'd here from .INDEX
+nWords:	0			;# entries in dictionary - MUST FOLLOW FILENT!!
+
+Werd:	Block WrdLen		;Requested word.
+7Werd:	Block WrdLen		;7bit version, maintaining funny characters.
+Werd2:	Block WrdLen		;Copy of Werd for spelling purposes
+
+OutBuf:	Block BufLen		;Random
+LinBuf:	Block BufLen		;buffers
+HakLin:	Block BufLen		;used
+WrdBuf:	Block BufLen		;by
+HakBuf:	Block BufLen		;Format
+NumBuf:	Block WrdLen		;routines.
+
+IFN U,[
+PSIPC1:	0
+PSIPC2:	0
+PSIPC3:	0
+
+LevTab:	PSIPC1 ? PSIPC2 ? PSIPC3
+
+ChnTab:	Channel GeeChn,2,GeeWiz
+	EndChannel
+
+HlpFil:	Asciz "HLP:WEBSTER.HLP"
+Prompt:	Asciz "Word: "
+BrkMsk:	Break 0,["?]		;Break on "?" also.
+];User
+
+TEXTIb:	lTEXTb
+	RD%JFN\RD%BEL\RD%CRF\RD%BRK
+	.PRIIN,,.PRIOU
+	0			;Destination buffer  \  Filled in
+	0			;Size of dest buffer /  at runtime
+	-1,,JCLbuf		;Static BP to start of buffer
+IFN U,	-1,,Prompt ? BrkMsk	;Mask of additional break characters
+.ELSE	0 ? 0
+lTEXTb==.-TEXTIb-1
+
+DigNam:	[Squash "zero"]
+	[Squash "one"]
+	[Squash "two"]
+	[Squash "three"]
+	[Squash "four"]
+	[Squash "five"]
+	[Squash "six"]
+	[Squash "seven"]
+	[Squash "eight"]
+	[Squash "nine"]
+
+TeenTb:	[Squash "ten"]
+	[Squash "eleven"]
+	[Squash "twelve"]
+	[Squash "thirteen"]
+	[Squash "fourteen"]
+	[Squash "fifteen"]
+	[Squash "sixteen"]
+	[Squash "seventeen"]
+	[Squash "eighteen"]
+	[Squash "ninteen"]
+
+TenNam:	[Squash "twenty"]
+	[Squash "thirty"]
+	[Squash "forty"]
+	[Squash "fifty"]
+	[Squash "sixty"]
+	[Squash "seventy"]
+	[Squash "eighty"]
+	[Squash "ninety"]
+
+CRLF:	Asciz "
+"
+
+.LSTOFF
+.INSRT MID:SOUT			;User-context SOUT%
+.INSRT MID:STCMP		;and STCMP% JSYSi (string only)
+.INSRT MID:PRARG		;For communication with the EXEC, .Lost, etc
+.LSTON
+
+V%MAJOR==4
+V%MINOR==1
+V%WHO==2
+V%EDIT==.FVERS
+
+Vector:	Jrst Begin		;Start
+	Jrst Ask		;Reentry
+	Version V%MAJOR,V%MINOR,V%WHO,V%EDIT
+	JSP A,OnFlag		;Word-a-day
+VecLen==.-Vector
+
+OnFlag:	Setom Pick1p-Vector-4(A)
+Begin:	Move P,PDL
+IFE IS,	RESET%
+IFN IS,	Movem 1,SrvJFN
+	Call GetIdx		;Get the index file
+
+IFN S,[
+	Call SrvIni		;Accept the connection
+Ask:	Call GetCmd		;Get a line of command.  Anything there?
+	  Jrst Die		;  Blank line, so close connection.
+	Call Parse		;Parse it up.
+	  Jrst Ask		;  Oops, error.
+	Call @Serve		;Dispatch on command
+	Jrst Ask		;and then do it again.
+
+Die:	Movei 1,.FHSLF
+	Seto 2,			;Restore primary JFNs
+	SPJFN%
+	  Ernop
+	Move 1,SrvJFN
+	CLOSF%
+	  Nop
+	HALTF%
+	Jrst .-1
+];S
+
+IFN U,[
+	Call TTYini		;Initialize TTY stuff
+	Call IntIni		;Initialize the interrupt system
+	Skipe Pick1p		;We supposed to pick a word for them?
+	  Jrst Pick1		;  Yes, so pick one
+	Call GetJCL		;See if there's any JCL.
+Ask:	  Call AskHim		;  No, so ask for a word.
+	Skipn JCLbuf		;Any input?
+	  Jrst Die		;  Naw.
+Crunch:	Call Process		;Strip leading/trailing blanks, process -> Werd
+	  Jrst Die		;  Nothing really there after all.
+	  Jrst WrdNum		;  They gave us a number.
+	  Jrst Tame		;  They gave us a wild one.
+	Call Find		;Find the word.
+	  Jrst NoFind		;  Oops
+Pretty:	Call Format		;No, so format it prettily
+	AType DefBuf		;and then output it.
+	Skipe nXrefs		;Any interesting cross-references?
+	  Call Xshow		;  Yes, so show them
+Nextp:	Skipn Once		;Just want to do one word?
+	  Jrst Ask		;  Nah, so ask for another.
+Die:	.Logout			;Yeah, so all done.
+More:	Skipe Pick1p		;If randomly picking,
+	  Jrst Pick1		;  then pick another.
+	Setzm Once		;In case continue,
+	Jrst Ask		;keep asking.
+];User
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Get the index/word file.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+GetIdx:	Movx 1,GJ%SHT\GJ%OLD
+	Hrroi 2,[Asciz "W7:NEW-INDEX.BIN"]
+	GTJFN%
+	  .Lost
+	Movem 1,IdxJFN
+	Move 2,[Field(36.,OF%BSZ)+OF%RD]
+	OPENF%
+	  .Lost
+	SIZEF%
+	  .Lost
+	Movem 3,IdxSiz		;Size in pages of index file.
+	Skipe Pick1p		;We randomly picking an entry?
+	  Movei 3,1		;  Yes, so only need 1st page for now.
+	Movs 1,IdxJFN		;JFN,,0
+	Move 2,[.FHSLF,,IdxPag]
+	Txo 3,PM%CNT\PM%RD\PM%PLD
+	PMAP%
+	  .Lost
+	Hlrz 1,IdxAdr		;LH of 1st word in index is # files
+	Caie 1,nStarts		;Same as we think?
+	  Fatal "?INDEX's file-count <> DICTION-FILE's file-count"
+	Move 1,[IdxAdr+1,,FilEnt]
+	BLT 1,FilEnt+nStarts-1	;Copy file-counts into fixed memory
+	Hrrz 1,IdxAdr		;# words in file
+	Movem 1,nWords
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Initialization stuff
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+IFN U,[
+TTYini:	Movei 1,.PRIOU
+	Movei 2,.MORLW
+	MTOPR%
+	  Erret
+	Skipe 3			;If 0
+	  Caile 3,MaxWid	;  or too big
+	    Movei 3,MaxWid	;    make the maximum width.
+	Movem 3,Width
+	RFMOD%			;Get the TTY mode word
+	Txz 2,TT%OSP		;Make sure output suppression is off
+	Movem 2,ModWrd		;and shuffle it away for later.
+	Return
+
+IntIni:	Movei 1,.FHSLF
+	Move 2,[LevTab,,ChnTab]
+	SIR%
+	  Erret
+	EIR%
+	  Erret
+	Movx 2,ChnMsk
+	AIC%
+	  Erret
+	Move 1,[.TICCG,,GeeChn]
+	ATI%
+	  Erret
+	Return
+];User
+
+IFN CS,[
+SrvIni:	Movx 1,GJ%SHT\GJ%OLD
+	Hrroi 2,[Asciz "CHA:.DICTIONARY"]
+	GTJFN%
+	  Jrst Die
+	Movem 1,SrvJFN
+	Move 2,[Field(8,OF%BSZ)+OF%RD+OF%WR]
+	OPENF%
+	  Jrst Die
+	Movei 2,.MOPKR
+	Movei 3,Packet
+	MTOPR%			;Grab the RFC packet
+	  Erjmp Die		;  Hmm...
+	Ldb T,[.BP $CPKNB,Packet]
+	Jumpe T,Accept		;No options.
+	Move TT,[440800,,Packet+%CPKDT]
+
+NxtOpt:	Ildb 1,TT		;and skip to next option.
+	Jumpe 1,Accept		;No more.
+	Caie 1,40		;Options are separated by spaces...
+	  Jrst NxtOpt
+ChkOpt:	Movei 1,Options
+	Move 2,TT
+	TBLUK
+	Txne 2,TL%NOM
+	  Jrst NxtOpt		;Unknown option.
+	Hrrz 1,(1)		;Get address of flag
+	Setom (1)		;set it
+	Jrst NxtOpt
+
+Accept:	Move 1,SrvJFN		;Accept the connection.
+	Movei 2,.MOOPN
+	MTOPR%
+	  Erjmp Die
+];CS
+IFN IS,SrvIni:
+IFN S,[
+SwpPIO:	Movei 1,.FHSLF
+	Hrrz 2,SrvJFN		;Redirect primary input
+	Hrls 2			;and output to the chaosnet.
+	SPJFN%
+	  .Lost
+	Return
+];S
+
+IFN S,[
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Parse the command string
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Parse:	Move T,[440700,,JCLbuf]
+	Setz TT,
+Parse0:	Ildb 1,T
+	Jumpe 1,Parse1
+	Caie 1,40
+	  Aoja TT,Parse0
+Parse1:	Jumpe TT,BadFmt
+	Movem 1,SavChr		;Save the character that ended command.
+	Setzb 1,JCLBP		;JCLBP/0 means no argument (yet)
+	Dpb 1,T			;Make command ASCIZ
+	Skipn SavChr		;No argument?
+	  Jrst Parse3		;  Nope.
+	Movem T,JCLBP		;BP to start of argument.
+Parse2:	Ildb 1,T
+	Jumpe 1,[Movem T,TEXTIb+.RDDBP
+		 Jrst Parse3]
+	Cail 1,"A
+	  Caile 1,"Z
+	    Jrst Parse2
+	Tro 1,40		;UC -> lc
+	Dpb 1,T
+	Jrst Parse2
+
+Parse3:	Movei 1,SrvCmd
+	Hrroi 2,JCLbuf
+	TBLUK%			;Should keep this in user context
+	Txne 2,TL%NOM\TL%AMB	;Unknown or ambiguous?
+	  Jrst UnkCmd		;  Eh?
+	Hrrz 1,(1)		;Address of handler
+	Movem 1,Serve		;saved here for later dispatch.
+	Movem T,ArgBP		;BP to start of argument
+	Setzb TT,ArgLen
+	Skipn SavChr		;Command end with NL?
+	  Jrst Popj1		;  Yes, so no argument.
+Parse5:	Ildb 1,T
+	Skipe 1
+	  Aoja TT,Parse5
+	Movem TT,ArgLen
+	Jrst Popj1
+
+BadFmt:	Error "Bad format for command, should be: COMMAND[<sp>argument]<NL>"
+	Return
+
+UnkCmd:	Error "Unknown, should be COMPLETE, DEFINE, ENDINGS, HELP, or SPELL"
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Server commands
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+ServeE:	Setom ShoMat
+	Hrroi T,[Asciz "MATCHS"]
+	Movem T,Header
+	Skipa
+ServeC:	  Setzm ShoMat
+	Skipn JCLBP		;Any argument?
+	  Jrst NoArg		;  Nope, luz.
+	Call StarIt		;Starify input
+	Call Process		;then process it.
+	  Jrst NoArg		;No real arg after all.
+	  Jrst Ambig		;Can't complete a number
+	  Nop			;Wild return, had better be!
+	Setzm SavMat		;Don't save matches.
+	Call DoWild		;Check out the matches.
+	Skipe ShoMat		;If showing them,
+	  Jrst ServE0		;  then this was an ENDINGS
+	Skipe T,mMatch		;No matches at all?
+	  Caie T,1		;  Or more than 1?
+	    Jrst Ambig		;    Then no good.
+	Type "COMPLETION "
+	Hrrz TT,1Match		;The 1 and only match
+	Hlrz T,EntNam(TT)	;address of 5bit matched string.
+	Add T,[440500,,IdxAdr]	;Converted to a BP
+	Call 5Type
+	Jrst NForce
+
+ServE0:	Skipe mMatch		;Any matchs?
+	  Jrst EForce		;  Yes, so done header.
+	Type "MATCHS 0"
+	Jrst NForce
+
+Ambig:	Type "AMBIGUOUS "
+	NType mMatch
+	Jrst NForce
+
+ServeD:	Skipn JCLBP		;Any argument?
+	  Jrst NoArg		;  Nope.
+ServD0:	Call Process		;Process the input.
+	  Jrst NoArg		;  No real input after all.
+	  Jrst ServeN		;  A number.
+	  Jrst ServeW		;  Wildcards.
+	Call Find		;Find the given word.
+	  Jrst ServS0		;  No match, try spellings.
+Pretty:	Skipn RAWp		;If raw mode, then don't
+	  Call Format		;  pretty up the entry.
+	Type "DEFINITION "
+	NType nXrefs
+	Call DoNL		;Newline
+	Skipe nXrefs		;Any of them?
+	  Call Xshow		;  Yes, so send them next.
+	Movei 1,.PRIOU
+	Move 2,Entry2		;BP to DefBuf or raw entry
+	Movn 3,Entry3		;0 for pretty of last entry, else # chars.
+	SOUT%
+	Jrst EForce		;and then an EOF
+
+ServeN:	Call WrdNu0
+	  Return		;Lossage
+	  Jrst ServD0		;Ascii pointer, needs to be processed
+	Jrst Pretty		;Got a word pointer.
+
+ServeW:	Setzm nMatch
+	Setom ShoMat
+	Setom SavMat
+	Hrroi T,[Asciz "WILD"]
+	Movem T,Header
+	Call DoWild
+	Skipe nMatch
+	  Jrst EForce
+	Type "WILD 0"
+	Jrst NForce
+
+ServeS:	Skipn JCLBP
+	  Jrst NoArg
+	Setzm nMatch		;No maybes yet.
+	Call Process
+	  Jrst NoArg
+	  Jrst ServS1
+	  Jrst ServS1
+	Call Find
+	  Jrst ServS0
+	Aos nMatch
+	Jrst ServS1
+
+ServS0:	Setzm nMatch
+	Setom ShoMat		;Show them
+	Setom SavMat		;and save them, as found.
+	Hrroi T,[Asciz "SPELLING"]
+	Movem T,Header		;Blast this out on the first match.
+	Call Dumbo		;Try various permutations of your word
+	Skipe nMatch
+	  Jrst EForce
+ServS1:	Type "SPELLING "
+	NType nMatch
+	Jrst NForce
+
+NoArg:	Error "Argument needed"
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Error stuff for server
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+TmpErr:	Setzm FatalE
+	Jrst CError
+
+Losage:	Hrroi 1,ErrBuf
+	Hrloi 2,.FHSLF
+	Movei 3,WrdLen*5-1
+	ERSTR%
+	  Nop
+	  Nop
+	Hrroi T,ErrBuf
+
+FatErr:	Setom FatalE
+CError:	Type "ERROR "
+	Hrroi 1,[Asciz "FATAL "]
+	Skipn FatalE
+	  Hrroi 1,[Asciz "RECOVERABLE "]
+	PSOUT%
+	Hrro 1,T
+	PSOUT%
+	Call NForce		;Force out.
+	Skipe FatalE		;If fatal, then
+	  Jrst Die		;  close up shop,
+	Return			;else just carry on.
+];S
+
+IFN CS,[
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Chaosnet output stuff.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+EForce:	Call EOF
+	Skipa
+NForce:	  Call DoNL
+Force:	Move 1,SrvJFN
+	Movei 2,.MONOP
+	MTOPR%			;Force out data.
+	Return
+
+DoNL:	Move 1,SrvJFN
+	Movei 2,NL
+	BOUT%			;.PRIOU is only 7 bits wide?
+	Return
+
+EOF:	Move 1,SrvJFN
+	Movei 2,.MOEOF
+	MTOPR%
+	Return
+];CS
+
+IFN IS,[
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Internet output stuff
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+EForce:	Call EOF
+	Skipa
+NForce:	  Call DoNL
+Force:	Move 1,SrvJFN
+	Movei 2,.TCPSH
+	TCOPR%			;Force out data
+	Return
+
+DoNL:	AType CRLF
+	Return
+
+EOF:	Move 1,SrvJFN
+	Movei 2,200
+	BOUT%
+	Return
+];IS
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Here when you gave us a number
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+IFN U,[
+WrdNum:	Call WrdNu0
+	  Jrst Nextp		;Lossage
+	  Jrst Crunch		;Ascii pointer, needs to be processed
+	Jrst Pretty
+];User
+
+WrdNu0:	Move TT,nMatch		;Not all of the matches may have
+	Caile TT,MaxMat		;been saved, so TT gets the highest
+	  Movei TT,MaxMat	;saved word#.
+	Move T,InpNum		;The number you typed.
+	Cail T,1
+	  Camle T,TT
+	    Jrst OutRange	;(n < 1) or (n > max), so out of range.
+	Hrrz TT,Matchs-1(T)	;Index of word
+	Cain TT,440700		;Pointer to cross reference?
+	  Jrst [Movs TT,Matchs-1(T)
+		Movem TT,JCLBP	;Make it look like they typed this word.
+		Jrst Popj1]	;Go process it.
+	Movem TT,Index
+	Hlre T,Matchs-1(T)	;File it's in already known?
+	Jumpl T,IdxOnly		;No, so go figure it out.
+WrdNu1:	Movem T,NewDF		;Yes, so save the file#.
+	Call Find0		;Suck in the entry
+	  Fatal "%FIND0 failed at WRDNU1"
+	Jrst Popj2
+
+IFN U,[
+Pick1:	Call RndIdx		;Pick a random index.
+	Movem TT,Index
+];User
+IdxOnl:	Hlrz T,EntNam(TT)
+	Add T,[440500,,IdxAdr]
+	Call 5Process		;Process string into normal order
+	  Fatal "%5PROCESS says null input"
+	  Nop			;#
+	  Nop			;Wildcards
+	Move T,[440600,,Werd]
+	Call BSF		;Now see what file to find it in
+	  Fatal "%BSF failed at IDXONL"
+	Movem T,NewDF		;Yes, so save the file#.
+	Call Find0		;Suck in the entry
+	  Fatal "%FIND0 failed at IDXONL"
+	Jrst Pretty
+
+OutRan:	Error "Word number out of range."
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Show interesting cross-references
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Xshow:	Movss TT,nXrefs
+	Movns TT
+	Hrr TT,1stXrf
+IFN U,[
+	TypeCR "
+Cross-references:"
+Xshow0:	Movei 1,.PRIOU
+	Movei 2,1(TT)
+	Move 3,[Field(3,NO%COL)+NO%LFL+NO%OOV+10.]
+	NOUT%
+	  Nop
+	Type ". "
+	Movs 1,Matchs(TT)	;This BP is stored swapped.
+	PSOUT%
+	AType CRLF
+];User
+
+IFN S,[
+Xshow0:	Movei 1,.PRIOU
+	Movei 2,1(TT)
+	Movei 3,10.
+	NOUT%
+	  Nop
+	CType 40
+	Movs 1,Matchs(TT)
+	PSOUT
+	Call DoNL
+];S
+	Aobjn TT,Xshow0
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Wildcard handler
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+IFN U,[
+Tame:	Setom ShoMat		;Show matches made
+	Setom SavMat		;and save them.
+	Call DoWild
+	Skipn nMatch
+	  Jrst [TypeCR "No matches."
+		Jrst Nextp]
+CRNext:	Atype CRLF
+	Jrst Nextp
+];User
+
+DoWild:	Skipn SavMat
+	  Setzm mMatch
+	Skipe SavMat
+	  Setzm nMatch
+	Setzm Spellp
+	Move TT,[440700,,7Werd]
+Wild1a:	Ildb T,TT		;Get a character from input string.
+	Caie T,"%		;Does the wild string start
+	  Cain T,"*		;  with a wildcard?
+	    Jrst [Movs F,nWords	;Yes, so we have to scan
+		  Movns F	;the whole damn index!
+		  Jrst Wild11]
+	Cail T,"a		;Nope, but stray junk before real letter
+	  Caile T,"z		;  is ignored, so
+	    Jrst Wild1a		;    get another.
+	Hlrz TT,LRange-"a(T)	;Starting df-table offset
+	Hrlz F,FilEnt(TT)	;x,,0
+	Hrrz A,LRange-"a(T)	;Ending df-table offset
+	Hrlz A,FilEnt+1(A)	;y,,0
+	Sub F,A			;-# words in letter-range,,0
+	Hrr F,FilEnt(TT)	;-# words,,starting word
+
+Wild11:	Move T,[440700,,7Werd]
+	Hlrz TT,EntNam(F)
+	Add TT,[440500,,IdxAdr]
+	Call 5Wild		;Do an effective WILD% call
+	  Jrst Wild12		;  No match.
+	Hrro T,F		;LH -1 so we'll have to find its file later.
+	Call Match		;  then do so
+Wild12:	Aobjn F,Wild11
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Here when the word you gave wasn't found
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+IFN U,[
+NoFind: CType "'
+	Atype 7Werd
+	TypeCR "' not found."
+	Setzm nMatch		;No maybes yet.
+	Setom ShoMat		;Show them
+	Setom SavMat		;and save them, as found.
+	Call Dumbo		;Try various permutations of your word
+	Skipn nMatch		;If there were any possibilities,
+	  Jrst Nextp		;  (there weren't)
+	AType CRLF		;continue, so can pick the right one.
+	Jrst More
+];User
+
+Dumbo:	Setom Spellp		;We're checking for spelling errors
+	Call 1Wrong		;Try for 1 letter wrong
+	Call 1Xposd		;and 1-pair transposition
+	Call 1Extra		;and 1 extra letter
+;	Call 1Mising		;and 1 missing letter.
+;	Return			;(fall into 1Mising)
+
+1Misin:	Move 1,[Werd,,Werd2]
+	BLT 1,Werd2+WrdLen-1
+	Movei 1,1
+	Movem 1,ChrCnt
+1Misi0:	Move 2,[440600,,Werd2]
+	Move 3,[440600,,Werd]
+	Move 4,ChrCnt
+1Misi1:	Ildb 1,2
+	Jumpe 1,1Extr3
+	Idpb 1,3
+	Sojg 4,1Misi1
+	Ibp 3
+	Movem 3,WerdBP
+1Misi2:	Ildb 1,2
+	Idpb 1,3
+	Jumpn 1,1Misi2
+	Move F,[%A-%Z-1,,%A]
+1Misi3:	Dpb F,WerdBP
+	Call FindIt
+	  Skipa
+	    Call Maybe
+	Aobjn F,1Misi3
+	Aos ChrCnt
+	Jrst 1Misi0
+
+1Wrong:	Move 1,[440600,,Werd]
+	Movem 1,WerdBP
+1Wron0:	Ildb 1,WerdBP
+	Jumpe 1,CPopj
+	Cail 1,%A
+	  Caile 1,%Z
+	    Jrst 1Wron0
+	Movem 1,SavChr		;Save the original character.
+	Move F,[%A-%Z-1,,%A]	;Aobjn for all letters
+1Wron1:	Hrrz 1,F
+	Camn 1,SavChr
+	  Jrst 1Wron2
+	Dpb 1,WerdBP
+	Call FindIt
+	  Skipa
+	    Call Maybe
+1Wron2:	Aobjn F,1Wron1
+	Move 1,SavChr
+	Dpb 1,WerdBP
+	Jrst 1Wron0
+
+1Xposd:	Move 1,[440600,,Werd]
+	Movem 1,BP1
+	Move 1,[360600,,Werd]
+	Movem 1,BP2
+1Xpos1:	Ildb 2,BP2
+	Jumpe 2,CPopj
+	Ildb 1,BP1
+	Camn 1,2
+	  Jrst 1Xpos1
+	Dpb 1,BP2
+	Dpb 2,BP1
+	Call FindIt
+	  Skipa
+	    Call Maybe
+	Ldb 1,BP1
+	Ldb 2,BP2
+	Dpb 1,BP2
+	Dpb 2,BP1
+	Jrst 1Xpos1
+
+1Extra:	Move 1,[Werd,,Werd2]	;Save a copy of Werd in Werd2
+	BLT 1,Werd2+WrdLen-1
+	Move 2,[360600,,Werd]
+	Movem 2,BP2
+	Move 3,[300600,,Werd2]
+1Extr1:	Ildb 1,3		;Copy original back sans 2nd character
+	Idpb 1,2
+	Jumpn 1,1Extr1
+	Move 2,[360600,,Werd2]
+	Movem 2,BP1
+1Extr2:	Call FindIt
+	  Skipa
+	    Call Maybe
+	Ldb 1,BP1
+	Jumpe 1,1Extr3
+	Ildb 1,BP1
+	Idpb 1,BP2
+	Jrst 1Extr2	
+
+1Extr3:	Move 1,[Werd2,,Werd]
+	BLT 1,Werd+WrdLen-1
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Maybe(report, save).
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Maybe:	Hrl T,NewDF
+	Hrr T,Index
+Match:	Skipn SavMat
+	  Jrst [Aos TT,mMatch
+		Jrst Mat0]
+	Aos TT,nMatch
+	Caile TT,MaxMat+1	;Can this one be saved?
+	  Jrst Match2		;  Nope, lost soul, so just type it out.
+Mat0:	Skipn ShoMat
+	  Jrst Mat1
+	Caig TT,1		;Say this before the 1st match.
+	  Call 1stMat
+	Cain TT,MaxMat+1	;And say this when can't save any more.
+	  Call Full
+Mat1:	Jumpl T,Match1		;For wildcard matches, don't check for dups
+	Movsi 3,-1(TT)		;# previous words,,0
+	Jumpe 3,Match1		;If no previous words, so be it.
+	Movns 3			;-#,,0
+Match0:	Camn T,Matchs(3)
+	  Jrst NoMatch		;Oho!  Duplicate!  So don't count it after all
+	Aobjn 3,Match0
+Match1:	Movem T,1Match
+	Skipe SavMat
+	  Movem T,Matchs-1(TT)
+Match2:	Skipn ShoMat		;Want to see matches as made?
+	  Return		;  Naw.
+	Hlrz T,EntNam(T)
+	Add T,[440500,,IdxAdr]
+IFN U,[
+	Move 3,MatCol		;Old ending column
+	IDiv 3,ColWid		;Columns/line
+	Skipn MatCol		;Left margin is special
+	  Jrst Mumble
+	Skipe SavMat
+	  Skipe 4
+	    Sub 4,ColWid
+Mumble:	Movns 4
+	Movem 4,LeadSp		;4/ leading spaces
+	Add 4,NumWid		;Space for the leading #
+	Move 3,T
+Match3:	Ildb 1,3
+	Cain 1,%META
+	  Jrst [Ildb 1,3
+		Aoja 4,Match3]
+	Skipe 1
+	  Aoja 4,Match3
+	Move 3,4
+	Add 3,MatCol		;ending column
+	Caml 3,Width		;Fit in line?
+	  Jrst [Atype CRLF	;Nope, so go to new line
+		Move 3,4	;and reset column#
+		Sub 3,LeadSp
+		Setzm LeadSp
+		Jrst .+1]
+	Movem 3,MatCol		;new ending column
+	Movei 1,40		;Space character
+	Sosge 2,LeadSp
+	  Jrst Match5
+Match4:	PBOUT%
+	Sojge 2,Match4
+Match5:	Skipn SavMat
+	  Jrst Match6
+	Movei 1,.PRIOU
+	Move 2,TT
+	Move 3,[Field(3,NO%COL)+NO%LFL+NO%OOV+10.]
+	NOUT%
+	  Nop
+	Type ". "
+Match6:	Call 5Type
+	Return
+];User
+IFN S,[
+	NType TT
+	CType 40
+	Call 5Type
+	Jrst NForce
+];S
+
+1stMat:
+IFN U,[
+	Hrroi 1,[Asciz " Maybe you mean:
+"] ?	Skipn Spellp		;"Maybe..." if you spelled it wrong,
+	  Hrroi 1,[Asciz " Matches:
+"] ?	PSOUT%			;Or "Matches" if you're wildcarding, etc.
+	Setzm MatCol		;Current at column 0.
+	Skipn SavMat
+	  Jrst [Movei 1,Width2
+		Setz 2,
+		Jrst 1stMa0]
+	Movei 1,Width1
+	Movei 2,5
+1stMa0:	Movem 1,ColWid
+	Movem 2,NumWid
+	Return
+];User
+IFN S,[
+	Move 1,Header
+	PSOUT%
+	Jrst DoNL
+];S
+
+Full:
+IFN U,[
+	Skipn SavMat
+	  Return
+	TypeCR "
+%No more room, not saving words from here on."
+	Setzm MatCol
+];User
+	Return
+
+NoMatc:	Skipe SavMat
+	  Sosa nMatch
+	    Sos mMatch
+	Return
+
+IFN U,[
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Pick a random index -- this is pretty bad...
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+RndIdx:	Setom Once
+	GJINF%
+	GTAD%
+	IMul 1,2
+	Hlrz T,1
+	IMuli T,3
+	Addi T,(1)
+	IDiv T,nWords		;Remainder in TT is what we want.
+
+RndMap:	Movs 1,IdxJFN		;Now preload-map the index pages we'll need.
+	Movei 2,nStarts+2(TT)
+	Txnn 2,777		;Last word in a page?
+	  Skipa 3,[PM%RD\PM%PLD]
+	    Move 3,[PM%RD\PM%PLD\PM%CNT+2]
+	Lsh 2,-9.
+	Hrr 1,2
+	Add 2,[.FHSLF,,IdxPag]
+	PMAP%
+	  .Lost
+	Hlrz 2,EntNam(TT)
+	Lsh 2,-9.
+	Hrr 1,2
+	Add 2,[.FHSLF,,IdxPag]
+	Movx 3,PM%RD\PM%PLD\PM%CNT+2
+	PMAP%			;read 2 pages in case word crosses page
+	  .Lost
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Read JCL
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+GetJCL:	Movei 1,.RSINI
+	RSCAN%
+	  .Lost
+	Movei 1,.PRIIN
+	Hrroi 2,JCLbuf
+	Movei 3,BufLen*5-1
+	Movei 4,^J
+	SIN%			;Suck in the JCL line.
+	Move T,[440700,,JCLbuf]
+GetJ0:	Ildb 1,T
+	Cain 1,^J		;JCL ends with <LF> with no space,
+	  Return		;so no real JCL.
+	Caie 1,40
+	  Jrst GetJ0
+	Setom Once
+	Movem T,JCLBP		;Save BP to start of real JCL
+GetJ1:	Ildb 1,T		;Keep going, clobber the LF to a null.
+	Jumpe 1,Popj1		;No LF, so OK.
+	Caie 1,^J
+	  Jrst GetJ1
+	Setz 1,
+	Dpb 1,2
+	Jrst Popj1
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Read word from the terminal
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+AskHim:	Setzm JCLbuf
+	Movei 1,.PRIOU
+	Move 2,ModWrd
+	SFMOD%			;Turn off output suppression
+	AType Prompt
+	Call SCCOC1		;Set the CCOC so escape doesn't echo.
+	Call AskIni		;Initialize buffers
+AskHi0:	Movei 1,TEXTIb
+	TEXTI%
+	  .Lost
+	Move 1,TEXTIb+.RDFLG
+	Txnn 1,RD%BTM		;Break character?
+	  Jrst Beep		;  No, must be too much input.
+	Ldb T,TEXTIb+.RDDBP	;Yeah, so see what character ended input.
+	Cain T,^[		;Escape? ]
+	  Jrst DoEsc		;  Yeah, try to complete.
+	Cain T,"?		;Want matches so far?
+	  Jrst DoQ		;  Uh huh.
+	Hrroi 1,CRLF		;Make sure to get to
+	Cain T,^Z		;a new line if they ended
+	  PSOUT%		;  input with a ^Z
+	Setz 2,			;And then
+	Dpb 2,TEXTIb+.RDDBP	;make string ASCIZ.
+	Jrst SCCOC2		;Reset the CCOC to original state and return.
+
+AskIni:	Move 1,[440700,,JCLbuf]	;Initialize the TEXTI buffers.
+	Movem 1,TEXTIb+.RDDBP	;Where input is to be placed
+	Movem 1,JCLBP
+	Movei 1,BufLen*5-1
+	Movem 1,TEXTIb+.RDDBC	;Space available
+	Return
+
+Helpp:	Skipn Escp		;Just did <ESC>?
+	  Jrst [Call DoHelp	;  No, just did "?"
+		Jrst AskHim]
+Beep:	CType ^G
+	Skipn Escp
+	  Jrst ReQ
+	Call UnBreak
+	Jrst AskHi0
+
+UnBrea:	Setz 1,
+	Dpb 1,TEXTIb+.RDDBP
+	Seto 1,
+	Adjbp 1,TEXTIb+.RDDBP
+	Movem 1,TEXTIb+.RDDBP
+	Aos TEXTIb+.RDDBC
+	Return
+];User
+
+IFN S,[
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Get a command line for the server
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+GetCmd:	Setzm JCLbuf
+IFN IS,[
+	Move 1,SrvJFN
+	BIN%
+	 Erjmp Die
+	Caie 2,^J		;See if maybe leftover LF from a CRLF pair.
+	  Jrst [Dpb 2,[350700,,JCLbuf]
+		Move 2,[350700,,JCLbuf]
+		Movei 3,BufLen*5-2
+		Jrst GetCm0]
+];IS
+	Hrroi 2,JCLbuf
+	Movei 3,BufLen*5-1
+GetCm0:	Movei 4,NL
+	SIN%
+	  Erjmp Die
+	Setz 4,
+	Dpb 4,2
+	Skipe JCLbuf
+	  Aos (P)
+	Return
+];S
+
+IFN U,[
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	<ESC> and ? handlers
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+DoQ:	Setzm Escp		;Not ESC, must be ?
+	Skipa
+DoEsc:	  Setom Escp		;Yes ESC
+	Call StarIt		;Starify input
+	Call Process		;then process it.
+	  Jrst Helpp		;No real input, maybe just "?"
+	  Jrst Beep		;Can't complete a number, beep also.
+	  Nop			;Wild return, had better be!
+	Skipn Escp		;Escape?
+	  Jrst Qexpan		;  No, so ?, so do it.
+	Setzm ShoMat		;Don't show matches when found
+	Setzm SavMat		;and don't save them either.
+	Call DoWild		;Check out the matches.
+	Skipe T,mMatch		;No matches at all?
+	  Caie T,1		;  Or more than 1?
+	    Jrst Beep		;    Uh huh, so beep at him.
+	Move T,[440700,,JCLbuf]	;Else...
+
+	Setob 2,3		;# wildcard characters, # before last wildcard
+DoEsc0:	Ildb 1,T
+	Jumpe 1,DoEsc1
+	Caie 1,"%
+	  Cain 1,"*
+	    Addi 2,1
+	Aoja 3,DoEsc0
+
+DoEsc1:	Hrrz TT,1Match		;The 1 and only match
+	Hlrz TT,EntNam(TT)	;address of 5bit matched string.
+	Add TT,[440500,,IdxAdr]	;Converted to a BP
+	Jumpg 2,nWild		;If more than one wildcard, you gave it!
+	Adjbp 3,TT		;Get BP to start of stuff to complete.
+	Seto 4,
+	Adjbp 4,TEXTIb+.RDDBP
+DoEsc2:	Ildb 1,3		;Get completed character
+	Jumpe 1,DoEsc3
+	Move 1,5Table(1)	;5bit -> 7bit
+	PBOUT%			;Type it out
+	Idpb 1,4		;deposit it in TEXTI buffer
+	Sos TEXTIb+.RDDBC	;subtract 1 from space left
+	Jrst DoEsc2		;and keep going.
+
+DoEsc3:	Movem 4,TEXTIb+.RDDBP
+	Idpb 1,4		;Make sure ASCIZ
+DoEsc4:	CType 40		;Trailing space so they know it completed.
+	Jrst AskHi0		;and then back into the TEXTI.
+
+nWild:	AType CRLF
+	AType Prompt
+	Move T,TT
+	Call 5Type
+	Call AskIni		;Re-initialize buffers.
+	Move 4,TEXTIb+.RDDBP
+nWild0:	Ildb 1,TT
+	Jumpe 1,DoEsc3
+	Move 1,5Table(1)
+	Idpb 1,4
+	Sos TEXTIb+.RDDBC
+	Jrst nWild0
+
+Qexpan:	Setom ShoMat		;Show matchs
+	Setzm SavMat		;but don't save them.
+	Call DoWild		;Check out the matches.
+	Hrroi 1,[Asciz " No matches"]
+	Skipg mMatchs
+	  PSOUT%
+ReQ:	AType CRLF
+	AType Prompt
+	Call UnBrea
+	Atype JCLbuf
+	Jrst AskHi0
+];User
+
+StarIt:	Movei 1,"*
+	Move 2,TEXTIb+.RDDBP	;Clobber the ESC to *
+	Dpb 1,2
+	Setz 1,
+	Idpb 1,2		;and then make sure ASCIZ.
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Type out help file.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+DoHelp:	Movx 1,GJ%SHT\GJ%OLD
+	Hrroi 2,HlpFil
+	GTJFN%
+	  Jrst [Error "Can't find help file"
+		Return]
+	Movem 1,HlpJFN
+	Move 2,[Field(7,OF%BSZ)+OF%RD]
+	OPENF%
+	  Jrst [Move 1,HlpJFN
+		CLOSF%
+		  Nop
+		Error "Can't open help file"
+		Return]
+IFN S,[
+	Type "OK"
+	Call DoNL
+];S
+	CRType "This is the file "
+	AType HlpFil
+	TypeCR ":
+----------"
+Help0:	Move 1,HlpJFN
+	Hrroi 2,TmpBuf		;Use this for sucking in chunks.
+	Movni 3,5000*5-1	;Space for this chunk.
+	SIN%
+	  Ernop
+	Setz 1,
+	Idpb 1,2
+	Atype TmpBuf
+	Jumpe 3,Help0		;If filled that chunk, get another.
+	Call Terpri
+	TypeCR "----------
+End of help file."
+	Move 1,HlpJFN
+	CLOSF%
+	  Nop
+IFN U,	Return
+.ELSE	Jrst EForce
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Process input
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+5Proce:	Move 1,T		;Call here with T/ BP to 5bit string
+	Setom 5bitp
+	Jrst Proce0
+
+Proces:	Move 1,JCLBP		;Source BP
+	Setzm 5bitp		;Source is not 5-bit squashed
+Proce0:	Setzb T,Werd		;So can test for =0 for no word.
+	Setzm NonDigit		;Non-digit found
+	Setzm Alphap		;Alpha characters found
+	Setzm Digitp		;Accumulating digits?
+	Setzm Spacep		;Flag for compacting multiple spaces
+	Setzm Wildp		;Set true if wildcard characters found (*, %)
+	Move 2,[440600,,Werd]	;Destination, extended 5bit scrunched version
+	Move 3,[440700,,7Werd]	;and 7bit version.
+	Setzm FunBuf
+	Move 5,[440600,,FunBuf]
+	Movem 5,Funp		;Re-using this as BP to FunBuf
+	Skipe 5bitp
+	  Jrst Strip1
+
+Strip0:	Ildb 4,1
+	Caie 4,40		;Get rid of leading whitespace
+	  Cain 4,^I
+	    Jrst Strip0
+	Skipa
+Strip1:	  Ildb 4,1
+	Jumpe 4,Strip7		;EOJCL
+	Skipe 5bitp
+	  Call Expand
+	Cail 4,"0
+	  Caile 4,"9
+	    Jrst Strip2
+	IMuli T,10.
+	Addi T,-"0(4)
+	Idpb 4,3		;Save the real digit in the 7bit string
+	Skipe Digitp		;Already started accumulating?
+	  Jrst [Move 5,Number
+		IMuli 5,10.
+		Addi 5,-"0(4)
+		Movem 5,Number
+		Jrst Strip1]
+	Setom Alphap
+	Setom Digitp
+	Movei 5,-"0(4)		;character into digit
+	Movem 5,Number
+	Jrst Strip1
+
+Strip2:	Skipe Digitp
+	  Call INumNm
+	Cain 4,40
+	  Jrst [Setom Spacep
+		Jrst Strip1]
+	Skipe Spacep
+	  Jrst [Setzm Spacep
+		Movei 5,40
+		Idpb 5,3
+		Jrst .+1]
+	Setom NonDigit
+	Cain 4,"-
+	  Jrst [Movei 5,%DASH1
+		Skipn Alphap
+		  Movei 5,%DASH2
+		Jrst Strip4]
+	Setom Alphap	
+IRP low,,["a,"A]high,,["z,"Z]
+	Cail 4,low
+	  Caile 4,high
+	    Skipa
+	   Jrst [Movei 5,-low+%A(4)
+		 Jrst Strip5]
+TERMIN
+	Caie 4,"%
+	  Cain 4,"*
+	    Setom Wildp		;Flag if wildcards in string.
+IRP char,,[40,"',54,".,"/,"`]squash,,[%SPACE,%APOS,%COMMA,%PERIOD,%SLASH,%GRAVE]
+	Cain 4,char
+	  Jrst [Movei 5,squash
+		Jrst Strip4]
+TERMIN
+	Jrst Strip6
+
+Strip4:	Idpb 5,Funp
+	Skipa
+Strip5:	  Idpb 5,2
+Strip6:	Idpb 4,3		;Save the 7bit character
+	Jrst Strip1
+
+Strip7:	Skipe Digitp
+	  Call INumNm
+	Skipn FunBuf		;Any trailers?
+	  Jrst Strip9		;  Naw
+	Idpb 4,Funp
+	Move 5,[440600,,FunBuf]
+Strip8:	Ildb 1,5		;Pop one off
+	Jumpe 1,Strip9
+	Idpb 1,2		;put on tail
+	Jrst Strip8
+
+Strip9:	Idpb 4,2		;End strings with null byte
+	Idpb 4,3
+	Skipn Werd		;Anything there?
+	  Return		;+1  Naw, just whitespace.
+	Skipn NonDigit		;All digits?
+	  Jrst [Movem T,InpNum	;  Yes, just numeric, so save the #
+		Jrst Popj1]	;  and take numeric-input return
+	Skipn Wildp
+Popj3:	  Aos (P)
+Popj2:	Aos (P)
+Popj1:	Aos (P)
+CPopj:	Return
+
+Expand:	Cain 4,%META
+	  Jrst [Ildb 4,1
+		Addi 4,%EXTEND
+		Jrst .+1]
+	Move 4,5Table(4)
+	Return
+
+INumNm:	Pushn P,[1,3,2]		;5bit destination
+	Move 2,Number		;# to translate
+	Move 3,[440500,,NumBuf]
+	Call NameNo
+	Pop P,1
+	Move 2,3		;Copy string from here
+	Setz 3,
+	$SOUT
+	Move 2,1		;Updated destination BP
+	Setzm Digitp
+	Popn P,[3,1]
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	5bit hackery
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+5Type:	Movei 1,.PRIOU
+5Type0:	Ildb 2,T
+	Jumpe 2,CPopj
+	Cain 2,%META		;Meta-prefix?  Extended character?
+	  Jrst [Ildb 2,T	;  Yes, to get character
+		Addi 2,%EXTEND	;  and bump up to extended region
+		Jrst .+1]
+	Move 2,5Table(2)
+	BOUT%
+	Jrst 5Type0
+
+5Copy:	Ildb 2,T
+	Jumpe 2,CPopj
+	Move 2,5Table(2)
+	Idpb 2,1
+	Jrst 5Copy
+
+5Wild:	Setzb 2,SVMSK
+5Wild1:	Ildb 1,T		;Get a wild character
+	Jumpe 1,5WEOW1
+	Move 2,1
+	Cain 2,"*
+	  Jrst [Movem TT,SVPTR
+		Movem T,SVMSK
+		Jrst 5Wild1]
+Igno5W:	Ildb 1,TT
+	Jumpe 1,CPopj
+	Cain 1,%META
+	  Jrst [Ildb 1,TT
+		Addi 1,%EXTEND
+		Jrst .+1]
+	Came 2,5Table(1)
+	  Cain 2,"%
+	    Jrst 5Wild1
+5WildF:	Skipn T,SVMSK
+	  Return
+	Ildb 1,SVPTR
+	Cain 1,%META
+	  Ibp SVPTR
+	Move TT,SVPTR
+	Jrst 5Wild1
+
+5WEOW1:	Cain 2,"*
+	  Jrst Popj1
+	Ildb 1,TT
+	Cain 1,%META
+	  Jrst [Ildb 1,TT
+		Addi 1,%EXTEND
+		Jrst .+1]
+	Jumpn 1,5WildF
+	Jrst Popj1
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Find the definition of the word in WERD (buffer).  Returns
+;;	+1 if word not found, else +2 with the definitions copied
+;;	into TmpBuf (all homonyms)
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+FindIt:	Move T,[440600,,Werd]
+	Call BSF		;Find which file this would go into.
+	  Return		;  Oops, shouldn't happen
+	Movem T,NewDF		;Save the file index.
+	Call BSE		;Binary search that region of index file.
+	  Return		;  Oops, not found or something.
+	Movem T,Index
+	Jrst Popj1
+
+Find:	Call FindIt		;See if the word exists.
+	  Return		;  Nope.
+Find0:	Move T,Index
+	Hrre TT,EntNam(T)	;If the RH (byte-offset into file) is .LT. 0
+	Jumpl TT,[Movni TT,-EntNam(TT)
+		  Hrrzm TT,Index
+		  Jrst IdxOnl]	;then it's a V/R pointer.
+	Move T,NewDF
+	Came T,OldDF		;This word in same source file as last?
+	  Call GetFil		;  No, so get it.
+	Move T,Index
+	Hrrz 2,EntNam(T)	;Offset of start of entry
+	Hrrz 3,EntNam+1(T)	;Offset of start of NEXT entry
+	Skipg 3			;If last entry in file, next is 0,
+	  Move 3,FilByt		;  so make it the size of the source file.
+	Subi 3,(2)		;# characters in entry
+	Adjbp 2,[440700,,Mapadr]
+	Movem 2,Entry2		;Save BP to start-of-entry
+	Movem 3,Entry3		;and entry-length
+	Skipe RAWp		;If raw mode,
+	  Jrst Popj1		;  then no need to copy the entry.
+	Hrlz 1,2		;First source word
+	Hrri 1,TmpBuf		;First destination word
+	IDivi 3,5		;5 bytes / word plus a bit extra.
+	BLT 1,TmpBuf+2(3)	;Blat-copy the entry.
+	Hrri 2,TmpBuf
+	Movem 2,TmpPtr		;BP to start of entry in TmpBuf space.
+	Move 3,Entry3
+	AdjBP 3,2		;BP to end of entry
+	Setz 2,
+	Idpb 2,3		;Make sure it's ASCIZ
+	Jrst Popj1		;and win return.
+
+GetFil:	Skipl OldDF		;There an old file?
+	  Call UnMap		;  Yes, so get rid of it.
+	Movem T,OldDF
+	Move 1,[170700,,File]	;Point to after the "W7:"
+	Move T,Starts(T)
+	Call 5Copy
+	Hrroi 2,[Asciz ".DICTION"]
+	Setz 3,
+	$SOUT			;Source filename.
+	Movx 1,GJ%SHT\GJ%OLD
+	Hrroi 2,File
+	GTJFN%
+	  .Lost
+	Movem 1,FilJFN
+	Move 2,[Field(36.,OF%BSZ)+OF%RD]
+	OPENF%
+	  .Lost
+	SIZEF%
+	  .Lost
+	Movem 3,FilSiz		;# pages in file.
+	Move 4,2
+	Move 2,[1,,.FBBYV]
+	Movei 3,3
+	GTFDB%
+	  .Lost
+	Ldb 3,[.BP FB%BSZ,3]	;Get the byte-size of the file.
+	Caie 3,7		;7-bit bytes?
+	  IMuli 4,5		;  No, so assume words.
+	Movem 4,FilByt
+	Movss 1			;JFN,,0
+	Move 2,[.FHSLF,,Mapage]
+	Move 3,FilSiz
+	Txo 3,PM%CNT\PM%RD
+	PMAP%
+	  .Lost
+	Return
+
+UnMap:	Seto 1,
+	Move 2,[.FHSLF,,Mapage]
+	Move 3,FilSiz
+	Txo 3,PM%CNT
+	PMAP%
+	  Ernop
+	Move 1,FilJFN
+	CLOSF%
+	  Nop
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Binary searches
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+BSF:	Movem T,WordBP
+IFN $$DEBUG,[
+	Type /[BSF] Target word = "/
+	Call 5Type
+	TypeCR /"/
+	Move T,WordBP
+];IFN $$DEBUG
+	Ildb A,T		;Get 1st character of target word.
+	Jumpe A,CPopj		;Ran out of characters with no alphanumeric!
+	Cail A,%A		;Start with a letter?
+	  Caile A,%Z
+	    Return
+	Hrrz B,LRange-%A(A)
+	Hlrz A,LRange-%A(A)
+IFN $$DEBUG,[
+	Type "Starting range:  Lower (A) = "
+	Movei 1,.PRIOU
+	Move 2,A
+	Movei 3,10.
+	NOUT
+	  Nop
+	Type ", Upper (B) = "
+	Movei 1,.PRIOU
+	Move 2,B
+	NOUT
+	  Nop
+	AType CRLF
+];IFN $$DEBUG
+BSF1:	Cain A,(B)
+	  Jrst [Movei T,(A)
+		Jrst Popj1]
+	Movei T,1(B)
+	Subi T,(A)		;# in range
+	Lsh T,-1		;/2
+	Addi T,(A)		;mid-point.
+IFN $$DEBUG,[
+	Type "A = "
+	Movei 1,.PRIOU
+	Move 2,A
+	Movei 3,10.
+	NOUT
+	  Nop
+	Type ", T = "
+	Movei 1,.PRIOU
+	Move 2,T
+	NOUT
+	  Nop
+	Type ", B = "
+	Movei 1,.PRIOU
+	Move 2,B
+	NOUT
+	  Nop
+	Type /, Test word = "/
+	Push P,T
+	Move T,Starts(T)
+	Call 5Type
+	Pop P,T
+	Type /" . . . /
+];IFN $DEBUG
+	Move 1,WordBP
+	Move 2,Starts(T)
+	Call Compare
+	  Jrst [IFN $$DEBUG,TypeCR "Target < Test"
+		Sos B,T
+		Jrst BSF1]
+	  Jrst [IFN $$DEBUG,TypeCR "Target > Test"
+		Movei A,(T)
+		Jrst BSF1]
+IFN $$DEBUG,TypeCR "Match!"
+	Jrst Popj1
+
+BSE:
+IFN $$DEBUG,[
+	Type /[BSE] Target word = "/
+	Move T,[440600,,Werd]
+	Call 5Type
+	TypeCR /"/
+];IFN $$DEBUG
+	Move T,NewDF		;File index.
+	Move A,FilEnt(T)	;Start search at this index
+	Move B,FilEnt+1(T)
+	Subi B,1		;and end at this index.
+IFN $$DEBUG,[
+	Type "Starting range:  Lower (A) = "
+	Movei 1,.PRIOU
+	Move 2,A
+	Movei 3,10.
+	NOUT
+	  Nop
+	Type ", Upper (B) = "
+	Movei 1,.PRIOU
+	Move 2,B
+	NOUT
+	  Nop
+	AType CRLF
+];IFN $$DEBUG
+
+BSE0:	Movei T,1(B)
+	Subi T,(A)		;B-A
+	Lsh T,-1		;(B-A)/2 = Midpoint byte-offset.
+	Addi T,(A)
+IFN $$DEBUG,[
+	Type "A = "
+	Movei 1,.PRIOU
+	Move 2,A
+	Movei 3,10.
+	NOUT
+	  Nop
+	Type ", T = "
+	Movei 1,.PRIOU
+	Move 2,T
+	NOUT
+	  Nop
+	Type ", B = "
+	Movei 1,.PRIOU
+	Move 2,B
+	NOUT
+	  Nop
+	Type /, Test word = "/
+	Push P,T
+	Hlrz T,EntNam(T)
+	Add T,[440500,,IdxAdr]
+	Call 5Type
+	Type /" . . . /
+	Pop P,T
+];IFN $$DEBUG
+	Move 1,[440600,,Werd]
+	Hlrz 2,EntNam(T)
+	Add 2,[440500,,IdxAdr]
+	Call Compare
+	  Jrst [Cail A,(B)
+		  Return
+IFN $$DEBUG,	TypeCR "Target < Test"
+		Movei B,-1(T)
+		Jrst BSE0]
+	  Jrst [Cail A,(B)
+		  Return
+IFN $$DEBUG,	TypeCR "Target > Test"
+		Movei A,1(T)
+		Jrst BSE0]
+IFN $$DEBUG,TypeCR "Match!"
+	Jrst Popj1
+
+Compar:	Setzm Funp
+	Setzm Digitp		;Not accumulating digits,
+	Setzm DigExp		;or expand a number-name.
+	Move 5,[440600,,FunBuf]
+
+Compa0:	Ildb 3,1
+Compa1:	Ildb 4,2
+	Cail 4,%A
+	  Caile 4,%Z
+	    Jrst NonAlf
+	Skipe Digitp			;Some digits before this alph?
+	  Jrst [Call NumExp
+		Jrst Compa1]
+Compa4:	Jumpe 3,EOW1
+	Cain 3,(4)
+	  Jrst Compa0
+Compa5:	Caig 3,(4)
+	  Return
+	Jrst Popj1
+
+Compa6:	Ildb 3,1
+Compa7:	Ildb 4,2
+	Jumpe 3,EOW1
+	Cain 3,(4)
+	  Jrst Compa6
+	Jrst Compa5
+
+NonAlf:	Jumpe 4,EOW2		;End of Word
+	Cain 4,%META		;Expand a leadered character
+	  Jrst [Ildb 4,2
+		Addi 4,%EXTEND
+		Jrst .+1]
+	Cain 4,%SPACE
+	  Jrst Compa1		;Ignore spaces.
+	Cail 4,%ZERO
+	  Caile 4,%NINE
+	    Jrst [Idpb 4,5	;Save in FunBuf
+		  Setom Funp
+		  Jrst Compa1]
+	Skipe Digitp		;Already started accumulating the number?
+	  Jrst [Movei 4,-%ZERO(4)
+		Exch 4,Number
+		IMuli 4,10.
+		Add 4,Number
+		Movem 4,Number
+		Jrst Compa1]
+	Setom Digitp		;flag that we're expanding a digit
+	Movei 4,-%ZERO(4)	;real digit value
+	Movem 4,Number		;and save for later accumulation.
+	Jrst Compa1
+
+EOW2:	Skipe Digitp		;Ran into EOW while accumulating digits?
+	  Jrst [Call NumExp	;  Yes, so need to take care of that.
+		Jrst Compa1]
+	Skipe DigExp		;Just finished expanding a digit?
+	  Jrst [Seto 2,		;  Yep, so recover old BP
+		AdjBP 2,Old2BP	;  (want to reget digit after #)
+		Setzm DigExp	;  clear flag,
+		Jrst Compa1]	;  and carry on.
+	Skipn Funp		;EOW2.  Any stacked trailers?
+	  Jrst Compa4		;  No, so needn't do phase II.
+	Idpb 4,5		;Tie off the FunBuf string
+	Move 2,[440600,,FunBuf]
+	Jrst Compa7
+
+EOW1:	Jumpn 4,Cpopj		;EOW1, but not EOW2, so W1 < W2
+	Jrst Popj2
+
+NumExp:	Pushn P,[1,3]
+	Movem 2,Old2BP
+	Move 2,Number		;Name this number
+	Move 3,[440500,,NumBuf]	;into this buffer.
+	Call NameNo		;Name that Number!
+	Move 2,3
+	Setzm Digitp		;Mark finished accumulating,
+	Setom DigExp		;and that we're expanding now.
+	Popn P,[3,1]
+	Return
+
+;;
+;;	Given a number in AC2, and a BP to a buffer in AC3, return
+;;	a BP (in 3) to the name of the number.  It could either be
+;;	a BP to the given buffer, or into some table
+;;
+
+NameNo:	Skipl 2			;Don't know what to do with
+	  Caile 2,9999.		;  negative or  
+	    Setz 2,		;    real large ones, so just do "zero"
+	Caig 2,19.		;Have a non-generatable name?
+	  Jrst [Move 3,DigNam(2);  Yes, so use it.
+		Hrli 3,440500	;Just a digit, so point to it's name.
+		Return]
+	Pushn P,[1,2,3]		;Need this for BP
+	Move 1,3		;Destination BP
+	IDivi 2,100.
+	Skipe 2
+	  Call 2Digit
+	Move 2,3
+	Call 2Digit
+	Popn P,[3,2,1]
+	Return
+
+2Digit:	Push P,3
+	Caig 2,19.
+	  Jrst 2Digi0
+	IDivi 2,10.
+	Pushn P,[2,3]
+	Move 2,TenNam-2(2)
+	Hrli 2,440500
+	Setz 3,
+	$SOUT
+	Popn P,[3,2]
+	Skipn 2,3
+	  Jrst 2Digi1
+2Digi0:	Move 2,DigNam(2)
+	Hrli 2,440500
+	Setz 3,
+	$SOUT
+2Digi1:	Pop P,3
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Take the definition in TmpBuf and format it into DefBuf
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Format:	Call BufIni		;Initialize buffers and pointers
+	Call LinIni		;Initialize temporary output line.
+	Setom NeedGR		;Need to do a GetRec
+	Setzm nXrefs		;No cross-references so far.
+	Jrst Form0
+
+NewHom:	Call NewLi0		;Come here for a new homonym.
+	Setzm NeedGR		;Don't need to do a GetRec, already did.
+Form0:	Call GetHdr		;Suck up the records composing the header.
+	  Nop			;  Oops, ran out!
+	Call MakHdr		;and then format them up nicely.
+	Skipe NoMore		;If no body,
+	  Jrst BodDun		;  then we're done.
+;	Jrst MakBod		;else fall into make-body
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	MakeBody of definition
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+MakBod:	Setom SNSNUM		;Initialize last senses to none.
+	Setom SNSLET
+	Setom SNSSUB
+	Setzm SumDef
+	Move T,RecTyp
+	Jrst MakBo1
+
+MakBo0:	Call GetRec
+	  Jrst [Skipe PPos	;Make sure we don't forget this buffered
+		  Call BodPos	;Pos/j/Pos2 beforing ending the entry.
+		Jrst BodDun]
+MakBo1:	Cain T,"P
+	  Jrst BodPro		;Stray pronunciation.
+	Skipe PPos		;Stray POS from previous runon, etc?
+	  Call BodPos		;  Yes, so do that before proceeding.
+	Cain T,"F		;Next homonym?
+	  Jrst NewHom
+	Cain T,"V
+	  Jrst BodVar		;Stray variant
+	Cain T,"R
+	  Jrst RunOn		;Run-on
+	Cain T,"S
+	  Jrst DoSyn		;Synonym
+	Cain T,"X
+	  Jrst Xref		;Cross reference
+	Caie T,"D		;Definition?
+	  Cain T,"L		;  or Label?
+	    Skipa		;    Yep
+	   Jrst MakBo0		;else ignore (for now).
+	Setzm 1stSpc
+	Skipe 1,RecArg+0	;Get SNSNUMBER, SNSLETTER, SNSSUBNUMBER
+	  Call GetNum
+	Movem 1,NUMBER
+	Skipe 1,RecArg+1
+	  Ildb 1,1
+	Movem 1,LETTER
+	Skipe 1,RecArg+2
+	  Call GetNum
+	Movem 1,SUBNUM
+	Move 1,RecTyp
+	Caie 1,"L
+	  Skipn T,RecArg+3
+	    Jrst ChkSNS
+	Setz A,
+	Movei TT,A
+	Call CpyRec		;Get a copy of this POS into A
+	Camn A,POS		;Same as last one?
+	  Jrst ChkSNS		;  Yeah, so keep going.
+	Movem A,POS		;Set new one.
+	Skipe SumDef
+	  Jrst [Movei T,"~
+		Call OutChr
+		Call OutSpc
+		Jrst .+1]
+	Movei T,POS
+	Call OutWrd
+
+ChkSNS:	Move T,NUMBER
+	Came T,SNSNUM		;Same def as last time?
+	  Jrst [Movem T,SNSNUM	;  No, so set it.
+		Setzm SNSLET
+		Setzm SNSSUB
+		Jumpe T,.+1	;but don't print def# if 0.
+		Call OutSpc
+		Move T,SNSNUM
+		Call OutNum
+		Setom 1stSpc
+		Jrst .+1]
+	Move T,LETTER
+	Came T,SNSLET		;same letter as last time?
+	  Jrst [Movem T,SNSLET
+		Setzm SNSSUB
+		Jumpe T,.+1
+		Skipn 1stSpc
+		  Call OutSpc
+		Move T,SNSLET
+		Call OutChr
+		Call OutSpc
+		Setom 1stSpc
+		Jrst .+1]
+	Move T,SUBNUM
+	Came T,SNSSUB
+	  Jrst [Movem T,SNSSUB
+		Jumpe T,.+1
+		Skipn 1stSpc
+		  Call OutSpc
+		Move T,SUBNUM
+		Call OutNu1
+		Move TT,["(,,")]
+		Call OutStr
+		Call OutSpc
+		Jrst .+1]
+	Setom SumDef
+	Move T,RecTyp
+	Caie T,"D
+	  Jrst [Move T,RecArg+3
+		Jrst MakBo2]
+	Movei T,":
+	Call OutChr
+	Call OutSpc
+	Move T,RecArg+4
+MakBo2:	Movei TT,40
+	Call OutStr
+	Jrst MakBo0
+
+DoSyn:	Call NewLin
+	Call OutSpc		;Indented two characters
+	Move T,RecArg+0		;text of synonym
+	Setz TT,
+	Call OutStr
+	Call NewLin
+	Jrst MakBo0
+
+Xref:	Skipe RecArg+0		;There a 1st WORD?
+	  Skipn 1,RecArg+3	;  or a cross-reference type
+	    Jrst MakBo0		;    Oh dear, there is none, so ignore it.
+	Call GetNum		;Turn that into a real number.
+	Jumpl 1,CPopj		;No good.
+	Caile 1,nXtypes		;Reasonable positive #?
+	  Jrst MakBo0		;  Nope, so ignore it also.
+	Movem 1,Xtype
+	Movei T,[Asciz "--"]
+	Call OutWrd
+	Move T,Xtype
+	Call @Xtypes(T)		;Yes, so dispatch on the type.
+	  Jrst MakBo0
+	Skipn Once		;If only running once,
+	  Skipe Pick1p		;  (by JCL or word-a-day)
+	    Jrst MakBo0		;    then no need to show xrefs.
+	Skipg nXrefs		;This the first elegible cross-reference?
+	  Jrst [Movei T,XRarea
+		Movem T,XrefBP
+		Move T,nMatch
+		Movem T,1stXrf
+		Jrst .+1]
+	Aos T,nMatch
+	Caile T,MaxMat		;Room to save this one?
+	  Jrst MakBo0		;  Alas, no.
+	Aos nXrefs
+	Move 1,XrefBP		;BP to where xref is to be stored.
+	Hrli 1,440700
+	Movsm 1,Matchs-1(T)	;Save swapped so RH is 440700
+	Move 2,RecArg+0		;BP to WORD
+	Setz 3,
+	$SOUT			;Copy xref.
+	Idpb 3,1
+	Movei 1,1(1)		;Get up to next word boundry
+	Movem 1,XrefBP		;and save new BP.
+	Jrst MakBo0	
+
+Xtype0:	Movei T,[Asciz "see"]
+	Call OutWrd
+	Call OutXW1
+	Jrst Popj1
+
+Xtype1:	Movei T,[Asciz "see"]
+	Call OutWrd
+	Call OutXW1
+	Movei T,[Asciz "table"]
+	Jrst OutWrd
+
+Xtype3:	Skipn RecArg+4		;2nd word there?
+	  Return		;  Nope.
+	Movei T,[Asciz "see"]
+	Call OutWrd
+	Move T,RecArg+4
+	Call OutWrd
+	Movei T,[Asciz "at"]
+	Call OutWrd
+	Call OutXW1
+	Movei T,[Asciz "table"]
+	Jrst OutWrd
+
+Xtype4:	Movei T,[Asciz "compare"]
+	Call OutWrd
+	Call OutXW1
+	Jrst Popj1
+
+Xtype5:	Movei T,[Asciz "compare"]
+	Call OutWrd
+	Call OutXW1
+	Movei T,[Asciz "table"]
+	Jrst OutWrd
+
+Xtype6:	Movei T,[Asciz "called also"]
+	Movei TT,40
+	Call OutStr
+	Jrst OutXW1
+
+Xtype8:	Movei T,[Asciz "SYN see in addition"]
+	Movei TT,40
+	Call OutStr
+	Call OutXW1
+	Jrst Popj1
+
+Xtype9:	Movei T,[Asciz "SYN see"]
+	Movei TT,40
+	Call OutStr
+	Call OutXW1
+	Jrst Popj1
+
+OutXW1:	Skipe T,RecArg+1	;Superscript?
+	  Call OutWrd		;  Uh huh.
+	Push P,Fonter
+	Movei T,UpCase		;Force WORD to be in caps.
+	Movem T,Fonter
+	Move T,RecArg+0
+	Movei TT,40
+	Call OutStr
+	Pop P,Fonter
+	Skipe T,RecArg+2	;Subscript?
+	  Call OutWrd		;  Yep.
+	Return
+
+RunOn:	Movei T,[Asciz "--"]
+	Call OutWrd
+	Movei T,RecArg+0
+	Movei TT,40
+	Call OutEnt
+	Movei T,3		;Starting at RecArg+3
+	Movei TT,PPos		;Storing into PPOS,+1,+2
+	Call GetPos		;Get POS,POSJ,POS2
+	Jrst MakBo0
+
+BodPro:	Move T,RecArg+0
+	Call OutPro
+	Skipe PPos
+	  Call BodPos
+	Jrst MakBo0
+
+BodPos:	Push P,T
+	Move T,PPos
+	Call OutPos
+	Skipn PPos2
+	  Jrst BodPo0
+	Movei T,PPosj
+	Call OutAl0
+	Setzm PPos2
+BodPo0:	Call OutSpc
+	Setzm PPos
+	Pop P,T
+	Return
+
+BodVar:	Movei T,RecArg+0
+	Movei TT,40
+	Call OutEnt
+	Jrst MakBo0
+
+GetPos:	Pushn P,[A,B]
+	Movei A,RecArg(T)	;First.
+	Move B,TT
+	Skipe T,(A)
+	  Jrst [Move TT,B
+		Call CpyRec
+		Jrst .+2]
+	Setzm (B)
+	Skipe T,1(A)
+	  Ildb T,1(A)
+	Movem T,1(B)
+	Skipe T,2(A)
+	  Jrst [Movei TT,2(B)
+		Call CpyRec
+		Jrst .+2]
+	Setzm 2(B)
+	Popn P,[B,A]
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Grab all the initial records composing the header of the
+;;	definition and break them down.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+GetHdr:	Setzm NoMore
+	Movei T,EOM
+	Movem T,FreeSp		;Reset Free-space pointer.
+
+	Setzm zbeg		;And clear top-level words.
+	Move T,[zbeg,,zbeg+1]
+	BLT T,zend-1
+	Skipe NeedGR		;Need to get a record?
+	  Jrst [Call GetRec	;Yes, so get one.
+		  Return	;  No more.
+		Jrst .+1]
+;	Caie T,"F		;What's be First-record!
+;	  ...			;  else something's wrong.
+	Move T,RecArg+0		;First sub-record is ENTNAME
+	Call SavStr		;Save that string in freespace
+	Movem T,NameBP		;Save BP to stored copy.
+	Skipe 1,RecArg+1	;2nd sub-record is HOMONO
+	  Call GetNum		;Convert to a number
+	Movem 1,HomoNo		;Save homonym# (or 0 if none)
+	Skipe T,RecArg+2	;If 0, there's no prefix-suffix character
+	  Ildb T,T		;  else get the character.
+	Movem T,Prefix		;and save it.
+	Skipe T,RecArg+3	;Next is DOTS
+	  Call SavStr
+	Movem T,DotsBP		;save BP or 0
+	Skipe T,RecArg+4	;Next is ACCENTS
+	  Call SavStr
+	Movem T,AcceBP		;save BP or 0.
+	Movei T,5		;Starting at RecArg+5
+	Movei TT,POS		;Storing into POS,+1,+2
+	Call GetPos		;Get POS, POSJ, POS2
+
+HdrLop:	Call GetRec
+	  Jrst [Setom NoMore
+		Return]
+	Cain T,"P
+	  Jrst Pronun
+	Cain T,"E
+	  Jrst Etymol
+	Cain T,"V
+	  Jrst Varian
+	Cain T,"L
+	  Jrst Label
+	Jrst Popj1
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	GetHdr record hackers
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Label:	Skipe RecArg+0
+	  Jrst Popj1		;If there's a SNS-NUM, goes with a definition!
+	Move 1,RecArg+3
+	Movem 1,LabelBP
+	Jrst HdrLop
+
+Etymol:	Move T,RecArg+0
+	Call SavStr
+	Movem T,EtymBP
+	Jrst HdrLop
+
+Pronun:	Move T,RecArg+0
+	Call SavStr
+	Skipe TT,VARP
+	  Jrst [Movem T,VPRONBP(TT)	;Save BP to pronunciation string
+		Jrst HdrLop]
+	Movem T,PronBP
+	Jrst HdrLop	
+
+Varian:	Move T,RecArg+3
+	Ildb 1,T		;Get 1st character, which is LEVEL1
+	Call VarNum		;Translate from variant encoding
+	Movem 1,LEVEL1
+	Ildb 1,T		;Get LEVEL2
+	Call VarNum
+	Movem 1,LEVEL2
+	Movei T3,n0VARs
+	Skipe LEVEL1
+	  Movei T3,nOVARs
+	Aos T,(T3)		;kick up the # of that-level variants
+	Caile T,MaxVar		;Room to store it?
+	  Jrst [Sos (T3)
+		Jrst HdrLop]
+	Move E,FreeSP
+	Movem E,VARP		;Save pointer to last variant found
+	Add T3,T
+	Movem E,(T3)		;Save address of block.
+	Movei 1,VLEVEL+1(E)
+	Movem 1,FreeSP		;allocate some freespace.
+	Move T,RecArg+0
+	Call SavStr
+	Movem T,VNAMEBP(E)	;BP to name.
+	Setzm VPRONBP(E)	;Assume no pronunciation for now.
+	Move T,RecArg+1
+	Call SavStr
+	Movem T,VDOTS(E)	;BP to DOTS
+	Move T,RecArg+2
+	Call SavStr
+	Movem T,VACCENT(E)	;BP to ACCENTS
+	Move T,LEVEL1
+	Hrlm T,VLEVEL(E)	;LEVEL1,,
+	Move T,LEVEL2
+	Hrrm T,VLEVEL(E)	;LEVEL1,,LEVEL2
+	Move T,LabelBP
+	Movem T,VLABEL(E)
+	Setzm LabelBP
+	Jrst HdrLop
+
+VarNum:	Cail 1,"0
+	  Caile 1,"9
+	    Jrst VarN0
+	Subi 1,"0
+	Return
+
+VarN0:	Movsi 2,-nVarNs
+VarN1:	Hlrz 3,VarNs(2)
+	Camn 1,3
+	  Jrst [Hrrz 1,VarNs(2)
+		Return]
+	Aobjn 2,VarN1
+	Movei 1,100.
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Tiny subroutines used by GetHdr
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+GetNum:	Movei 3,10.
+	NIN
+	  Jfcl
+	Move 1,2
+	Return
+
+SavStr:	Move TT,FreeSP
+	Hrli TT,440700
+	Move 2,T
+	Ildb 1,2
+	Idpb 1,TT
+	Jumpn 1,.-2
+	Ibp TT
+	Movei T,1(TT)
+	Exch T,FreeSP
+	Hrli T,440700
+	Return
+
+CpyRec:	Tlce TT,-1
+	  Tlcn TT,-1
+	    Hrli TT,440700
+	Move 2,T
+	Ildb 1,2
+	Idpb 1,TT
+	Jumpn 1,.-2
+	Return
+
+MovStr:	Ildb 1,T
+	Jumpe 1,CPopj
+	Idpb 1,TT
+	Jrst MovStr
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Now construct the header of the definition, having already
+;;	gotten and dissected the F, P, and related initial fields.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+MakHdr:	Setom SpaceOK		;OK to have spaces leading, since not indented
+	Skipe T,HomoNo		;Homonym?
+	  Call OutHom		;  Yes, so output the number.
+	Movei T,NameBP
+	Movei TT,40
+	Call OutEnt		;Output an entry-name with dots, etc.
+	Setzm SpaceOK
+	Skipe T,PronBP		;There a pronunciation?
+	  Call OutPro
+	Skipe n0VARs		;Any 1st-level-0 variants?
+	  Call OutL0V		;  Yes, so put them next.
+	Skipe T,Pos
+	  Call OutPos		;Output the "n", "v", etc.
+	Skipe nOVARs		;Any other variants?
+	  Call OutLnV		;  Yowp.
+	Skipe Pos2		;There an alternate?
+	  Call OutAlt		;  Yep, so do that one, joining with POSJ
+MakHd0:	Skipe LabelBP
+	  Call OutLab		;Label
+	Call OutSpc
+	Skipe EtymBP		;Etymology?
+	  Call OutEty		;  Yep.
+	;
+	;	Maybe more here
+	;
+	Skipa		;Tie off output and then done.
+BodDun:	  Call NewLi0
+EndOut:	Setz 1,
+	Move 2,DefPtr
+	Idpb 1,2
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Buffer output routines, lowest to highest
+;;
+;;	OutSpc - Output a space
+;;	OutChr - Output the character in AC T
+;;	OutCh0 - Same as OutChr, but don't check for over-line
+;;	NewLin - Get to a new line, and indent one space
+;;	NewLi0 - Just get to a new line
+;;	OutNum - Output the number in T then a space
+;;	OutNu0 - Just output the number in AC T
+;;	OutWrd - Output the 1-word string pointed to by AC T, then space
+;;	OutWr0 - Same, but no space
+;;	OutStr - Output the n-word string pointed to by AC T, and then
+;;		 the character in AC TT, if not 0.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+OutSpc:	Movei T,40		;Output a space.
+OutChr:	Aos TT,Column		;Output the character in AC T
+	Camge TT,Width
+	  Jrst [Cain T,40
+		  Caie TT,3
+		    Jrst OutCh1
+		Skipe SpaceOK	;Special dispensation - allow spaces here.
+		  Jrst OutCh1
+		Sos Column	;Don't start lines with spaces.
+		Return]
+	Call NewLin
+	Cain T,40		;If space put it over, don't put it on
+	  Return		;next line.
+OutCh0:	Aos Column
+OutCh1:	Idpb T,LineBP		;Don't column-check for this.
+	Aos nChars
+	Return
+
+HackUp:	Skipn HackLn
+	  Jrst [Setom HackLn
+		Setzm OldCol
+		Move 1,[440700,,HakLin]
+		Movem 1,HackBP
+		Jrst .+1]
+	Move 2,Column
+	Sub 2,OldCol
+	Sos 2			;Adjustment, velly hush hush.
+	Movei 1,40
+	Sojl 2,HackU0
+	Idpb 1,HackBP
+	Jrst .-2
+
+HackU0:	Idpb T,HackBP
+	Move 1,Column
+	Movem 1,OldCol
+	Return
+
+NewLin:	Call NewLi0
+	Push P,T
+	Call OutSpc		;new lines are indented two spaces.
+	Call OutSpc
+	Pop P,T
+	Return
+
+NewLi0:	Skipg Column		;This is really TERPRI.
+	  Return
+	Pushn P,[T,TT]
+	Setz 1,
+	Idpb 1,LineBP		;Make sure new line is ASCIZ!
+	Idpb 1,HackBP		;ditto.
+	Move T,[440700,,HakLin]
+	Skipn HackLn		;This line have super-scripted junk?
+NewLi1:	  Move T,[440700,,LinBuf]
+	Move TT,DefPtr		;the high line
+	Call MovStr		;comes first.
+	Movem TT,DefPtr
+NewEek:	Movei T,^M		;else normal stuff.
+	Idpb T,DefPtr
+	Movei T,^J
+	Idpb T,DefPtr
+	Skipe HackLn
+	  Jrst [Setzm HackLn
+		Jrst NewLi1]
+	Call LinIni
+	Popn P,[TT,T]
+	Return
+
+LinIni:	Setzm Column
+	Move 1,[440700,,LinBuf]
+	Movem 1,LineBP		;BP to start of output line.
+	Setzm HackLn		;This line has been hacked.
+	Return
+
+BufIni:	Move 1,[440700,,DefBuf]	;Pointer to the output buffer
+	Movem 1,DefPtr
+	Movem 1,Entry2		;BP to start of final entry.
+	Setzm Entry3		;ASCIZ entry after formatting.
+	Setzm nChars		;Total # chars in output buffer
+	Setzm Fonter		;Initially no funny font.
+	Return
+
+OutHom:	Call OutNu1
+	Call OutWr0
+	Movei T,40
+	Jrst OutCh0		;Force a space to exist.
+
+OutNum:	Call OutNu1
+	Jrst OutWrd
+
+OutNu0:	Call OutNu1
+	Jrst OutWr0
+
+OutNu1:	Hrroi 1,NumBuf
+	Move 2,T
+	Movei 3,10.
+	NOUT
+	  Jfcl
+	Movei T,NumBuf
+	Return
+
+OutWrd:	Call OutWr0
+	Jrst OutSpc
+
+OutWr0:	Tlce T,-1
+	  Tlcn T,-1
+	    Hrli T,440700
+	Movem T,FromBP			;BP to source string.
+	Move TT,[440700,,WrdBuf]	;BP to de-encrypted string
+	Move T3,[440700,,HakBuf]	;BP to super-scripted string.
+	Setz 5,			;Count # characters in this word.
+OutWr1:	Call GetChr		;Get a character
+	  Jrst OutWr2		;  No more.
+	Idpb 1,TT		;Save de-enrypted version
+	Idpb 2,T3		;and super-script character.
+	Aoja 5,OutWr1
+
+OutWr2:	Setz 1,
+	Idpb 1,TT		;Make sure nice and ASCIZ.
+	Idpb 1,T3
+	Add 5,Column		;# characters in word + # already output.
+	Caml 5,Width		;Will fit on line (with ending space)?
+	  Call NewLin		;  Nope, so go to new line!
+	Move TT,[440700,,WrdBuf]
+	Move T3,[440700,,HakBuf]
+OutWr3:	Ildb T,TT
+	Jumpe T,CPopj
+	Call OutCh0
+	Ildb T,T3
+	Skipe T
+	  Call HackUp
+	Jrst OutWr3
+
+OutStr:	Hlrzm TT,BegCh		;First character!
+	Hrrzm TT,EndCh		;Last character!
+	Setzm EndStr
+	Tlce T,-1
+	  Tlcn T,-1
+	    Hrli T,440700
+	Movem T,FromBP
+OutSt0:	Move TT,[440700,,OutBuf]
+	Movem TT,ToBP
+	Skipe 1,BegCh		;Any beginning character?
+	  Jrst [Setzm BegCh	;  Yes, so use that first.
+		Jrst OutSt2]
+OutSt1:	Call GetC		;Get a character, hacking continuation.
+	  Jrst [Setom EndStr	;End of line (no cont) or end of buffer
+		Skipn 1,EndCh	;Is there an ending character?
+		  Jrst DoWord	;  Naw, so just got for it.
+		Jrst OutSt3]	;Yes, so include that as part of the string.
+OutSt2:	Cain 1,40
+	  Jrst DoWord
+OutSt3:	Idpb 1,ToBP
+	Skipn EndStr
+	  Jrst OutSt1
+DoWord:	Setz 1,
+	Idpb 1,ToBP		;Make sure word-buffer'd string is ASCIZ
+	Push P,FromBP		;(OutWrd wants to use this)
+	Movei T,OutBuf
+	Call OutWr0		;Then output the word.
+	Pop P,FromBP		;(so get it back after they're done)
+	Skipn EndStr		;This the end of the input string?
+	  Jrst [Call OutSpc	;  No, so word ends in space,
+		Jrst OutSt0]	;  and go get another.
+	Return			;and then we're done.
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Now higher level outputs
+;;
+;;	OutPos, OutAlt, OutLab, OutL0V, OutL1V, OutL2V, OutEnt,
+;;	OutPro, OutPr0, OutEty, OutEnt
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+OutPos:	Movsi TT,-nPoses
+OutPo0:	Hllz 1,PosTab(TT)
+	Camn T,1
+	  Jrst [Hrrz T,PosTab(TT)
+		Skipn T
+		  Movei T,PosTab(TT)
+		Setz TT,
+		Jrst OutStr]
+	Aobjn TT,OutPo0
+	Movem T,OutBuf
+	Movei T,OutBuf
+	Jrst OutWr0
+
+OutAlt:	Movei T,Posj
+OutAl0:	Push P,T
+	Call OutSpc
+	Move A,(T)		;Joiner-character
+	Movei T,[Asciz "or"]
+	Cain A,"2
+	  Movei T,[Asciz "(or"]
+	Call OutWrd
+	Pop P,T
+	Move T,1(T)
+	Call OutPos
+	Movei T,")
+	Cain A,"2
+	  Jrst OutChr
+	Return
+
+OutLab:	Skipe Pos
+	  Jrst [Movei T,",
+		Call OutChr
+		Call OutSpc
+		Jrst .+1]
+	Move T,LabelBP
+	Setz TT,
+	Call OutStr
+	Setzm LabelBP
+	Return
+
+OutL0V:	Movs A,n0VARs		;# of level-0 variants
+	Movns A			;AOBJN pointer to pointer array
+	Skipa
+OutL00:	  Call OutSpc
+	Move B,0VARS(A)		;Address of block for this variant
+	Call OutVar		;Output entry, no fancy stuff.
+	Aobjn A,OutL00
+	Movei T,",
+	Call OutChr
+	Jrst OutSpc
+
+OutLnV:	Movs A,nOVARs
+	Movns A
+OutLn0:	Move B,OVARS(A)		;Address of block.
+	Hlrz T,VLEVEL(B)	;LEVEL1
+	Camn T,OLDVAR		;Same as last one?
+	  Jrst [Call OutSpc
+		Call OutVar
+		Jrst OutLn2]
+	Exch T,OLDVAR
+	Jumpe T,OutLn1
+	Movei T,";
+	Skipn VARPRO
+	  Call OutChr
+OutLn1:	Call OutSpc
+	Call OutVa0
+OutLn2:	Aobjn A,OutLn0
+	Jrst OutSpc
+
+OutVar:	Hrrz C,VLEVEL(B)	;2nd level of this variant
+	Movei T,[Asciz "or"]
+	Cain C,2
+	  Movei T,[Asciz "also"]
+	Call OutWrd		;variant joiner
+OutVa0:	Movei TT,40
+	Skipe T,VLABEL(B)
+	  Call OutStr
+	Movei T,VNAMEBP(B)
+	Setz TT,
+	Call OutEnt
+	Setzm VARPRO
+	Skipn VPRONBP(B)
+	  Return
+	Setom VARPRO
+	Call OutSpc
+	Move T,VPRONBP(B)
+	Jrst OutPr0
+
+OutEnt:	Movem TT,EntEnd
+	Pushn P,[B,C]
+	Move TT,[440700,,OutBuf]	;Where we'll accumulate the output
+	Move E,1(T)		;BP to DOTS
+	Jumpn E,[Ildb 1,E
+		 Call CvtNum
+		 Move D,1
+	  	 Jrst OutEnF]
+	Skipn 2(T)		;if no accents or dots, treat as normal
+	  Jrst [Move T,0(T)	;string.
+		Jrst EndEn0]
+OutEnF:	Move F,2(T)		;BP to accents
+	Jumpn F,[Ildb 1,F
+		 Call CvtNum
+		 Move 5,1
+		 Jrst .+1]
+	Move C,0(T)		;BP to source
+	Setz T3,		;# characters read from source.
+OutEn0:	Ildb 1,C
+	Idpb 1,TT
+	Jumpe 1,EndEnt
+	Aos T3
+	Jumpe F,OutEn1
+	Came T3,5
+	  Jrst OutEn1
+	Ildb 1,F		;Get accent-type.
+	Movsi 2,-nProChr
+OutEn2:	Hlrz 3,ProChr(2)
+	Camn 1,3
+	  Jrst [Hrrz 1,ProChr(2)
+		Jrst .+2]
+	Aobjn 2,OutEn2
+	Movei 2,^H
+	Idpb 2,TT
+	Idpb 1,TT		;Write <char><BS><accent>
+	Ildb 1,F		;Get new number
+	Jumpe 1,[Setz F,
+		 Jrst OutEn1]
+	Call CvtNum
+	Add 5,1
+OutEn1:	Jumpe E,OutEn0
+	Came T3,D		;This character should be followed by dot?
+	  Jrst OutEn0
+	Movei 1,".		;Yep.
+	Idpb 1,TT		;Period will have to do.
+	Ildb 1,E		;Get next dot-position.
+	Jumpe 1,[Setz E,	;oops, no more!
+		 Jrst OutEn0]	;oh well!
+	Call CvtNum
+	Add D,1			;numberify & sum, giving new position.
+	Jrst OutEn0
+
+EndEnt:	Movei T,OutBuf
+EndEn0:	Move TT,EntEnd
+	Call OutStr
+	Popn P,[C,B]
+	Return
+
+CvtNum:	Cail 1,"1
+	  Caile 1,"9
+	    Jrst AccNu0
+	Subi 1,"0
+	Return
+
+AccNu0:	Movsi 3,-nAccPos
+AccNu1:	Hlrz 2,AccPos(3)
+	Camn 2,1
+	  Jrst [Hrrz 1,AccPos(3)
+		Return]
+	Aobjn 3,AccNu1
+	Setz 1,
+	Return
+
+OutPro:	Call OutPr0
+	Jrst OutSpc
+
+OutPr0:	Move TT,["\,,"\]	;1st, last character
+	Jrst OutStr
+
+OutEty:	Move T,EtymBP
+	Move TT,["[,,"]]	;1st, last character
+	Call OutStr
+	Jrst OutSpc
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Get a character from the FromBP string, hacking fonts and
+;;	encoded characters.  Returns +1 if no more characters, else
+;;	+2 with AC1 having the character, and AC2 with the char
+;;	that should go over AC1, else 0 if none.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+GetChr:	Call GetCh0
+	  Return
+	Skipe Fonter		;Need to do a font-shift?
+	  Call @Fonter		;  yes indeedy.
+	Jrst Popj1
+
+GetCh0:	Skipe FunBP		;Still expanding an old encryption?
+	  Jrst GetFun		;  yep!
+	Call GetC		;Get a character, hacking continuation.
+	  Return		;  No more!
+	Setz 2,			;Assume no funny stuff.
+	Cain 1,^H		;Uh oh, overstrike?
+	  Jrst OvrStr		;  Yep.
+	Caie 1,"(		;Maybe losing font start?
+	  Jrst Popj1		;  Nope, normal stuff.
+	Call GetC		;See what followes the open
+	  Return
+	Caie 1,^H		;Open-BS?
+	  Jrst [Call UnGetC	;  oops, nope!  un-get whatever it was
+		Movei 1,"(	;  and put back the open
+		Jrst Popj1]	;  and leave before we get into more trouble!
+	Call GetC		;Get font character.
+	  Return
+	Movsi 2,-nFonts		;now look it up in table
+FndFnt:	Hlrz 3,Fonts(2)
+	Camn 1,3
+	  Jrst [Hrrz 2,Fonts(2)
+		Hlrz 1,(2)	;Data
+		Hrrz 3,(2)	;Handler
+		Jrst (3)]
+	Aobjn 2,FndFnt
+	Setzm Fonter		;If not inportant, don't do anything.
+	Jrst GetCh0
+
+DoFont:	Movem 1,Fonter
+	Jrst GetCh0
+
+BeginF:	Setz 2,
+	Jrst Popj1
+
+NoFont:	Setzm Fonter		;Font hacking is invisible!
+	Call BackUp
+	Jrst GetCh0
+
+EndF:	Move 1,C
+	Setz 2,
+	Call BackUp
+	Jrst Popj1
+
+OvrStr:	Ldb 4,TT		;Get last character saved
+	Lsh 4,35		;Get into topmost ascii position
+	Call GetC		;Get character after ^H
+	  Return		;  No more!??
+	Movem 1,PostBS		;(save it)
+	UC 1
+	Lsh 1,35-7
+	Add 4,1			;OK, 4/ 2-character asciz string.
+	Camn 4,[Asciz "|B"]	;Pronunciation twiddle?
+	  Jrst BinBox		;  Yep.
+	Movsi 2,-nFun
+OvrSt0:	Hllz 3,FunChr(2)	;Get 2-char encryption combos
+	Camn 4,3
+	  Jrst [Hrrz 2,FunChr(2)
+		Hlrz C,(2)	;C/ data
+		Hrrz 3,(2)	;3/ handler
+		Jrst (3)]
+	Aobjn 2,OvrSt0
+	Ldb 1,TT
+	Move 2,PostBS
+	Call BackUp
+	Jrst Popj1
+
+ArfArf:	Ldb 1,TT		;get pre-BS character
+	Call FndArf		;decode into AC2
+	Move 1,PostBS		;and post BS character
+	Call BackUp		;backup BPs one, then done.
+	Jrst Popj1
+
+FndArf:	Movsi 2,-nOvers
+FndAr0:	Hlrz 3,Overs(2)
+	Camn 1,3
+	  Jrst [Hrrz 2,Overs(2)
+		Return]
+	Aobjn 2,FndAr0
+	Move 2,1		;Dunno what they mean, so just use it.
+	Return
+
+BackUp:	Seto 3,			;Back up BP to obliterate ( or )
+	Adjbp 3,TT
+	Move TT,3
+	Seto 3,
+	Adjbp 3,T3
+	Move T3,3
+	Sos 5			;Decrement character count
+	Return
+
+UpFun:	Movei 1,40		;Single superscript character (over space)
+	Move 2,C
+UpFun0:	Call BackUp
+	Jrst Popj1
+
+OneFun:	Move 1,C		;Single character
+	Setz 2,
+	Jrst UpFun0
+
+TwoFun:	Hrli C,440700		;One character over another
+	Ildb 1,C
+	Ildb 2,C
+	Jrst UpFun0
+	
+1stFun:	Hrli C,440700		;replacement string
+	Movem C,FunBP
+	Call BackUp
+GetFun:	Ildb 1,FunBP
+	Jumpe 1,[Setzm FunBP	;oops, no more of the replacement
+		 Jrst GetCh0]	;string!  so try again.
+	Setz 2,
+	Jrst Popj1
+
+BinBox:	Call GetChr		;Get special character
+	  Jfcl			;  Ummm!
+	Call FndBox
+	  Jrst [Call BackUp
+		Jrst Popj1]
+BinBo0:	Call BackUp
+	Ldb 1,TT
+	Call BackUp
+	Jrst Popj1
+
+FndBox:	Movsi 2,-nBoxes
+FndBo0:	Hlrz 3,BoxChr(2)
+	Camn 1,3
+	  Jrst [Hrrz 2,BoxChr(2)
+		Jrst Popj1]
+	Aobjn 2,FndBo0
+	Setz 2,
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Get a character from the FromBP string, hacking continuation.
+;;	Returns +1 if no more characters, else +2 with character in
+;;	AC1
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+GetC:	Move 1,FromBP		;Save BP from before we get this
+	Movem 1,OldFBP		;character.
+	Ildb 1,FromBP		;Get a character
+	Jumpe 1,CPopj
+	Caie 1,^M		;EOL?
+	  Jrst Popj1		;  Nope, so return the character
+	Ildb 1,FromBP		;skip the LF
+	Move 2,FromBP
+	Ildb 1,2		;get 1st character of next line
+	Cain 1,"c		;Continuation with needed space?
+	  Jrst GetC0		;  Yup.
+	Caie 1,"C		;"C" for continuation?
+	  Return		;  Nope, so EOL, so done.
+	Ildb 1,2
+	Caie 1,":		;"C:"?
+	  Return
+GetC0:	Movem 2,FromBP		;yes, so keep reading.
+	Jrst GetC
+
+UnGetC:	Move 1,OldFBP
+	Movem 1,FromBP
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Font shifters
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+UpCase:	UC 1
+	Return
+
+APL:	Cain 1,"@
+	  Movei 1,"~
+	Cain 1,^Z
+	  Movei 1,"^
+	Return
+
+Super:	Cain 1,")		;This is massively cheating and
+	  Return		;inexcusable, but I'm doing it.
+	Move 2,1
+	Movei 1,40
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	GetRec - Get a record.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+SubFld:	"F,,7			;# significant semi-colons
+	"L,,3
+	"V,,3
+	"D,,4
+	"R,,5
+	"X,,4
+nTypes==.-SubFld
+
+GetRec:	Skipe EOFp
+	  Return
+	Setzm nArgs
+	Setzm LinLen
+	Move T,TmpPtr		;Pointer into buffer we're inhaling.
+	Ildb 1,T
+	Jumpe 1,EndRec
+	Movem 1,RecTyp
+	Ibp T			;Skip the ":"
+	Movsi 2,-nTypes		;AOBJN pointer top max-sub-records table
+	Hlrz 3,SubFld(2)
+	Camn 1,3
+	  Jrst [Hrrz 2,SubFld(2)
+		Movem 2,MaxSub
+		Jrst GetRe0]
+	Aobjn 2,.-3
+	Setzm MaxSub
+
+GetRe0:	Movem T,TempBP		;BP to start of this sub-record
+	Setzm RecLen
+GetRe1:	Ildb 1,T
+	Jumpe 1,EndRec
+	Aos LinLen
+	Cain 1,";
+	  Jrst EOsrec		;end of sub-record
+	Cain 1,^J
+	  Jrst EOLp
+GetRe2:	Aos RecLen
+	Jrst GetRe1
+
+EOsrec:	Move 1,nArgs
+	Caml 1,MaxSub
+	  Jrst GetRe2
+	Setz 1,
+	Dpb 1,T			;clobber the ; to 0.
+	Call SavSBP
+	Jrst GetRe0
+
+EOLp:	Move 2,T
+	Ildb 1,2		;Get character after LF
+	Caie 1,"C		;"C"?  Maybe continuation field?
+	  Jrst NotC
+	Ildb 1,2
+	Jumpe 1,EndRec
+	Caie 1,":		;It's "C:", surely continuation!
+	  Jrst NotC
+	Move 1,LinLen
+	Setzm LinLen
+	Cain 1,79.		;Exactly 79 characters?
+	  Jrst [Movei 1,"c
+		Idpb 1,T	;Clobber the "C" with "c"
+		Movei 1,40
+		Idpb 1,T	;and the colon with space.
+		Jrst GetRe1]
+	Move T,2
+	Jrst GetRe1		;so keep reading this field.
+
+NotC:	Seto 2,			;Make sure the last field is asciz.
+	Adjbp 2,T
+	Setz 1,
+	Dpb 1,2
+	Call SavSBP
+	Movem T,TmpPtr
+	Move T,RecTyp
+	Jrst Popj1
+
+SavSBP:	Aos 1,nArgs
+	Skipe 2,RecLen		;Of 0-length sub-record, store 0
+	  Move 2,TempBP		;  not, BP to null-string.
+	Movem 2,RecArg-1(1)
+	Return
+
+EndRec:	Setom EOFp
+	Return
+
+IFN U,[
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Miscellaneous random routines
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+GeeWiz:	Movei 1,.PRIOU
+	CFOBF			;Clear the output buffer.
+	  Ernop
+	TypeCR " *Flushed*"
+	Move P,PDL		;Don't know WHERE we interrupt out of.
+	Movx T,Bit(5)		;User-mode, please.
+	Iorm T,PSIPC2
+	Movei T,Nextp		;Where we want to continue executing from.
+	Hrrm T,PSIPC2
+	DEBRK			;Carry on, men.
+
+SCCOC1:	Movei 1,.PRIOU
+	RFCOC
+	  Erret
+	Movem 2,CCOC2
+	Movem 3,CCOC3
+	Setz 4,
+	Dpb 4,[200200,,3]
+	SFCOC			;Set ESC to not display at all
+	  Erret
+	Return
+
+SCCOC2:	Movei 1,.PRIOU
+	Move 2,CCOC2
+	Move 3,CCOC3
+	SFCOC
+	  Erret
+	Return
+];User
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Miscellaneous tables
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Xtypes:	Xtype0			;0 = "see WORD"
+	Xtype1			;1 = "see WORD table"
+	CPopj			;2 = not used
+	Xtype3			;3 = "see WORD2 at WORD table"
+	Xtype4			;4 = "compare WORD"
+	Xtype5			;5 = "compare WORD table"
+	Xtype6			;6 = "called also WORD"
+	CPopj			;7 = not used
+	Xtype8			;8 = "SYN see in addition WORD"
+	Xtype9			;9 = "SYN see WORD"
+nXtypes==.-Xtypes
+				;aprox#
+Fonts:	"M,,[UpCase,,DoFont]	;61246 mini-caps
+	"R,,[APL,,DoFont]	; 8724 APL
+	"A,,[Super,,DoFont]	; 4623 super-script
+	"Q,,["{,,BeginF]	; 1077 spelled-out character
+	"B,,[Super,,DoFont]	;    1 italic super-script
+;	"C,,[Super,,DoFont]	;    0 bold-face super-script
+nFonts==.-Fonts
+						;aprox#
+FunChr:	Ascii ")X" [NoFont]			;100012 italic
+	Ascii ")M" [NoFont]			; 61246 mini-caps
+	Ascii "::" [":,,OneFun]			; 25725 bold-face colon
+	Ascii "<(" ["<,,OneFun]			; 11479 left-"brace" (broket)
+	Ascii ")>" [">,,OneFun]			;  ~ "  right-"brace" (broket)
+	Ascii ")R" [NoFont]			;  8724 APL
+	Ascii "-M" [[Asciz "--"],,1stFun]	;  8709 m-dash
+	Ascii ")A" [NoFont]			;  4623 super-script
+	Ascii ")I" [NoFont]			;  2224 sub-script
+	Ascii ")Q" ["},,EndF]			;  1077 spelled-out character
+	Ascii ")Y" [NoFont]			;   850 bold-face
+	Ascii ">E" [ArfArf]			;   810 grave-accent e
+	Ascii "|-" ["|,,OneFun]			;   427 single dagger
+	Ascii "-/" ["\,,OneFun]			;   214 APL lossage
+	Ascii "<E" [ArfArf]			;   153 acute-accent e
+	Ascii /"O/ [ArfArf]			;    82 umlaut o
+	Ascii "'O" ["o,,UpFun]			;    76 degree
+	Ascii ")G" [NoFont]			;    70 greek
+	Ascii ">A" [ArfArf]			;    60 grave-accent a
+	Ascii ";C" [ArfArf]			;    49 cedille c
+	Ascii /"I/ [ArfArf]			;    49 umlaut i
+	Ascii /"U/ [ArfArf]			;    45 umlaut u
+	Ascii "~A" [ArfArf]			;    38 circumflex a
+	Ascii /"A/ [ArfArf]			;    35 umlaut a
+	Ascii ">U" [ArfArf]			;    27 grave-accent u
+	Ascii "-3" [[Asciz "..."],,1stFun]	;    27 ellipsis
+	Ascii "~E" [ArfArf]			;    24 circumflex e
+	Ascii "<A" [ArfArf]			;    22 acute-accent a
+	Ascii "~O" [ArfArf]			;    20 circumflex o
+	Ascii ")J" [NoFont]			;    17 italic sub-script
+	Ascii "(|" ["[,,OneFun]			;    14 left-bracket
+	Ascii "|)" ["],,OneFun]			;    ~" right-bracket
+	Ascii "-X" ["x,,OneFun]			;    12 multiplication sign
+	Ascii "~U" [ArfArf]			;    11 circumflex u
+	Ascii "-N" [[Asciz "--"],,1stFun]	;    10 n-dash
+	Ascii "<'" ["`,,OneFun]			;     9 single open quote
+	Ascii "~I" [ArfArf]			;     7 circumflex i
+	Ascii /"E/ [ArfArf]			;     7 umlaut e
+	Ascii "-:" ["/,,OneFun]			;     3 division sign
+	Ascii "*O" [".,,OneFun]			;     3 center-dot
+	Ascii ">'" ["',,OneFun]			;     " single close quote
+	Ascii "+=" [[Asciz "-+"],,TwoFun]	;     2 plus/minus
+	Ascii /'"/ ["',,OneFun]			;     2 stright apostrophy
+	Ascii "'B" [[Asciz "b-"],,TwoFun]	;     2 b with crossed staff
+	Ascii "|Q" [[Asciz "{paragraph}"],,1stFun] ;  1 paragraph
+	Ascii "|S" [[Asciz "{section}"],,1stFun]   ;  1 section
+	Ascii "=S" [[Asciz "{integral}"],,1stFun]  ;  1 integral sign
+	Ascii "|=" [[Asciz "||"],,1stFun]	;     1 double dagger
+	Ascii ")B" [NoFont]			;     1 italic super-script
+;	Ascii ")C" [NoFont]			;     0 bold-face super-script
+;	Ascii ")W" [NoFont]			;     0 normal
+;	Ascii ")K" [NoFont]			;     0 bold-face super-script
+;	Ascii "<I" [ArfArf]			;     0 acute-accent i
+;	Ascii "<O" [ArfArf]			;     0 acute-accent o
+;	Ascii "<U" [ArfArf]			;     0 acute-accent u
+;	Ascii ">I" [ArfArf]			;     0 grave-accent i
+;	Ascii ">O" [ArfArf]			;     0 grave-accent o
+nFun==.-FunChr
+
+PosTab:	Ascii "n"  0				;42587
+	Ascii "aj" [Asciz "adj"]		;13253
+	Ascii "vt" 0				; 4947
+	Ascii "vb" 0				; 2422
+	Ascii "av" [Asciz "adv"]		; 1432
+	Ascii "vi" 0				; 1362
+	Ascii "cf" [Asciz "comb form"]		;  516
+	Ascii "pp" [Asciz "prep"]		;  164
+	Ascii "nc" [Asciz "n comb form"]	;  150
+	Ascii "tm" [Asciz "trademark"]		;  121
+	Ascii "pn" [Asciz "pron"]		;  108
+	Ascii "ns" [Asciz "n suffix"]		;  107
+	Ascii "cj" [Asciz "conj"]		;   96
+	Ascii "ij" [Asciz "interj"]		;   94
+	Ascii "pf" [Asciz "prefix"]		;   74
+	Ascii "js" [Asciz "adj suffix"]		;   50
+	Ascii "vs" [Asciz "v suffix"]		;   12
+	Ascii "vp" [Asciz "v inper"]		;   10
+	Ascii "as" [Asciz "adj suffix"]		;    7
+	Ascii "va" [Asciz "aux v"]		;    4
+	Ascii "ia" [Asciz "indef art"]		;    3
+	Ascii "vm" [Asciz "v impersonal"]	;    2
+	Ascii "vc" [Asciz "v comb form"]	;    2
+	Ascii "sf" [Asciz "suffix"]		;    2
+	Ascii "da" [Asciz "def art"]		;    2
+	Ascii "np" [Asciz "n pl suffix"]	;    1
+	Ascii "is" [Asciz "interj suffix"]	;    1
+nPoses==.-PosTab
+
+ProChr:	":,,""			;Characters occuring in the ACCENTS
+	"',,"^			;field of ENTNAMEs and the like.
+	"),,"`
+	"(,,"'
+	"@,,"~
+nProCh==.-ProChr
+
+BoxChr:	"(,,"'			;Characters following a virtual
+	"),,"`			;backspace (B in a Box!)
+	"-,,"_
+	",,,",			;Must be here so is superscripted
+	".,,".			;(likewise)
+	"_,,"j
+	":,,""
+	"',,"^
+	"~,,"~			;(same with this one)
+nBoxes==.-BoxChr
+
+Overs:	"<,,"`			;Overstuck characters.
+	";,,",
+	"~,,"^
+	">,,"'
+;	"",,""
+nOvers==.-Overs
+
+AccPos:	"`,,10.			;Accent positions (EBCDIC...)
+	"[,,11.
+	"],,12.
+	"{,,13.
+	"},,14.
+	^A,,15.
+	^H,,16.
+	^[,,17.			;...until here, then it's just weird.
+	^R,,18.
+	^S,,19.
+	^T,,20.
+nAccPos==.-AccPos
+
+VarNs:	40,,10.			;Demented variant-level encoding.
+	"_,,11.
+nVarNs==.-VarNs
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Address space allotment
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Variables
+Constants
+
+XRarea:	Block XRefLn		;Area for persistent cross-references
+
+EOM:	0
+
+TmpPag==<./777>+nFrePg
+TmpBuf=TmpPag*1000
+
+DefPag==TmpPag+MaxEnt
+DefBuf=DefPag*1000
+
+Mapage==DefPag+MaxEnt
+MapAdr=Mapage*1000
+
+IdxPag==Mapage+MaxFil
+IdxAdr=IdxPag*1000
+
+EntNam==IdxAdr+nStarts+2
+
+	End VecLen,,Vector

@@ -1,0 +1,1505 @@
+;[SRI-NIC]SRC:<LOC.SYSTEM>ACJ.MAC.42,  2-Apr-90 16:14:32, Edit by ZZZ
+; Log newly-created user directories (ie. just not-files-only ones)
+;[SRI-NIC]SRC:<LOC.SYSTEM>ACJ.MAC.21, 14-Jan-88 13:34:57, Edit by MKL
+; log most other crdir% stuff
+;[SRI-NIC]SRC:<LOC.SYSTEM>ACJ.MAC.14,  4-Jan-88 22:12:01, Edit by MKL
+; log password changes
+;[SRI-NIC]SRC:<LOC.SYSTEM>ACJ.MAC.4, 20-Oct-87 22:54:56, Edit by MKL
+; Add code to decide who's a winner and who's a loser.
+;[SRI-NIC]PS:<MKL>ACJ.MAC.2, 14-Aug-85 11:58:34, Edit by MKL
+;Make this the ACJ for SRI-NIC.  
+;  YUCK!  Kill most of the Stanford crap...
+;  We basically only need ACJ to handle last logout times
+;  and for downtime queue management.
+;
+
+
+TITLE ACJ - SRI-NIC Access Control Job
+Subttl Kirk Lougheed / August 1980 / Stanford University
+Search Monsym, Macsym, Anaunv, Fngdef
+
+.Require sys:macrel
+Asuppress
+Sall
+
+Subttl Definitions
+
+;site dependent assembly parameters
+
+;********THIS IS THE LIST OF ACJ TRAPS********
+define montab,<
+	fnc (golgo,sf%eok,sf%dok) 	;LGOUT% to record last logout time
+	fnc (gomdd,sf%eok,sf%dok) 	;MDDT%  to record possible lusers
+	fnc (gohsy,sf%eok,sf%dok)	;HSYS%  to handle downtime queues
+	fnc (gocrd,sf%eok,sf%dok)	;CRDIR% logging of special items
+	fnc (gocjb,sf%eok,sf%dok)	;CRJOB% by WHOPR's only
+>;end define montab
+
+.gonet==400001
+
+define usrtab,<
+	fnc (gonet,sf%eok,sf%dok)	;To set network tty locations
+>;end define usrtab
+;*********************************************
+
+;site independent assembly parameters
+
+define sym(symbol,value) < ifndef symbol,<symbol==value> >
+
+sym pdllen,200			;length of stack
+sym rcvlen,100			;length of RCVOK% argument block
+sym skdlen,20			;length of SKED% argument block
+sym hsylen,^D18			;two date/time words plus 16 string words
+sym gtdlen,.cddfe		;size of GTDIR% value block
+sym grplen,^D100		;maximum number of groups we handle
+sym maxtty,^d256		;many tty lines
+sym usrlh,500000		;code for a usernumber
+
+;accumulator definitions
+
+a=1				;JSYS arguments, temporaries
+b=2
+c=3
+d=4
+f=5				;flags used within function processors
+t=6				;usually a terminal number
+u=7				;usually a 36 bit usernumber
+pt=10				;pointer to base of GETOK% argument block
+e=11
+q=12				;pointer into cfs data file
+p=17				;stack pointer
+
+
+;parameters for FINGER data gathering
+
+bgnpag=240			;1st data page
+
+bldpag==240			;base page of FINGER.BIN file
+bldloc==bldpag*1000		;base address of same
+lstpag==600			;last possible page of FINGER.BIN
+
+fngsig==bldloc			;sixbit FINGER
+fngaut==fngsig+1		;usernumber of last writer
+fngtim==fngaut+1		;TAD of last write
+fnginf==fngtim+4		;address of header of keyword table
+
+died==4				;offset of TAD of logout
+r.i.p.==died+1			;offset of location of logout
+
+
+;IPCF stuff
+FkPid:	.IPCIW			;function
+	0			;no copies
+FNam:	Asciz /TVTLOC/
+PidLn=.-FkPid			;length of block
+OurPid:	0			;our pid
+FPid:	0			;foreign pid
+ResLn=10
+DesBlk:	Block	ResLn
+MsgBlk:	Block	ResLn
+
+Subttl Macros
+
+;WARN - print a warning message on the CTY and return
+
+define warn (str) <
+	 call [ call logtad	;;time stamp
+		tmsg <Warning - str
+>				;;warning message
+		ret	]	;;return to caller
+>
+
+
+;ERROR - print an error message on the CTY and halt
+
+define error (str) <
+	 jrst [ call logtad	;;time stamp
+		tmsg <Fatal - str
+>				;;print error message
+		haltf%		;;halt
+		jrst .-1   ]	;;and stay halted
+>
+
+
+define msg (str) <
+	if1,<printx str>
+>
+Subttl Impure Storage
+
+pdl:	block pdllen		;stack
+rcvblk:	block rcvlen		;RCVOK% argument block
+getblk:	block .jimax		;GETJI% argument block
+line:	block maxtty		;terminal data
+skdarg:	block skdlen		;SKED% argument block
+hsytab: block hsylen		;HSYS% argument block
+hsytb1:	block hsylen		;auxillary readin block for HSYS% processing
+tmpbuf:	block 30		;scratch buffer
+msgbuf:	block 50		;buffer for building messages
+bugacs:	block 20		;save the AC's here on a crash
+usrnam:	block 10		;buffer for writing a username
+myname:	block 10		;my host name string
+ttyoff:	block 1			;offset between words in tty initialization
+nlines:	block 1			;negative number of terminals
+atjflg: block 1			;-1 if ATTACHing, 0 if LOGIN
+dbugsf:	block 1			;-1 if DBUGSW was set to 2 at startup
+messgf:	block 1			;-1 if we have a message for the requestor
+fngbad:	block 1			;-1 if FINGER data file is clobbered
+hsydnp: block 1			;-1 if an HSYS% needs doing
+dwnjfi: block 1			;input jfn for downtime queue
+dwnjfo: block 1			;output jfn for downtime queue
+msgptr:	block 1			;pointer into message buffer
+fngjfn:	block 1			;jfn of FINGER data file
+oprnum:	block 1			;usernumber of OPERATOR
+usrnum:	block 1			;storage of general user number
+sysnum:	block 1			;directory number of PS:<SYSTEM>
+subsys:	block 1			;directory number of PS:<SUBSYS>
+ctynum:	block 1			;tty number of CTY
+ctydev:	block 1			;CTY device designator
+logdev:	block 1			;LOGTTY device designator
+tvtmin:	block 1			;lowest tvt number
+tvtmax:	block 1			;highest tvt number
+
+;classifications
+;winners: wheels who should have a wheel bit
+;losers:  wheels who shouldn't have a wheel bit
+;others:  based on actual bits
+
+;winners
+WinLst:	[Asciz "MKL"]
+	[Asciz "VIVIAN"]
+	[Asciz "KLH"]
+	[Asciz "ZZZ"]
+	[Asciz "HSS"]
+WinLen==.-WinLst
+
+;losers
+LosLst:	[Asciz "FEINLER"]
+LosLen==.-LosLst
+
+
+
+;interrupt PC storage locations
+
+lev1pc: block 1			;level 1 interrupts  
+lev2pc: block 1			;level 2 interrupts
+lev3pc: block 1			;level 3 interrupts
+
+;these blocks are +1 since they begin with a count word
+
+gtdblk:	block gtdlen+1		;GTDIR% value block
+usrgrp:	block grplen+1		;user group list for user doing connect
+dirgrp:	block grplen+1		;directory group list for user doing connect
+
+Subttl Constant Storage
+
+dwnque:	asciz/SYSTEM:DOWNTIME.QUEUE/ ;name of the downtime queue
+crshnm: asciz/SYSTEM:ACJ.CRASH/  ;name of ACJ crash dump file
+fngnam:	asciz/SYSTEM:FINGER.BIN/ ;name of FINGER data file
+
+
+chntab:	block 11		;0 - 8
+	1,,panic		;9
+	block 1			;10
+	1,,panic		;11
+	1,,panic		;12
+	block 2			;13 - 14
+	1,,panic		;15
+	1,,panic		;16
+	1,,panic		;17
+	block 2			;18 - 19
+	1,,panic		;20
+	block 17		;21 - 35
+
+
+chans:	1b9!1b11!1b12!1b15!1b16!1b17!1b20 ;interrupt channel mask
+
+
+levtab:	lev1pc			;level 1 interrupts
+	lev2pc			;level 2 interrupts
+	lev3pc			;level 3 interrupts
+Subttl ACJ Function Tables
+
+;ACJ function dispatch tables
+
+;MONTAB and USRTAB are information bearing macros that should be defined
+;in the header file.  An example of MONTAB:
+;
+;	define montab,<
+;		fnc (golog,sf%eok,sf%dok) ;;LOGIN% ACJ hook
+;		fnc (golgo,sf%eok,sf%dok) ;;LGOUT% ACJ hook
+;	>;end define montab
+
+ifndef montab,<msg (No monitor ACJ functions defined)>
+ifndef usrtab,<msg (No user ACJ functions defined)>
+
+define fnc (fc,ena,def)
+    < ife <sf%eok-ena>,<xwd .'fc,fc>
+    >
+
+dsptab:	montab
+dsptln==.-dsptab
+
+usrdsp: usrtab
+usrdln==.-usrdsp
+
+
+;ACJ function enable table
+
+define fnc (fc,ena,def)
+    < ifnb <def>,<<ena>!<def>! .'fc>
+      ifb <def>,<<ena>! .'fc>
+    >
+
+enatab:	montab			;table of monitor GETOK% functions
+	sf%eok!400000		;enable for user mode GETOK%'s
+	enatln==.-enatab
+Subttl ACJ Main Program
+
+;startup code and main loop 
+
+start:	reset%			;clean up world
+	move p,[iowd pdllen, pdl] ;initialize stack
+	call init		;miscellaneous initalization routines
+	call mapfng		;map in FINGER data file
+	call setdwn		;initialize downtime queue and HSYS%
+loop:	movei a,rcvblk		;a/ address of receiving block
+	movei b,rcvlen		;b/ length of receiving block
+	rcvok%			;get a request
+	 erjmp rcverr		;some error, go check it out
+	move pt,rcvblk+.rcara	;set up pointer to GETOK% argument block
+	hlrz a,rcvblk+.rcfcj	;check function code
+	dmove b,[ dsptab	;set up for dispatch for monitor request
+		   dsptln ]
+	trne a,400000		;but is it really a user request?
+	dmove b,[ usrdsp	;yes, get address of user table
+		  usrdln ]
+	movns c			;create pointer to table
+	jumpe c,loopx		;if table empty, then illegal request
+	hrl b,c			;set up aobjn counter
+loop1:	hlrz c,(b)		;get the function code
+	camn c,a		;found a match?
+	jrst loop2		;yes, go execute it
+	aobjn b,loop1		;look through the whole table
+	jrst loopx		;not there
+
+
+;here to dispatch to the appropriate subroutine to verify access
+
+loop2:	hrrz a,(b)		;get the dispatch address
+	call (a)		;go log the function
+	 jrst [ call deny	;deny access
+		jrst loop ]
+	call allow		;grant access
+	jrst loop		;loop back for next request
+
+;LOOPX - here on an unknown function code.  Access is granted
+
+loopx:
+	push p,a		;save function code on stack
+	call logtad		;time stamp
+	tmsg <Unknown function code: >
+	pop p,b
+	call logoct		;log an octal number
+	tmsg <, access granted to >
+	move b,rcvblk+.rcuno	;fetch user number
+	call logusr		;say who the strange one was
+	call crlf		;finish entry
+	call allow		;grant the access
+	jrst loop		;loop back for next request
+
+
+;RCVERR - here on a RCVOK% or GIVOK% error to possibly restart
+;only restart if GOKER3 and we are running under SYSJOB
+
+rcverr:	gjinf%			;get job number in c
+	movei a,.fhslf		;a/ our fork handle
+	geter%			;get last error
+	hrrzs b			;clear bits on left
+	skipn c			;not job 0?
+	 caie b,goker3		;or error other than timeout?
+	  call fatal		;something else, go die
+	warn <RCVOK% timeout detected, restarting....>
+	seto a,			;a/ -1 to unmap
+	move b,[xwd .fhslf,bgnpag] ;b/ starting with first data file
+	move c,[pm%cnt+<777-bgnpag>] ;c/ unmap to end of memory
+	pmap%			;do so
+	movei a,.fhslf		;this process
+	clzff%			;close the files
+	jrst start		;jump to start address	
+
+;DENY - deny access
+;takes a/ error number
+;      b/ string pointer to error message
+
+deny:	skipe messgf		;skip if no message
+	 call sndmsg		;send user a message
+	trne a,400000		;is this a legal error code?
+	tlne a,-1		;cannot have bits in left half
+	movei a,400000		;illegal access error code
+	tlc b,-1		;check for a legal string pointer
+	tlcn b,-1
+	hrli b,(point 7,0)	;get string pointer
+	ldb c,[point 6,b,11]	;get byte size
+	caie c,7		;must be an ascii byte pointer
+	hrroi b,[asciz/Unexplained denial from Access Control Job/]
+	move c,b		;set up for GIVOK%
+	move b,a		;error number
+	move a,rcvblk+.rcrqn	;get the request number
+	givok%			;deny request
+	 erjmp rcverr		;error, check if fatal or restartable
+	ret			;return to caller
+
+;ALLOW - allow access
+
+allow:	skipe messgf		;skip if no message
+	 call sndmsg		;send user a message
+	move a,rcvblk+.rcrqn	;get the request number
+	setzb b,c		;give the ok
+	givok%			;do it
+	 erjmp rcverr		;error, check if fatal or restartable
+	ret			;return to caller
+Subttl Initialization Routines
+
+;INIT - perform assorted program initialization functions
+;returns +1 always
+
+init:	movei a,.fhslf		;a/ current process
+	rpcap%			;fetch capabilities
+	move b,c		;b/ capabilities to enable
+	epcap%			;enable all capabilities
+	move b,[xwd ^D50,1]	;50% percent of machine, always in Queue 0
+	spriw%			;set process priority
+	setzm dbugsf		;assume system is not standalone for debugging
+	movei a,.dbugsw		;a/ table number
+	getab%			;get value of DBUGSW
+	 ercal fatal		;some error
+	cain a,2		;are we standalone? 
+	setom dbugsf		;yes, set the flag 
+	movx a,.sflcl		;a/ local logins function
+	movei b,1		;b/ enable
+	skipe dbugsf		;are we standalone?
+	smon%			;yes, allow local logins
+	 ercal fatal		;some error
+	movx a,.sfpty		;a/ PTY logins function
+	movei b,1		;b/ enable
+	skipe dbugsf		;are we standalone?
+	smon%			;yes, allow PTY logins as well
+	 ercal fatal		;some error
+	setzb a,c		;a,c/ no flags
+	hrroi b,[asciz/OPERATOR/] ;b/ name of operator
+	rcusr%			;get user number
+	 ercal fatal		;some error
+	movem c,oprnum		;save for later
+	setzb a,c		;a,c / no flags
+	hrroi b,[asciz/PS:<SYSTEM>/] ;b/ name of directory
+	rcdir%			;get directory number
+	 ercal fatal		;some error
+	movem c,sysnum		;save for later
+	setzb a,c		;a,c / no flags
+	hrroi b,[asciz/PS:<SUBSYS>/] ;b/ name of directory
+	rcdir%			;get directory number
+	 ercal fatal		;some error
+	movem c,subsys		;save for later
+	setzm messgf		;no messages to be sent
+	move a,[xwd 1,.logde]	;want logging device (the CTY)
+	getab%			;get it
+	 ercal fatal		;fatal if this fails
+	txz a,.ttdes		;clear device bits
+	hrrzm a,ctynum		;store CTY number
+	hrroi a,[asciz \cty\]	;get CTY device (not terminal) designator
+	stdev%
+	 ercal fatal		;what the %$#&
+	movem b,ctydev
+	movei a,.logde		;get LOGTTY terminal designator
+	getab%
+	 ercal fatal
+	caie a,.nulio		;does it really exist?
+	ifskp.
+	  setzm logdev		;no
+	else.
+	  move b,a		;yes, copy terminal designator
+	  hrroi a,tmpbuf
+	  devst%		;get asciz device name
+	   ercal fatal
+	  hrroi a,tmpbuf
+	  stdev%		;now get corresponding device designator
+	   ercal fatal
+	  movem b,logdev
+	endif.
+	call ininvt		;get TVT/PNV information
+	movsi d,-enatln		;set up to scan table of functions
+init0:	movei a,.sfsok		;set access function
+	move b,enatab(d)	;get function to set up
+	smon%			;enable it
+	 ercal fatal		;some error
+	aobjn d,init0		;loop back for all functions
+	movei a,.fhslf		;a/ current process
+	move b,[xwd levtab, chntab] ;b/ addresses of level and channel tables
+	sir%			;set up interrupt system
+	eir%			;enable interrupt system
+	move b,chans		;b/ channel mask
+	aic%			;activate interrupt channels
+	call winini		;init winner table
+	call losini		;init loser table
+	ret			;return to caller
+
+winini:	movsi 4,-winlen
+winin0:	Movx 1,RC%EMO
+	Hrro 2,WinLst(4)
+	RCUSR%
+	 Erjmp .+2
+	  Txne 1,RC%NOM
+	   Setz 3,
+	Movem 3,WinLst(4)
+	Aobjn 4,winin0
+	Ret
+
+losini:	movsi 4,-loslen
+losin0:	Movx 1,RC%EMO
+	Hrro 2,losLst(4)
+	RCUSR%
+	 Erjmp .+2
+	  Txne 1,RC%NOM
+	   Setz 3,
+	Movem 3,losLst(4)
+	Aobjn 4,losin0
+	Ret
+
+
+;ININVT - initialize TVT/PNV data
+;Returns +1 always
+
+ininvt:	hrloi a,377777
+	movem a,tvtmin		;assume no TCP
+	movem a,tvtmax
+	movx a,tcp%nt		;get tvt function
+	stat%
+	 erjmp ininv1		;no tcp here
+	hrrzm b,tvtmin		;set first tvt
+	hlro c,b		;- number of tvts
+	sub b,c			;1+last tvt number
+	hrrzm b,tvtmax
+ininv1:	ret
+
+;MAPFNG - map the FINGER data file
+;Returns +1 always
+
+mapfng:	setzm fngbad		;say FINGER data file is good
+	movx a,gj%old+gj%sht	;a/ want an old file
+	hrroi b,fngnam		;b/ file spec
+	gtjfn%			;get a handle on it
+	 erjmp mapfnx		;file not found
+	movem a,fngjfn		;save jfn
+	movx b,of%rd+of%wr+of%thw ;b/ full word, read write thawed access
+	openf%			;open the file
+	 erjmp mapfnx		;some failure
+	hrlzs a			;get jfn into place
+	hrri a,bldpag		;a/ jfn,,first file page
+	move b,[xwd .fhslf,bldpag] ;b/ process,,first process page
+	move c,[pm%cnt+pm%rd+pm%wr+<lstpag-bldpag>] ;c/ flags, repeat count
+	pmap%			;map in the file
+	 erjmp mapfnx		;some failure
+	move a,fngsig		;fetch header word
+	camn a,[sixbit/FINGER/]	;sixbit FINGER?
+	ret			;yes, good file, return now
+	warn <FINGER data file has bad format> ;put a warning on the console
+	setom fngbad		;flag a bad file
+	ret			;return to caller
+
+mapfnx: warn <Unable to map in FINGER data file> ;warning on console
+	setom fngbad		;flag a bad file
+	ret			;return to caller
+
+;retskp if user (t1) is a winner
+winner:	Movsi 2,-WinLen
+WinChk:	Camn 1,WinLst(2)	;find one
+	 jrst rskp		;win
+	AobJn 2,WinChk
+	Ret
+
+;retskp if user (t1) is a loser
+loser:	Movsi 2,-LosLen
+LosChk:	Camn 1,LosLst(2)	;find one
+	 jrst rskp		;win
+	AobJn 2,LosChk
+	Ret
+
+
+Subttl HSYS% trapping - Maintaining Downtime Queue
+
+;GOHSY - manipulate the HSYS% downtime **stack** (is NOT a queue!)
+;Returns +1 always
+
+gohsy:	movsi b,-hsylen		;get this many table words
+gohsy0:	movei a,.dwnti		;from the DWNTIM table
+	hrl a,b			;offset into table
+	getab%			;get a word from the table
+	 ercal fatal		;some error
+	movem a,hsytab(b)	;put it in my HSYTAB table
+	aobjn b,gohsy0		;loop and get another word until done
+	gtad%			;get the current date/time
+	move 0,a		;store it away someplace "safe"
+	skipn hsytab		;always paw over the queue on a cancel
+	 jrst hsyqu1
+	addi a,3*2*^D60		;fuzz up two minutes
+	caml a,hsytab		;is it a very soon downtime?
+	retskp			;yes, punt the queue
+hsyqu1:	movsi a,(gj%fou!gj%old!gj%sht) ;get a handle on the downtime queue
+	hrroi b,dwnque
+	gtjfn%
+	 erjmp newque
+	hrrzm a,dwnjfo		;stask jfn away
+	move b,[44b5!of%wr!of%rtd]
+	openf%
+	 erjmp [move a,dwnjfo	;some cretin is trying to screw us
+		rljfn
+		 nop
+		warn <Cannot open downtime queue>
+		retskp]
+	movsi a,(gj%old!gj%sht)	;get read jfn on file
+	hrroi b,dwnque
+	gtjfn%
+	 ercal fatal		;bullshit; we have the file open!
+	hrrzm a,dwnjfi
+	move b,[44b5!of%rd]
+	openf%
+	 ercal fatal
+	skipn hsytab		;is this a new shutdown request?
+	 jrst hsycan		;no, a cancellation - process it
+	setom hsydnp		;flag an hsys% needs to be done
+;	jrst hsyffr
+
+;drops in from previous page
+
+hsyffr:	move a,dwnjfi		;search for the first record after this cease
+	move b,[point 36,hsytb1]
+	movni c,hsylen
+	sin%
+	 erjmp [move a,dwnjfo	;none, insert new record here
+		move b,[point 36,hsytab]
+		movni c,hsylen
+		sout%
+		 ercal fatal	
+		jrst hsyxit]	;and leave
+	caml hsytb1		;is this time valid?
+	 jrst hsyffr		;bad time, flush this record
+	move a,hsytb1		;is this time before the new time?
+	camle a,hsytab
+	ifskp.
+	  move a,dwnjfo		;no, write record out
+	  move b,[point 36,hsytb1]
+	  movni c,hsylen
+	  sout%
+	   ercal fatal
+	  skipn hsydnp		;does an HSYS% need to be done?
+	   jrst hsyffr		;no, flush
+	  setzm hsydnp		;doesn't need to be done any more
+	  dmove a,hsytb1	;get time down/time up
+	  movei c,hsytb1+2	;pointer to string
+	  hsys%			;set the new cease
+	   ercal fatal
+	  jrst hsyffr		;and continue scan
+	endif.
+	move a,dwnjfo		;yes, insert new record here
+	move b,[point 36,hsytab]
+	movni c,hsylen
+	sout%
+	 ercal fatal	
+hsycop:	move b,[point 36,hsytb1] ;and continue copying the rest of the file
+	movni c,hsylen
+	sout%
+	 ercal fatal	
+	move a,dwnjfi		;get yet another record
+	move b,[point 36,hsytb1]
+	movni c,hsylen
+	sin%
+	 erjmp hsyxit		;end of file, all done
+	move a,dwnjfo		;still more, get output jfn and continue
+	jrst hsycop
+
+;here to cancel the top request of the queue
+
+hsycan:	move a,dwnjfi		;flush the first record
+	move b,[point 36,hsytab]
+	movni c,hsylen
+	sin%
+	 erjmp hsyxit		;file probably empty somehow
+hsycn0:	move b,[point 36,hsytab] ;get new downtime request
+	movni c,hsylen
+	sin%
+	 erjmp hsyxit		;at end, punt
+	gtad%			;verify that this new time is in the future
+	caml a,hsytab
+	 jrst hsycn0		;bad time, flush this record
+	dmove a,hsytab		;get time down/time up
+	movei c,hsytab+2	;pointer to string
+	hsys%			;set the new cease
+	 ercal fatal
+hsycn1:	move a,dwnjfo		;write record out, repeat for each record
+	move b,[point 36,hsytab] ;(probably should check invalid date/time
+	movni c,hsylen		; here too, but since it's "impossible" i
+	sout%			; didn't want to bother.  up above is to
+	 ercal fatal		; prevent a cancel bringing down the system!)
+	move a,dwnjfi		;get back input jfn
+	move b,[point 36,hsytab] ;read next record
+	movni c,hsylen
+	sin%
+	 erjmp hsyxit		;at end, punt
+	jrst hsycn1		;loop back for next record
+
+;here to create a new downtime queue
+
+newque:	skipn hsytab		;is this a cease request?
+	 retskp			;a cancellation and no file, go away
+	movsi a,(gj%fou!gj%new!gj%sht) ;a/ new output file
+	hrroi b,dwnque		;b/ pointer to file spec
+	gtjfn%			;get a handle on a new fie
+	 ercal fatal		;some error
+	hrrzm a,dwnjfo		;stask jfn away
+	move b,[44b5!of%wr!of%rtd] ;b/ full word, write access
+	openf%			;open the file
+	 erjmp [ move a,dwnjfo	;a/ bum jfn
+		 rljfn%		;release the jfn
+		  jfcl		;ignore error here
+		 warn <Cannot create downtime queue>
+		 retskp ]
+	move b,[point 36,hsytab] ;pointer to request
+	movni c,hsylen		;length of request
+	sout%			;write it
+	 ercal fatal		;some error
+	closf%			;close off the file
+	 ercal fatal		;some error
+	retskp			;grant the request
+
+
+;here when downtime queue munging done.  Flush the jfns and exit
+
+hsyxit:	move a,dwnjfi		;a/ jfn of input queue file
+	hrli a,(co%nrj)		;a/ don't flush the jfn
+	closf%			;close the file
+	 ercal fatal		;fatal if can't close file
+	hrli a,(df%exp)		;a/ delete and expunge the old file
+	delf%			;do it
+	 jfcl			;ignore error here
+	move a,dwnjfo		;a/ jfn of output queue file
+	closf%			;close new file
+	 ercal fatal		;some error
+	retskp			;grant the request
+
+;SETDWN - set cease from the downtime queue and update downtime queue
+;Called when ACJ starts up
+
+setdwn:	movsi a,(gj%fou!gj%old!gj%sht) ;a/ flags
+	hrroi b,dwnque		;b/ file spec
+	gtjfn%			;get a handle on the downtime queue 
+	 erjmp r		;no queue, return now
+	hrrzm a,dwnjfo		;a/ stash jfn away
+	move b,[44b5+of%wr!of%rtd] ;b/ full word, write access
+	openf%			;open the file
+	 ercal fatal		;some error, die
+	movsi a,(gj%old!gj%sht)	;a/ flags
+	hrroi b,dwnque		;b/ file spec
+	gtjfn%			;get another jfn
+	 ercal fatal		;some error die
+	hrrzm a,dwnjfi		;stash the jfn away
+	move b,[44b5!of%rd]	;b/ full word, read access
+	openf%			;open the file
+	 ercal fatal		;some error, die 
+	setob d,hsydnp		;flag an HSYS% needs to be done
+setdw0:	move a,dwnjfi		;a/ jfn of input file
+	move b,[point 36,hsytab] ;b/ put HSYS% record here
+	movni c,hsylen		;c/ record is this long
+	sin%			;read in a record
+	 erjmp setdw1		;end of file, go finish up
+	caml d,hsytab		;reasonable entry?
+	 jrst setdw0		;no, ignore out of order entries
+	move d,hsytab		;shuffle the TAD header
+	gtad%			;get current time
+	caml a,hsytab		;is the record reasonable?
+	 jrst setdw0		;it isn't, try next time
+	move a,dwnjfo		;a/ jfn of output file
+	move b,[point 36,hsytab] ;b/ pointer to the record
+	movni c,hsylen		;c/ length of recofd
+	sout%			;write to the new file
+	 ercal fatal		;some error, shouldn't happen
+	skipn hsydnp		;does an HSYS% need to be done?
+	jrst setdw0		;no, next record
+	setzm hsydnp		;flag that we're doing it now
+	dmove a,hsytab		;get time down/time up
+	movei c,hsytab+2	;pointer to string
+	hsys%			;set the new cease
+	 ercal fatal		;some error
+	jrst setdw0		;loop back to finish processing queue
+
+;here to finish up processing the downtime queue
+
+setdw1:	setzm hsydnp		;clear the flag
+	move a,dwnjfi		;a/ jfn of input file
+	hrli a,(co%nrj)		;don't flush the jfn just yet
+	closf%			;close the file
+	 ercal fatal		;some error
+	hrli a,(df%exp)		;a/ jfn on input file, want to expunge it
+	delf%			;delete and expunge the old file
+	 jfcl			;don't terribly care
+	move a,dwnjfo		;a/ jfn of output file
+	closf%			;close the file and release the jfn
+	 ercal fatal		;some error
+	ret			;return to caller
+
+Subttl LGOUT% logging
+
+;GOLGO - perform various checks and updating at logout
+golgo:	skipge a,.gerlg(pt)	;a/ fetch job number argument to LGOUT%
+	 hrrz a,rcvblk+.rcfcj	;-1 means requestor is killing self
+	move b,[xwd -.jimax,getblk] ;b/ put the data here
+	movei c,.jijno		;c/ start with the job number
+	getji%			;get job information
+	 erjmp rskp		;some error, give good return
+;	move 1,rcvblk+.rcuno
+;	camn 1,getblk+.jiuno	;is user logging own job out?
+;	 jrst gonluz		;yes, ok
+;	call loser		;is person doing logout a loser?
+;	 jrst gonluz		;no
+;	ret			;lose!
+gonluz:	call fngupd		;update logout data for FINGER
+	retskp			;give a good return
+
+;FNGUPD - update information for FINGER program
+;if file is inconsistent, FNGBAD is set as a warning to do updates
+;Takes	GETBLK - GETJI% information for job logging out
+;Returns +2 always
+
+fngupd:	skipe fngbad		;is the FINGER file okay?
+	retskp			;no, can't do anything
+	move a,fngsig		;get the header word
+	camn a,[sixbit/FINGER/]	;is it sixbit/finger/?
+	ifskp.
+	  warn <FINGER file apparently clobbered, ignoring logouts>
+	  setom fngbad
+	  retskp		;no, file is bad, set flag and return
+	endif.
+fngup0:	skipe b,getblk+.jiuno	;is job not logged in?
+	aosn getblk+.jibat	;or controlled by batch?
+	 jrst fngup1		;yes, don't record it
+	hrroi a,usrnam		;pointer to buffer for username string
+	dirst%			;write it
+	 erjmp fngup1		;some error, quit now
+	move a,fnginf		;pointer to user lookup area
+	hrroi b,usrnam		;user name of this person
+	tbluk%			;find user
+	 erjmp fngup1		;user not in database
+	txnn b,tl%exm		;exact match?
+	 jrst fngup1		;forget it
+	hrrz u,(a)		;put address of user info in U
+	gtad%			;get the time now
+	movem a,died(u)		;save it
+	movem a,fngtim		;set the last writer time as well
+	move a,oprnum		;assume we are being run under OPERATOR
+	movem a,fngaut		;set last author
+	move e,getblk+.jitno	;get terminal number in this ac
+	skipge b,e		;get terminal number
+	 jrst fngup2		;detached, don't check for TVT
+	caml b,tvtmin		;is it a TVT?
+	 caml b,tvtmax
+	  jrst fngup4
+	move e,b		;save TTY # in case error
+	movx a,tcp%tv		;argument is TVT
+	hrr a,b			;TVT number
+	hrroi b,7		;want host number (should be a symbolic name)
+	hrroi c,e		;location of last logout
+	stat%
+	 erjmp .+1
+fngup5:	move b,e
+	jrst fngup2
+
+fngup4:
+fngup2:	movem b,r.i.p.(u)	;location of last logout
+fngup1:	hrlz a,fngjfn		;jfn of finger file
+	hrri a,bldpag		;first page to update
+	move b,[uf%now+<lstpag-bldpag>]	;don't block, page count
+	ufpgs%			;update file pages
+	 erjmp rskp		;ignore an error
+	retskp			;give a good return
+
+;LOGCTY - check attempts to log onto or attach to the console
+;takes	u/ usernumber
+;returns +1 permission denied
+;	 +2 user permitted
+
+logcty:	camn u,oprnum		;is it the operator?
+	retskp			;yes, operator can log onto CTY
+	call luserp		;privileges?
+	 retskp			;yes, grant access
+	call cpyset		;begin message
+	hrroi a,[asciz/?WHEEL or OPERATOR privileges required to use console./]
+	call cpystr		;why the user lost
+	call cpyend		;finish message
+	ret			;return denial
+
+;LOGWHL - check if user is WOPR when system is standalone (DBUGSW = 2)
+;Takes	u/ usernumber
+;Returns +1 denial
+;	 +2 permission
+
+logwhl:	camn u,oprnum		;OPERATOR?
+ 	 retskp			;yes, always allow this account
+	call luserp		;a privileged user?
+	 retskp			;yes, quit now
+	call cpyset		;begin message
+	hrroi a,[asciz/?System is standalone for debugging/]
+	call cpystr		;why the user lost
+	call cpyend		;finish message
+	ret			;return denial
+
+Subttl CRDIR% Logging
+
+;GOCRD - examine and log directory creations and modifications
+;This is a Stanford only GETOK% function
+;Arguments
+;		1.  CRDIR% flags
+;		2.  36-bit directory number
+;		3.  .CDMOD flags
+
+gocrd:	skipe dbugsf		;standalone?
+	 retskp			;yes, ignore all directory munging
+	move f,1(pt)		;fetch CRDIR% flags
+	skipn u,2(pt)		;directory number or zero if doesn't exist
+	 call gocnew		;new directory - maybe log it
+	txne f,cd%psw		;changing password?
+	 call gocpsw		;yep, log it
+	txne f,cd%mod		;changing modes
+	 call gocmod		;log it
+	txne f,cd%fpt!cd%dpt
+	 call gocprt		;log protection change
+	txne f,cd%ugp!cd%dgp!cd%cug
+	 call gocgrp		;log group changes
+	txne f,cd%liq!cd%loq!cd%ret!cd%lld!cd%sdq!cd%dac!cd%ppn
+	 call gocmsc		;log anything else
+	txne f,cd%del		;deletion?
+	 jrst gocdel		;yes...
+	txne f,cd%prv		;privileges?
+	 call gocprv		;yes, note if changing something
+	move a,rcvblk+.rccap	;fetch enabled capabilities
+	txne a,sc%whl+sc%opr	;WOPR?
+	 retskp			;yes, always allow
+	skipe u			;always check a new directory
+	 txne f,cd%mod		;check change to mode word of an old directory 
+	  trna			; ...
+	   retskp		;old directory, no mode word change, is good
+	move a,3(pt)		;get mode word we are setting
+	txne a,cd%dir		;FILES-ONLY?
+	 retskp			;yes, allow people to create F-O subdirs
+	ret			;no, don't let them create login subdirs
+
+;log new-directory creations if not files-only
+gocnew:	txnn f,cd%mod		;are we setting mode word?
+	 jrst gocne1		;no - gotta log the new directory
+	move a,3(pt)		;get the new mode word
+	txne a,cd%dir		;will it be files-only?
+	 ret			;yes - no need to log
+gocne1:	call logtad		;print tad and banner
+	tmsg <A new user directory is being created by >
+	move b,rcvblk+.rcuno	;fetch user number
+	call logusr		;log the person's username
+	call crlf		;end of output line
+	ret
+
+;log password changes if old directory
+gocpsw:	skipn u			
+	 ret			;ret if new dir
+	call logtad		;print tad and banner
+	tmsg <Password of >
+	move b,u		;fetch directory number
+	call logdir		;log the directory name
+	tmsg < changed by >
+	move b,rcvblk+.rcuno	;fetch user number
+	call logusr		;log the name of the culprit
+	call crlf		;finish entry
+	ret
+
+;log mode change if old directory
+gocmod:	skipn u			
+	 ret			;ret if new dir
+	call logtad		;print tad and banner
+	tmsg <Directory >
+	move b,u		;fetch directory number
+	call logdir		;log the directory name
+	tmsg < changed by >
+	move b,rcvblk+.rcuno	;fetch user number
+	call logusr		;log the name of the culprit
+	tmsg < to be >
+	hrroi 1,[asciz /files-only/]
+	move 2,3(pt)		;get new mode word
+	txnn 2,cd%dir
+	 hrroi 1,[asciz /loginable/]
+	PSOUT%
+	call crlf		;finish entry
+	ret
+
+;log protection changes
+gocprt:	skipn u			
+	 ret			;ret if new dir
+	call logtad		;print tad and banner
+	tmsg <Protections of >
+	move b,u		;fetch directory number
+	call logdir		;log the directory name
+	tmsg < changed by >
+	move b,rcvblk+.rcuno	;fetch user number
+	call logusr		;log the name of the culprit
+	call crlf		;finish entry
+	ret
+
+;log group changes
+gocgrp:	skipn u			
+	 ret			;ret if new dir
+	call logtad		;print tad and banner
+	tmsg <Group info of >
+	move b,u		;fetch directory number
+	call logdir		;log the directory name
+	tmsg < changed by >
+	move b,rcvblk+.rcuno	;fetch user number
+	call logusr		;log the name of the culprit
+	call crlf		;finish entry
+	ret
+
+;log other changes
+gocmsc:	skipn u			
+	 ret			;ret if new dir
+	call logtad		;print tad and banner
+	move b,u		;fetch directory number
+	call logdir		;log the directory name
+	tmsg < twiddled by >
+	move b,rcvblk+.rcuno	;fetch user number
+	call logusr		;log the name of the culprit
+	call crlf		;finish entry
+	ret
+
+
+Subttl CRDIR% Logging
+
+;GOCDEL - log directory deletions
+
+gocdel:	jumpe u,rskp		;do nothing if directory doesn't exist
+	move a,u		;get more information on directory
+	call .gtdir		;do a GTDIR%
+	 retskp			;some error, let it pass
+	push p,gtdblk+.cdmod	;save mode word
+	move a,sysnum		;now do a GTDIR% on <SYSTEM>
+	call .gtdir		;so as to unmap the directory we are killing
+	 nop			;ignore failure return
+	call logtad		;print tad and banner
+	tmsg <Deletion of>
+	hrroi a,[asciz / login/]
+	pop p,b			;restore desired mode word
+	txnn b,cd%dir	
+	 PSOUT%
+	tmsg < directory >
+	move b,u		;fetch directory number
+	call logdir		;log the directory name
+	tmsg < by >
+	move b,rcvblk+.rcuno	;fetch user number
+	call logusr		;log the name of the culprit
+	call crlf		;finish entry
+	retskp			;skip return to caller
+
+;GOCPRV - log granting of privileges
+
+gocprv:	move a,rcvblk+.rccap	;fetch requestor's capabilities
+	txnn a,sc%whl		;WHEEL ONLY!
+	 ret			;no, CRDIR% will fail.  No message.
+	call logtad		;print TAD and banner
+	tmsg <Capabilities of >
+	move b,u		;fetch directory number, if any
+	call logdir		;log the directory name
+	tmsg < were changed by >
+	move b,rcvblk+.rcuno	;fetch user number
+	call logusr		;log the name of the culprit
+	callret crlf		;finish entry
+Subttl Miscellaneous Checks
+
+;MDDT% logging - who crashed the system messing with the monitor?
+
+gomdd:	skipe dbugsf		;standalone?
+	 retskp			;yes, ignore user playing with MDDT
+	move a,rcvblk+.rccap	;get enabled capabilities
+	txnn a,<sc%whl>		;wheel?
+	 ret			;disallow
+	move 1,rcvblk+.rcuno	;fetch user number
+	call winner
+	 ret
+	call logtad		;log time and date
+	tmsg <Entry into MDDT by >
+	move b,rcvblk+.rcuno	;fetch user number
+	call logusr		;log the name of the culprit
+	call crlf		;finish entry
+	retskp			;grant access
+
+;CRJOB% check - allow only WHEEL/OPERATOR to create jobs 
+
+gocjb:	move a,rcvblk+.rccap	;fetch capabilities of sender
+	txne a,sc%whl!sc%opr	;WOPR?
+	 retskp			;yes, allow
+	ret			;no, disallow
+
+
+;getok% called by EXEC and FTPSRT on startup to set network tty loc for finger
+gonet:	hrrz a,rcvblk+.rcfcj	;get job num
+	move 2,[-1,,getblk]
+	movei 3,.jitno		;get tty num
+	GETJI%
+	 erjmp gonex
+	move a,getblk		;tty num
+	caml a,tvtmin		;is it a TVT?
+	 caml a,tvtmax
+	  jrst gonex		;no, skip it
+	movem	a,MsgBlk	;send tty# as argument
+
+; tmsg <[ACJ] debug. net login tty >
+;	movei 1,.priou
+;	move 2,msgblk
+;	movei 3,10
+;	NOUT%
+;	 jfcl
+; tmsg <
+;>
+
+;now send ipcf to ttyloc setting program
+	skipn	fpid		;have ttyloc pid?
+	 call	getpid		;get needed pids
+
+	Setzm	DesBlk+.IPCFL	;flags
+	Move	1,OurPid
+	Movem	1,DesBlk+.IPCFS	;our pid
+	Move	1,FPid		;F pid
+	Movem	1,DesBlk+.IPCFR	;send to fpid
+	Move	1,[1,,MsgBlk]	;length,,address of message
+	Movem	1,DesBlk+.IPCFP	;save function pointer
+	Movei	1,.IPCFP+1	;length of pdb
+	Movei	2,DesBlk	;address of description block
+	MSEND%
+	 Erjmp	.+1		;too bad
+
+gonex:	retskp			;always ok
+
+
+;get us pid of ttyloc program, and one for ourselves
+getpid:	Setz	1,		;no pid yet
+	Skipn	OurPid		;if we don't have one...
+	 Txo	1,IP%CPD	; create a pid
+	Movem	1,DesBlk+.IPCFL	;save in flag word area
+	Move	1,OurPid
+	Movem	1,DesBlk+.IPCFS
+	Setzm	DesBlk+.IPCFR	;0 means send to Info
+	Move	1,[PidLn,,FkPid]	;pid data block stuff
+	Movem	1,DesBlk+.IPCFP ;save function pointer
+	Movei	1,.IPCFP+1	;length of pdb
+	Movei	2,DesBlk	;address of ipcf block
+	MSEND%			;send request to INFO
+	 Erjmp	[ret]
+
+	Setzm	DesBlk+.IPCFL	;no flags
+	Move	1,DesBlk+.IPCFS	;get our pid
+	Movem	1,OurPid	;save it for later
+	Movem	1,DesBlk+.IPCFR	;we are reciever
+	Setzm	DesBlk+.IPCFS	;no sender yet
+	Move	1,[ResLn,,MsgBlk] ;destination buffer
+	Movem	1,DesBlk+.IPCFP
+	Movei	1,.IPCFP+1	;length of message
+	Movei	2,DesBlk
+	MRECV%			;get reply from INFO
+	 Erjmp	[ret]
+	Load	1,IP%CFE,DesBlk
+	Cain	1,.IPCNN
+	 ret			;name not found
+	Move	1,MsgBlk+.IPCI1	;get pid
+	Movem	1,FPid		;save it
+	Ret			;got pids
+
+
+Subttl Internet Access Checking
+
+;.GOANA - Internet/Arpanet Access Checking
+;The DEC version as of Rel 5.3 does not return any arguments
+;Arguments
+;		1. 32-bit Internet host number for foreign host
+;		2. foreign port 
+
+
+goana:	move a,rcvblk+.rccap	;get capabilities of requestor
+	txne a,sc%whl!sc%opr!sc%ana	;good person?
+	 retskp			;yes, allow the request
+	ret			;disallow the request
+
+Subttl Assign device (ASND% or OPENF%)
+
+;.GOASD - Assign via ASND%
+;.GOOAD - Assign via OPENF%
+;Arguments:
+;	1. device designator
+;Only WOPRs can assign CTY/LOGTTY
+
+goasd:
+gooad:	move a,.geadd(pt)	;get device designator
+	came a,ctydev		;assigning CTY
+	camn a,logdev		; or LOGTTY?
+	 skipa a,rcvblk+.rccap	;yes, get capabilities
+	retskp			;no, then allow it
+	txne a,sc%whl!sc%opr	;special privs enabled?
+	 retskp			;yes, allow if WOPR
+	ret			;else deny
+
+Subttl File Utility Routines
+
+;MAPIT - map in a file for the specified access
+;takes	b/ pointer to file spec
+;	c/ initial memory page
+;	d/ OPENF bits
+;returns +1 on error
+;	 +2 success, with jfn in A, page count in C
+
+mapit:	stkvar <mapmod>		;local storage
+	setzm mapmod		;0 means map file for read access
+	txne d,of%wr		;but are we opening the file for write access?
+	setom mapmod		;yes, -1 to map the file for read and write
+	movsi a,(gj%sht!gj%old)	;a/ look for an old file
+	gtjfn%			;get a handle on the file
+	 erjmp r		;some error
+	move b,d		;b/ open access bits
+	openf%			;open the file
+	 erjmp r		;some error
+	move d,c		;save contents of C in D
+	sizef%			;get file size
+	 erjmp r		;some error
+	hrlzs a			;a/ jfn,,page
+	hrli b,.fhslf
+	hrr b,d			;b/ fork,,page
+	tlo c,(pm%cnt!pm%rd)	;c/ access,,count
+	skipe c			;skip if just want read access
+	tlo c,(pm%wr)		;set write access as well
+	pmap%			;map in the file
+	 erjmp r		;some error
+	hlrzs a			;get jfn in place
+	hrrzs c			;get page count in place
+	retskp			;give good return
+
+;MAKFIL - create an empty file
+;takes	b/ pointer to file specification
+;	c/ page count
+;	d/ initial memory page
+;returns +1 failure
+;	 +2 success, file created and closed
+
+makfil:	stkvar <makjfn>		;local storage
+	movsi a,(gj%fou!gj%sht)	;a/ new file
+	gtjfn%			;get a jfn
+	 erjmp r		;some error
+	movem a,makjfn		;save the jfn for later
+	move a,c		;put page count in A
+	move b,d		;put initial page in B
+	lsh b,11		;make it an address
+makfl0:	skip (b)		;make sure all pages exist by
+	addi b,1000		;touching them.
+	sojg a,makfl0		;loop until all pages are touched
+	move a,makjfn		;a/ jfn
+	move b,[44b5+of%rd!of%wr!of%thw] ;b/ full word, thawed access 
+	openf%			;open the file
+	 erjmp r		;some error
+	hrli a,.fhslf
+	hrr a,d			;a/ fork,,memory page
+	hrlz b,makjfn		;b/ file,,file page
+	hll c,[pm%rd+pm%cnt]	;c/ access,,page count
+	pmap%			;from process to file, creating it
+	move a,makjfn		;a/ retrieve the jfn
+	closf%			;close the file
+	 erjmp r		;some error
+	retskp			;success return
+
+; GETDIR, .GTDIR, $GTDIR - get directory information
+;
+; enter at GETDIR for PS: (and check if a=gtdblk+.cdnum) 
+;          .GTDIR to zero argument block
+;          $GTDIR if argument block loaded
+;
+; GETDIR takes u/ 18 bit (rh) user/directory number
+; .GTDIR & $GTDIR take a/ 36 bit directory number
+;
+; Returns +1 failure
+;	  +2 success
+
+getdir:	hrrz b,u		;a/ put usernumber in place
+	hrli b,usrlh		;make it a directory number
+	movx a,<rc%emo>		;exact match only
+	rcdir%			;get logged in directory number
+	 erjmp r		;deny the login
+	move a,c		;get the logged-in directory number into a
+.gtdir:	setzm gtdblk		;clear first word
+	move b,[xwd gtdblk, gtdblk+1] ;form blt pointer
+	blt b,gtdblk+gtdlen-1	;clear entire argument block
+$gtdir:	movei b,gtdblk		;b/ put directory information in GTDBLK
+	setz c,			;c/ no password wanted
+	gtdir%			;get directory information
+	 erjmp r		;some error
+	retskp			;good return, GTDBLK loaded
+
+;LUSERP - Check if user is unprivileged
+;Takes	u/ usernumber
+;Returns +1 user has WOPR privileges
+;	 +2 a luser
+
+luserp:	call getdir		;get directory information
+	 ret			;some error, err on side of generosity
+	move a,gtdblk+.cdprv	;get privileges of directory
+	txnn a,sc%whl!sc%opr	;an unprivileged user?
+	 retskp			;yes, skip return
+	ret			;no, single return
+
+Subttl CTY Logging Routines
+
+;LOGTAD - log the time and date and print a banner phrase
+
+logtad:	movei a,.priou		;controlling terminal
+	rfpos%			;read cursor position
+	trne b,-1		;against left margin?
+	call crlf		;no, print a crlf
+	movei a,.priou		;to the tty
+	seto b,			;current time and date
+	setz c,			;default format
+	odtim%			;print it
+	tmsg < [ACJ] >		;identify ourself
+	ret			;return to caller
+
+
+;CRLF - print a crlf on the CTY
+
+crlf:	tmsg <
+>
+	ret
+
+
+;LOGOCT, LOGDEC - log either a decimal or octal a number
+;Takes b/ number
+
+logoct:	skipa c,[10]		;c/ octal radix
+logdec:	movei c,12		;c/ decimal radix
+	movei a,.priou		;a/ to the tty
+	nout			;print the number
+	 jfcl			;ignore any error
+	ret			;return to caller
+
+;LOGUSR - log a username
+;takes b/ usernumber
+
+logusr:	movei a,.priou		;a/ tty is destination
+	hrli b,500000		;b/ make damn sure we have a usernumber
+	dirst%			;write the username
+	 erjmp [ tmsg <Unknown user>
+		 ret   ]
+	ret			;return to caller
+
+
+;LOGDIR - log a directory name
+;takes b/ directory number
+
+logdir:	ife. b			;zero means new directory
+	  tmsg <new directory>
+	else.
+	  movei a,.priou	;a/ tty is destination
+	  dirst%		;write the directory name
+	    erjmp r
+	endif.
+	ret			;return to caller
+Subttl TTY Message Buffer Building Routines
+
+;N.B. All the buffer building routines take their arguments in AC1.
+;     All other accumulators are saved.
+
+
+;CPYSET - set up message sending variables
+;returns +1 always
+
+cpyset:	setom messgf		;flag that we are preparing a message
+	move a,[point 7,msgbuf] ;fetch byte pointer
+	movem a,msgptr		;store it
+	ret			;return to caller
+
+
+
+;SNDMSG - send the message in MSGBUF to the requestor if MESSGF is set
+;returns +1 always with MESSGF reset
+
+sndmsg:	setzm messgf		;clear flag now
+	skipge t,rcvblk+.rcter	;fetch requestor's terminal, skip if attached
+	 ret			;don't send to detached jobs
+	push p,a		;save AC's
+	push p,b
+	movei a,.ttdes(t)	;a/ terminal designator
+	hrroi b,msgbuf		;b/ pointer to buffer
+	ttmsg%			;send to requestor
+	 erjmp .+1		;if error, probably timed out
+	pop p,b			;restore AC's
+	pop p,a
+	ret			;return to caller
+
+;CPYSTR - copy an asciz string into the message buffer
+;returns +1 always
+
+cpystr:	push p,b		;save B
+	hrli a,(<point 7,0>)	;form a standard byte pointer
+cpyst0:	ildb b,a		;fetch a byte
+	jumpe b,cpyst1		;quit copying if we find a nul
+	idpb b,msgptr		;deposit the byte
+	jrst cpyst0		;loop back for more
+cpyst1:	pop p,b			;restore B
+	ret			;return to caller
+
+
+;CPYEND - tack a CRLF and a NUL onto the end of the buffer
+
+cpyend:	push p,a
+	movei a,.chcrt		;a CR
+	idpb a,msgptr
+	movei a,.chlfd		;a LF
+	idpb a,msgptr
+	movei a,.chnul		;a NUL
+	idpb a,msgptr
+	pop p,a
+	ret
+
+;CPYOCT, CPYDEC - copy an octal or decimal number into the buffer
+;takes	a/ number
+;returns +1 always
+
+cpyoct:	push p,c
+	movei c,10
+	jrst cpycom
+cpydec:	push p,c
+	movei c,12
+cpycom:	push p,b
+	call cpynum
+	pop p,b
+	pop p,c
+	ret
+
+cpynum:	idiv a,c
+	push p,b
+	skipe a
+	call cpynum
+	pop p,a
+	movei a,"0"(a)
+	idpb a,msgptr
+	ret
+
+
+;CPYDIR, CPYUSR - copy a directory or username into the message buffer
+;takes	a/ 36 bit number
+
+cpydir:
+cpyusr:	push p,b		;save B
+	move b,a		;b/ 36 bit number
+	move a,msgptr		;a/ destination is the buffer
+	dirst%			;write the string
+	 erjmp cpyusx		;some error, go handle it gracefully
+	movem a,msgptr		;update the byte pointer
+	pop p,b			;restore B
+	ret			;return to caller
+
+cpyusx: hrlzs b			;clear junk from right hand side
+	hrroi a,[asciz/Unknown user/] ;assume a usernumber 
+	caie b,usrlh		;user number?
+	hrroi a,[asciz/Unknown directory/] ;no, it's a directory number
+	call cpystr		;copy string into buffer
+	pop p,b			;restore B
+	ret			;return to caller
+Subttl Fatal Error Handling
+
+;FATAL - here on a fatal JSYS error
+;we save the AC's at the time of the error in BUGACS
+;the entire core image is saved in the file SYSTEM:ACJ.CRASH
+
+fatal:	movem 17,bugacs+17	;save 17 for use as a BLT pointer
+	movei 17,bugacs+0	;set up blt pointer
+	blt 17,bugacs+16	;save all the AC's for later examination
+	move 17,bugacs+17	;restore the AC we just clobbered
+	call logtad
+	tmsg <Fatal JSYS error - >
+	movei a,.priou		;display last error
+	hrloi b,.fhslf
+	setz c,
+	erstr%
+	 jfcl
+	  jfcl
+	tmsg < at PC >
+	movei a,.priou		;output the PC
+	pop p,b
+	subi b,2		;point pc at actual location of the jsys
+	hrrzs b			;not interested in PC flags
+	movei c,10		;octal radix
+	nout%
+	 jfcl
+	call crlf		;finish entry
+	call crash		;make a crash dump
+	haltf%			;halt
+	jrst .-1		;and stay that way
+
+;PANIC - here on a panic channel interrupt
+;we save the AC's at the time of the error in BUGACS
+;the entire core image is saved in the file SYSTEM:ACJ.CRASH
+
+panic:	movem 17,bugacs+17	;save 17 for use as a BLT pointer
+	movei 17,bugacs+0	;set up blt pointer
+	blt 17,bugacs+16	;save all the AC's for later examination
+	move 17,bugacs+17	;restore the AC we just clobbered
+	call logtad
+	tmsg <Panic channel interrupt at PC >
+	movei a,.priou
+	hrrz b,lev1pc
+	movei c,10
+	nout%
+	 jfcl
+	tmsg <
+Last error: >
+	movei a,.priou
+	hrloi b,.fhslf
+	setz c,
+	erstr%
+	 jfcl
+	  jfcl
+	call crlf
+	call crash
+	haltf%
+	jrst .-1
+
+;CRASH - make a crash dump of our munged core image
+
+crash:	gjinf%			;get job information
+	jumpn c,r		;no core dump if not job zero
+	call logtad		;time stamp, again
+	tmsg <Creating crash dump file....
+>
+	movsi a,(gj%fou!gj%sht)	;output file, short form 
+	hrroi b,crshnm		;file spec
+	gtjfn%			;get a handle on the fie
+	 error <Could not get JFN on crash file> ;some error
+	hrli a,.fhslf		;fork handle,,file jfn
+	move b,[-1000,,ss%cpy+ss%rd+ss%wr] ;dump the whole thing
+	ssave%			;dump our core image into a file
+	seto a,			;-1 to close all files
+	closf%			;shut everything down
+	 error <Could not CLOSF% crash file> ;some error
+	ret			;return
+
+;assemble literals here, but don't CREF them
+
+xlist
+lit
+list
+
+;entry vector
+
+evec:	jrst start		;start address
+	jrst loop		;reenter address
+evecl==.-evec
+
+
+	end <evecl,,evec>
+

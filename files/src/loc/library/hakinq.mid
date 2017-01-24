@@ -1,0 +1,1363 @@
+;-*-Midas-*-
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Inquire-database-hacking routines.
+;;
+;;	Midas programs which use this library:
+;;
+;;	ACJ	HSNAME	TURFLS	HAPPY-BIRTHDAY
+;;	DIALUP	LOOKUP	UU
+;;	FILE	MAIL	SLEUTH
+;;	FINGER	RPMAIL	HOLMES
+;;	HARDLE	SEND	WATSON
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; $$MAP
+;;	Routines for mapping in and out the Inquire database.  MAPIN
+;;	is for READ-ONLY access (for normal mode); Set $$WRITE on to
+;;	get the database with R/W access.  Note this can only be done
+;;	by one program at a time (usually the Daemon).  The LH of A
+;;	should contain flags for the PMAP call (which are IORed with
+;;	the PM%RD, PM%WR, etc) or 0 if you don't have any special
+;;	requirements.  MAPOUT does the obvious.
+;;
+;;	MAPIN:	A/ flags,,page# (Read-only access)
+;;	MUNG:	A/ flags,,page# (Read/Write access)
+;;	GROW
+;;	MAPOUT
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; $$READ
+;;	Routines to find and expand entries, and do some minor
+;;	checking.  FIND, given an "entry spec" (which can be either
+;;	an address or BP to a username string, or a user#, or a PS:
+;;	directory#, or an address or BP to a machine-username string)
+;;	skip-returns with the entry's address (0-based).  Read does
+;;	the same, but expands the entry into individual buffers.
+;;	If given a user or directory#, the pointer from the directory
+;;	table will be verified (by RCDIR'ing the dirnam of the field
+;;	pointed to, and making sure they match).  This, however, is
+;;	quite slow; so to be quick&dirty, set $$NOVER, which says not
+;;	to perform this verification.
+;;
+;;	READ:	A/ entry spec	B/ (BP block)
+;;	READF:	A/ entry spec	B/ field#,,buffer address
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; $$NPNAME
+;;	Given the stored "Lastname,Firstname,Jr." personal-name, put it
+;;	in human-readable order.
+;;
+;;	NPNAME:	A/ output designator
+;;		B/ BP to source string
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; $$XLATE
+;;	Translate an Inquire username to a machine username, returning
+;;	the user# in B
+;;
+;;	XLATE:	A/ entry spec
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; $$WRITE
+;;	Routines for modifying the database;  Write creates a new entry
+;;	or modifies an existing one, given the entry spec and pointers
+;;	to the data fields.  Delete removes an entry from the database.
+;;	
+;;	WRITE:	A/ entry spec	B/ (BP block)
+;;	DELETE:	A/ entry spec
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; $$BUFFER
+;;	This just allocates buffer spaces for a single full-sized
+;;	Inquire entry, done with .SCALAR
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Entry specifiers are either a directory# (only PS: directories
+;;	may have entries) or an address (or BP) to an Inquire username
+;;	string (or machine username).  Or or or...
+;;
+;;	All subroutines have free reign over ACs 1-4, T, and TT
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Database header (page 0):
+;;
+;;		 Statistics only
+;;		 |Map (MAPIN, MUNG)
+;;		 ||Read (READ, READF)
+;;		 |||Write (WRITE, DELETE)
+;;		 ||||
+BORN$D==:0	;S..W	Time&Date when this database was created
+ N$NEW==:1	;S..W	Number of new entries made (since created)
+ N$MOD==:2	;S..W	Number of old entries modified (")
+ N$DEL==:3	;S..W	Number of entries deleted outright (")
+WRIT$D==:4	;...W	Time&Date of last change
+F$HEAD==:5	;..RW	Head of free-block list, or 0
+U$HEAD==:6	;..RW	Head of Username linked list, or 0
+P$HEAD==:7	;..RW	Head of personal-name linked list, or 0
+ E$O$M==:10	;...W	End of memory, where we can put grab some space.
+N$PAGE==:11	;.M.W	Number of data pages in database.
+EAT$ME==:12	;.M..	Set if mappers should punt the current database
+S$HASH==:13	;..RW	Start of hash table.
+H$SIZE==:14	;.M..	Size (in words) of hash table (should be prime)
+S$DTAB==:15	;..RW	Start of directory table
+D$SIZE==:16	;.M..	Size (in PAGES) of directory table.
+S$DATA==:17	;...W	Start of data portion of file
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Format of a block:
+;;
+  $SIZE==:0		;<Total size>,,<Words used>
+ $ULINK==:1		;Username link field: <Backlink,,Forwardlink>
+ $PLINK==:2		;Personal-name link field: <B,,F>
+$UHLINK==:3		;Username hash-list link field: <B,,F>
+$PHLINK==:4		;Personal-name hash-list link field: <B,,F>
+  $DATA==:5		;Start of data (sequential ASCIZ strings)
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Data fields:
+;;
+FLen==:<80./5>		;This is the normal buffer size,
+RLen==:FLen*48.		;and this is for Remarks.
+;;
+%first==:0
+%UNAME==:%FIRST		;Username
+%DNAME==:1		;Associated directory
+%PNAME==:2		;Personal-name (Last, First I., Title)
+%NNAME==:3		;Nick-name
+ %BDAY==:4		;Birthday (Month day)
+%BIRTH==:%BDAY		;(SYMONYM)
+%WADDR==:5		;Work address
+%WPHON==:6		;Work phone
+%HADDR==:7		;Home address
+%HPHON==:10		;Home phone
+ %PROJ==:11		;Project
+%PROJE==:%PROJ		;(SYNONYM)
+%SUPER==:12		;Supervisor/Advisor/Sponsor
+%GROUP==:13		;Group (1 character)
+  %REL==:14		;Relation to group (1 character)
+%RELAT==:%REL		;(SYNONYM)
+%MADDR==:15		;Mailing address
+%IADDR==:16		;Inquire address(')
+%LOCAL==:17		;Local fields (not forwarded)
+%SPARE==:20		;Spare field... have fun.
+  %REM==:21		;Remark field
+%REMAR==:%REM		;(SYNONYM)
+%ALTER==:22		;Last alteration (name date time)
+ %last==:%ALTER
+;;
+%NUMBER==:%LAST-%FIRST+1
+;;
+;;	Format of free-block:
+;;
+;;	+0	is $SIZE, but RH (words used) is always 0.
+$FLINK==:$ULINK	;<B,,F> in free-block chain.
+;;	 .
+;;	 .
+;;	 .
+;;	+n: total size,,1 	(last word in block)
+;;				RH=1 to signal free-block.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	All things from here are in are in the HAKINQ block, to
+;;	keep from intersecting the MAIN symbols
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+.BEGIN HAKINQ
+
+IRP ac,,[T,TT,A,B]
+  IFNDEF ac,.FATAL ac is undefined
+  IFLE ac-4,.FATAL ac must be not 1-4
+TERMIN
+
+IFNDEF $$MAP,   $$MAP==1
+IFNDEF $$READ,  $$READ==0
+ IFNDEF $$NOVER,$$NOVER==0
+IFNDEF $$NPNAME,$$NPNAME==0
+IFNDEF $$XLATE, $$XLATE==0
+IFNDEF $$WRITE, $$WRITE==0
+IFNDEF $$BUFFER,$$BUFFER==0
+
+  Call=<PUSHJ P,>
+Return=<POPJ P,>
+   Nop=<TRNN>
+
+  PSLH==540000		;LH of a PS: directory specification	
+UserLH==500000		;LH of user#
+
+MinSiz==30		;Minimum size of remainder after subdiving lblk
+MaxSiz==377777		;Maximum meaningful block size
+FSPace==5		;Number of words of elbow room in new blocks
+
+Define JLOSE &string
+	Jrst [Movei A,[Asciz string]
+	      Return]
+Termin
+
+Define JLOSE1 &string
+	Jrst [Movei A,[Asciz string]
+	      Jrst Popj1]
+Termin
+
+Define EJLOSE &string
+	Erjmp [Movei A,[Asciz string]
+	       Return]
+Termin
+
+Define LOSE &string
+	Movei A,[Asciz string]
+	Return
+Termin
+
+Define LOSE1 &string
+	Movei A,[Asciz string]
+	Jrst Popj1
+Termin
+
+IFN $$BUFFER,[
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Buffers and BP block and such in case you don't want to use
+;;	your own
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+.VECTOR UNAME(FLen),DNAME,PNAME,NNAME,BIRTH,WADDR,WPHON,HADDR
+.VECTOR HPHON(FLen),PROJE,SUPER,GROUP,RELAT,MADDR,IADDR,LOCAL
+.VECTOR SPARE(FLen),ALTER,REMAR(RLen)
+
+BPs:	IRP FOO,,[UNAME,DNAME,PNAME,NNAME,BIRTH,WADDR,WPHON,HADDR
+		  HPHON,PROJE,SUPER,GROUP,RELAT,MADDR,IADDR,LOCAL
+		  SPARE,REMAR,ALTER]
+	440700,,FOO
+TERMIN
+
+];$$BUFFER
+
+IFN $$MAP,[
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	MAPIN:	Maps the database in at the specified page
+;;	MAPIN0:	Same as MAPIN, but AC-B should be BP to database filename
+;;	MUNG:	Same, but with write access
+;;	MUNG0:	Analagous to MAPIN0
+;;	JMAPIN:	Enter here with AC1 containing the JFN on the database,
+;;	OMAPIN: (or here with JFN in AC1, but to an already open file)
+;;		and with MANGLE already set (0=read-only, non-0 write)
+;;	Takes:	A/ PMAP flags,,page# to map in at
+;;	       [B/ BP to filename]
+;;	       [1/ JFN on database]
+;;
+;;	GROW:	Append any new pages to mapped data base.  Uses flags
+;;		from last map call (just call MAPIN/MUNG again to give
+;;		new flags)
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+	
+.SCALAR	InqJFN			;JFN on .DAT file (0 if not mapped in)
+.SCALAR InqPag			;Page where we're mapping file
+.SCALAR InqLoc			;Address in memory of start of database
+.SCALAR NDPage			;Number of database pages ala N$PAGE
+.SCALAR Mangle			;If this mapping for write access?
+
+.SCALAR	BORND,NNEW,NMOD,NDEL,WRITD
+.SCALAR FHEAD,UHEAD,PHEAD,EOM,NPAGE
+.SCALAR EATME,SHASH,HSIZE,SDTAB,DSIZE
+.SCALAR SDATA
+
+File:	Asciz "221B:INQUIRE.BIN"
+
+MUNG:	Hrroi B,File		;Write access requested
+MUNG0:	Seto 2,			;(enter here with B/ BP to database filename)
+	Jrst MAP1
+
+MAPIN:	Hrroi B,File		;Read-only acces
+MAPIN0:	Setz 2,			;(enter here with B/ BP to database filename)
+MAP1:	Skipe InqJFN		;Database currently mapped in?
+	  Jrst Grow0		;  Yes, so see if need to extend it.
+	Movem 2,Mangle
+	Movsi 1,(GJ%SHT\GJ%OLD)
+	Move 2,B
+	GTJFN
+	  JLose "Can't get Inquire database"
+JMAPIN:	Push P,1		;(Enter here with 1/ JFN on database)
+	Movei 2,OF%RD
+	Skipe Mangle
+	  Tro 2,OF%WR
+	OPENF
+	  Jrst [Pop P,1
+		RLJFN
+		  Nop
+		Setzm InqJFN
+		Lose "Can't open Inquire database"]
+	Pop P,1
+OMAPIN:	Movem A,INQPAG		;Save flags and page
+	Movem 1,InqJFN
+	Move 2,[1,,.FBBYV]
+	Movei 3,3
+	GTFDB
+	Hrrzm 3,NDPAGE
+	Movs 1,INQJFN
+	Movei 2,(A)
+	Hrli 2,.FHSLF
+	Hll 3,A			;Get flag bits from LH of A
+	Tlo 3,(PM%CNT\PM%RD)	;plus these one (assume read-access)
+	Skipe Mangle		;If we're writing,
+	  Tlo 3,(PM%WR)		;then need write-access.
+	PMAP
+	 Erjmp [Move 1,InqJFN
+		CLOSF
+		  Nop
+		Setzm InqJFN
+		Lose "Error mapping in Inquire database"]
+	Movei 1,(A)
+	IMuli 1,1000
+	Movem 1,INQLOC		;Absolute start of database
+IRP off,,[F$HEAD,U$HEAD,P$HEAD,N$PAGE]abs,,[FHEAD,UHEAD,PHEAD,NPAGE]
+	Movei 2,off(1)
+	Movem 2,abs
+TERMIN
+IRP off,,[S$HASH,S$DTAB,S$DATA]abs,,[SHASH,SDTAB,SDATA]
+	Move 2,off(1)
+	Add 2,1
+	Movem 2,abs
+TERMIN
+IRP off,,[H$SIZE,D$SIZE]abs,,[HSIZE,DSIZE]
+	Move 2,off(1)
+	Movem 2,abs
+TERMIN
+	Skipn Mangle
+	  Jrst Popj1
+IRP off,,[N$NEW,N$MOD,N$DEL,WRIT$D,E$O$M]abs,,[NNEW,NMOD,NDEL,WRITD,EOM]
+	Movei 2,off(1)
+	Movem 2,abs
+TERMIN
+Popj1:	Aos (P)
+CPopj:	Return
+
+Grow:	Hllz A,InqPag
+Grow0:	Move T,@NPAGE
+	Camg T,NDPAGE		;Have more pages been added to database?
+	  Jrst Popj1		;  No, so all's well.
+	Hrl 1,InqJFN		;JFN,,file page#
+	Hrr 1,NDPAGE
+	Hrrz 2,InqPag
+	Addi 2,(1)
+	Hrli 2,.FHSLF
+	Hllz 3,A		;User-supplied bits.
+	Tlo 3,(PM%CNT\PM%RD)
+	Skipe Mangle
+	  Tlo 3,(PM%WR)
+	Hrr 3,T			;New # pages minus
+	Sub 3,NDPAGE		;old is # we need.
+	PMAP
+	  JLose "Failed to grow Inquire database"
+	Movem T,NDPAGE
+	Jrst Popj1
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	MAPOUT: Unmap previously mapped database
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+MAPOUT:	Skipn InqJFN
+	  JLose "Inquire database is not mapped in"
+	Seto 1,
+	Move 2,INQPAG
+	Hrli 2,.FHSLF
+	Move 3,NDPAGE		;Currently mapped #pages
+	Hrli 3,(PM%CNT)
+	PMAP
+	  EJLose "Error unmapping Inquire database"
+	Move 1,InqJFN
+	Setzm InqJFN
+	CLOSF
+	  EJLose "Error closing Inquire data base"
+	Jrst Popj1
+
+];IFN $$MAP
+
+IFN $$READ,[
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; FIND: Find an entry given the "entry spec".
+;;
+;;	Takes:	A/ Entry spec
+;;
+;;	Gives:	+1: No such entry
+;;		+2: A/ 0-relative address of start of entry
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+.SCALAR	BPBADR			;Byte-Pointer Block Address
+.SCALAR UNAMBP			;BP to username string
+
+FIND:	Hlrz 3,A		;Check LH.
+	Caie 3,UserLH		;User#?
+	  Cain 3,PSLH		;or PS: directory#?
+	    Jrst FDir		;  Yep.
+	Caie 3,-1		;If TWENEX HRROI-style pointer,
+	  Skipn 3		;  or just an address,
+	    Hrli A,440700	;    then canonicalize into real BP.
+	Movem A,UNAMBP		;Save BP to username
+	Call HashU		;Get hash pointer for that entry in AC4
+	  Return		;  Bad username.
+	  Jrst TryDir		;  Isn't one, so no entry, maybe dir string?
+Find0:	Add 4,InqLoc		;Make absolute
+	Move TT,4		;Save a copy here...
+	Move T,UNAMBP		;Now walk down the list, comparing...
+	Add TT,[440700,,$DATA]	;username (we know it's first in data area)
+	$STCMP			;Compare the two
+	  Jrst Found		;T=TT  We've found the entry, expand it.
+	  Nop			;T<TT  Doesn't mean anything, keep looking.
+	  Nop			;T>TT  Likewise.
+	Hrrz 4,$UHLINK(4)	;Forward hash link.
+	Jumpn 4,Find0		;keeping looking...
+
+TryDir:	Movsi 1,(RC%EMO)	;See if the string you gave us might
+	Move 2,A		;be a username specification.
+	RCDIR			;Try and turn into directory#
+	  Erjmp FindE0		;Notta chance...
+	Tlne 1,(RC%NOM)		;Valid stuff?
+FindE0:	  JLose "No such username"
+	Hlrz 2,3		;Yes, so now check the LH...
+	Caie 2,PSLH		;Is this a PS: directory-spec?
+FindE1:	  JLose "Only PS: directories have Inquire entries"
+	Move A,3		;Success...
+
+FDir:	Hrrz 2,A		;Get here with A containing PS directory#
+	Add 2,SDTAB		;Make absolute...
+	Skipn 4,(2)		;Get directory pointer.  Anything there?
+	  JLose "No entry for that directory"
+	Add 4,InqLoc
+IFE $$NOVER,[
+	Move T,4		;Verify the directory-name field.
+	Add T,[440700,,$DATA]	;Point to data portion
+	Movei TT,%DNAME		;We want this field...
+	Ildb 2,T		;Skip over preceeding fields...
+	Jumpn 2,.-1
+	Sojn TT,.-2
+	Movsi 1,(RC%EMO)	;Want exact match
+	Move 2,T		;Pointer to directory-name
+	RCDIR
+	  Erjmp FindE0
+	Tlne 1,(RC%NOM)		;No such directory??
+	  Jrst FindE0
+	Hlrz 2,3		;Check LH...
+	Caie 2,PSLH		;PS:?
+	  Jrst FindE1
+	Tlz 3,-1		;Only want RH
+	Hrrz 2,A		;Check RH of what you specified
+	Came 3,2		;Directory #'s match?
+	  JLose "No entry for that directory (stale directory pointer)"
+];End of normal directory-table verification code
+Found:	Move A,4		;Return address of block in A
+	Jrst Popj1		;Skip return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; READ: Read and explode an entry
+;;
+;;	Takes:	A/ Entry spec
+;;		B/ Address of BP block
+;;
+;;	Gives:	+1: No such entry
+;;		+2: A/ Address of entry
+;;		Individual buffers pointer to by the BP block
+;;		filled; if a field was null, the first word
+;;		of that field (at least) will be all zero, for
+;;		testing porpoises.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+READ:	Call Find		;Find specified entry
+	  Return		;  Not found.
+Expand:	Hrli B,-%NUMBER		;Expand entry into individual fields.
+	Move 4,A
+	Add 4,[440700,,$DATA]	;Point to data area of block
+Exp0:	Move 2,(B)		;BP to field.
+	Setzm (2)		;Clear first word, for testing porpoises.
+Exp1:	Ildb 3,4
+	Idpb 3,2
+	Jumpn 3,Exp1
+	Aobjn B,Exp0
+	Jrst Popj1
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; READF: Read a single field of an entry
+;;
+;;	Takes:	A/ Entry spec
+;;		B/ field#,,address of buffer
+;;
+;; READFF: Is like READF, but expects the entry address to be in AC-A
+;;
+;;	Gives:	B/ Updated buffer BP
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+READF:	Call Find
+	  Return
+READFF:	Hlrz 4,B		;Field#
+	Cail 4,%first
+	  Caile 4,%last
+	    JLose "Invalid field# - not in range"
+	Move 3,A
+	Add 3,[440700,,$DATA]
+READF0:	Sojl 4,READF1
+	Ildb 1,3
+	Jumpn 1,.-1
+	Jrst READF0
+
+READF1:	Hrrz 2,B		;Address of buffer
+	Setzm (2)
+	Hrli 2,440700
+READF2:	Ildb 1,3
+	Idpb 1,2
+	Jumpn 1,READF2
+	seto B,
+	ibp B,2
+	Jrst Popj1
+
+];$$READ
+
+IFN $$NPNAME,[
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; NPNAME: Turns a "Last, First I., Jr." order pname into
+;;	   "First I. Last, Jr." order.
+;;
+;;	Takes:	A/ Output designator, where to put result
+;;		B/ BP to source string
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+NPNAME:	Move 1,A		;Output designator
+	Tlce B,-1		;If LH is 0
+	  Tlcn B,-1		;or -1 (HRROI-style)
+	    Hrli B,440700	;then make into real BP
+	Move 3,B
+NPNAM0:	Ildb 2,3
+	Jumpe 2,NPNAM4
+	Caie 2,",
+	  Jrst NPNAM0
+	Ildb 2,3
+	Cain 2,40
+NPNAM1:	  Ildb 2,3
+	Cain 2,",
+	  Jrst NPNAM3
+	Jumpe 2,NPNAM2
+	BOUT
+	Jrst NPNAM1
+
+NPNAM2:	Setz 3,
+NPNAM3:	Push P,3		;Push address of string of "Junior"
+	Movei 2,40		;string, or 0 if there is none.
+	BOUT
+NPNAM4:	Move 3,B
+NPNAM5:	Ildb 2,3
+	Jumpe 2,NPNAM8
+	Cain 2,",
+	  Jrst NPNAM6
+	BOUT
+	Jrst NPNAM5
+
+NPNAM6:	Pop P,3			;Get back address of junior string
+	Jumpe 3,NPNAM8		;Oops, there is none.
+	Movei 2,",
+	BOUT
+NPNAM7:	Ildb 2,3
+	Jumpe 2,NPNAM8
+	BOUT
+	Jrst NPNAM7
+
+NPNAM8:	Setz 2,
+	BOUT
+	Jrst Popj1
+
+];$$NPNAME
+
+IFN $$XLATE,[
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	XLATE: Translate Inquire username to machine user#
+;;
+;;	Takes:	A/ entry specifier
+;;
+;;	Gives:	+1: failure, no username, no mapping or error
+;;		+2: success, address of entry in A, user# in B
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+XLATE:	Call Find		;Loop up entry
+	  Return
+XLATE0:	Move 2,A
+	Add 2,[440700,,$DATA]	;Point to data area
+	Movei 3,%DNAME
+	Ildb 1,2
+	Jumpn 1,.-1
+	Sojg 3,.-2
+	Movsi 1,(RC%EMO)
+	RCDIR
+	  Erjmp FindE0
+	Tlne 1,(RC%NOM)
+	  Jrst FindE0
+	Hlrz 2,3		;Check LH
+	Caie 2,PSLH		;This a PS directory?
+	  Jrst FindE1		;  Nope...
+	Hrrz B,3		;Yes, so use RH of that
+	Hrli B,UserLH		;and user# LH and
+	Jrst Popj1
+
+];$$XLATE
+
+IFN $$WRITE,[
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	WRITE: Write a new information block
+;;
+;;	Takes:	A/ Entry specifier
+;;		B/ Address of BP block
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+WRITE:	Movem B,BPBADR		;Save address of BP-block
+	Call NewSize		;Get size of new block into BSIZE
+	Call Find		;See if entry already exists
+	  Jrst New		;  Nope, will have to create a new one.
+	Aos @NMOD		;Up the entry-moification count
+	Call UnLink		;Kill the old links and hashes and such
+	Call UnHash		;since they might be changing.. re-do 'em.
+	Call Detour		;(oh yeah, kill from directory table too)
+	Hlrz T,$SIZE(A)		;Get total size of block entry's in now.
+	Caml T,BUSED		;Will the new data fit in old space?.
+	  Jrst Dupe		;  Yes, so no need to get a new block
+	Call Free		;No, so free that old block and
+	Skipa
+New:	  Aos @NNEW		;Up the new-entry count
+	Call Snarf		;allocate a new one of adequate sizeage.
+Dupe:	Call Copy		;Copy the information in
+	Call Link		;[re]Link it,
+	Call Hash		;[re]Hash it,
+	Call Direct		;And stuff in directory table,
+	Call Mark		;and mark database with new time.
+	Jrst Popj1
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Given BPBADR, compute the size of the storage block that's
+;;	needed to store the stuff in, including the size of the header
+;;	(saved in BUSED) and the free-space that's alotted (BSIZE, the
+;;	total size)
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+.SCALAR BSIZE			;Semi-peranent storage for block size
+.SCALAR	BUSED			;and actual words used.
+
+NewSiz:	Setz T,			;Number of bytes (including terminators)
+	Move 3,BPBADR		;Address of BPs
+	Hrli 3,-%NUMBER		;Number of fields to length-sum up
+NewS0:	Move 2,(3)		;BP to this field
+NewS1:	Ildb 1,2
+	Aoj T,			;Count # characters
+	Jumpn 1,NewS1		;Each data field ends in a null byte
+	Aobjn 3,NewS0		;Count all fields.
+	Addi T,4		;Rounding factor
+	IDivi T,5		;Convert into #words
+	Addi T,$DATA		;Add in # header words
+	Movem T,BUSED		;Words used
+	Movem T,BSIZE		;Normally no elbow room is given.
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Update the internal-format Date&Time of last write (or
+;;	delete).
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Mark:	GTAD			;Date&Time
+	Movem 1,@WRITD
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Snarf the best-fitting free block of at least size BSIZE.
+;;	Grab the block if it fits exactly.  If the best block is
+;;	more than MINSIZ words larger than we need, then subdivide
+;;	the block.  BUSED must be set up, and contain the number
+;;	of words needed for this block.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+Snarf:	Setz T,			;Address of best fitting block so far
+	Movei TT,MaxSiz		;Best fit so far (size of best block)
+	Skipn 2,@FHEAD		;Head of free list
+	  Jrst Snarf2		;  No snarfable free blocks.
+Snarf0:	Add 2,InqLoc
+	Hlrz 3,$SIZE(2)		;Total size of this block.
+	Caml 3,BUSED		;Will we fit in this block?
+	  Caml 3,TT		;Yes, fit better than what we've got so far?
+	    Jrst Snarf1		;  Nope on either -- next block.
+	Move TT,3		;Update best fit (size of block)
+	Move T,2		;and address of that best block.
+	Camn TT,BUSED		;Exact fit?
+	  Jrst Snarf4		;  Yes, so search is off -- grab it!
+Snarf1:	Hrrz 2,$FLINK(2)	;Next block: New forward link
+	Jumpn 2,Snarf0		;If more to check, do so.
+	Jumpn T,Snarf4		;Found something that will do?  Yeah...
+
+Snarf2:	Move T,BUSED		;Add a little elbow room to the end of this
+	Addi T,FSpace		;block, for efficiencies sake, so we can
+	Movem T,BSIZE		;expand without having to release everything.
+	Add T,@EOM		;Now let's see if that new block will fit
+	Movei T,777(T)
+	IDivi T,1000		;T/ #pages including what we're adding
+SnarfC:	Camg T,@NPAGE		;Have we gone into Limbo?
+	  Jrst Snarf3		;  No, still in reality.
+	Move 1,@NPAGE		;a new physical page to the database.
+	Add 1,InqPag
+	Movei 2,(1)
+	IMuli 2,1000		;First non-existent word
+	Setzm (2)		;Create that page in our address space.
+	Hrli 1,.FHSLF
+	Movs 2,InqJFN
+	Hrr 2,@NPAGE
+	Push P,1		;The page in us
+	Push P,2		;Page in the file
+	Movsi 3,(PM%RD\PM%WR)	;Allow read/write access
+	PMAP			;Create that page in the disk file.
+	Pop P,1			;File page,
+	Pop P,2			;our page.
+	Movsi 3,(PM%RD\PM%WR)
+	PMAP			;Map disk page back to our address space.
+	Move 1,InqJFN		;Update page-count of file.
+	Hrli 1,.FBBYV+(CF%NUD)
+	Movei 2,FB%PGC		;Page count
+	Aos 3,@NPAGE		;Aos total page count
+	CHFDB
+	jrst SnarfChk		;See if need another (e.g. moby remarks field)
+
+Snarf3:	Move 2,@EOM		;Old end-of-memory
+	Move T,2		;Save since we're modifying it.
+	Add 2,BSIZE		;Now point it after this block.
+	Movem 2,@EOM		;and update EOM.
+	Add T,InqLoc		;Address of where we put entry.
+	Move TT,BSIZE		;We grabbed this size block
+	Jrst Snarf6
+
+Snarf4:	Move 1,BUSED		;Here to re-use an existing free block.
+	Caig TT,MinSiz(1)	;Is the block we have too big?
+	  Jrst Snatch
+	Move 2,T		;Address of the too-big block
+	Sub 2,InqLoc
+	Add 2,BUSED		;Top of new free-block to make (subdivided)
+	Hlrz 3,$FLINK(T)	;Back free link
+	Jumpe 3,[Movem 2,@FHEAD
+		 Jrst Snarf5]
+	Add 3,InqLoc		;Address of previous free block
+	Hrrm 2,$FLINK(3)	;Point within, past what we'll use.
+Snarf5:	Move 4,TT		;Original size of block
+	Sub 4,BSIZE		;less what we're using
+	Add 2,InqLoc
+	Hrlzm 4,$SIZE(2)	;is the size of the new small free-block
+	Addi 2,-1(4)
+	Hrlm 4,(2)		;and modify last word of free block...
+	Move TT,BUSED
+	Jrst Snarf6
+
+Snatch: Hlrz 2,$FLINK(T)	;  No, it's ok, so just link
+	Hrrz 3,$FLINK(T)	;out this block, either...
+	Jumpe 2,[Movem 3,@FHEAD	;at the head ...
+		 Jrst Snatc1]
+	Move 1,2
+	Add 1,InqLoc		;... or just from middle.
+	Hrrm 3,$FLINK(1)
+Snatc1:	Add 3,InqLoc
+	Hrlm 2,$FLINK(3)
+
+Snarf6:	Hrlm TT,(T)		;Total size of new block
+	Setzm $ULINK(T)
+	Hrli 1,$ULINK(T)	;2nd word in new block
+	Hrri 1,$PLINK(T)	;Third word
+	Move 2,T
+	Add 2,TT
+	BLT 1,-1(2)		;Clear out all but first word of block.
+	Move A,T		;Return in A address of block.
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Link up block whose address is in A
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+Link:	Push P,A
+	Move 4,A
+	Sub 4,InqLoc
+	Skipn 3,@UHEAD		;Any entries atoll?
+	  Jrst [Movem 4,@UHEAD	;  No, then this is the first.
+		Setzm $ULINK(A)	;  and no forward or back links.
+		Movem 4,@PHEAD	;  Likewise for personal stuff
+		Setzm $PLINK(A)
+		Jrst LDone]
+	Add A,[440700,,$DATA]	;BP to USERNAME (first data field)
+ULink0:	Add 3,InqLoc		;Einstein
+	Move T,3
+	Add T,[440700,,$DATA]	;BP to uname of this entry
+	Move TT,A		;and to your uname.
+	$STCMP			;String compare
+	  Jrst ULink1		;= (better not happen)
+	  Jrst ULink1		;<
+	  Jrst ULink2		;>
+ULink1:	Hrrz T,$ULINK(3)	;Follow forward link.
+	Jumpe T,[Hrrm 4,$ULINK(3)	;At end... put us at the end then.
+		 Sub 3,InqLoc		;Un-Einstein
+		 Move A,(P)		;Get back addr of our block
+		 Hrlzm 3,$ULINK(A)	;and point back to that entry
+		 Jrst PLink]		;then do pipple-link.
+	Move 3,T		;else keep following
+	Jrst ULink0		;links forward.
+
+ULink2:	Hlrz 1,$ULINK(3)	;Link into middle; 1/ back link
+	Move 2,1
+	Add 2,InqLoc		;Einstein
+	Hrlm 4,$ULINK(3)	;Link back to this block now.
+	Sub 3,InqLoc
+	Move A,(P)
+	Hrrm 3,$ULINK(A)	;then our block links forward,
+	Skipe 1
+	  Hrrm 4,$ULINK(2)	;In middle of list somewhere
+	Skipn 1
+	  Movem 4,@UHEAD	;At head of list.
+	Hrlm 1,$ULINK(A)
+
+PLink:	Move A,(P)		;Get backa copy of entry address.
+	Move 3,@PHEAD
+
+PLink0:	Add 3,InqLoc
+	Move T,3
+	Add T,[440700,,$DATA]
+	Movei 2,%PNAME
+	Ildb 1,T		;Find the pname field.
+	Jumpn 1,.-1
+	Sojg 2,.-2
+	Move TT,BPBADR		;Address of BP block
+	Move TT,%PNAME(TT)	;BP to personalname
+	$STCMP
+	  Jrst PLink1		;=
+	  Jrst PLink1		;<
+	  Jrst PLink2		;>
+PLink1:	Hrrz T,$PLINK(3)
+	Jumpe T,[Hrrm 4,$PLINK(3)
+		 Sub 3,InqLoc
+		 Hrlzm 3,$PLINK(A)
+		 Jrst LDone]
+	Move 3,T
+	Jrst PLink0
+
+PLink2:	Hlrz 1,$PLINK(3)
+	Move 2,1
+	Add 2,InqLoc
+	Hrlm 4,$PLINK(3)
+	Sub 3,InqLoc
+	Hrrm 3,$PLINK(A)
+	Skipe 1
+	  Hrrm 4,$PLINK(2)
+	Skipn 1
+	  Movem 4,@PHEAD
+	Hrlm 1,$PLINK(A)
+LDone:	Pop P,A
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Put us into the hash table.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Hash:	Push P,A
+	Add A,[440700,,$DATA]
+	Call HashU		;Hash on current username
+	  Jrst Hash1		;(bad username??)
+	  Nop			;No hashings
+	Move A,(P)		;Address of entry
+	Hrrzm 4,$UHLINK(A)	;Make us point to former head of list
+	Sub A,InqLoc		;(un-absolute)
+	Hrrm A,(3)		;this block is now at head of list.
+	Jumpe 4,Hash1		;If there is a forward block
+	Add 4,InqLoc		;then (absolute former-head)
+	Hrlm A,$UHLINK(4)	;point him back to new head.
+Hash1:	Move A,BPBADR		;BP block address
+	Move A,%PNAME(A)	;Get BP to personalname
+	Call HashP
+	  Jrst Hash2		;0-length or bad pername.
+	  Nop			;No hashings
+	Move A,(P)
+	Hrrzm 4,$PHLINK(A)
+	Sub A,InqLoc
+	Hrlm A,(3)
+	Jumpe 4,Hash2
+	Add 4,InqLoc
+	Hrlm A,$PHLINK(4)
+Hash2:	Pop P,A
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Now make a pointer to this entry from the directory table,
+;;	if a PS: directory was specified.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Direct:	Movsi 1,(RC%EMO)
+	Move 2,BPBADR
+	Move 2,%DNAME(2)
+	RCDIR			;Not a username... dname?
+	  Erjmp CPopj
+	Tlne 1,(RC%NOM)
+	  Return
+	Hlrz 2,3		;Check LH of directory#
+	Caie 2,PSLH		;This a PS directory?
+	  Return		;  Nope, so doesn't go in this table.
+Direc1:	Move 4,A
+	Sub 4,InqLoc
+	Tlz 3,-1
+	Add 3,SDTAB
+	Movem 4,(3)
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Copy the data from the individual buffers (address of BP
+;;	block in BPBADR), and store them in the block pointed to
+;;	by A, and modify the working-size of that block (from BUSED)
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+Copy:	Move 2,BPBADR		;Address of first BP
+	Hrli 2,-%NUMBER
+	Move 3,A
+	Add 3,[440700,,$DATA]	;BP to data portion of new block
+Copy0:	Move 4,(2)		;BP to field
+Copy1:	Ildb 1,4		;Copy in the fields.
+	Idpb 1,3
+	Jumpn 1,Copy1
+	Aobjn 2,Copy0
+	Move 1,BUSED
+	Hrrm 1,$SIZE(A)		;Update working-size
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	DELETE - Get rid of an in-use block
+;;
+;;	Takes:	A/ Directory# or Address (or BP) of username
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+DELETE:	Call Find
+	  Return
+Delet0:	Aos @NDEL		;Up the entrys-deleted count.
+	Call UnLink
+	Call UnHash
+	Call Detour
+	Call Free
+	Call Mark
+	Jrst Popj1
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Opposite of DIRECT - Remove the pointer to this entry from
+;;	the directory table, if one exists.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Detour:	Move 2,A
+	Add 2,[440700,,$DATA]
+	Movei 1,%DNAME
+	Ildb 3,2
+	Jumpn 3,.-1
+	Sojg 1,.-2
+	Move 1,2
+	Ildb 1,1
+	Jumpe 1,CPopj
+	Movsi 1,(RC%EMO)
+	RCDIR
+	  Erjmp CPopj
+	Tlne 1,(RC%NOM)
+	  Return
+	Hlrz 2,3		;Check LH of directory#.
+	Caie 2,PSLH		;This a PS directory?
+	  Return		;  No, so isn't in the table.
+	Move 4,A
+	Sub 4,InqLoc
+	Tlz 3,-1
+	Add 3,SDTAB
+	Camn 4,(3)
+	  Setzm (3)
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Remove the block (A) from the u- and p-name linked lists.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+UnLink:	IRP link,,[$ULINK,$PLINK]head,,[UHEAD,PHEAD]tag,,[UUTAG,UPTAG]
+	Hlrz 1,link(A)		;Previous name in chain
+	Hrrz 2,link(A)		;Next name
+	Jumpe 1,tag!0		;Was this the first in chain?
+	Move 3,1		;No, so link the previous
+	Add 3,InqLoc		;one around us to
+	Hrrm 2,link(3)		;the next one.
+	Skipa
+tag!0:	  Movem 2,@head		;(Yes, head), so make head point to next.
+	Jumpe 2,tag!1		;There a next block?  Nope...
+	Move 3,2		;Yep, so make it point
+	Add 3,InqLoc		;back around us to
+	Hrlm 1,link(3)		;the previous one.
+tag!1:	TERMIN
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Undo this blocks hashing (remove from hash list, etc)
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+UnHash:	Push P,A		;Clobber city, so save this.
+	Add A,[440700,,$DATA]
+	Call HashU
+	  Jrst UnHas2		;Bad username - this shouldn't happen.
+	  Jrst UnHas2		;No hashings - neither should this.
+	Move 2,(P)		;Get copy of block address.
+	Sub 2,InqLoc
+	Camn 2,4		;We at the head of the hash list?
+	  Jrst [Move 2,(P)	;Yes.
+		Hrrz 1,$UHLINK(2)
+		Hrrm 1,(3)
+		Jumpe 1,UnHas2
+		Add 1,InqLoc
+		Setz 3,
+		Hrlm 3,$UHLINK(1)
+		Jrst UnHas2]
+UnHas0:	Move 3,4		;No, so save address of current loc,
+	Add 3,InqLoc		;(make it absolute tho)
+	Hrrz 4,$UHLINK(3)	;so get it's hash link
+	Jumpe 4,UnHas2		;(ooooooooops, no more, broken!)
+	Came 2,4		;and if this isn't the right block
+	  Jrst UnHas0		;then keep looking.
+	Add 2,InqLoc		;Absolute current block
+	Hrrz 1,$UHLINK(2)	;Get our forward pointer
+	Hrrm 1,$UHLINK(3)	;Point them around us...
+	Jumpe 1,UnHas2		;No forward block.
+	Add 1,InqLoc		;The forward block
+	Sub 3,InqLoc
+	Hrlm 3,$UHLINK(1)	;Point that back around us.
+
+UnHas2:	Move A,(P)
+	Add A,[440700,,$DATA]
+	Movei 2,%PNAME
+	Ildb 1,A
+	Jumpn 1,.-1
+	Sojg 2,.-2
+	Call HashP
+	  Jrst UnHas4		;Bad or 0-length pername
+	  Jrst UnHas4		;No hashings??
+	Move 2,(P)		;Get copy of block address.
+	Sub 2,InqLoc
+	Camn 2,4		;We at the head of the hash list?
+	  Jrst [Move 2,(P)	;Yes.
+		Hrrz 1,$PHLINK(2)
+		Hrlm 1,(3)
+		Jumpe 1,UnHas4
+		Add 1,InqLoc
+		Setz 3,
+		Hrlm 3,$PHLINK(1)
+		Jrst UnHas4]
+UnHas3:	Move 3,4		;No, so save address of current loc,
+	Add 3,InqLoc		;(make it absolute tho)
+	Hrrz 4,$PHLINK(3)	;so get it's hash link
+	Jumpe 4,UnHas4		;(ooooooooops, no more, broken!)
+	Came 2,4		;and if this isn't the right block
+	  Jrst UnHas3		;then keep looking.
+	Add 2,InqLoc		;Absolute current block
+	Hrrz 1,$PHLINK(2)	;Get our forward pointer
+	Hrrm 1,$PHLINK(3)	;Point them around us...
+	Jumpe 1,UnHas4		;No forward block.
+	Add 1,InqLoc		;The forward block
+	Sub 3,InqLoc
+	Hrlm 3,$PHLINK(1)	;Point that back around us.
+UnHas4:	Pop P,A
+	Return			;So all done.
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Given address of block in A, merge it into adjacent free
+;;	blocks, and then perhaps push back the EOM-pointer; if no
+;;	adjacent free blocks, just add it to the free-list.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+Free:	Move 4,A
+	Sub 4,InqLoc
+	Hlrz T,$SIZE(A)		;Size of this block
+	Add T,A			;Address of next block
+	Hrrz TT,$SIZE(T)	;Words-used in next block
+	Jumpg TT,ChkMom		;If in use, then carry on, else free block.
+;;
+;;	Case I:  Next physical block is free.
+;;
+	Camn A,SDATA		;If first block in data area, previous can't
+	  Jrst CaseIb		;be a free block, so just insert it.
+	Hrrz 1,-1(A)		;RH of last word of previous block
+	Caie 1,1		;1? (Free-block flag)
+	  Jrst CaseIb
+;;
+;;	Ia: Previous block also.
+;;	
+
+CaseIa:	Hlrz 2,$SIZE(T)		;Next block is EOM?
+	Jumpe 2,CasIaa
+	Hlrz 2,$FLINK(T)	;We're going to get rid of the next block;
+	Hrrz 3,$FLINK(T)	;Back and forward pointers here.
+	Jumpn 2,[Move 1,2
+		 Add 1,InqLoc
+		 Hrrm 3,$FLINK(1)	;Link forwards around...
+		 Jrst .+2]
+	Movem 3,@FHEAD
+	Move 1,3
+	Add 1,InqLoc
+	Hrlm 2,$FLINK(1)	;And then backwards around...
+	Hlrz TT,$FLINK(A)	;Size of this block
+	Hlrz 1,-1(A)		;Size of previous block
+	Hlrz 2,$FLINK(T)	;Size of next block
+	Sub A,1			;New start-of-block
+	Add TT,1
+	Add TT,2		;Total size of new conglomerate.
+	Jrst MarkUp
+
+CasIaa:	Move 2,@EOM		;Old EOM
+	Hlrz 3,$SIZE(A)
+	Sub 2,3
+	Hlrz T,-1(A)
+	Sub 2,T
+	Movem 2,@EOM		;New EOM
+	Add 2,InqLoc
+	Setzm (2)
+	Hrli 1,0(2)
+	Hrri 1,1(2)
+	Add 2,3
+	Addi 2,-1(T)
+	BLT 1,(2)
+	Push P,A
+	Sub A,3
+	Call UnLink
+	Pop P,A
+	Return
+
+;;
+;;	Ib: Only the next block...
+;;
+
+CaseIb:	Hlrz 2,$SIZE(T)		;Check size of block: 0 means EOM
+	Jumpe 2,CasIba
+	Hlrz 2,$FLINK(T)	;Previous free-block in chain
+	Jumpn 2,[Add 2,InqLoc		;Point to the new joint-block
+		 Hrrm 4,$FLINK(2)	;instead of just the lower
+		 Jrst .+2]		;part...
+	Movem 4,@FHEAD		;Head of list, so point to the new block.
+	Hrrz 2,$FLINK(T)	;Now have next block point back to right one
+	Jumpn 2,[Add 2,InqLoc	;(Providing there is a next)
+		 Hrlm 4,$FLINK(2)
+		 Jrst .+1]
+	Move 2,$FLINK(T)	;Move the old free-pointers to the right
+	Movem 2,$FLINK(A)	;position in the joint block.
+	Hlrz TT,$SIZE(T)	;Size of the newly acquired block
+	Hlrz 2,$SIZE(A)		;Size of this block
+	Add TT,2
+	Jrst MarkUp
+
+CasIba:	Move 2,@EOM		;Previous end-of-memory
+	Hlrz 3,$SIZE(A)
+	Sub 2,3			;new EOM
+	Movem 2,@EOM
+	Add 2,InqLoc
+	Setzm (2)
+	Hrli 1,0(2)
+	Hrri 1,1(2)
+	Addi 2,-1(3)
+	BLT 1,(2)
+	Return
+
+ChkMom:	Camn A,SDATA		;If first block in data area, previous can't
+	  Jrst InsBlk		;be a free block, so just insert it.
+	Hrrz T,-1(A)		;RH of last word of previous block
+	Caie T,1		;1? (Free-block flag)
+	  Jrst InsBlk
+;;
+;;	Case II: Previous phsycial block (only) is free.
+;;
+	Hlrz TT,-1(A)		;Size of previous block.
+	Hlrz 2,$SIZE(A)		;Size of this block again
+	Sub A,TT		;Start of new combined block
+	Add TT,2		;Combine sizes
+	Jrst MarkUp
+
+;;
+;;	Case III: Neither adjacent blocks are free, so we're creating
+;;	a new block -- add it into the links.
+;;
+
+InsBlk:	Move T,@FHEAD		;Previous head of free linked list
+	Movem 4,@FHEAD		;Make head point to this block now....
+	Hrrzm T,$FLINK(A)	;and then this entry point to previous head
+	Jumpn T,[Add T,InqLoc	;and then it points back to this one.
+		 Hrlm 4,$FLINK(T)
+		 Jrst .+1]
+	Hlrz TT,$SIZE(A)
+;;
+;;	Come here with A containing the start of the block, TT the
+;;	total length:  We'll set of head and tail size words, and
+;;	zero out the body of the block.
+;;
+
+MarkUp:	Hrlzm TT,$SIZE(A)	;SIZE,,0
+	Move T,A
+	Addi T,-1(TT)		;T/ last word in block
+	Hrlzs TT
+	Hrri TT,1		;Size,,1
+	Movem TT,(T)		;(flag word at end of free block)
+	Setzm $PLINK(A)
+	Hrli 1,$PLINK(A)
+	Hrri 1,$DATA(A)
+	BLT 1,-1(T)
+	Return
+
+];$$WRITE
+
+IFN $$READ\$$WRITE,[
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	String matching.  T/ BP to string#1, TT/ BP to string#2
+;;	Returns +1/ S#1 = S#2
+;;		+2/ S#1 < S#2
+;;		+3/ S#1 > S#2
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+MATCH:	Ildb 1,T
+	Ildb 2,TT
+	Jumpe 1,[Jumpe 2,MEQ
+		 Jrst MLT]
+	Cail 1,"a
+	  Caile 1,"z
+	    Skipa
+	   Trz 1,40
+	Cail 2,"a
+	  Caile 2,"z
+	    Skipa
+	   Trz 2,40
+	Camge 1,2
+	  Jrst MLT
+	Camn 1,2
+	  Jrst Match
+MGT:	Aos (P)
+MLT:	Aos (P)
+MEQ:	Return
+
+$STCMP=<Call MATCH>
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Given a BP to a string in A, return address of first entry
+;;	from hash table in AC4.
+;;
+;;	This routine is used to filter usernames a bit;  it returns
+;;
+;;	+1 if the username is bad (zero length, contains control
+;;	   characters, etc)
+;;	+2 if there are no entries starting at that hashing, so there
+;;	   can't be an entry
+;;	+3 if there's something; AC4 contains address of first entry
+;;	   AC3 address in hash table
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+HashU:	Movei T,6		;Max # of characters to hash
+	Setz TT,		;No special terminating character in string
+	Call HashIt
+	  Return		;0-length
+	  Return		;Bad string
+	Hrrz 4,(3)		;RH of hash table has username pointers
+	Skipe 4
+	  Aos (P)
+	Jrst Popj1
+
+HashP:	Movei T,8.		;Max # characters to hash
+	Movei TT,",		;Stop hashing when we find a comma
+	Call HashIt
+	  Skipa			;0-length
+	  Return		;Bad string
+	Hlrz 4,(3)		;LH has personal-name pointers
+	Skipe 4
+	  Aos (P)
+	Jrst Popj1
+
+HashIt:	Move 4,A
+	Move 3,T
+	Setz 2,
+Hashi0:	Ildb 1,4
+	Jumpe 1,Hashi1
+	Camn 1,TT
+	  Jrst Hashi1
+	Caige 1,40
+	  JLose1 "Funny character in string?"
+	Trz 1,40
+	Lsh 2,5
+	Add 2,1
+	Sojg 3,Hashi0
+Hashi1:	Caml 3,T
+	  JLose "Null string?"
+	IDiv 2,HSIZE		;Divide, leaving mod in AC3
+	Movms 3			;Make sure it's positive!
+	Add 3,SHASH
+Popj2:	Aos (P)
+	Jrst Popj1
+
+];$$READ\$$WRITE
+
+
+	.END HAKINQ

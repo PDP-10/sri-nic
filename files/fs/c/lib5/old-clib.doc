@@ -1,0 +1,293 @@
+[THIS FILE IS OUTDATED BY NEW LIBRARY.  WILL BE REVISED!  --KLH]
+
+This page attempts to outline installation/update procedures, which
+are still being updated and consequently may omit some details.  Note
+that the current .MIC files assume that CONDCC.EXE exists; if not
+there, compile it with "cc condcc".
+
+How to generate a new CLIB for your current configuration:
+	1. Verify that the local copy of C-ENV.H is identical with that
+		in the standard include directory.  (Or you can use the
+		-I switch in step 2 to point to that directory.)
+	2. Compile the modules with the "-c" switch.
+	3. Put the .REL files together into a library file.
+	Note: CLIB.MIC on TOPS20 will do all this.
+		T20-CLIB.MIC and TNX-CLIB.MIC also exist for
+		cross-compiling purposes.  If you are not on TOPS20/TENEX
+		you will need to adapt one of these.
+	4. Copy CLIB.REL to C:.
+
+How to generate a CLIB for another system or CPU:
+	1. Copy C-ENV.H into the CLIB directory, and edit it to define
+		the right system and CPU.
+	2. Copy C-HDR.C into the CLIB directory.  Likewise edit it if
+		necessary (unlikely, except perhaps for the .REQUEST)
+	3. Generate the file C-HDR.FAI with this command:
+		CC -E C-HDR > C-HDR.FAI
+	4. Use KCC to compile the .C files, like this:
+		for KA10 or KI10: CC -c -a -HC-HDR.FAI name.C
+		for KS10 or KL10: CC -c -A -HC-HDR.FAI name.C
+	5. Put the .REL files together into a library file.
+	Note that TNX-CLIB.MIC basically does these steps.
+
+To set up cross-compiler on T20, for 10X:
+	Do TNX-CLIB.MIC to compile the library.  (Delete all .REL files first)
+	Copy the resulting C-H10X.FAI and CLB10X.REL files to C:.
+	Install the TCC.C program.  This automatically sets TENEX defs and
+		uses the header file C:C-H10X.FAI.
+
+Guidelines for C library modules:
+	Always #include "c-env.h" before anything else, unless the code
+		is truly portable and completely in C, in which case
+		none of these guidelines are necessary.
+	Keep all versions of a function together in the
+		same file, rather than having a different file for
+		each version depending on the system.  Just
+		conditionalize any system-dependent code appropriately.
+	ASSEMBLER HACKERS: .FAI or .MAC modules should not exist.
+		Functions which require assembly code should use the
+		#asm feature of KCC.
+		The remaining comments pertain to stuff within #asm boundaries.
+	Invoke $$CODE or $$DATA to switch between assembling pure and
+		impure (variable) code/data.  #asm inclusions will always
+		begin in the code segment, and must always end
+		in the code segment.  Never use $$CODE when already in the
+		code segment, or $$DATA when already in the data segment.
+	Use $ or % for runtime-only externals, switches, and macros, since
+		they cannot be used in C symbols.  Remember "_" in a C symbol
+		is equivalent to "." in an assembler symbol.
+	If trying to assemble for an unsupported system or CPU, either
+		produce a function which always fails (possibly with
+		an error printout on stderr) or cause a compile-time
+		error by using .FATAL within an #asm.
+#asm bugnotes:
+	In the C-HDR preamble, a PURGE is done of all the assembler IF
+pseudos.  Thus, #asm code cannot use any IF tests, nor macros
+which use them.
+	SEARCH MONSYM causes several "FAIL BUG IN SEARCH" error
+messages due to the same PURGE.  (MACRO does not have this problem).
+ME@SAIL has been notified of the problem and may or may not fix it.
+These error messages can be ignored; however, note that the MOVX, TXO,
+etc. macros cannot be used due to the IF pseudo purge.
+	If, within a file, C code references an #asm function, both FAIL
+and MACRO will output an error message about "External already defined" because
+KCC can't see the function def and thinks it is external; FAIL/MACRO
+barf if EXTERN is done on a symbol already defined.  The REL file is
+assembled OK, but to avoid these warnings declare the functions as static
+(even if they are entries - this will merely stop the EXTERN declaration).
+	Be VERY CAREFUL to flush all single apostrophes (') from the
+#asm code, because KCC will stupidly consider them the
+start of a quoted string and will blindly pass on everything up to the
+next '.  The same thing applies to double-quotes ("),
+although if there are two of them enclosing a string then they are OK.
+
+Files in standard include directory:
+
+	C-ENV.H		- C Environment definitions.  Should be included
+			by every CLIB routine which has any system or
+			environment dependencies. Different versions
+			of this file to exist for different
+			systems/machines/configurations.
+			Can also be included by user programs.
+			IFNDEFs allow testing temporary changes by using
+			the -D switch, but note that C-HDR.FAI would probably
+			also need to be regenerated.
+
+	C-HDR.C		This is the source for C-HDR.FAI (below).  It includes
+			C-ENV.H which determines the system/CPU configuration.
+
+	C-HDR.FAI	This file is automatically inserted by KCC as a
+			preamble in every assembler file generated.
+			It should not be edited by hand; if changes are
+			necessary they should be made in C-HDR.C and the
+			.FAI version then regenerated with:
+				cc -E c-hdr.c > c-hdr.fai
+
+All source files for KCC and the CLIB routines should refer to these
+definition files with "" instead of <>, so that different versions
+of KCC/CLIB can be tested easily.  Normal compilation for one's own
+system can simply point to the standard include-file location with
+the -I switch.  Note that user programs should always use <> for these.
+
+Important files in CLIB:
+
+	CRT.C	 - Standard C Run Time support for KCC.
+			All necessary assembly time definitions
+			are furnished by C-ENV.H and C-HDR.C.
+
+	URT.C	- Basic UNIX Run Time support stuff, written in C.
+
+	UIO.H	- Definitions shared by URT-type functions which deal
+		with UNIX I/O simulation, such as open(), creat(), etc.
+
+	<funct>.C	- In general each specific library function should
+		have its own individual file, although several functions
+		can be collected in the same file if they are really tightly
+		bound together.
+		Any routine that needs to use a system call should
+		consider using #asm for efficiency, instead of the
+		jsys() or syscal() functions. (This is not normally
+		recommended, but since library rtns are heavily used and
+		rarely modified, it's okay.)
+
+KCC library routines: (1st page syscalls, 2nd page general-purpose)
+
+Port status code:
+	* = fully portable, else names of supported CPUs/systems.
+	E = C-ENV file inserted/included.
+
+Module name	Port status
+ACCESS.C	E T20		ACCESS - Syscall simulation
+	TENEX does not have the CHKAC JSYS.  This routine will at the moment
+	always succeed on TENEX (unless the file doesn't exist).
+	Eventually a simulation can be coded.
+CRT.C		E T20,10X,WAITS,ITS	C Runtime!
+			$START, __EXIT	(system dependent)
+			END,ETEXT,EDATA
+			$RET,$RETZ,$RETO,$RETT,$RETF
+			$BYTE, $ZERO
+			$SPUSH,$SPOP,$DFIX,$DFLOT,$ADJBP,$SUBBP,$BPCNT
+URT.C		E T20,10X,WAITS,ITS	C/URT Syscall runtime support
+			_RUNTM, EXIT, _EXIT
+
+CLOSE.C		E T20,10X	CLOSE (for T20/10X) - URT
+CPUTM.C		E T20,10X,WAITS,ITS	_CPUTM - gets CPU runtime, for KCC only
+DUP.C		E T20,10X,WAITS,ITS	DUP, DUP2 - URT
+FORK.C		E T20,10X	URT syscall simulation
+			EXECL, EXECLE, EXECLP, EXECV, EXECVE, EXECVP
+			FORK, VFORK
+GETPID.C	E T20,10X	GETPID - URT syscall simulation.
+				TENEX has slightly different args for GFRKS%.
+GETTIM.C	E T20	gettimeofday() - URT syscall simulation
+IOCTL.C		T20		GTTY,STTY,IOCTL	- Unused, routine unfinished.
+			But will obviously need TENEX mods if ever finished.
+JSYS.C		E T20,10X	JSYS - C runtime support for T20/10X syscalls
+			Changed to return:
+				1 if skipped (known success)
+				0 if ERJMP taken on TOPS-20 (known failure)
+				-1 if didn't skip on TENEX (possible failure)
+			*** See also signal.c re catching .ICILI errors.
+LSEEK.C		E T20,10X	LSEEK, TELL - URT syscall simulation.
+OPEN.C		E T20,10X	OPEN, CREAT
+			_UIOFD	(for various other I/O calls)
+			_GTJFN	(for T20/10X)
+			_RLJFN  (for T20/10X)
+PERROR.C	E T20,10X	PERROR
+PFORK.C		E T20,10X?	PFORK - subfork support
+				TENEX cannot chain or pass PRARG% data.
+				Either of these cause call to fail.
+PIPE.C		E T20,10X,WAITS,ITS	PIPE	- URT
+READ.C		E T20,10X	READ, READLN - URT
+RENAME.C	E T20,10X	RENAME - URT syscall simulation
+SBRK.C		E T20,10X,WAITS?,ITS?	BRK, SBRK - URT syscall simulation
+			sbrk() is machine independant, but not brk().
+SIGNAL.C	E T20,10X?	SIGNAL, SIGSYS, KILL - URT syscall simulation
+			Modified for 10X too, but not sure if it works.
+SLEEP.C		E T20,10X,WAITS	SLEEP, PAUSE - URT syscall simulation
+STAT.C		E T20,10X	STAT, FSTAT - URT syscall simulation
+				TENEX mod for file author value.
+TIME.C		E T20,10X	TIME, CTIME, _T2UTIM, _U2TTIM - URT Syscall sim
+				TENEX has different GTAD format.
+UNLINK.C	E T20,10X,ITS	UNLINK - URT syscall sim.  TENEX lacks DF%EXP.
+WAIT.C		E T20,10X	WAIT - URT syscall simulation
+WRITE.C		E T20,10X	WRITE - URT
+
+ABORT.C		E PDP-10
+ATOI.C		*		ATOI, ATOF, should split?
+BCOPY.C		E PDP-10	BZERO, BCOPY, BCMP
+CTYPE.H		*		Implements all CARM macros.  Portable, but
+				set _CT_TABTYPE if char array preferable.
+CTYPE.C		E *		_CTYP1 and _CTYP2 arrays.
+GETENV.C	E T20		GETENV
+	TENEX does not have the LNMST JSYS.  This routine will at the moment
+	always fail on TENEX.  Eventually a new mechanism will be developed.
+MALLOC.C	*		CALLOC, CFREE, CLALLOC, FREE, MALLOC,
+				MLALLOC, REALLOC, RELALLOC
+MKTEMP.C	E T20,10X	MKTEMP (uses HPTIM% or TIME% instead of GETPID)
+QSORT.C		*		QSORT - GNU version
+REGEX.C		*		 - GNU version.  Not used, problems with
+					overly long variable names.  Foo.
+SETBUF.C	*		SETBUF, _SOBUF - STDIO dependent
+SETJMP.C	E KCC		SETJMP, LONGJMP
+SETJMP.H	*?		defines JMP_BUF.  Maybe not so portable.
+SIGNAL.H	*?		Looks like BSD4.2 version?
+STRING.C	*		STRCAT, STRNCAT, STRCMP, STRNCMP, STRCPY,
+				STRNCPY, STRLEN, INDEX, RINDEX
+				Note portable, but has KCC bias in syntax
+				to encourage ILDB/IDPB optimization.
+				Opposite of optimal PDP-11 order!
+SYSTEM.C	E T20,10X	SYSTEM.  Partial implementation.
+
+STDIO routines, all are machine independent.
+
+STDIO.H		*	FILE, BUFSIZ, NULL, EOF
+			clearerr, feof, ferror, getc, getchar,
+			putc, putchar, rewind
+			_sios, stdin, stdout, stderr
+CLEANUP.C	*	_cleanup (called by EXIT for STDIO's local cleanup)
+FCLOSE.C	*	fclose
+FFLUSH.C	*	fflush (also works on input streams!)
+FGETC.C		*	fgetc
+FGETS.C		*	fgets
+FILBUF.C	*	_filbuf
+FOPEN.C		*	fopen (new, additional flags for raw-mode, byte-size)
+FPUTC.C		*	fputc
+FPUTS.C		*	fputs
+FREAD.C		*	fread
+FREOPE.C	*	freope
+FSEEK.C		*	fseek
+FTELL.C		*	ftell
+FWRITE.C	*	fwrite
+GETS.C		*	gets
+PRINTF.C	*	printf, fprintf, sprintf
+			Portability depends on how stack args handled
+PUTS.C		*	puts
+SCANF.C		*	scanf, fscanf, sscanf
+SETBUF.C	*	setbuf, _sobuf
+SOPEN.C		*	sopen (string open, new call)
+UNGETC.C	*	ungetc
+
+Runtime symbols/routines needed by the KCC compiler itself in order
+to run:
+
+CRT:			; System specific
+        $START  401266	; *T20,10X,WAITS,ITS
+        $BYTE   466602	; *
+
+STDIO:
+        PUTC    466067	; *
+	  WRITE		; *T20,10X,WAITS,ITS
+        GETC    463371	; *
+	  READ		; *T20,10X,WAITS,ITS
+        UNGETC  404502	; *
+        FGETS   0	; *
+        FPUTS   464465	; *
+        FFLUSH  466712	; *
+        FCLOSE  404224	; *
+	  CLOSE		; *T20,10X,WAITS,ITS
+        .IOB    0	; *
+        FOPEN   463355	; T20		; "r" and "w" modes only.
+	  OPEN		; T20,10X
+	  CREAT		; T20,10X
+        FPRINT  466423	; T20,10X	; Uses "dfout%" jsys
+        SPRINT  446261	; T20,10X	; Uses "dfout%" jsys
+
+STRING:			; All sys independent, OK
+        STRCMP  405305	; *
+        STRLEN  465371	; *
+        STRCPY  423152	; *
+        STRCAT  405607	; *
+
+MALLOC/SBRK:		; System dependent, ugh
+        MALLOC  446234	; *PDP10
+	  SBRK		; *T20,10X,ITS,WAITS
+        FREE    423476	; *PDP10
+
+misc:
+CPUTM:	.CPUTM  400355	; *T20,10X,WAITS,ITS
+URT:	EXIT    422515	; *PDP10 (seems OK)
+UNLINK:	UNLINK  400336	; T20,10X,     ,ITS	; CC to remove assembler file
+
+T20 conditionalized:
+PFORK:	PFORK   466723	; T20			; Used in CCASMB.
+JSYS:	JSYS    466407	; T20,10X		; Used in CCASMB.

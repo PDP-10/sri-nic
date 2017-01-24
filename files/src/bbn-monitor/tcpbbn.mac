@@ -1,0 +1,2587 @@
+;Merge CMU and BBN code
+;<MONITOR.CMU>TCPBBN.MAC.3, 14-Aug-85 05:57:20, Edit by VAF
+;CS147 Add an MNTM5 where needed.
+;<MONITOR.CMU>TCPBBN.MAC.2, 18-Jul-85 13:33:01, Edit by VAF
+; CS62	Restrict listening ports even if ACJ OK's. This is necessary because
+;	ACJ cannot know if the connection is active or not.
+;	Return real errors for ACJ denial and Net Wizard required
+;-------
+;Pass open flags to ACJ
+; UPD ID= 3916, SNARK:<6.MONITOR>TCPBBN.MAC.10,  13-Mar-84 08:06:34 by PAETZOLD
+;More TCO 6.1733 - BBNCKK smashes T1.  Reflect that fact in .OPEN
+; UPD ID= 3893, SNARK:<6.MONITOR>TCPBBN.MAC.9,  11-Mar-84 10:36:06 by PAETZOLD
+;More TCO 6.1733 - Use "JRST EMRET1"  instead of RETERR at TCPERR so as
+;not to set LSTERR and allow ITRAPs to work. TATTVT routine for  TVTJFN
+;to  attach a JFN to a TVT. Require Wheel/Operator/NetWiz/AbsSockets to
+;open listening on small port #. ACJ test passes host and  port  number
+;to  ACJ.  If  caller  specifies  a  local  address,  use it in OPEN1A.
+;Prevents FTP data connection opened on different host from control.
+; UPD ID= 3823, SNARK:<6.MONITOR>TCPBBN.MAC.8,  29-Feb-84 18:13:12 by PAETZOLD
+;More TCO 6.1733 - ANBSEC and MNTSEC removal.  Bug fixes.  Cleanup.
+;[BBNF]<TAPPAN.MERGE>TCPBBN.MAC.5, 26-Jan-84 12:09:46, Edit by: TAPPAN
+; Merge with stanford changes
+; UPD ID= 3177, SNARK:<6.MONITOR>TCPBBN.MAC.6,  16-Nov-83 21:34:49 by PAETZOLD
+;Make HISTOGRAM symbols conditional
+; UPD ID= 2996, SNARK:<6.MONITOR>TCPBBN.MAC.5,   5-Oct-83 14:50:36 by PAETZOLD
+;More TCO 6.1733 - Bug fixes.
+; UPD ID= 2791, SNARK:<6.MONITOR>TCPBBN.MAC.4,   3-Aug-83 13:23:35 by PAETZOLD
+;TCO 6.1689 - Move fork tables to extended sections.  Fix FKPGS reference.
+; UPD ID= 2716, SNARK:<6.MONITOR>TCPBBN.MAC.3,  22-Jul-83 14:52:54 by PAETZOLD
+;TCO 6.1733 - Merge TCP/IP changes in release 6 again
+;<TCPIP.5.1.MONITOR>TCPBBN.MAC.21,  5-Jul-83 22:30:57, Edit by PAETZOLD
+;JFN Interface
+;BBN JSYS Stuff into this module
+
+
+
+;THIS SOFTWARE IS FURNISHED UNDER A LICENSE AND MAY ONLY BE USED
+;  OR COPIED IN ACCORDANCE WITH THE TERMS OF SUCH LICENSE.
+;
+;COPYRIGHT (C) 1982,1983,1984,
+;BY DIGITAL EQUIPMENT CORPORATION, MAYNARD, MASS.
+
+	SEARCH	ANAUNV,PROLOG
+	TTITLE	(TCPBBN,TCPBBN,< - BBN TCP JSYS Interface Routines>)
+	IFNDEF REL6,<REL6==0>
+
+FX==Q3					; Must agree with PROLOG, PAGEM
+
+COMMENT	!
+
+This module implements the BBN TCP JSYS interface.
+
+This  code  was originally developed at Bolt Beranek and Newman (BBN)
+under contract to  the  Defense  Advanced  Research  Projects  Agency
+(DARPA).
+
+!
+
+	SWAPCD
+
+; Frequent constants
+STSFLG==TCP%IX!TCP%NI!TCP%NT!TCP%SD!TCP%ST!TCP%SY!TCP%SL!TCP%TV
+OPNFLG==TCP%FS!TCP%PS!TCP%VT!TCP%IC!TCP%RX!TCP%FR  ;OPEN% only flags
+
+; Resource deallocation routines
+
+TCPKJB==:R		; No specific TCP routine when a job is killed
+
+	SUBTTL SEND% JSYS - Send a Buffer
+
+;T1/	Flags,,JCN
+;T2/	Pointer to buffer header
+;T3/	User Timeout (in seconds) (0 is infinite, max is TCPPTM)
+;T4/	RX parameters
+;	SEND%
+;Ret+1:	 Error, Code in T1
+;CHKARG	ELP+^D01 ; JCN out of range/no TCB, Illegal connection/control bit
+;TCPUOP	ELP+^D02 ; Error in option length
+;CHKARG	ELT+^D04 ; No free JCN/TCB space/free WAIT bit/free TVTs
+;	ELP+^D12 ; Attempt to SEND% after CLOSE%
+;CHKARG	ELP+^D13 ; Invalid local address/port(LP=0)
+;MAKBFR	ELP+^D15 ; Bad buffer arg(s) (Count<0, Adr last word>=1,,0)
+;MAKBFR	ELT+^D16 ; No free WAIT bit(s)/space for buffer header
+;	ELP+^D30 ; Must be internet fork to use TCP%VT
+;CHKARG	ELT+^D31 ; TCP not yet initialized
+; Net related errors if TCP%WT
+;CHKADD	-1,,ELP+^D05 ; Packet with wild FH/FP
+;CHKADD	-1,,EFP+^D07 ; No such TCB
+;Ret+2:	Success
+
+.SEND::	MCENT			; Enter monitor context
+	SETZ FR,		; No flags
+	TXNE T1,TCP%JS		; JCN must be supplied
+	 TXNE T1,<STSFLG!OPNFLG>&^-<TCP%JS!TCP%WT!TCP%HP>
+          JRST TCPILP		; Illegal control bit
+
+MNTM5	AOS CELL(TCJSN,0,,TCJ)	; Count SEND%s
+
+	MOVE T2,T1		; User's AC 1
+	XMOVEI T1,SEND1		; Routine to call via CHKARG
+	TXO T1,<001B8>		; Send/phase 1
+	CALL CHKARG		; Check arguments, set TCB, call SEND1
+	JUMPL T1,TCPERR		; Error.
+				; T1/ 0,,BIDX,TERRF
+MNTM5	AOS CELL(TCJSN,1,,TCJ)	; Count SEND1 successes
+
+	UMOVE T2,1		; Get User's Flags
+	SKIPE T1		; Cannot wait if do not have wait indicies
+	 TXNN T2,TCP%WT		; Supposed to wait?
+          SMRETN		; No.  Give immediate skip return
+
+MNTM5	AOS CELL(TCJSN,2,,TCJ)	; Count SEND% waits
+
+	HRLS T1			; BIDX,TERF,,...
+	HRRI T1,INTOOT		; Select SEND% Done Test routine
+	MDISMS			; Wait for buffer-done or error
+
+	XMOVEI T1,SENDP2	; Code to do Send checking w/ tcb locked
+	TXO T1,<002B8>		; SEND%/phase 2
+	UMOVE T2,1		; User's AC 1
+	CALL CHKARG		; Do tcb lookup in case it's gone
+	JUMPL T1,TCPERR		; Jump if error during SEND% wait
+				; CELL( TCJSN,2 - TCJSN,3 errors in SEND1
+MNTM5	AOS CELL(TCJSN,3,,TCJ)	; SEND% wait completed w/o error & still open
+	JUMPE T1,SKMRTN		; Ok return - SEND% wait complete w/o error
+
+MNTM5	AOS CELL(TCJSN,4,,TCJ)	; Connection closing during SEND% wait
+	HRLS T1			; Conn closing, TOPNF,TERRF,,0
+	HRRI T1,INTZOT		; Select close done test
+	MDISMS			; Wait for closed or error
+
+	XMOVEI T1,TCJFRE	; Code to do cleanup w/ tcb locked
+	TXO T1,<003B8>		; SEND%/phase 3
+	UMOVE T2,1		; User's AC 1
+	CALL CHKARG		; Do tcb lookup in case it's gone
+	JUMPL T1,TCPERR		; Jump if error
+				; CELL( TCJSN,4 - TCJSN,5 SEND% close error
+MNTM5	AOS CELL(TCJSN,5,,TCJ)	; Close w/o error within SEND%
+	SMRETN			; All done, skip return
+
+
+	SUBTTL SEND% JSYS - Send a Buffer - Phase 1
+
+;T1/	JCN specified by caller
+;TCB/	Extended Pointer to locked connection block
+;   	NOINT
+;	CALL SEND1
+;Ret+1:	Always, T1 has 0,,BIDX,TERF and BFR has the buffer, or T1 has -1,,error
+;TCPUOP	-1,,ELP+^D02 ; Error in option length
+;	-1,,ELP+^D12 ; Attempted SEND% after connection was CLOSE%ed
+;MAKBFR	-1,,ELP+^D15 ; Bad buffer arg(s) (Count lt 0, Adr last word ge 1,,0)
+;MAKBFR	-1,,ELT+^D16 ; No free WAIT bit(s)/space for buffer header
+;	-1,,ELP+^D30 ; Must be internet fork to use TCP%VT
+
+SEND1:	INCRNO TCSND,(TCB)	; Count user sends
+	LOAD FR,TERRT,(TCB)	; Want error trace?
+	SKIPE FR		; No
+	  MOVX FR,1B0		; Yes
+
+	IFQN. TTVT,(TCB)	; If TVT
+	  HRROI T1,ELP+^D30	; Only internet fork can run TVTs
+	  RET
+	ENDIF.
+
+	IFQE. TSUOP,(TCB)	; Closing - PZ may not have sent the FIN yet
+	  HRROI T1,ELP+^D12	; "Connection Closing"
+	  RET
+	ENDIF.
+
+	XMOVEI T3,TCBSBQ(TCB)	; Queue head for send buffers
+	LOAD T3,QCNT,(T3)	; Get current size
+	LOAD T4,TPSMH		; Get maximum we are willing to hold
+	CAMGE T3,T4		; Are we at or beyond the maximum?
+	IFSKP.
+	  HRROI T1,ELT+^D04	; Yes, Return Temp Resource Shortage
+	  RET			;  Error
+	ENDIF.
+
+MNTM5	AOS CELL(TCJSN,10,,TCJ)	; Count permissible SEND%s
+
+	SETZ BFR,		; Assume no buffer here
+
+	UMOVE T1,4		; Get Retrans. parameter word
+	CALL RXPARS		; Change them in TCB
+
+	UMOVE T3,3		; Get the User Timeout from user
+	IFN. T3			; Finite time specified
+	  CAMLE T3,TCPPTM	; Be sure it is reasonable for add to TODCLK
+           MOVE T3,TCPPTM
+	  CAIGE T3,0		; Must be positive
+	    SETZ T3,
+	  IMULI T3,^D1000	; Convert to milliseconds
+	  STOR T3,TSTO,(TCB)	; Set new value in TCB
+	ENDIF.
+
+	XCTU [HRRZ T2,2]	; Get user buffer header address
+	JUMPE T2,R		; No user specified a data buffer, done
+
+;Process user's data buffer
+
+	IFQN. TNUFM,(TCB)	; New format buffer
+MNTM5	  AOS CELL(TCJSN,11,,TCJ) ; Count new format SEND%s
+	  XCTU [HRRZ T2,2]	; Get user buffer header address
+	  UMOVE T1,.TCPBI(T2)	; Get IP info
+	  TRNN T1,777		; Specified? NB: 400 means zero
+	  IFSKP.
+	    STOR T1,TTOS,(TCB)	; Yes, Save type of service
+	    SETONE TTOSU,(TCB)	; Remember user set it
+	  ENDIF.
+	  HLRS T1
+	  TRNE T1,.RTJST(-1,PITTL) ; User specify non-zero time?
+	    STOR T1,TTTL,(TCB)	; Yes, Save Time to live
+	  LSH T1,^D<-18+2>	; Top two bits
+	  TRNE T1,3		; NB: 2 means zero
+	    STOR T1,TIFDF,(TCB)	; Don't fragment
+
+; Should options be synchronous or asynchronous??
+
+	  UMOVE T1,.TCPBO(T2)	; Get user option addresses word
+	  IFN. T1		; Have options
+	    CALL TCPUOP		; Yes
+	    JUMPL T1,R		; Error in options, T1/ error code
+	    MOVX T1,PT%TOO	; Send options processed
+	    TXNN FR,1B0		; TCB trace or
+	     TDNE T1,MNTRAC	; Want trace?
+	      CALL PRNPKT	; Yes
+	  ENDIF.		; Have options
+	ENDIF.			; End of new format
+
+;All error checking done, actually build the Buffer
+
+	MOVX T1,<0>;"PTRD"	; How check read access?
+	CALL MAKBFR		; Make a buffer descriptor
+	SKIPGE BFR,T1		; Error?
+	  RET			; Yes.  Code in T1.
+
+	XMOVEI T1,BFRQ(BFR)	; What to Enqueue
+	XMOVEI T2,TCBSBQ(TCB)	; Queue head for send buffers
+	CALL NQ			; Enqueue it for Packetizer.
+
+	LOAD T2,BICNT,(BFR)	; Initial count
+	LOAD T1,TSBYT,(TCB)	; Currently queued for PZ
+	ADD T1,T2		; Additional data in this buffer
+	STOR T1,TSBYT,(TCB)
+
+	MOVE T2,BFRFLG(BFR)	; Get the buffer flags
+	IFXN. T2,BPSH		; User specify PUSH?
+	  INCRNO TSBFP,(TCB)	; Increment count of buffers with PUSH
+	ENDIF.
+
+	IFXN. T2,BURG		; URGENT send?
+	  CALL SETURP	;(T1)	; Yes.  Set the send urgent pointer
+	  INCRNO TCSUR,(TCB)	; Count urgent sends
+	ENDIF.
+
+	MOVX T1,PT%TSD		; Send buffer
+	TXNN FR,1B0		; TCB trace or
+	 TDNE T1,MNTRAC		; Want trace?
+	  CALL PRNPKT		; Yes
+
+	LOAD T1,TSLFT,(TCB)	; Current Send Left
+	LOAD T2,TSSEQ,(TCB)	; Current Send Sequence
+	LOAD T3,TSWND,(TCB)	; Current Send Window
+	IFQN. TDBGQ,(TCB)	; Faking zero?
+	  SETZ T3,		; Yes
+	ENDIF.
+	ADD T3,T1		; Current Right
+	MODSEQ T3
+	CALL CHKWND		; See if there is space in the window
+	IFN. T1			; Yes
+MNTM5	  AOS CELL(TCJSN,12,,TCJ) ; Count signals to PZ
+	  $SIGNL(PZ,0)		; Make Packetizer run now
+	ENDIF.
+
+	LOAD T1,BIDX,(BFR)	; Buffer Done Flag Index
+	LOAD T2,TERRF,(TCB)	; Error Flag index
+	ROT T2,-<WID(TERRF)>	; Put in high bits of T2
+	LSHC T1,<WID(TERRF)>	; Build 0,,bfr,err
+	RET			; Say OK to caller
+
+	SUBTTL SEND% JSYS - Send a Buffer - Phase 2,  JSYS Error Exits
+
+;SEND%/Phase 2 -- wait for buffer-done or error completed
+
+SENDP2:	LOAD T1,TERR,(TCB)	; Get possible error
+	JUMPN T1,TCJFRF		; If error, return -1,,error in 1.
+
+	IFQE. TSUOP,(TCB)	; Connection has been CLOSEd
+
+;Connection has been CLOSE%ed, now wait for it to close or get an error
+
+				; Get wait bits for close wait test
+MNTM5	  AOS CELL(TCJSN,7,,TCJ) ; Connection closing during SEND% wait
+	  LOAD T1,TOPNF,(TCB)	; Get ID of Open Flag for this TCB
+	  LOAD T2,TERRF,(TCB)	; Error Flag index
+	  ROT T2,-<WID(TERRF)>	; Put in high bits of T2
+	  LSHC T1,<WID(TERRF)>	; Put opn,err in rh of T1.
+	  RET			; Return index bits for wait
+	ENDIF.
+
+MNTM5	AOS CELL(TCJSN,6,,TCJ) ; Count SEND% wait completed ok, still UOPen
+
+
+;Release buffer resources
+
+TCJFRE:	CALL FREBFR		; Release resources
+	LOAD T1,TERR,(TCB)	; Get possible error
+	SKIPE T1		; Return 0 in T1 if no error
+TCJFRF:	  HRROS T1		; Make sure lh has -1 when error found
+	RET			; Ret with -1,,error in T1.
+
+
+;General JSYS error exit routines
+
+TCPILP:	HRROI T1,ELP+^D01	; Illegal parameter (control bit)
+TCPERR:	ANDI T1,-1		; Save just the error code
+TCPERO:	UMOVEM T1,1		; Return error code
+	MOVE T2,T1		; Error code for trace
+	MOVE T3,TCB
+
+	MOVE T4,T1		; BBN error code
+	ANDI T4,37
+	CAILE T4,ERTMAX 	; Error code we know about?
+	 SETZ T4,		; No so fix it up
+	MOVE T4,ERTAB(T4)	; Get the TOPS20 error code
+	MOVEM T4,LSTERR		; For all to see
+
+	MOVX T1,PT%TER		; TCP error
+	TXNN FR,1B0		; TCB trace or
+	 TDNE T1,MNTRAC		; Want trace?
+	  CALL PRNPKT		; Yes
+	JRST EMRET1		; Give no-skip return.  Do not update LSTERR
+
+ERTAB:	EXP TCPX25,TCPX25,TCPX25,TCPX30,TCPX20,TCPXX3,TCPX19,TCPX31
+	EXP TCPX25,TCPX32,TCPX25,TCPX25,TCPX33,TCPXX8,TCPX25,TCPX25
+	EXP TCPXX1,TCPX34,TCPX25,TCPX25,TCPX34,TCPX34,TCPX34,TCPX25
+	EXP TCPX25,TCPX25,TCPX25,TCPX25,TCPX25,TCPX34,TCPX25,TCPX16
+	ERTMAX=.-ERTAB-1
+
+	SUBTTL SETURP - Setup Urgent Pointer
+
+;An  URGENT  send  is  being  done  and  the value of the send urgent
+;pointer must be computed. This is done by adding up all  the  queued
+;data (on the send buffer queue) to get the current end of the urgent
+;data, relative to the current send sequence.
+
+;TCB/	Pointer to connection block
+;T1/	Total un-packetized byte count
+;     	NOINT
+;	CALL SETRUP
+;Ret+1:	Always.  TSURP setup and TSURG turned on.
+
+SETURP::
+	JUMPLE T1,R		; Ignore zero or negative counts
+
+MNTM5	AOS CELL(TCJAA,1,,TCJ)	; Count SETURP calls
+
+	LOAD T3,TSSEQ,(TCB)	; Next send seq. num. to be used
+	IFQN. TTVT,(TCB)	; If a TVT,
+	  LOAD T2,TSCPK,(TCB)	; Look for a packet being filled
+	  SKIPE T2
+	    LOAD T3,PESEQ,(T2)	; If one exists, base count on it's end
+	ENDIF.
+	ADDI T3,-1(T1)		; Compute last urgent seq. num.
+	MODSEQ T3		; Keep within the right number of bits
+	STOR T3,TSURP,(TCB)	; Set the urgent pointer into the TCB
+	SETONE TSURG,(TCB)	; Say we are in send urgent mode
+	RET
+
+	SUBTTL RECV% JSYS - Receive a Buffer
+
+;T1/	Flags,,JCN (or pointer to CDB)
+;T2/	Pointer to buffer header
+;	RECV%
+;Ret+1:	 Error.  Code in T1
+;CHKARG	ELP+^D01 ; JCN out of range/no TCB, Illegal connection/control bit
+;CHKARG	ELT+^D04 ; No free JCN/TCB space/free WAIT bit/free TVTs
+;	EFP+^D12 ; Connection CLOSING (received a FIN)
+;CHKARG	ELP+^D13 ; Invalid local address/port(LP=0)
+;MAKBFR	ELP+^D15 ; Bad buffer arg(s) (Count<0, Adr last word>=1,,0)
+;MAKBFR	ELT+^D16 ; No free WAIT bit(s)/space for buffer header
+;	ELP+^D30 ; Must be internet fork to use TCP%VT
+;CHKARG	ELT+^D31 ; TCP not yet initialized
+; Net related errors if TCP%WT
+;CHKADD	-1,,ELP+^D05 ; Packet with wild FH/FP
+;CHKADD	-1,,EFP+^D07 ; No such TCB
+;Ret+2:	Success
+
+.RECV::	MCENT			; Enter monitor context
+	SETZ FR,		; No flags
+MNTM5	AOS CELL(TCJRV,0,,TCJ)	; Count RECV%s
+	TXNE T1,TCP%JS		; JCN must be supplied
+	 TXNE T1,<STSFLG!TCP%HP!TCP%SC!OPNFLG>&^-<TCP%JS!TCP%WT>
+          JRST TCPILP		; Illegal control bit
+
+	HRROI T1,ELP+^D15	; Make sure have buffer
+	JUMPE T2,TCPERR		; No buffer, error
+
+	XMOVEI T1,RECV1		; Routine to call via CHKARG
+	TXO T1,<011B8>		; RECV%/phase 1
+	UMOVE T2,1		; User's AC 1
+	CALL CHKARG		; Check arguments, set TCB, call RECV1
+	JUMPL T1,TCPERR		; Error.
+				; T1/ 0,,BIDX,TERF
+MNTM5	AOS CELL(TCJRV,1,,TCJ)	; Successful RECV1
+	UMOVE T2,1		; Get flags
+	TXNN T2,TCP%WT		; Supposed to wait?
+         SMRETN			; No.  Give immediate skip return
+
+MNTM5	AOS CELL(TCJRV,2,,TCJ)	; RECV% waits
+	HRLS T1			; BIDX,TERF,,...
+	HRRI T1,INTOOT		; Select RECV% done test routine
+	MDISMS
+
+	XMOVEI T1,TCJFRE	; Code to cleanup w/ tcb locked
+	TXO T1,<013B8>		; RECV%/phase 2
+	UMOVE T2,1		; User's AC 1
+	CALL CHKARG		; Do tcb lookup in case it's gone
+	JUMPL T1,TCPERR		; Jump if error
+MNTM5	AOS CELL(TCJRV,3,,TCJ)	; RECV% wait completed ok
+	SMRETN			; Return skip to user
+
+	SUBTTL RECV% JSYS - Receive a Buffer - Phase 1
+
+;T1/	JCN specified by caller
+;TCB/	Extended Locked connection block
+;     	NOINT
+;	CALL RECV1
+;Ret+1:	Always.  T1 has 0,,BIDX,TERF and BFR has the buffer, or T1 has-1,,error
+;	-1,,EFP+^D12 ; Connection CLOSING (received a FIN)
+;MAKBFR	-1,,ELP+^D15 ; Bad buffer arg(s) (Count < 0, Adr last word >= 1,,0)
+;MAKBFR	-1,,ELT+^D16 ; No free WAIT bit(s)/space for buffer header
+;	-1,,ELP+^D30 ; Must be internet fork to use TCP%VT
+
+RECV1:	INCRNO TCRCV,(TCB)	; Count user RECV%s
+	LOAD FR,TERRT,(TCB)	; Want error trace?
+	SKIPE FR		; No
+	  MOVX FR,1B0		; Yes
+
+	IFQN. TTVT,(TCB)	; Not allow for TVTs
+	  HRROI T1,ELP+^D30	; Only internet fork can run TVTs
+	  RET
+	ENDIF.
+
+	LOAD T3,TRSYN,(TCB)	; Get receive state
+	CAIE T3,TIMWAT		; TIME-WAIT or
+	 CAIN T3,FINRCV		; FIN received?
+	IFSKP.			; No.
+	  CAIN T3,NOTSYN	; Not synchronized?
+	  ANSKP.		; No
+				; Do nothing
+	ELSE.			; Yes.  Fail.
+	  HRROI T1,EFP+^D12	; "Connection Closing"
+	  RET
+	ENDIF.
+
+	XMOVEI T3,TCBRBQ(TCB)	; Queue head for receive buffers
+	LOAD T3,QCNT,(T3)	; Get current size
+	LOAD T4,TPRMH		; Get maximum we are willing to hold
+	CAMGE T3,T4		; Are we at or beyond the maximum?
+	IFSKP.
+	  HRROI T1,ELT+^D04	; Yes, Return Temp Resource Shortage
+	  RET			;  Error
+	ENDIF.
+
+MNTM5	AOS CELL(TCJRV,4,,TCJ)	; RECV1 connection state ok
+
+	MOVX T1,<PTWR>		; Writeable
+	CALL MAKBFR		; Make a buffer descriptor
+	SKIPGE BFR,T1		; Check for error
+	  RET			; There was one.
+
+MNTM5	AOS CELL(TCJRV,5,,TCJ)	; RECV1 MAKBFR ok
+
+	LOAD T1,TRBS,(TCB)	; Current amount of receive buffer space
+	LOAD T2,BICNT,(BFR)	; How much more is being made available
+	ADD T1,T2
+	STOR T1,TRBS,(TCB)	; New amount (for window setting)
+
+	XMOVEI T1,BFRQ(BFR)	; Item to enqueue
+	XMOVEI T2,TCBRBQ(TCB)	; Receive buffer queue head
+	CALL NQ			; Enqueue this buffer there
+
+	MOVX T1,PT%TRD		; Receive buffer
+	TXNN FR,1B0		; TCB trace or
+	 TDNE T1,MNTRAC		; Want trace?
+	  CALL PRNPKT		; Yes
+
+	CALL NUWNDO		; Setup the new window, maybe ENCPKT
+
+	IFQE. TRCB,(TCB)	; No signal if RA already had a BFR
+	  IFQE. TRPP,(TCB)	; If no partially processed packet waiting
+	    XMOVEI CX,TCBRPQ(TCB) ; Look for unprocessed packet
+	    LOAD T1,QNEXT,(CX)	; Ptr to 1st packet on RA queue
+	    CAME T1,CX		; Empty queue and
+            ANSKP.		; No unprocessed packets queued?
+				; Yes, do nothing
+	  ELSE.			; Have a partial or unprocessed packet
+	    LOAD T3,QCNT,<+TCBRBQ(TCB)> ; How many buffers in the queue?
+	    CAIE T3,1		; If more than one, nothing to do
+            IFSKP.		; Only buffer is one just added, so
+	      $SIGNL(RA,0)	; Make Reassembler run now
+MNTM5	      AOS CELL(TCJRV,6,,TCJ) ; RECV1 signals to RA
+	    ENDIF.
+	  ENDIF.
+	ENDIF.
+
+	LOAD T1,BIDX,(BFR)
+	LOAD T2,TERRF,(TCB)	; Error Flag index
+	ROT T2,-<WID(TERRF)>	; Put in high bits of T2
+	LSHC T1,<WID(TERRF)>	; Build 0,,bfr,err
+	RET			; Say OK to caller
+
+	SUBTTL OPEN% JSYS - Open a TCP Connection
+
+;T1/	Flags,,Pointer to Connection Descriptor Block (CDB)
+;T2/	User Timeout, seconds (0 is no change, lt 0 is infinite, max is TCPPTM)
+;T3/	RX parameters
+;	OPEN%
+;Ret+1:	 Error.  T1 has <JCN,,code>.
+;CHKARG	ELP+^D01 ; JCN out of range/no TCB, Illegal connection/control bit
+;TCPUOP	ELP+^D02 ; Error in option length
+;CHKARG	ELT+^D04 ; No free JCN/TCB space/free WAIT bit/free TVTs
+;OPEN2	ELP+^D06 ; Connection already exists/open
+;	ELP+^D12 ; Connection CLOSING (one side or other NOTSYN)
+;CHKARG	ELP+^D13 ; Invalid local address/port(LP=0)
+;	ELP+^D30 ; Must be internet fork to use TCP%VT
+;CHKARG	ELT+^D31 ; TCP not yet initialized
+; Net related errors if TCP%WT
+;CHKADD	-1,,ELP+^D05 ; Packet with wild FH/FP
+;CHKADD	-1,,EFP+^D07 ; No such TCB
+;	    ELP+^D09 ; Transmission timeout (TCP%FS was set)
+;Ret+2:	Success, T1 has TCP%JS+JCN.
+
+.OPEN::	MCENT			; Enter the monitor context
+	SETZ FR,		; No flags
+	CALL BBNCKK
+	  RETERR (TCPX28)	; Not allowed
+
+	HRROI T1,ELT+^D31	; "TCP Not initialized yet"
+	SKIPL TCPON		; TCP ON?
+	  JRST TCPERR		; No, do not allow an OPEN
+
+MNTM5  	AOS CELL(TCJOP,0,,TCJ)	; OPEN%s when TCPON
+
+	UMOVE T2,1		; Get user flags
+	TXNE T2,<STSFLG!TCP%JS>&^-<TCP%WT!OPNFLG>
+	  JRST TCPILP		; Illegal control bit
+
+	MOVE T1,FORKX		; Which fork this is
+	CAMN T1,INTFRK		; The Internet fork?
+	IFSKP.			; No, check further
+	  HRROI T1,ELP+^D30	; "Only Internet fork can run TVTs"
+	  TXNE T2,TCP%VT	; Virtual terminal open?
+	    JRST TCPERR		; Yes, not allowed
+
+;Require privledges to listen on a "Well Known" port (.lt. 256).
+
+HOCTET==377B27			; High order octet in a port number
+	  HRRZ T4,T2		; Get CDB pointer
+	  UMOVE T3,.TCPLP(T4)	; Get Local port number
+IFDEF  CMU,<
+	  IFXE. T2,TCP%FS	;CS62 Active connection may have any port #
+	    ANDXE. T3,HOCTET	; Not active, if high octet zero need privs
+              JE <SC%WHL,SC%OPR,SC%NAS,SC%NWZ>,CAPENB,[RETERR (NTWZX1)] ;CS62
+	  ENDIF.		; Everything is OK.
+>; End of IFDEF CMU
+	  SKIPN ACJFN		; If have ACJ fork, check OPEN request to
+	  IFSKP.		; permit sites selective network access.
+            HLL T3,T2		; Open flags for ACJ with local port number
+	    UMOVE T1,.TCPFH(T4)	; Get foreign host number
+	    UMOVE T2,.TCPFP(T4)	; Get foreign port number
+	    UMOVE T4,.TCPLH(T4)	; Get Local host number
+	    GTOKM (.GOANA,<T1,T2,T3,T4>,TCPILP) ; Ask ACJ for its blessing
+	  ELSE.			; No, ACJ not present, do our own check
+	    ANDXE. T2,TCP%FS	; Active connection may have any port #
+	     ANDXE. T3,HOCTET	; Not active, if high octet zero need privs
+	      JE <SC%WHL,SC%OPR,SC%NAS,SC%NWZ>,CAPENB,TCPILP ; Ret. BBN error
+	  ENDIF.		; Everything is OK.
+	ENDIF.
+
+	XMOVEI T1,OPEN2		; Routine to call via CHKARG
+	TXO T1,<021B8>		; Open/phase 1
+	UMOVE T2,1		; User's AC 1
+	CALL CHKARG		; Check arguments, set TCB, call OPEN2
+	JUMPL T1,OPENE		; Jump on error (400000+JCN,,error)
+
+	UMOVE T3,1		; Get user flags
+	TXO T1,TCP%JS		; Turn on JCN Supplied bit
+	UMOVEM T1,1		; JCN to user (so CHKARG can use it if wait)
+	TXNN T3,TCP%WT		; Supposed to wait?
+	  SMRETN		; No, return ok
+				; Yes
+
+MNTM5	AOS CELL(TCJOP,6,,TCJ)	; OPEN% waits
+
+	PUSH P,T1		; Save the JCN
+	HRL T1,BFR		; TOPNF,TERRF,,0
+	HRRI T1,INTOOT		; Select OPEN% Done Test
+	MDISMS
+
+	XMOVEI T1,GETERR	; Routine to call
+	TXO T1,<022B8>		; OPEN%/phase 2
+	UMOVE T2,1		; User's AC 1
+	CALL CHKARG		; Get error code
+	POP P,T2		; JCN
+	EXCH T1,T2		; Assume no error
+	JUMPE T2,SKMRTN		; Jump if no error
+
+MNTM5	AOS CELL(TCJOP,7,,TCJ)	; Count OPEN% wait errors
+
+	HRLZS T1		; JCN left half
+	HRR T1,T2		; Put error code in right half
+OPENE:	TLZ T1,400000		; Remove error flag, leaving JCN,,Code
+	JRST TCPERO		; Return T1 and no skip
+
+	SUBTTL OPEN% JSYS - Open a TCP Connection - Phase 1, 2
+
+;T1/	JCN resulting from CDB specified by caller
+;T2/	Option addresses word, or 0 if none specified
+;TCB/	Extended Locked connection block
+;    	NOINT
+;	CALL OPEN2
+;Ret+1:	Always.  T1 has (400000+JCN,,error), or the JCN & BFR has wait indicies
+;TCPUOP	-1,,ELP+^D02 ; Error in option length
+;OPEN2	-1,,ELP+^D06 ; Connection already exists/open
+;	-1,,ELP+^D12 ; Connection closing (one side isn't closed-TIMWAT/NOTSYN)
+
+OPEN2:	ACVAR <USRAC1,JCN,UOPTS>
+	MOVEM T1,JCN
+	MOVEM T2,UOPTS
+        UMOVE USRAC1,1		; Get user flags
+	LOAD CX,MNPTJ		; Get TCB Trace Job Number
+	SKIPE CX		; 0? (0 means don't match any job)
+	 CAME CX,JOBNO		; Non-0, Want trace for this job?
+	  TXNE USRAC1,TCP%PT	; No, Does caller want trace?
+	IFNSK.			; Yes, somebody out there wants a TCB trace
+	  SETONE TERRT,(TCB)	; Set flag
+	ENDIF.
+
+	LOAD FR,TERRT,(TCB)	; Want error trace?
+	SKIPE FR		; No
+	  MOVX FR,1B0		; Yes
+
+	TXNN USRAC1,TCP%ET	; Want messages?
+	IFSKP.			; Yes
+				; Would be nice to have a file...
+	  MOVX T1,<.SCRET,,.FHSLF> ; Process's controlling terminal
+	  SCTTY%
+	  ERJMP OPENET		; There ought to be a macro  "ANNJE."
+	  CAIE T2,.CTTRM	; Any set?
+	  IFSKP.		; No
+	    GJINF%		; Get job controlling TTY
+	    ERJMP OPENET
+	    CAMN T4,[-1]	; Detached?
+	     TDZA T2,T2		; Yes, forget it
+	      MOVEI T2,.TTDES(T4) ; No, tty number to tty descriptor
+	  ENDIF.
+	  ANDN. T2
+	    STOR T2,TERJN,(TCB)	; Set tty descriptor
+OPENET:	ENDIF.
+
+	IFQN. TSUOP,(TCB)	; If already open
+	  HRROI T1,ELP+^D06	; "Connection already open"
+	  JRST OPENX
+	ENDIF.
+
+;ACTTCB tries to move a connection from the completely unsynchronized
+;(closed  or  brand  new)  state  into the SYNABLE state, where it is
+;able to send and/or respond to SYNs.  Activating a connection is the
+;operation performed by user calls to OPEN%, and makes the connection
+;be "alive". If the connection is already active, this results  in  a
+;true value.  False is return if the connection is partially closed -
+;- one side or the other is NOTSYN state.
+
+ACTTCB:
+MNTM5	AOS CELL(TCJOP,1,,TCJ)	; Reached ACTTCB
+	LOAD T4,TSSYN,(TCB)	; Get send state
+	LOAD T3,TRSYN,(TCB)	; Get recv state
+	CAIE T4,NOTSYN		; Unsynchronized?
+	  JRST ACTTC7		; No.
+	CAIE T3,NOTSYN
+	 CAIN T3,TIMWAT
+	  TRNA			; TIMWAT or NOTSYN
+	   JRST ACTTC8		; Return FALSE
+
+; TIMWAT/NOTSYN.NOTSYN
+
+MNTM5	AOS CELL(TCJOP,2,,TCJ)	; State ok TIMWAT/NOTSYN.NOTSYN
+	STOR JCN,TJCN,(TCB)	; Indicate this TCB is owned
+	STOR TCB,JCNTC,(JCN)	; Save TCB address and
+	MOVE T3,FORKX		; Owning fork
+	STOR T3,JCNFX,(JCN)	
+
+	SETZRO <TIPOR,TIPOU,TIOPF>,(TCB)
+	MOVX T1,<<<MINIHS+3>/4>>
+	STOR T1,TIPDO,(TCB)
+	XMOVEI T1,TCBIO(TCB)	; Clear IP option blocks
+	CALL CLROP
+	XMOVEI T1,TCBIR(TCB)
+	CALL CLROP
+	XMOVEI T1,TCBIU(TCB)
+	CALL CLROP
+
+	SETZRO <TTPOR,TTPOU,TTOPF>,(TCB)
+	MOVX T1,<<<MINTHS+3>/4>>
+	STOR T1,TTPDO,(TCB)
+	XMOVEI T1,TCBTO(TCB)	; Clear TCP option blocks
+	CALL CLROP
+	XMOVEI T1,TCBTR(TCB)
+	CALL CLROP
+	XMOVEI T1,TCBTU(TCB)
+	CALL CLROP
+
+	SKIPE T1,UOPTS		; Option address word
+	 CALL TCPUOP		; Get options from user
+	  JUMPL T1,ACTTCX	; Return error code ** RETJCN too
+
+	MOVE T2,JOBNO		; Our job number
+	STOR T2,TOWNR,(TCB)	; Store this as TCB Owner
+	MOVX T1,SYNABL		; SYN Ok state
+	STOR T1,TSSYN,(TCB)	; Set send side
+	STOR T1,TRSYN,(TCB)	; and recv side
+
+	SETONE TRIS,(TCB)	; Receive sequence number not valid
+
+; Clear persistent SYN flag, Clear OPEN% has been done flag
+; Clear "said it's open" bit, Clear ABORT% requested flag
+; Clear TVT flag, Clear "Don't Abort on RTX Timeout" Flag
+; Clear "Flush RECV data after Close" Flag
+; Clear "We did Flush RECV data after Close" Flag
+
+	SETZRO <TSPRS,TSUOP,TSOPN,TSABT,TTVT,TSRX,TSFR,TWFR>,(TCB)
+	SETZRO TVTL,(TCB)	; Clear TVT line number
+	SETZRO TSCPK,(TCB)	; No partially filled packet
+
+	MOVE T1,INXPB		; Maximum data size for a packet
+	SUBI T1,MINIHS+MINTHS	; Assuming no options & largest net
+	STOR T1,TRWND,(TCB)	; is the default initial receive window.
+	LOAD T1,TPRMW		; Get shut window level
+	STOR T1,TCRMW,(TCB)	; Initial value for TCB
+	LOAD T1,TPRMQ		; Get send source quench level
+	STOR T1,TCRMQ,(TCB)	; Initial value for TCB
+	SETZRO TRBS,(TCB)	; No RECV buffer space yet
+	HRRZ T1,FORKN		; Our Job fork number
+	STOR T1,TOFRK,(TCB)	; Say who owns the TCB
+	SETO T1,
+	STOR T1,TPSIC,(TCB)	; No PSI Channels named yet
+	STOR T1,TPIFU,(TCB)	; No INTRP fork
+	STOR T1,TPIFR,(TCB)	; No RECV% DONE fork
+	STOR T1,TPIFS,(TCB)	; No SEND% DONE fork
+	STOR T1,TPIFE,(TCB)	; No ERROR fork
+	STOR T1,TPIFX,(TCB)	; No STATE CHANGE fork
+	STOR T1,TPIFA,(TCB)	; No PUSH ACK fork
+	STOR T1,TRLWN,(TCB)	; No last window seq #
+
+	; Allow specifying initial interrupt channels
+	TXNN USRAC1,TCP%IC	; User specified initial channels?
+	IFSKP.			; Yes, set them up
+	  HRRZ T1,USRAC1	; Get CDB address
+	  UMOVE T1,.TCPIC(T1)	; Get the initial channel word
+	  CALL OPNCHN ;(T1,TCB:T1) ; Set up the OPEN initial channels
+	  JUMPL T1,OPENX	; Error, get out
+	ENDIF.
+
+	MOVE T1,TPRX0		; Good starting point for retrans
+	STOR T1,TMNRT,(TCB)	; Minimum round trip time
+	STOR T1,TMXRT,(TCB)	; Maximum round trip time
+	STOR T1,TRXI,(TCB)	; Current RX interval
+	STOR T1,TSMRT,(TCB)	; Dynamic starting point, smoothed TSMRT
+	SETZRO TUNRT,(TCB)	; Assume dynamic initially reliable
+	SETZRO <TRXPN,TRXPD,TRXPI>,(TCB) ; Clear RX parameters (dynamic)
+
+	MOVX T1,^D1000000	; Optimistic
+	STOR T1,TSMXB,(TCB)	; Maximum baud rate
+	MOVX T1,OK		; General success code
+	STOR T1,TERR,(TCB)	; Indicate no error on this connection
+	MOVX T1,MNTX00
+	STOR T1,TCERR,(TCB)
+	LOAD T1,TERRF,(TCB)	; Index of the error event flag
+	CALL CLRWTB		; Clear it
+	MOVX T1,<OK>		; Return OK
+	IFSKP.			; Error exits
+ACTTC7:	  CAIN T3,NOTSYN	; Check receive state (S.ne.NOTSYN)
+ACTTC8:	    HRROI T1,ELP+^D12	; "Connection closing" error
+				; (R.ne.TIMWAT/NOTSYN ior S.ne.NOTSYN)
+				; (S.noweq.SYNABL & R.noweq.SYNABL)
+ACTTCX:				; Return with TCPUOP's error code
+	ENDIF.		;cwl update FR here ***
+	JUMPL T1,OPENX		; Err xit (maybe bad options), T1/ code
+MNTM5	AOS CELL(TCJOP,3,,TCJ)	; Count successful OPEN% activations
+	SETONE TSUOP,(TCB)	; Mark the TCB as open
+	IFQN. TNUFM,(TCB)	; Skip following if old format
+MNTM5	  AOS CELL(TCJOP,4,,TCJ) ; Count new format OPEN%s
+	  HRRZ T1,USRAC1	; Connection block address
+	  UMOVE T1,.TCPIP(T1)	; Get IP parameter word
+	  TRNN T1,777
+	  IFSKP.
+	    STOR T1,TTOS,(TCB)	; Save type of service
+	    SETONE TTOSU,(TCB)	; Remember user set it
+	  ENDIF.
+	  HLRS T1
+	  TRNE T1,.RTJST(-1,PITTL) ; User specify non-zero TTL?
+            STOR T1,TTTL,(TCB)	; Yes, Save Time to live
+	  LSH T1,^D<-18+2>	; Top two bits
+	  STOR T1,TIFDF,(TCB)	; Don't fragment
+	ENDIF.
+        UMOVE T2,2		; Get the User Timeout from user
+	IFG. T2			; Only set timeout if specified
+	  CAMLE T2,TCPPTM	; Check if reasonable for add to TODCLK
+	    MOVE T2,TCPPTM
+	  IMULI T2,^D1000	; Make into milliseconds
+	  STOR T2,TSTO,(TCB)	; Set the new value into the TCB
+	ENDIF.
+        UMOVE T1,3		; Get retransmission parameter word
+	CALL RXPARS		; Change them in TCB
+	MOVX T1,1		; To set flags ...
+	TXNE USRAC1,TCP%VT	; Openning as a virtual terminal?
+	  STOR T1,TTVT,(TCB)	; Yes.  Mark TCB as such
+	TXNE USRAC1,TCP%PS	; Supposed to be persistent?
+	  STOR T1,TSPRS,(TCB)	; Yes, mark the TCB as such.
+	TXNE USRAC1,TCP%RX	; If "Don't Abort on RTX Timeout" flag
+	  STOR T1,TSRX,(TCB)	; Set it in the TCB
+	TXNE USRAC1,TCP%FR	; If "Flush RECV data after close" flag
+	  STOR T1,TSFR,(TCB)	; Set it in the TCB
+
+	LOAD T2,TTVT,(TCB)	; TVT?
+	LOAD T1,TPSMO		; Max outstanding packets
+	LSH T1,(T2)		; Twice as many if TVT
+	STOR T1,TCSMO,(TCB)	; Maximum outstanding packets
+
+	MOVX T1,PT%TOJ		; Open
+	TXNN FR,1B0		; TCB trace or
+	 TDNE T1,MNTRAC		; Want trace?
+	  CALL PRNPKT		; Yes
+
+	TMNN TCDFS,(TCB)	; JFN interface want active, or
+	 TXNE USRAC1,TCP%FS	; Supposed to force synchronization?
+	IFNSK.			; Yes
+	  IFQE. TLH,(TCB)	; If caller specified local address, use it
+	    LOAD T1,TFH,(TCB)	; Otherwise, Get foreign host
+	    IFE. T1		; Better have foreign address to send a packet
+	      HRROI T1,ELP+^D12	; Ought to have a better code
+	      JRST OPENX
+	    ENDIF.
+	    SETZ T2,
+	    CALL BSTADR		; Find best local address for foreign
+	      NOP		; Shouldn't occur
+;cwl add t1 error code if down
+	    STOR T2,TLH,(TCB)	; And stick it in the TCB
+	  ENDIF.
+
+MNTM5	  AOS CELL(TCJOP,5,,TCJ) ; Count active OPEN%s
+	  CALL FRCPKT		; Yes.  Packetizer will do that.
+	ENDIF.
+
+	MOVE T1,JCN		; JCN to return
+	LOAD T2,TOPNF,(TCB)	; Get ID of Open Flag for this TCB
+	LOAD T3,TERRF,(TCB)	; Error Flag index
+	ROT T3,-<WID(TERRF)>	; Put in high bits of T3
+	LSHC T2,<WID(TERRF)>	; Build 0,,TOPNF,TERRF
+	MOVE BFR,T2		; BFR will be preserved over return
+
+OPENX:	SKIPGE T1		; If have an error
+	  HRLI T1,400000(JCN)	; Return JCN in LH for user to ABORT%
+	RET
+
+	ENDAV.
+
+
+;CLROP	Routine to clear specified option block.
+
+;T1/	Extended Option block address
+;	CALL CLROP
+;Ret+1:	Always, T2 preserved
+
+..XI==<MAXIOS+3>/4
+..XT==<MAXTOS+3>/4
+IFN ..XI-..XT,<PRINTX ? Need two versions of CLROP>
+
+CLROP:	MOVX T3,<-..XT>	; # words to clear
+	SETZM (T1)	;**
+	ADDI T1,1	;**
+	AOBJN T3,.-2	;**
+	RET
+
+
+; Second phase of OPEN% and CLOSE% - get the error code
+
+GETERR:	LOAD T1,TERR,(TCB)	; Get error code
+	RET
+
+
+;OPNCHN	Routine to set up the initial interrupt channels specified by the
+;user with the OPEN% JSYS.  This routine assumes that the interrupt
+;words in the TCB have all been initialized to -1.
+;
+;Call:
+;T1/	User specified channel word (.TCPIC)
+;TCB/	TCB address
+;	CALL OPNCHN
+;Returns: +1 always:
+;	Error:	  T1/	-1,,ELP+^D17 
+;	Success:  T1/   0
+
+OPNCHN:	; N.B. Maximum of 6 ACVARs so that TCB does not get trashed
+	ACVAR <CNT,FORKID,INICHS,INIPTR,OLDPTR,FRKPTR>
+	MOVE INICHS,T1		; Save the initial channel word
+
+	MOVE FORKID,FORKX	; Fork that gets interrupted
+	MOVX INIPTR,<POINT 6,INICHS>  ;Scan initial channels
+	MOVX OLDPTR,<POINT 6,TCPIC(TCB)>  ;Scan current channels
+	MOVX FRKPTR,<POINT 18,TCPIF(TCB)>  ;Scan forks
+	MOVX CNT,6		; Number to scan
+	DO.
+	  ILDB T1,INIPTR	; Get Initial setting
+	  TRC T1,76		; No change or Delete wanted?
+	  TRCN T1,76
+	  IFSKP.		; No, a change is wanted
+	    CAIG T1,5		; Less than or equal to 5?
+	    IFSKP. 		; No...
+	      CAIL T1,^D24	; Between 24 and 35?
+		CAILE T1,^D35
+	      ANNSK.		; No, bogus number
+		HRROI T1,ELP+^D17	; Return error
+		RET
+	    ENDIF.
+	    IDPB T1,OLDPTR	; Set the channel in the TCB
+	    IDPB FORKID,FRKPTR	; And the fork ID 
+	  ELSE.			; No change wanted...
+	    IBP OLDPTR		; Skip to the next
+	    IBP FRKPTR
+	  ENDIF.
+	  SOJG CNT,TOP.		; Loop
+	ENDDO.
+	SETZ T1,		; Here on success
+	RET
+	ENDAV.
+
+	SUBTTL CLOSE% JSYS - Close a TCP Connection
+
+;T1/	Flags,,JCN (NOTE: don't allow CDB here since it would create a TCB)
+;	CLOSE%
+;Ret+1:	 Error, Code in T1
+;CHKJCN	ELP+^D01 ; JCN out of range/no TCB, Illegal connection/control bit
+;CLOSE1	ELP+^D03 ; Connection not open/was never open
+; Net related errors if TCP%WT
+;CHKADD	-1,,ELP+^D05 ; Packet with wild FH/FP
+;CHKADD	-1,,EFP+^D07 ; No such TCB
+;Ret+2:	Success
+
+.CLOSE::
+	MCENT			; Enter the monitor context
+	SETZ FR,		; No flags
+MNTM5	AOS CELL(TCJCL,0,,TCJ)	; Count CLOSE%s
+	TXNE T1,TCP%JS		; JCN must be supplied
+	 TXNE T1,<STSFLG!TCP%HP!TCP%SC!OPNFLG>&^-<TCP%JS!TCP%WT!TCP%FR>
+          JRST TCPILP		; Illegal control bit
+	TXZ T1,<<777777000000-TCP%FR>> ; Save just the JCN part & TCP%FR
+	XMOVEI T2,CLOSE1	; Select CLOSE1 routine
+	TXO T2,<031B8>		; CLOSE%/phase 1
+	CALL CHKJCN		; Check access, set TCB, call CLOSE1
+	JUMPL T1,TCPERR		; Jump if error.
+MNTM5	AOS CELL(TCJCL,1,,TCJ)	; Count successful CLOSE1s
+	UMOVE T1,1		; Get user flags
+	TXNN T1,TCP%WT		; Supposed to wait?
+	  SMRETN		; No.  User will do ABORT to release JCN
+	IFL. BFR		; Not yet established?
+MNTM5	  AOS CELL(TCJCL,2,,TCJ) ; Count CLOSE% waits (still opening)
+	  HRL T1,BFR		; TOPNF,TERRF,,x
+	  HRRI T1,INTOOT	; Select CLOSE% Done Test (opening)
+	  MDISMS
+	  XMOVEI T1,GETERR	; Get error code
+	  TXO T1,<032B8>	; CLOSE%/phase 2
+	  UMOVE T2,1		; User's AC 1
+	  CALL CHKARG
+	  JUMPN T1,TCPERR	; Jump if error code non-null
+	ENDIF.
+MNTM5	AOS CELL(TCJCL,2,,TCJ)	; Count CLOSE% waits
+	HRL T1,BFR		; TOPNF,TERRF,,x
+	HRRI T1,INTZOT		; Select CLOSE% Done Test (closed)
+	MDISMS
+
+	XMOVEI T1,GETERR	; Get error code
+	TXO T1,<033B8>		; CLOSE%/phase 3
+	UMOVE T2,1		; User's AC 1
+	CALL CHKARG
+	JUMPN T1,TCPERR		; Jump if error code non-null
+MNTM5	AOS CELL(TCJCL,3,,TCJ)	; Successful CLOSE% wait & RETJCN
+	LOAD T1,TJCN,(TCB)	; Get the JCN for this connection
+	CALL RETJCN		; Release it
+	SMRETN
+
+	SUBTTL CLOSE% JSYS - Close a TCP Connection - Phase 1 (also TVTDET)
+
+;T1/	JCN Specified by caller (ignored here), possibly with TCP%FR bit
+;TCB/	Extended Locked Connection Block
+;	NOINT
+;	CALL CLOSE1
+;Ret+1:	Always. T1 has 0 for OK, or -1,,error
+;		BFR has (open) 0,,TOPNF,TERRF  or (opening) 1B0,,TOPNF,TERRF
+;CLOSE1	-1,,ELP+^D03 ; Connection not open/was never open
+
+CLOSE1::
+	LOAD FR,TERRT,(TCB)	; Want error trace?
+	SKIPE FR		; No
+	  MOVX FR,1B0		; Yes
+
+	TXZN T1,TCP%FR		; If "Flush RECV data after close" flag
+	IFSKP.
+	  SETONE TSFR,(TCB)	; Set it in the TCB
+	ENDIF.
+
+	LOAD T2,TOPNF,(TCB)	; Get ID of Open Flag for this TCB
+	LOAD T3,TERRF,(TCB)	; Error Flag index
+	ROT T3,-<WID(TERRF)>	; Put in high bits of T2
+	LSHC T2,<WID(TERRF)>	; 0,,TOPNF,TERRF
+	MOVE BFR,T2		; Wait indicies of interest
+				; BFR will be preserved over (FRCPKT &) return
+	IFQN. TSUOP,(TCB)	; OPENed by user but not yet CLOSEd?
+	  SETZRO TSUOP,(TCB)	; User CLOSEing it now
+	  IFQN. TSOPN,(TCB)	; Was it ever open?
+MNTM5	    AOS CELL(TCJCL,4,,TCJ) ; FRCPKTs for FIN by CLOSE1
+	    CALL FRCPKT		; Get Packetizer to try and send the FIN
+	    MOVX T2,OK		; Tell caller OK
+	  ELSE.			; Never been opened (But may STILL BE opening)
+	    TXO BFR,1B0		; Flag that have to wait for open first
+	    LOAD T2,TERR,(TCB)	; Had any errors?
+	    SKIPE T2		; Zero is OK
+	      HRROS T2		; Yes, return error now
+	  ENDIF.		; T2 has error code
+	ELSE.			; Either never OPENed or already CLOSEd
+	  HRROI T2,ELP+^D03	; "Connection not open"
+	ENDIF.
+
+	MOVX T1,PT%TCJ		; CLOSE% JSYS
+	TXNN FR,1B0		; TCB trace or
+	 TDNE T1,MNTRAC		; Want trace
+	  CALL PRNPKT		; Yes
+
+	MOVE T1,T2		; Error code to be returned
+	RET
+
+	SUBTTL	Connection Cleanup
+
+;Kill job:	Nothing to do, TCPKJB is R
+;Kill FORKN:	TCPKFK flushes all receive and send Buffers for the FORKN
+;Close fork-relative files:
+;					      TTYDAS <- LDTACH -- DTACH%
+;					   +- FLOGO <-- LDTACH -- JOBCOF
+;					   +- LGOUT%
+;					   +- CLOSF%(-1)
+;TCPCZF <-- INTCZF <-- MNTCZF <-- CLZFF% <-+- RESET%
+;  V (TCBHLK)
+;TCBSCN -(all jcn)-------(TCBLCK)--> ABTJCN ---(FORKN)--+
+;							+-> ABTTCB[RETJCN]
+;User ABORT%: -> ABORT1 -(TCBLCK)-----------------------+   (sets TSABT)
+
+
+
+
+;TCPKFK
+;Abort Buffers associated with FORKX.
+;Called from [FORK]KSELF via MNTKFK via INTKFK, all registers have been saved.
+
+
+TCPKFK::
+	SKIPLE TCPON		; TCP enabled?
+	  RET			; No.
+;	SAVEAC <FR,TCB>
+;	SAVET			; KSELF code requires this
+	SETZ FR,		; No flags
+MNTM5	AOS CELL(TCJBF,0,,TCJ)	; TCPKFK calls
+	XMOVEI T1,TCBHLK	; Stabilize JCNTCB table in JSB and
+	XMOVEI T2,TCBSCN	; Routine to scan JCNTCB table
+	TXO T2,<076B8>		; TCPKFK/ TCBH
+	XMOVEI T3,ABTBF6	; Routine to be applied to each TCB found
+	TXO T3,<077B8>		; TCPKFK/ TCB
+	SETZ T4,		; No argument (implicit FORKX)
+	CALL LCKCAL		; Lock the lock and scan the TCBs
+	RET
+
+ABTBF6:				; Worker routine called with TCB locked
+	LOAD FR,TERRT,(TCB)	; Want error trace?
+	SKIPE FR		; No
+	  MOVX FR,1B0		; Yes
+	CALL FLSRBX		; Flush any receive buffers
+	CALL FLSSBX		; Flush any send buffers
+	CALL FLSPSI		; Flush the PSI channels for this fork
+	RET			; Return to caller
+
+;FLSPSI	Flush the PSI assignments for the current FORKX.
+
+;TCB/	Extended TCB address
+;FORKX/	Fork to flush PSI's for
+;	CALL FLSPSI
+;Return: +1 always
+;Clobbers no ACs
+
+FLSPSI:	ACVAR <CNT,CHNPTR,FRKPTR,MINUS1,FORKID>
+	SETO MINUS1,		; Get -1
+	MOVX CHNPTR,<POINT 6,TCPIC(TCB)>  ;Scan current channels
+	MOVX FRKPTR,<POINT 18,TCPIF(TCB)>  ;Scan forks
+	MOVX CNT,6		; Number to scan
+	DO.
+	  ILDB FORKID,FRKPTR	; Get fork assignment
+	  IBP CHNPTR		; Point to the corresponding channel
+	  CAME FORKID,FORKX	; This fork?
+	  IFSKP.		; Yes, flush the channel
+	    DPB MINUS1,FRKPTR	; Set fork to -1
+	    DPB MINUS1,CHNPTR	; Set channel to -1
+	  ENDIF.
+	  SOJG CNT,TOP.		; Loop
+	ENDDO.
+	RET
+
+	ENDAV.
+
+;TCPCZF	Called from [JSYSF]CLZFF1 via MNTCZF via INTCZF, all registers saved.
+
+;T1/	Job fork number of fork being considered (FORKN)
+;	Critical section, FKLOCK locked
+
+TCPCZF::
+	SKIPLE TCPON		; TCP enabled?
+	  RET			; No.
+;	SAVEAC <FR,TCB>
+;	SAVET			; CLZFF code requires this
+	SETZ FR,		; No flags
+MNTM5	AOS CELL(TCJAJ,0,,TCJ)	; TCPCZF calls
+	MOVE T4,T1		; Put FORKN in place for lower level routine
+	XMOVEI T1,TCBHLK	; Stabilize JCNTCB table in JSB and
+	XMOVEI T2,TCBSCN	; Routine to scan JCNTCB table
+	TXO T2,<074B8>		; TCPCZF/ TCBH
+	XMOVEI T3,ABTJCN	; Abort a TCBs owned by argument FORKN.
+	TXO T3,<075B8>		; TCPCZF/ TCB
+				; T4 set above
+	NOINT			; Retain control during this
+	CALL LCKCAL
+	OKINT			; State is clean again
+	RET
+
+
+;ABTJCN	Abort a TCBs owned by argument FORKN.
+
+;T1/	Job fork number being considered (FORKN)
+;TCB/	Extended Locked connection block
+;TCBH/	Locked TCB Hash table
+;      	NOINT
+;	CALL ABTJCN
+;Ret+1:	Always.
+
+ABTJCN:
+MNTM5	AOS CELL(TCJAN,0,,TCJ)	; ABTJCN calls
+	LOAD FR,TERRT,(TCB)	; Want error trace?
+	SKIPE FR		; No
+	  MOVX FR,1B0		; Yes
+	LOAD T2,TOWNR,(TCB)	; Get job number of owner
+	CAME T2,JOBNO		; Better be ours
+	IFSKP.
+	  LOAD T2,TOFRK,(TCB)	; Get job fork handle (FORKN) of owner
+	  UMOVE T3,1		; Get CLZFF flags from caller
+	  CAME T1,T2		; Was JCN created by the object fork?
+	    JRST ABTJC7		; No.
+	  TXNN T3,CZ%NSF	; Yes. Are we supposed to abort there?
+	    JRST ABTJC8		; Yes.  Go do it
+	  RET			; No.
+
+ABTJC7:	  EXCH T1,T2		; Get to right places for SKIIFA
+	  TXNN T3,CZ%NIF	; Abort inferiors' connections?
+	   CALL SKIIFA		; Check owner inferior to object fork
+	    RET			; Should not kill it
+				; Self or inferior
+ABTJC8:
+	  MOVX T1,PT%TAB	; Non-user abort
+	  TXNN FR,1B0		; TCB trace or
+	   TDNE T1,MNTRAC	; Want trace?
+	    CALL PRNPKT		; Yes
+	  MOVEI T1,ELP+^D14	; Connection reset
+	  CALLRET ABTTCB	; Abort the TCB and release the JCN
+	ENDIF.
+
+MNTM5	AOS CELL(TCJAN,1,,TCJ)	; Count cross job close
+	BUG.(CHK,TCPJS4,TCPBBN,SOFT,
+<ABTJCN: TCP Conn not owned by aborting job: abjob,onjob,tcb>,
+<<T2,D>,<JOBNO,D>,<TCB,D>>,<
+
+Cause:	A Job which does not own a TCP connection is trying to abort it.
+
+Action:
+
+Data:	TCB owner's job number, Aborter's job number, TCB address
+
+>)
+	RET			; Don't kill someone else's connection
+
+;TCBSCN	Routine to scan JCNTCB for vaild TCBs, and apply argument function
+;to each.  Called with TCBH Lock set, NOINT
+
+;T1/	Next function to be called, with Id code
+;T2/	Argument for that function
+
+TCBSCN:	ACVAR <JCN,FCTN,JOBFRK>
+	MOVEM T1,FCTN
+	MOVEM T2,JOBFRK
+
+	MOVSI JCN,-MAXJCN	; Set to scan JSB table
+	DO.
+	  LOAD TCB,JCNTC,(JCN)	; Get pointer to TCB
+	  IFN. TCB		; Have entry?
+				; Validate TCB by looking it up in TCBH
+	    LOAD T1,TLP,(TCB)	; If TCB is valid, can get LP
+	    CALL TCBHSH		; Hash LP into a TCBH index
+	    MOVE T1,T2		; Get working pointer, save queue head
+	    DO.
+  	      LOAD T1,QNEXT,(T1) ; Get next entry in chain
+IFN TCBQ,<    XMOVEI T3,-TCBQ(T1) ; Locate top of structure
+	      CAMN T3,TCB>	; Desired TCB?
+IFE TCBQ,<    CAMN T1,TCB>	; Desired TCB?
+	      IFSKP.
+	        CAME T1,T2	; Back to head?
+	          JRST TOP.	; No, go check this one
+MNTM5	        AOS CELL(TCJAJ,1,,TCJ) ; TCBSCN cannot find TCB
+	        SETZB TCB,JCNTCB(JCN) ; TCB has vanished!
+	      ENDIF.
+	    ENDDO.
+	    IFN. TCB		; If valid
+	      XMOVEI T1,TCBLCK(TCB); Pointer to lock on that TCB
+	      MOVE T2,FCTN	; Function to be applied to TCB, with id code
+	      MOVE T3,JOBFRK	; Argument for function
+	      CALL LCKCAL	; Lock the TCB and Abort the JCN
+	    ENDIF.
+	  ENDIF.
+	  AOBJN JCN,TOP.	; Loop over all
+	ENDDO.
+	RET
+
+	ENDAV.
+
+
+;ABORT% JSYS	Flush a connection (if necessary), and release JCN.
+
+;T1/	Flags,,JCN
+;	ABORT%
+;Ret+1:	Error.  T1 has code.
+;CHKJCN	ELP+^D01 ; JCN out of range/no TCB, Illegal connection/control bit
+;		   CDB supplied
+;Ret+2:	Success.  Nothing more will be heard about this connection.
+
+.ABORT::
+	MCENT			; Enter monitor context
+	SETZ FR,		; No flags
+MNTM5	AOS CELL(TCJAB,0,,TCJ)	; Count ABORT%s
+	TXNE T1,TCP%JS		; JCN must be supplied
+	 TXNE T1,<STSFLG!TCP%HP!TCP%SC!OPNFLG>&^-<TCP%JS!TCP%WT>
+	  JRST TCPILP		; Illegal control bit
+	HRRZS T1		; Save just the JCN
+	XMOVEI T2,ABORT1	; Select the routine to run
+	TXO T2,<071B8>		; ABORT%/phase 1
+	CALL CHKJCN		; Check arguement, set TCB, run ABORT1
+	JUMPL T1,TCPERR		; Jump if some sort of error
+MNTM5	AOS CELL(TCJAB,1,,TCJ)	; Successful ABORT1
+	SMRETN
+
+
+;ABORT1(TCB)	ABORT% JSYS, phase 1
+
+;T1/	JCN specified by caller (ignored here)
+;TCB/	Extended Locked Connection Block
+;      	NOINT
+;	CALL ABORT1
+;Ret+1:	Always.  T1 has 0 for passing to caller.
+
+ABORT1:	LOAD FR,TERRT,(TCB)	; Want error trace?
+	SKIPE FR		; No
+	  MOVX FR,1B0		; Yes
+	MOVX T1,PT%TAJ		; ABORT% JSYS
+	TXNN FR,1B0		; TCB trace or
+	 TDNE T1,MNTRAC		; Want trace?
+	  CALL PRNPKT		; Yes
+
+	MOVEI T1,ELP+^D14	; Connection reset
+	CALL ABTTCB		; Abort the connection and release the JCN
+
+	MOVX T1,OK		; Say OK to caller
+	RET
+
+
+;ABTTCB	Abort a TCB.  Called from ABORT1 (ABORT%) and ABTJCN (ABTJC1,TCPCZF).
+;Executing in job which owns the connection (User except for no-TVT error).
+
+;TCB/	Locked Connection Block
+;	NOINT, maybe NOSKED
+;T1/	Abort code
+;	ELP+^D04 No TVTs available
+;	ELP+^D14 Connection reset
+;	CALL ABTTCB
+;Ret+1:	Always.
+
+ABTTCB::
+	MOVE T4,T1		; Save abort code
+MNTM5	AOS CELL(TCJAT,0,,TCJ)	; ABTTCB calls
+	JN TSABT,(TCB),ABTTCX	; Already being aborted?
+
+	SETONE TSABT,(TCB)	; No.  Make it so.
+	SETZRO <TSUOP,TSFP,TSEP>,(TCB) ; Fake user CLOSE%, Clear Force Packet
+
+	MOVE T1,FORKX		; Indicate which fork is killing the TCB
+	STOR T1,TABTFX,(TCB)
+
+;If a foreign address is known and we aren't TIMWAT/NOTSYN.NOTSYN a RESET
+;is sent to the foreign end to indicate that this end is being flushed.
+
+	MOVE T1,T4		; Abort code (ELP+^D14, connection reset)
+	CALL ABTCON		; Clean up the database for this connection
+				; T1 has "release" (0) or "abort" (nz) flag
+	IFQN. TSSV,(TCB)	; If able to send something, and
+	ANDN. T1		; Connection is being "abort"ed,
+	  CALL ABTREP		; Send a RESET reply to other end
+	ENDIF.
+
+ABTTCX:
+	LOAD T1,TJCN,(TCB)	; Get user's handle (JCN)
+	CALLRET RETJCN		; Release that.
+
+	SUBTTL STAT% JSYS - Get status of a connection or a TCB
+
+;T1/	Flags,,JCN or Pointer to CDB
+;T2/	-N,,Offset	Number and beginning to return
+;T3/	-M,,Address	Size and location in user space for results
+;T4/	    Address	If TCP%SL set, location in user space for lengths
+;	STAT%
+;Ret+1:	 Error.  Code in T1
+;CHKARG	ELP+^D01 ; JCN out of range/no TCB, Illegal connection/control bit
+;CHKARG	ELT+^D04 ; No free JCN/TCB space/free WAIT bit/free TVTs
+;CHKARG	ELP+^D13 ; Invalid local address/port(LP=0)
+;STATx	ELP+^D20 ; Funny pointer to STAT% (offset)
+;STATx	ELP+^D21 ; Bad pointers/transfer size to STAT%
+;STATx	ELP+^D22 ; Invalid name
+;CHKARG	ELT+^D31 ; TCP not yet initialized
+;Ret+2:	Success
+
+.STAT::	MCENT			; Enter monitor context
+	SETZ FR,		; No flags
+MNTM5	AOS CELL(TCJSU,0,,TCJ)	; Count STAT%s
+
+	MOVX T1,PT%TST		; STAT% JSYS
+	TXNN FR,1B0		; TCB trace or
+	 TDNE T1,MNTRAC		; Want trace?
+	  CALL PRNPKT		; Yes
+
+	UMOVE T1,1		; Get arg back
+	TXNE T1,<TCP%HP!TCP%SC!OPNFLG>&^-<TCP%JS!TCP%WT!STSFLG>
+	  JRST TCPILP		; Illegal control bit
+ 	CALL STATSB		; Decode function bits, call function
+	JUMPL T1,TCPERR		; There was something wrong.
+MNTM5	AOS CELL(TCJSU,1,,TCJ)	; Successful STAT%s
+	SMRETN
+
+STATSB:	TXNE T1,TCP%NT		; AOBJN pointer for TVTs wanted?
+	  CALLRET STATNT	; Yes
+	TXNE T1,TCP%NI		; AOBJN pointer for connections wanted?
+	  CALLRET STATNI	; Yes
+	TXNN T1,TCP%SD		; If just want definitions, don't validate JCN
+	 TXNE T1,TCP%ST		; Asking for statistics?
+	  CALLRET STATS		; Yes
+	MOVE T2,T1		; Flags!connection info for CHKARG
+	XMOVEI T1,STAT1		; Select routine to call
+	TXO T1,<051B8>		; STAT%/ TCB
+	CALLRET CHKARG		; Validate JCN, set TCB, call STAT1
+
+
+;Return in 2/ -#TVTs,,first TVT
+
+STATNT:	MOVE T2,TVTPTR		; Get AOBJN pointer
+MNTM5	AOS CELL(TCJSU,2,,TCJ)	; STAT% TVT AOBJN counters
+	JRST STATO2
+
+;Return in 2/ -# connections,,1
+
+STATNI:	MOVN T2,TCBCNT		; # connections
+	HRLS T2			; in LH
+	HRRI T2,1		; First connection #
+MNTM5	AOS CELL(TCJSU,3,,TCJ)	; STAT% connection AOBJN counters
+STATO2:	UMOVEM T2,2		; Result to user
+STATOK:	MOVX T1,OK		; Tell caller all is well
+	RET			; All ok
+
+;Function with offsets/names may return OK, or
+;STATx	-1,,ELP+^D20 ; Funny pointer to STAT (offset)
+;STATx	-1,,ELP+^D21 ; Bad pointers/transfer size to STAT
+;STATx	-1,,ELP+^D22 ; Invalid name
+
+;Copy the statistics area to user space, T1/ flags
+
+STATS:	SETZ TCB,		; Be safe
+	TXNE T1,TCP%SY		; Giving symbolic names?
+	IFSKP.			; No
+MNTM5	  AOS CELL(TCJSU,4,,TCJ) ; STAT% statistics requests w/offsets
+	  XMOVEI Q1,STAT0	; Base for offsets
+	  MOVX Q2,STATZZ-STAT0	; Invalid offset
+	  CALLRET STATSO	; Perform function, TCB zero
+	ENDIF.
+MNTM5	AOS CELL(TCJSU,5,,TCJ)	; STAT% statistics requests w/symbols
+	CALLRET STATSS		; Perform function, TCB zero
+
+;STAT% JSYS - Get status of a connection - Phase 1
+
+;TCB/	Extended Locked connection block
+;	CALL STAT1     	NOINT
+;Ret+1:	Always.  T1 has 0 for OK, or -1,,error
+
+STAT1:	LOAD FR,TERRT,(TCB)	; Want error trace?
+	SKIPE FR		; No
+	  MOVX FR,1B0		; Yes
+	UMOVE T1,1		; Caller's flags
+	TXNE T1,TCP%SY		; Giving symbolic names?
+	IFSKP.			; No
+MNTM5	  AOS CELL(TCJSU,6,,TCJ) ; STAT% for connection w/offsets
+	  MOVE Q1,TCB		; Base for offsets
+	  MOVX Q2,TCBSIZ	; Invalid offset
+	  CALLRET STATSO	; Perform function, TCB valid
+	ENDIF.
+MNTM5	AOS CELL(TCJSU,7,,TCJ)	; STAT% for connection w/symbols
+	CALLRET STATSS		; Perform function, TCB valid
+
+;Given offsets ...
+
+STATSO:	XCTU [DMOVE T1,1]	; Set up ACs
+	XCTU [DMOVE T3,3]
+	IFL. T2			; Non-zero input count and
+	ANDL. T3		; Non-zero output count
+
+	  HLRE T1,T2		; Get user's input count
+	  MOVNS T1		; As a postive number
+	  HLRE T4,T3		; Get size of user's output area
+	  MOVNS T4		; As a postive number
+	  CAMLE T1,T4		; Take min as size of transfer
+	    MOVE T1,T4
+
+	  HRRES T2		; Start offset
+	  IFGE. T2
+	    SUB Q2,T1		; Valid words beyond start
+	    CAMLE T2,Q2		; Trying to read too much?
+	    ANSKP.		; No
+	      MOVE T4,T1	; Transfer count in RH
+	      HRLS T4		; Transfer count in both halves
+	      XCTU [ADDM T4,2]	; Update user's pointers
+	      XCTU [ADDM T4,3]
+
+	      ADD T2,Q1		; Start address within data area
+	      HRRZS T3		; Flush the count (assume user sec 0)
+	      CALL BLTMU	; Transfer from monitor to user
+	      JRST STATOK
+	  ENDIF.
+
+	  HRROI T1,ELP+^D20	; "Funny pointer to STAT"
+	ELSE.
+	  HRROI T1,ELP+^D21	; "Bad transfer size to STAT"
+	ENDIF.
+	RET
+
+
+
+;Given symbols ...	TCB zero or valid
+
+STATSS:	SAVEAC <Q1,Q2,Q3,P1,<TCB-1>> ; Shouldn't be required, but do it anyway
+
+	XCTU [DMOVE Q1,1]	; Set up ACs
+	XCTU [DMOVE Q3,3]
+	CALL STATNM		; Do work, return error code
+
+	XCTU [DMOVEM Q2,2]	; Return results, STAT% format
+	TXNE Q1,TCP%SL		; Want lengths?
+	  UMOVEM P1,4		; Yes, return updated pointer
+	RET
+
+	SUBTTL	TCSTAT - Invoked by IPOPR% or TCOPR%
+
+;T1/	-1, invoked by IPOPR%
+;	otherwise, is TCB corresponding to TCOP% JFN
+;	CALL TCSTAT
+;Ret+1:	Always, T1 has TOPS-20 error code
+
+TCSTAT::			
+IFN <TCB-1-PKT>,<SAVEAC <PKT>>
+	SAVEAC <<TCB-1>,TCB>
+	CAMN T1,[-1]		; Who called
+	  JRST TCSTAI		; IPOPR%
+
+				; TCOPR%,  T1 has alleged TCB address
+	MOVE PKT,T1		; Validate TCB for JFN by looking it up in TCBH
+
+	MOVX T1,TCPX34		; Assume bad argument
+	UMOVE T3,3		; Argument block address
+	UMOVE T2,.TCFLG(T3)	; Flags from argument block
+	TXNN T2,<TCP%NT!TCP%TV!TCP%NI!TCP%IX!TCP%ST!TCP%JS> ; Only SY [+SD+SL]
+	 TXNE T2,<TCP%HP!TCP%SC!OPNFLG>&^-<TCP%JS!TCP%WT!STSFLG>
+	  RET			; Bad argument
+
+	CALL INTBCK	;(PKT)	; TCB in correct region of memory?
+	IFSKP.			; Yes
+	  MOVE TCB,PKT		; In correct memory region, not really a PKT
+	  LOAD T1,TLP,(TCB)	; If TCB is valid, can get LP
+	  CALL TCBHSH		; Hash LP into a TCBH index
+	  MOVE T1,T2		; Get working pointer, save queue head
+	  DO.
+  	    LOAD T1,QNEXT,(T1)	; Get next entry in chain
+IFN TCBQ,<  XMOVEI T3,-TCBQ(T1) ; Locate top of structure
+	    CAMN T3,TCB>	; Desired TCB?
+IFE TCBQ,<  CAMN T1,TCB>	; Desired TCB?
+	    IFSKP.
+	      CAME T1,T2	; Back to head?
+	        LOOP.		; No, go check this one
+	      SETZ TCB,		; TCB has vanished! (or unOPENF%ed DEC TCB)
+	    ENDIF.
+	  ENDDO.
+	  IFN. TCB		; If valid
+	    XMOVEI T1,TCBLCK(TCB) ; Pointer to lock on that TCB
+	    XMOVEI T2,TCSTAU	; Function to be applied to TCB, with id code
+	    TXO T2,<056B8>	; TCOPR% id
+	    CALL LCKCAL		; Lock the TCB and Abort the JCN
+	  ELSE.
+	    MOVX T1,TCPX34	; Bad TCB or arguments
+	  ENDIF.
+	ENDIF.
+
+	RET
+
+;TCSTAU	TCOPR% access to connection data. Args in User block pointer to by 3.
+
+;TCB/	Extended locked TCB pointer
+;	CALL TCSTAU
+;Ret+1:	Always, T1/ TOPS-20 error code
+
+TCSTAU:	SAVEAC <Q1,Q2,Q3,P1,<TCB-1>>
+	XCTU [MOVE T3,3]		; Address of argument block
+	XCTU [DMOVE Q1,.TCFLG(T3)]	; Get args
+	XCTU [DMOVE Q3,.TCDTP(T3)]
+	CALL STATNM			; Return requested information
+	XCTU [MOVE T3,3]		; Address of argument block
+	XCTU [DMOVEM Q2,.TCNMP(T3)]	; Update arguments
+	TXNE Q1,TCP%SL			; Want lengths?
+	  XCTU [MOVEM P1,.TCLNP(T3)]	; Yes, return updated pointer
+TCSTAX:	IFE. T1
+TCSTOK:	  MOVX T1,MNTX00		; OK return
+	ELSE.
+	  CAIG T1,600000		; TCP error code?
+	    MOVX T1,TCPX34		; Bad argument
+	ENDIF.
+	RET
+
+;TCSTAI	IPOPR% access to statistics and connections.  Args in User block 2.
+
+TCSTAI:				; IPOPR%
+	XCTU [MOVE T3,2]		; Get address of argument block
+	XCTU [MOVE T2,.TCFLG(T3)]	; Get function flags
+	MOVX T1,TCPX34			; TCOPR argument error
+	TXNE T2,<TCP%HP!TCP%SC!OPNFLG>&^-<TCP%JS!TCP%WT!STSFLG>
+	  RET				; Bad argument
+
+	TXZE T2,TCP%NT			; AOBJN pointer for TVTs wanted?
+	 TLNE T2,-1			; Just TCP%NT bit?
+	IFSKP.				; Yes
+	  MOVE T3,TVTPTR		; Get AOBJN pointer
+MNTM5	  AOS CELL(TCJSU,2,,TCJ)	; STAT% TVT AOBJN counters
+	  JRST TCSTA3			; Return -#TVTs,,first TVT
+	ENDIF.
+
+	TXZE T2,TCP%NI			; AOBJN pointer for connections wanted?
+	 TLNE T2,-1			; Just TCP%NI bit?
+	IFSKP.				; Yes
+	  MOVN T3,TCBCNT		; # connections
+	  HRLS T3			; in LH
+	  HRRI T3,1			; First conn. #, 3/ -# conn,,1
+MNTM5	  AOS CELL(TCJSU,3,,TCJ)	; STAT% connection AOBJN counters
+TCSTA3:	  XCTU [MOVE T2,2]		; Address of argument block
+	  XCTU [MOVEM T3,.TCNMP(T2)]	; Return 3
+	  JRST TCSTOK
+	ENDIF.
+
+	TXNN T2,TCP%SY			; Only names supported
+	  RET				; Bad argument, T1/ TCPX34
+
+	SETZ TCB,			; Assume not need TCB
+	TXNN T2,TCP%JS+TCP%TV+TCP%IX	; Have connection info and
+	 TXNN T2,TCP%ST+TCP%SD		; Need it?
+	IFSKP.				; No, connectionless
+TCSTAJ:	  SAVEAC <Q1,Q2,Q3,P1,<TCB-1>>	; TCB/ Extended Locked connection block
+	  XCTU [MOVE T3,2]		; Address of argument block
+	  XCTU [DMOVE Q1,.TCFLG(T3)]	; Get args
+	  XCTU [DMOVE Q3,.TCDTP(T3)]
+	  CALL STATNM			; Return requested information
+	  XCTU [MOVE T3,2]		; Address of argument block
+	  XCTU [DMOVEM Q2,.TCNMP(T3)]	; Update pointers
+	  TXNE Q1,TCP%SL		; Want lengths?
+	    XCTU [MOVEM P1,.TCLNP(T3)]	; Yes, return updated pointer
+	ELSE.				; Validate connection info, set TCB
+	  XMOVEI T1,TCSTAJ		; Select routine to call
+	  TXO T1,<054B8>		; IPOPR% ID
+					; T2/ flags!connection info
+	  CALL CHKARG			; Check arguments, set TCB, call TCSTAJ
+	ENDIF.
+	JRST TCSTAX			; Translate error code & return
+
+	SUBTTL STATNM - Symbolic Routines
+
+UFL==Q1	; User's AC1, flags and connection info (TCP%WT implies TCB valid)
+INP==Q2	; User's AC2, Input count and address
+OUP==Q3	; User's AC3, Output count and address
+OUC==P1	; User's AC4, Lengths address, if TCP%SL
+;TCB/	Zero or valid TCB address
+;	CALL STATNM	TCB-1 saved
+;Ret+1:	Always.  T1/ Error code, or 0; Q2-P1 undated.
+;STATx	-1,,ELP+^D01 ; Invalid parameter (need connection info)
+;STATx	-1,,ELP+^D21 ; Bad pointers/transfer size to STAT
+;STATx	-1,,ELP+^D22 ; Invalid name
+
+..STBT==4	; Bit in TCB but not in TCB-1
+IFE <TCB&..STBT>,<PRINTX % Fix ..STBT in STATNM>
+IFN <<TCB-1>&..STBT>,<PRINTX % Fix ..STBT in STATNM>
+
+STATNM:	XMOVEI TCB-1,STAT0	; For references in statistics area
+	JUMPGE INP,STATNV	; IN count error
+	JUMPGE OUP,STATNV	; OUT count error
+	TLZ OUC,-1		; Only address here
+				; Input ptr valid & at least 1 output slot
+	DO.
+	  UMOVE T4,(INP)	; Get name
+	  CALL SRCH		; Lookup name in T4 to T2/ Len, T3/ Ptr
+	  JUMPE T2,STATNW	; Error, name not in table
+
+	  TXNN UFL,TCP%SL	; Want legnths?
+	  IFSKP.
+	    UMOVEM T2,(OUC)	; Yes, give length to user
+	    AOS OUC		; Bump pointer, too
+	  ENDIF.
+
+	  TXNN UFL,TCP%SD	; Want pointer or value?
+	  IFSKP.
+	    MOVX T2,1		; Pointer has length 1
+	    MOVE T1,T3		; Get pointer
+	  ELSE.
+	    IFE. TCB		; No valid TCB
+	      TXNE T3,<<..STBT>B17> ; Pointer use TCB?
+	        JRST STATNX	; Yes, but don't have it
+	    ENDIF.	    
+	    LDB T1,T3		; Get (first) value
+	  ENDIF.
+
+	  DO.			; Return all data bytes for name to user
+	    UMOVEM T1,(OUP)	; Datum to user
+	    SOS T2		; One less to go
+	    AOBJP OUP,STATNU	; Leave if output full
+	    JUMPLE T2,ENDLP.	; End multiple word "value"
+	    ILDB T1,T3		; Get value
+	    LOOP.		; Back for rest
+	  ENDDO.
+	  AOBJN INP,TOP.	; Loop if have another name
+	ENDDO.
+
+	MOVX T1,<OK>		; All done w/o error
+	RET
+
+
+STATNU:	SKIPN T1,T2		; Error if more to output
+	  AOBJP INP,R		; Or more input (NB T1 is 0 = OK)
+STATNV:	HRROI T1,ELP+^D21	; Bad pointers
+	RET
+
+STATNW:	HRROI T1,ELP+^D22	; Invalid name
+	RET
+
+STATNX:	HRROI T1,ELP+^D01	; Invalid parameter, need a connection
+	TXNN UFL,TCP%SL		; Returning legnths?
+	  SOS OUC		; Yes, undo so returned info is consistent
+	RET
+
+	PURGE	UFL,INP,OUP,OUC
+
+	SUBTTL SRCH - Exact Match Binary Search Routine
+
+;T4/	Symbol
+;	CALL SRCH
+;Ret+1:	  Not found
+;Ret+2:	Found and T3/ Pointer, T2/ Count
+
+PRB==T1
+XXX==T2
+OFS==T3
+KEY==T4
+
+SRCH:	HRRZ OFS,STSTAB-2	; Next 2**N larger than STABLN
+	SETZB PRB,T2		; Offset into table & assume missing
+	DO.
+	  ADD PRB,OFS		; Move forward (double)
+	  DO.
+	    LSH OFS,-1		; Offset for next time
+	    SUB PRB,OFS		; Move reverse or forward (single)
+	    JUMPLE OFS,SRCHK	; Stop if no move
+	    CAMG PRB,STSTAB-1	; Point too far? or
+	     CAMGE KEY,STSTAB(PRB) ; Value too big?
+	      LOOP.		; Yes, move reverse
+	  ENDDO.
+	  CAML KEY,STSTAB+1(PRB) ; As far as next?
+	    LOOP.		; Yes, move forward
+	ENDDO.
+SRCHK:	CAME KEY,STSTAB(PRB)	; Exact match?
+	  RET			; No, error (T2 is 0)
+				; Yes
+	HRRE T3,STATPT(PRB)	; Offset (sign extended)
+	LSH T3,-4		; Restore bits crunched for net
+	HLL T3,STATPT(PRB)	; Pointer
+	HLRZ T2,STATCT(PRB)	; Count
+	RET
+
+	PURGE PRB,XXX,OFS,KEY
+
+	SUBTTL CHANL% - Set TCP Event Interrupt Channels
+
+;T1/	Flags,,JCN (or pointer to CDB)
+;T2/	Six 6-bit bytes (channel numbers)
+;	77 - No change, or 0-5, 24-35 Channel to get intertupt
+;	CHANL%
+;Ret+1:	 Error, Code in T1.
+;CHKARG	ELP+^D01 ; JCN out of range/no TCB, Illegal connection/control bit
+;CHKARG	ELT+^D04 ; No free JCN/TCB space/free WAIT bit/free TVTs
+;CHKARG	ELP+^D13 ; Invalid local address/port(LP=0)
+;CHANL1	ELP+^D17 ; Bad arg to CHANL% (not 0-5, 23-35)
+;CHKARG	ELT+^D31 ; TCP not yet initialized
+;Ret+2:	Success
+
+.CHANL::
+	MCENT			; Enter monitor context
+	TXNE T1,TCP%JS		; JCN must be supplied
+	 TXNE T1,<STSFLG!TCP%HP!TCP%SC!OPNFLG>&^-<TCP%JS!TCP%WT>
+	  JRST TCPILP		; Illegal control bit
+	SETZ FR,		; No flags
+MNTM5	AOS CELL(TCJCN,0,,TCJ)	; Count CHANL%s
+	MOVE T2,T1		; User's AC 1
+	XMOVEI T1,CHANL1	; Select routine to call via CHKARG
+	TXO T1,<061B8>		; CHANL%/ TCB
+	CALL CHKARG		; Check arguments, set TCB, call CHANL1
+	JUMPL T1,TCPERR		; Jump if something is wrong.
+MNTM5	AOS CELL(TCJCN,1,,TCJ)	; Successful CHANL%s
+	SMRETN
+
+	SUBTTL CHANL% - Set TCP Event Interrupt Channels, Phase 1
+
+;T1/	JCN specified by caller (ignored here)
+;TCB/	Extended Locked Connection Block
+;      	NOINT
+;	CALL CHANL1
+;Ret+1:	Always.  T1 has 0 if OK, or -1,,error
+;CHANL1	-1,,ELP+^D17 ; Bad arg to CHANL (not 0-5, 23-35)
+
+NEW==T1
+OLD==T2
+CNT==T3
+FORKID==T4
+
+CHANL1:	ACVAR <NEWCHS,NEWPTR,OLDPTR,FRKPTR>
+	LOAD FR,TERRT,(TCB)	; Want error trace?
+	SKIPE FR		; No
+	  MOVX FR,1B0		; Yes
+	UMOVE NEWCHS,2		; Get channel word from user
+
+	MOVE T2,NEWCHS
+	MOVX T1,PT%TIS		; CHANL% JSYS
+	TXNN FR,1B0		; TCB trace or
+	 TDNE T1,MNTRAC		; Want trace?
+	  CALL PRNPKT		; Yes
+
+	MOVE NEWPTR,[POINT 6,NEWCHS]	; Set to scan them
+	MOVE OLDPTR,[POINT 6,TCPIC(TCB)]; Set to scan current ones
+	MOVE FRKPTR,[POINT 18,TCPIF(TCB)]; Set to scan forks
+	MOVEI CNT,6		; How many to scan
+	MOVE FORKID,FORKX	; Who is setting the new channels
+CHANL2:	ILDB NEW,NEWPTR		; Get a new setting
+	ILDB OLD,OLDPTR		; and what was there before
+	CAIE NEW,77		; No change mark?
+	 CAIN NEW,76		; Or delete mark?
+	  TRNA			; Yes, take the number
+	   CAIG NEW,5		; OK number for the channel?
+	    JRST CHANL3		; Take the good number
+	CAIL NEW,^D24		; These are also OK
+	 CAILE NEW,^D35
+	  JRST CHANL9		; Bad.  Tell user.
+CHANL3:
+	CAIN NEW,76		; Deletion?
+	 TROA OLD,77		; Deletion.  77 will replace old
+	  CAIN NEW,77		; No change?
+	   TRNA
+	    MOVE OLD,NEW	; Change.  New will replace old
+	DPB OLD,NEWPTR		; Construct the replacement set
+	IBP FRKPTR		; Move to current fork slot
+	CAIE NEW,77		; Changing the channel
+	  DPB FORKID,FRKPTR	; Yes.  This fork gets the PSIs now.
+	SETO CX,		; Get -1
+	CAIN NEW,76		; Deleting?
+	  DPB CX,FRKPTR
+	SOJG CNT,CHANL2		; Loop over all six bytes
+	MOVEM NEWCHS,TCPIC(TCB); Stash into TCB
+	TDZA T1,T1		; Tell caller all is well
+CHANL9:	  HRROI T1,ELP+^D17	; "Bad arg to CHANL"
+	RET
+
+	ENDAV.
+	PURGE NEW,OLD,CNT,FORKID
+
+	SUBTTL SCSLV% JSYS - Set Connection Security Level
+
+;T1/	Flags,,JCN or pointer to CDB
+;T2/	Security Level
+;	SCSLV%
+;Ret+1:	 Error.  Code in T1
+;CHKARG	ELP+^D01 ; JCN out of range/no TCB, Illegal connection/control bit
+;CHKARG	ELT+^D04 ; No free JCN/TCB space/free WAIT bit/free TVTs
+;CHKARG	ELP+^D13 ; Invalid local address/port(LP=0)
+;SCSLV1	ELP+^D29 ; Can't change security levels
+;CHKARG	ELT+^D31 ; TCP not yet initialized
+;Ret+2:	Success.
+
+.SCSLV::
+	MCENT
+	TXNE T1,TCP%JS		; JCN must be supplied
+	 TXNE T1,<STSFLG!TCP%HP!TCP%SC!OPNFLG>&^-<TCP%JS!TCP%WT>
+	  JRST TCPILP		; Illegal control bit
+	SETZ FR,		; No flags
+MNTM5	AOS CELL(TCJSC,0,,TCJ)	; Count SCSLV%s
+	MOVE T2,T1		; User's AC 1
+	XMOVEI T1,SCSLV1	; Select routine to call via CHKARG
+	TXO T1,<041B8>		; SCSLV%/ TCB
+	CALL CHKARG		; Check args, set TCB, call SCSLV1
+	JUMPL T1,TCPERR		; Give error return if appropriate
+MNTM5	AOS CELL(TCJSC,1,,TCJ)	; Successful SCSLV%s
+	SMRETN			; Otherwise, it was good.
+
+;SCSLV1	SCSLV% JSYS, Phase 1
+
+;T1/	JCN specified by caller (ignored here)
+;TCB/	Locked connection block
+;      	NOINT
+;	CALL SCSLV1
+;Ret+1:	Always.  T1 has 0 if OK, or -1,,error
+;SCSLV1	-1,,ELP+^D29 ; Can't change security levels
+
+SCSLV1:	LOAD FR,TERRT,(TCB)	; Want error trace?
+	SKIPE FR		; No
+	  MOVX FR,1B0		; Yes
+	IFQE. TSLVN,(TCB)	; Better be zero
+	  UMOVE T2,2		; Get arg from caller
+	  STOR T2,TSLVN,(TCB)	; Set the new value
+	  MOVX T1,PT%TSL	; SCSLV JSYS
+	  TXNN FR,1B0		; TCB trace or
+	   TDNE T1,MNTRAC	; Want trace?
+	    CALL PRNPKT		; Yes
+	  MOVX T1,OK
+	ELSE.
+	  HRROI T1,ELP+^D29	; "Can't change security levels"
+	ENDIF.
+	RET
+
+	SUBTTL TCP Portion of ATNVT% JSYS
+
+;TATNVT	Part of ATNVT% JSYS for TVTs, Returns to USER w/ w/o skip.
+;Attach a TVT to a User TCB; Called in non-Job-0 context
+
+;T1/	Flags+JCN
+;	JRST TATNVT
+;Ret+1:	 Failed, Error code in T1, JCN still valid
+;	ATNX1	-1,,ELP+^D01	JCN out of range/no TCB, Illegal connection
+;	ATNX2			Receive side not SYNCED
+;	ATNX3			User CLOSE%ed/ABORT%ed connection
+;	ATNX5			Recieve side has been used (RECV%s)
+;	ATNX6			Connection has been closed, or has errors
+;	ATNX8			Send side not SYNCED
+;	ATNX11			Send side has been used (SEND%s)
+;	ATNX13	-1,,ELT+^D04	No TVTs or
+;		-1,,ELT+^D31	TCP not Initialized
+;Ret+2:	Success, T1 contains TTY designator for TVT
+;		 JCN has been released
+
+TATNVT::
+	XCTU [HRRZ T1,1]	; Get JCN w/o flags
+MNTM5	AOS CELL(TCJTV,0,,TCJ)	; TATNVT calls
+	CALL TATTVT		; Call worker routine
+	  JRST TCPERR		; Return error
+MNTM5	AOS CELL(TCJTV,1,,TCJ)	; Successful TATNV1s
+	SMRETN			; OK (skip) return
+
+;TATTVT - Worker routine for TATNVT and TVTJFN
+;Takes	T1/ JCN
+;Returns +1 failure, T1/ TOPS-20 error code
+;	 +2 success, user T1 updated with TTY designator
+
+TATTVT::
+	SAVEAC <FR>
+	SETZ FR,		; No flags
+	MOVE T2,T1		; User's AC 1
+	TXO T2,TCP%JS		; Set JCN Supplied
+	XMOVEI T1,TATNV1	; Routine to call
+	CALL CHKARG		; Check arg, set TCB, call TATNV1
+	IFL. T1
+	  HRRZS T1		; Drop -1,, for compares
+	  CAIN T1,<ELP+^D01>	; Translate TCP error code into TOPS20
+	   MOVX T1,ATNX1
+	  CAIE T1,<ELT+^D04>
+	   CAIN T1,<ELT+^D31>
+	    MOVX T1,ATNX13
+	  RET			; Return non-skip
+	ENDIF.
+MNTM5	AOS CELL(TCJTV,1,,TCJ)	; Successful TATNV1s
+	LOAD T1,TVTL,(TCB)	; Make TTY descriptor
+	TXO T1,.TTDES
+	UMOVEM T1,1		; Return TT Descriptor
+	RETSKP
+	SUBTTL TCP Portion of ATNVT% JSYS, Phase 1
+
+; T1/	JCN supplied by caller
+; TCB/	Locked connection block
+;      	NOINT
+;	CALL TATNV1
+;Ret+1:	Always. T1 has -1,,error, or TTY descriptor otherwise
+;	ATNX2			Receive side not SYNCED
+;	ATNX3			User CLOSE%ed/ABORT%ed connection
+;	ATNX5			Recieve side has been used (RECV%s)
+;	ATNX6			Connection has been closed, or has errors
+;	ATNX8			Send side not SYNCED
+;	ATNX11			Send side has been used (SEND%s)
+;	ATNX13	-1,,ELT+^D04 ; No free TVTs
+
+TATNV1:	ACVAR <JCN>
+	MOVEM T1,JCN
+	LOAD FR,TERRT,(TCB)	; Want error trace?
+	SKIPE FR		; No
+	  MOVX FR,1B0		; Yes
+	MOVX T1,<-1,,ATNX2>
+	LOAD T2,TRSYN,(TCB)	; Receive side SYNCED?
+	CAIE T2,SYNCED
+         JRST TATNV9		; No, error
+	MOVX T1,<-1,,ATNX8>
+	LOAD T2,TSSYN,(TCB)	; Send side SYNCED?
+	CAIE T2,SYNCED
+         JRST TATNV9		; No, error
+	MOVX T1,<-1,,ATNX5>
+	XMOVEI CX,TCBRBQ(TCB)
+	LOAD BFR,QNEXT,(CX)
+	CAME BFR,CX		; Without receive buffers
+         JRST TATNV9		; Has buffer, error
+	MOVX T1,<-1,,ATNX11>
+
+	XMOVEI CX,TCBSBQ(TCB)
+	LOAD BFR,QNEXT,(CX)
+	CAME BFR,CX		; Without send buffers
+         JRST TATNV9		; Has buffer, error
+
+	MOVX T1,<-1,,ATNX3>
+	JE TSUOP,(TCB),TATNV9	; Not OPEN%ed by user error
+	MOVX T1,<-1,,ATNX6>
+	JE TSOPN,(TCB),TATNV9	; Not still OPEN% error
+	JN TERR,(TCB),TATNV9	; Had some error error
+	MOVE T1,TCB		; ASNTVT wants 23-bit TCB &
+	TXO T1,AN%NTP		; Say it will speak new Telnet
+	CALL ASNTVT		; Assign a virtual terminal
+         JRST TATNV8		; Failed (no TVT available, etc)
+	STOR T1,TVTL,(TCB)	; Save TTY # connection block
+
+	MOVE T3,T1		; Line number for trace
+	MOVX T1,PT%TVT		; ATNVT% JSYS
+	TXNN FR,1B0		; TCB trace or
+	 TDNE T1,MNTRAC		; Want trace?
+	  CALL PRNPKT		; Yes
+
+; Forget everything about Job which opened connection & give to Job0
+; Preserve T2
+
+	MOVE T1,JCN		; Our JCN
+	CALL RETJCN		; Release PSIs & JCN
+	SETZRO TOWNR,(TCB)	; Transferred to Job0
+	SETONE TJCN,(TCB)	; without a JCN (hard to get to Job0 JSB)
+	SETONE TTVT,(TCB)	; Say its a TVT
+
+; T2 from ASNTVT
+
+	CALL ULKTTY		; Block now stable
+	TDZA T1,T1		; OK
+TATNV8:	  MOVX T1,<-1,,ATNX13>	; Out of resources error (TVTs)
+TATNV9:	RET
+
+	ENDAV.
+
+	SUBTTL CHKARG - Check BBN TCP JSYS Arguments
+
+;Call FN(JCN,user option word or 0)
+;T1/	Extended Function address
+;T2/	Info for function to be called (Caller's T1/ Flags!connection)
+;	CALL CHKARG
+;Ret+1:	Always.  T1 has value of FUNC(JCN,ARG).  TCB has been setup.
+;		Note:  TCB is locked & NOINT during call to FUNC
+;	-1,,ELT+^D31 ; TCP not yet initialized
+; JCN
+;CHKJCN	-1,,ELP+^D01 ; JCN out of range/no TCB
+; CDB
+;GETJCN	-1,,ELT+^D04 ; No free JCN
+;CHKADD	-1,,ELT+^D04 ; No TCB space/free WAIT bit/too many connections(TCBMAX)
+;CHKADD	-1,,ELP+^D13 ; Invalid port(LP=0)
+; TVT
+;CHKTVT	-1,,ELP+^D01 ; Invalid TVT terminal line number/No TCB for line
+; System Connection Index
+;	-1,,ELP+^D01 ; Index out of range 1 to TCBCNT
+; Net
+;CHKADD	-1,,ELP+^D05 ; Packet with wild FH/FP
+;CHKADD	-1,,EFP+^D07 ; No such TCB
+; or code from function ...
+
+
+CHKARG:	TRVAR <<ARGBLK,CHKADW>>	; Setup argument block for CHKADD
+	CHKADL (USR)		; Local PARAMS also defined
+	XMOVEI PARAMS,ARGBLK	; Point to argument block
+MNTM5	AOS CELL(TCJCK,0,,TCJ)	; CHKARG calls
+	MOVEM T1,FN		; Save function address, w/ID
+	MOVEM T2,ARG1
+	NOINT
+	SKIPLE TCPON		; TCP turned on?
+	  JRST CHKARI		; No.
+	MOVE T1,T2		; Get user flags
+
+;Given JCN
+
+	TXNN T1,TCP%JS		; JCN Supplied in right half?
+	IFSKP.			; Yes, validate it
+CHKAR1:
+MNTM5	  AOS CELL(TCJCK,1,,TCJ) ; CHKARG w/ JCNs
+	  HRRZS T1		; Save JCN part
+	  MOVE T2,FN		; Function to call, w/ID, if JCN ok
+	  MOVE T3,ARG1		; Argument to FN
+	  CALL CHKJCN		; Set TCB, Lock it & call FN
+	  JRST CHKARX		; Return whatever result
+	ENDIF.
+
+;Given TVT #
+
+	TXNN T1,TCP%TV		; TVT number specified?
+	IFSKP.			; Yes
+CHKAR2:
+MNTM5 	  AOS CELL(TCJCK,4,,TCJ) ; CHKARG w/ TVTs
+	  MOVEI T2,(T1)		; TVT line # into 2
+	  CALL CHKTVT		; Check if valid TVT
+	    JRST CHKART		; Lose
+	  CALL TVTCHK		; Get (locked) data base
+	    JRST CHKARU		; Not fully active
+	  LOAD TCB,PTVT,(T2)	; Get TCB address
+	  CALL ULKTTY		; Unlock TTY data base
+	  JUMPE TCB,CHKART	; Illegal connection
+	  MOVX T3,0 ;T1		; Unused Arg for FN is line type??
+	  XMOVEI T1,TCBLCK(TCB)	; Lock to lock
+	  MOVE T4,ARG1		; Second arg for FN
+	  MOVE T2,FN		; Function to call, w/ID
+	  CALL LCKCAL
+	  JRST CHKARX		; Leave
+	ENDIF.
+
+
+;Find the nth system connection specified by T1
+
+	TXNN T1,TCP%IX		; Connection # specified?
+	IFSKP.			; Yes, scan for it
+CHKAR3:
+MNTM5 	  AOS CELL(TCJCK,5,,TCJ) ; CHKARG w/ connection index
+	  HRRZS T1		; Just the number
+	  CAILE T1,0		; Must be greater than 0 and
+	   CAMLE T1,TCBCNT	; Less than current number
+	    JRST CHKART		; Lose, invalid index
+	  PUSH P,TCB		; Save TCB
+	  PUSH P,T1		; Save index
+	  XMOVEI T1,TCBHLK	; Lock for TCB hash table
+	  CALL SETLCK		; Lock it
+	  MOVSI T2,-TCBHSZ	; Size of hash table
+	  POP P,T1		; Get index
+
+	  DO.			; Scan TCBH table
+	    HRRZ TCB,T2		; Current TCBH slot
+	    ADD TCB,TCBH	; Add base of table (including section)
+	    MOVE T3,TCB		; Save head of list
+	    DO.			; Scan entry in TCBH table
+	      LOAD TCB,QNEXT,(TCB) ; Get next on list
+	      CAME TCB,T3	; Back to head?
+	        SOJG T1,TOP.	; No, decrement index, loop if count not zero
+	    ENDDO.
+	    ADDI T2,QSZ-1
+	    SKIPE T1		; Stop, found TCB
+	      AOBJN T2,TOP.	; Jump back if another slot
+	  ENDDO.
+	  SKIPL T2		; Find one?
+	    SETZ TCB,		; No more, TCB not found
+
+;TCB points to TCB or is 0
+
+	  AOS TCBHUC		; Bump hash table use count
+	  XMOVEI T1,TCBHLK	; TCBH lock
+	  CALL UNLCK		; Unlock it with non-zero count means reading
+	  HRROI T1,<ELP+^D01>	; Assume error
+	  SKIPN TCB		; Find a TCB?
+	  IFSKP.
+IFN TCBQ,<  XMOVEI TCB,-TCBQ(TCB)> ; Yes, locate top of structure
+	    XMOVEI T1,TCBLCK(TCB) ; TCB to lock
+	    MOVE T2,FN		; Function to call, w/ID
+	    MOVX T3,0 ;JCN	; Restore args (JCN=0 here)
+	    MOVE T4,ARG1
+	    CALL LCKCAL		; Call function
+	  ENDIF.
+	  SOS TCBHUC		; Done reading TCB
+	  POP P,TCB		; Restore register
+	  JRST CHKARX		; Leave, error code in T1
+	ENDIF.
+
+;Given Connection block (only allowed by OPEN%)
+
+CHKAR4:
+MNTM5	AOS CELL(TCJCK,2,,TCJ)	; CHKARGs w/ CDBs
+	CALL GETJCN		; Reserve a JCN
+	JUMPL T1,CHKARX		; Couldn't.  Tell caller
+	MOVEM T1,JCN		; Save the JCN
+	MOVEM T1,ARG2		; Also for error exit check
+
+	XCTU [HRRZ USR,1]	; Get ptr to Connection Descriptor Block
+	UMOVE T1,.TCPLH(USR)
+	UMOVE T2,.TCPLP(USR)	; Copy the info from user area
+	UMOVE T3,.TCPFH(USR)
+	UMOVE T4,.TCPFP(USR)
+	UMOVE USR,.TCPOP(USR)
+
+				; ****	Beginning of Compatability Kludge
+	PUSH P,BHC+1		; Assume new format
+	IFN. T1			; If first word isn't 0, may be old (LP=0 bad)
+	  TLNE T1,-1		; If first is old LP, then only RH 16-bits used
+	  ANSKP.		; Looks like old format
+MNTM5	    AOS CELL(TCJCK,3,,TCJ) ; Old format CDBs
+	    MOVE T4,T3		; Map old format into new
+	    MOVE T3,T2
+	    MOVE T2,T1
+	    SETZB T1,USR	; New info zero if old format
+	    SETZM (P)		; Use old format
+	ENDIF.			; ****	End of Compatability Kludge
+
+	ANDX T1,.RTJST(-1,PISH)	;cwl address space codes here
+	ANDX T2,.RTJST(-1,PSP)
+	ANDX T3,.RTJST(-1,PIDH)
+	ANDX T4,.RTJST(-1,PDP)
+	MOVEM T1,LH
+	MOVEM T2,LP		; Store into ARGBLK for CHKADD
+	MOVEM T3,FH
+	MOVEM T4,FP
+	MOVEM USR,ARG1		; Option addresses are second arg for FN
+
+	IFN. T1			; Is local address wild?
+	  CALL LCLHST		; No, is it one of our addresses?
+	    JRST CHKA18		; No, invalid address specified
+	ENDIF.
+
+	SETZM WILDOK		; Not OK to find listening connections
+	MOVE T1,PARAMS		; Pointer to parameter block for CHKADD
+	CALL CHKADD		; Find TCB, Lock it, Call FN, w/ID
+
+				; ****	Beginning of Compatability Kludge
+	POP P,T2		; Old (0)/New (1) flag
+	JUMPL T1,CHKA19		; Jump if error
+	STOR T2,TNUFM,(TCB)	; Save format flag
+	JRST CHKARX
+				; ****	End of Compatability Kludge
+	JRST CHKA19
+
+
+CHKA18:	POP P,(P)		; Drop Old (0)/New (1) flag
+	HRROI T1,ELP+^D13	; "Invalid local address"
+CHKA19:	PUSH P,T1		; Save error result
+	MOVE T1,JCN		; Get back the "current" JCN
+	LOAD T2,JCNTC,(T1)	; To see if reserved or in use
+	SKIPE T2		; If just reserved, or
+	 CAMN T1,ARG2		; If "current" is the "reserved" JCN
+	  CALL RETJCN		; Return & disown TCB ("DEAD")
+	POP P,T1		; Restore error code
+	JRST CHKARX
+
+
+
+
+
+CHKARU:	CALL ULKTTY		; Maybe a non-standard block
+CHKART:	HRROI T1,ELP+^D01	; Illegal connection
+	JRST CHKARX
+
+CHKARI:	HRROI T1,ELT+^D31	; "TCP Not initialized yet"
+CHKARX:	OKINT
+MNTM5	SKIPGE T1		; Error?
+MNTM5	  AOS CELL(TCJCK,6,,TCJ); CHKARG errors
+	CHKADR
+	RET
+
+	ENDTV.
+	SUBTTL CHKJCN - See if caller has access to JCN
+
+;T1/	JCN in question
+;T2/	Extended Function to call, w/ID, if OK
+;T3/	Argument for function
+;     	Maybe NOINT
+;	CALL CHKJCN
+;Ret+1:	Always.  T1 has -1,,error or value of FN(JCN,ARG1)
+;	ELP+^D01 ; JCN out of range/no TCB
+
+CHKJCN:
+MNTM5	AOS CELL(TCJCJ,0,,TCJ)	; CHKJCN calls
+	PUSH P,T1		; Save the JCN and flags
+	HRRZS T1		; Just JCN
+	CAIL T1,1		; Reasonable number?
+	 CAIL T1,MAXJCN
+	  JRST CHKJC8		; No.  Tell Caller
+	LOAD TCB,JCNTC,(T1)	; Get the TCB
+	JUMPE TCB,CHKJC8	; Non-JCN, give error
+	CALL BBNCHK		; Is this call legal for other reasons
+	  JRST CHKJC9		; No
+	LOAD T1,TOWNR,(TCB)	; Check the owning job number
+         CAME T1,JOBNO		; Is it the same as our job
+	  JRST CHKJC7
+	XMOVEI T1,TCBLCK(TCB)	; Pointer to the connection lock
+	MOVE T4,T3		; Put arg in right place
+	MOVE T3,0(P)		; Get the JCN as first ARG to function
+	CALL LCKCAL		; Lock the lock and call the function
+	JRST CHKJC9		; Use whatever value is returned
+
+CHKJC7:	BUG.(CHK,TCPJS3,TCPBBN,SOFT,
+<CHKJCN: TCB ownership screwed up - own/job/jcn>,<<T1,D>,<JOBNO,D>,<(P),D>>,<
+
+Cause:	A TCB is being accessed by a job which does not own it.
+
+Action:	Try to determine how the situation occurred.
+
+Data:	Owning job number, Accessing job number, Job connection number.
+
+>)
+
+CHKJC8:	HRROI T1,ELP+^D01	; "Illegal Connection"
+CHKJC9:	ADJSP P,-1		; Clear stack
+MNTM5	SKIPGE T1
+MNTM5	  AOS CELL(TCJCJ,1,,TCJ); CHKJCN errors
+	RET
+
+	SUBTTL GETJCN - Assign a Job Connection Number
+
+;     	NOINT
+;	CALL GETJCN
+;Ret+1:	Always.  T1 has the JCN (.GT.0) or
+;	-1,,ELT+^D04 ; No free JCN/TCB space/free WAIT bit/free TVTs
+
+GETJCN:
+MNTM5	AOS CELL(TCJGJ,0,,TCJ)	; GETJCN calls
+	NOSKED			; Prevent others from interfering
+	MOVSI T2,-MAXJCN+1	; Max number of JCNs per job (ignore 0)
+	SKIPE JCNTCB+1(T2)	; Empty slot?
+	  AOBJN T2,.-1		; No.  Check next
+	HRROI T1,ELT+^D04	; "No space for another connection"
+	JUMPGE T2,GETJCX	; Return that if no empty slot found
+	MOVE T3,FORKX		; Our identity.
+	STOR T3,JCNFX,+1(T2)	; Reserve the slot for later use
+	MOVEI T1,1(T2)		; The JCN as a result.
+GETJCX:	OKSKED
+MNTM5	SKIPGE T1
+MNTM5	  AOS CELL(TCJGJ,1,,TCJ); GETJCN errors
+	RET
+
+	SUBTTL RETJCN - Free a Job Connection Number
+
+;T1/	JCN
+;     	NOINT
+;	CALL RETJCN		; NB T2 preserved
+;Ret+1:	Always.
+;Preserves T2,T4
+
+RETJCN::
+	SAVEAC <T1,TCB>
+MNTM5	AOS CELL(TCJAA,2,,TCJ)	; RETJCN calls
+	NOSKED
+	CAIN T1,-1		; Job0 w/o JCN?
+         JRST RETJCX		; Yes, special User TVT connection
+	CAIL T1,1
+	 CAIL T1,MAXJCN		; Reasonable number
+	  SKIPA CX,FORKX	; Bug info
+	   JRST RETJC1
+	BUG.(INF,TCPJS1,TCPBBN,SOFT,
+<RETJCN: JCN out of range - job/fx/jcn/pc>,
+<<JOBNO,JOB>,<CX,FX>,<T1,JCN>,<-3(P),PC>>,<
+
+Cause:	A TCP job connection number (JCN) is being released, but the JCN
+	given is not valid.
+
+Action:	Notify software support of the problem, giving the additional
+	information displayed.  The bad call has been ignored.
+
+Data:	Job number, ForkX, Invalid JCN, Address of RETJCN's caller.
+
+>)
+	JRST RETJCX
+
+RETJC1:	SETZ TCB,
+	EXCH TCB,JCNTCB(T1)
+	AND TCB,[JCNTC]		; Just keep 23-bit TCB address
+	TDNN TCB,[JCNTC]	; Just a reserved slot?
+         JRST RETJCX		; Yes.  Get out.
+	MOVNI T3,1
+	STOR T3,TPSIC,(TCB)	; Disable all PSIs
+	STOR T3,TPIFU,(TCB)	; Remove forks from TCB
+	STOR T3,TPIFR,(TCB)
+	STOR T3,TPIFS,(TCB)
+	STOR T3,TPIFE,(TCB)
+	STOR T3,TPIFX,(TCB)
+	STOR T3,TPIFA,(TCB)
+	STOR T3,TOFRK,(TCB)	; Forget owning fork
+	SETZRO TJCN,(TCB)	; Disown the TCB ("DEAD")
+
+	MOVE T1,TCB		; in case we call TCPBFD
+	TMNE TDEC,(TCB)		; a DEC TCB?
+	 CALL TCPBFD		; yes so release all DEC buffers
+RETJCX:	OKSKED
+	RET
+
+	SUBTTL MAKBFR - Make a Buffer Descriptor
+
+;Buffer descriptors ("Buffers") are the items which get queued for
+;the Packetizer and Reassembler.  There is one for each SEND% or RECV%
+;executed by the user.  Amoung other things, a buffer block contains
+;an "index" which associates that buffer with a particular DONE bit
+;which is stored in resident core;  it is this bit that the scheduler
+;tests to reactivate a process which is waiting for that particular
+;buffer.
+
+;User 1/JCN and flags
+;User 2/Address of buffer header
+;T1/	Access flags (PTWR form)
+;TCB/	Extended pointer to locked connection block
+;	CALL MAKBFR
+;Ret+1:	Always.  T1 has the buffer address (.GT.0) or -1,,error
+;MAKBFR	-1,,ELP+^D15 ; Bad buffer arg(s) (Count lt 0, Adr last word ge 1,,0)
+;MAKBFR	-1,,ELT+^D16 ; No free WAIT bit(s)/space for buffer header
+
+MAKBFR:	ACVAR <HDRADR,JCNFLG,DATADR,ACCESS>
+MNTM5	AOS CELL(TCJMB,0,,TCJ)	; MAKBFR calls
+	PUSH P,BFR		; Save register
+	MOVEM T1,ACCESS
+
+	MOVEI T1,BFRSIZ		; Size of a buffer descriptor
+ 	CALL GETBLK		; Get a block of free storage
+	SKIPLE BFR,T1		; Got it?
+	IFSKP.			; No
+	  HRROI T1,ELT+^D16	; "No space right now"
+	  JRST MAKBFX
+	ENDIF.
+	MOVEI T2,BFRSIZ		; Size of a buffer descriptor
+	CALL CLRBLK		; Clear the block
+
+	STOR TCB,BTCB,(BFR)	; Remember which TCB owns the buffer
+	MOVE T1,TODCLK		; Now in milliseconds
+	STOR T1,BTS,(BFR)	; Set into buffer timestamp
+
+	UMOVE JCNFLG,1		; Get JCN control flags from user
+	TXNN JCNFLG,TCP%WT	; Will this fork wait for this buffer?
+	IFSKP.			; Yes
+	  CALL ASNWTB		; Assign an index
+	  IFL. T1
+	    MOVX T1,ELT+^D16	; None available (TCP error code)
+	    JRST MAKBF9		; Go release buffer & return error
+	  ENDIF.
+	  STOR T1,BIDX,(BFR)	; Put in wait bit index
+	  CALL CLRWTB		; Clear it
+	ENDIF.
+
+	UMOVE HDRADR,2		; Get address of header from user
+	SUBI HDRADR,BFRSUI	; Make it into standard header ptr.
+	STOR HDRADR,BHADR,(BFR)	; Save header address in user space
+
+	MOVX T1,<TCP%DN!TCP%ER> ; Done and Error bits
+	XCTU [ANDCAB T1,BFRFLG(HDRADR)] ; Clear in user space, get others
+	TXNE T1,TCP%UR		; Urgent (send) bit on?
+	  TXO T1,TCP%PU		; Yes.  That implies a PUSH.
+	MOVEM T1,BFRFLG(BFR)	; Store in monitor copy
+
+	IFQN. TNUFM,(TCB)	; Using new formats?
+	  UMOVE T1,BFROPT(HDRADR) ; Get option addresses word
+	  MOVEM T1,BFROPT(BFR)	; Save them
+	ENDIF.
+
+	UMOVE T4,BFRCNT(HDRADR) ; Number of words/bytes in buffer
+	JUMPL T4,MAKBF8		; Illegal
+	STOR T4,BICNT,(BFR)	; Remember the initial data count
+
+	UMOVE T3,BFRDAD(HDRADR)	; Address of data area possibly
+				; contains byte pointer and section
+	TXNE T3,BDAPO!BDASZ	; Size and Position fields 0?
+	IFSKP.			; Yes, default P and S in the pointer
+	  TXNE JCNFLG,TCP%WM	; In word mode?
+	   TXOA T3,<POINT 36,0>	; Yes, use 36 bit bytes
+	    TXO T3,<POINT 8,0>	; No, use 8 bit bytes
+	ELSE.			; Non-0 P and S, is S 8 or 36?
+	  LOAD T2,BDASZ,-BFRDAD+T3  ; Get the Size
+	  TXNN JCNFLG,TCP%WM	; In word mode?
+	  IFSKP.		; Yes
+	    CAIE T2,^D36	; 36 bit bytes?
+	     JRST MAKBF8	; No, illegal
+	  ELSE.			; Not in word mode
+	    CAIE T2,^D8		; 8 bit bytes?
+	     JRST MAKBF8	; No, illegal
+	  ENDIF.
+	ENDIF.
+	STOR T3,BDADR,(BFR)	; Remember it
+
+	AND T3,[XWD 37,777777]	; 23-bit address
+	MOVE T1,T3		; Save begin address for MAP
+
+	TXNE JCNFLG,TCP%WM	; Is data count in words?
+	IFSKP.			; No, octets
+	  ADDI T4,3		; Round up to word boundary
+	  ASH T4,-2		; Number of words in the buffer
+	ENDIF.
+	ADD T3,T4		; Beyond buffer
+	SUBI T3,1		; Last word in buffer
+	MOVE T2,T3		; Save it
+	LSH T3,-PGSFT		; Last page in buffer
+	CAIL T3,1000		; Better not cross section boundary
+	  JRST MAKBF8		; Give error if it does
+
+; Verify access
+
+	TXNN ACCESS,PTWR	; Want to write?
+	IFSKP.			; Yes
+	  DO.
+	    XCTU [MAP T3,(T1)]	; Page access
+	    TXNE T3,20B5	; Check for hard failure
+	      JRST MAKBF8	; Found one, let someone else complain
+	    TXNN T3,17B5	; Skip if page exits
+;cwl might it be possible for the system to not have touched the end?
+	     TXNN T3,1B0	; Not exist and user address is ok
+	      TXNE T3,PTWR	; Exists or NEX-monitr  and  writeable?
+	       TRNA		; NEX & User, or EX & writeable
+	        JRST MAKBF8	; No, fail
+	    ADDI T1,1000	; Next page
+	    CAMG T1,T2		; Need to check it?
+	      JRST TOP.		; Yes
+	  ENDDO.
+	ELSE.			; Read access
+jfcl;cwl how to check for no read access?
+	ENDIF.
+
+	MOVE T1,FORKX		; User's system fork number
+	STOR T1,BFRKX,(BFR)	; Remember for mapping user space
+
+	NOSKED			; No, Make sure we are the only one
+
+	LOAD T4,BDASE,(BFR)	; Get section number of data
+	XSFM T1			; Get previous context flags
+	TXNN T1,PCU		; Previous Context User on?
+	IFSKP.			; Yes
+	  SETZ T2,		; Previous was user, Set monitor flag=0
+	  LOAD T1,SPTX,+USECTB(T4) ; SPT index of data's section map
+	ELSE.			; No
+	  SETO T2,		; Previous monitor, Set monitor flag=1
+	  LOAD T1,SPTX,+MSECTB(T4) ; SPT index of data's section map
+	ENDIF.
+	JUMPE T1,MAKBF7		; Error if no section map
+	STOR T1,BDSPT,(BFR)	; Save SPT index of data's section map
+	STOR T2,BFRMN,(BFR)	; Set Buffer from Monitor flag
+
+IFN REL6,<PRINTX ? Does MAKBFR have to be changed for REL6>
+
+	LOAD T2,BFRMN,(BFR)	; User/Monitor flag
+	LOAD T4,BHDSE,(BFR)	; Section containing buffer header
+	IFE. T2			; User
+	  LOAD T3,SPTX,+USECTB(T4) ; SPT index of user section map
+	ELSE.
+	  LOAD T3,SPTX,+MSECTB(T4) ; SPT index of monitor section map
+	ENDIF.
+	STOR T3,BHSPT,(BFR)	; SPT index of header's section map
+
+	IFQE. BFRMN,(BFR)	; Is buffer in monitor space, or
+;cwl TDEC should imply BFRMN since SEND%/RECV% for DEC was from monitor
+	ANDQE. TDEC,(TCB)	; Is this a DEC TCB?
+	  LOAD T2,SPTSHC,(T1)	; Get the share count on the spt slot
+	  CAIL T2,MAXSHC-10	; Is it close to overflow?
+	    JRST MAKBF6		; Yes, so we can not continue
+	  PUSH P,Q1		; Protect critical AC
+	  CALL UPSHR;(T1)	; Inc. data section's share count
+	  LOAD T1,BHSPT,(BFR)	; Header section's SPT index
+	  CALL UPSHR		; Inc. header section's share count
+	  POP P,Q1
+	  SETONE BFSRC,(BFR)	; Remember resource
+	ENDIF.
+
+	OKSKED			; Give back the system
+
+	CALL RSTBFR		; Reset the buffer state
+	MOVE T1,BFR		; This is the value
+MNTM5	AOS CELL(TCJMB,1,,TCJ)	; Successful MAKBFRs
+	JRST MAKBFX
+
+
+MAKBF6:				; Here when UPT Share count will overflow
+;	SETZRO BFSRC,(BFR)	; Did not increment share count
+	OKSKED			; Give back the machine
+	HRROI T1,ELT+^D16	; No "space" available right now
+	JRST MAKBF9
+
+MAKBF7:	OKSKED			; Give back the machine
+MAKBF8:	HRROI T1,ELP+^D15	; "Bad buffer arg(s)"
+MAKBF9:	PUSH P,T1		; Save error code
+	LOAD T1,BIDX,(BFR)
+	SKIPE T1		; Was wait bit assigned?
+	  CALL RELWTB		; Yes, Release it
+	MOVE T1,BFR		; Get the free space address
+	CALL RETBLK		; Return the block and fall through
+	POP P,T1		; Error code
+MAKBFX:	POP P,BFR
+	RET
+
+	ENDAV.
+	ENDTV.
+
+	SUBTTL FREBFR - Release Resources Used By a Buffer
+
+;Called by a process doing a SEND%, RECV% which waits for completion.
+;In this case USRBFE (or USRBFF) places the completed buffer on the
+;TCPBDQ so it may be released by this routine in the above JSYSs or
+;by ABORT.  Note that all mapping functions have already been completed.
+
+;BFR/	Extended Buffer
+;	CALL FREBFR
+;Ret+1:	Always
+
+FREBFR:
+MNTM5	AOS CELL(TCJAA,3,,TCJ)	; FREBFR calls
+	NOSKED
+
+	MOVX T1,PT%TKB		; Kill buffer
+	TXNN FR,1B0		; TCB trace or
+	 TDNE T1,MNTRAC		; Want trace?
+	  CALL PRNPKT		; Yes
+
+	LOAD T1,BIDX,(BFR)	; Get the wait bit index
+	SETZRO BIDX,(BFR)	; Indicate it has been released
+	SKIPE T1		; Have a bit to release?
+	  CALL RELWTB		; Actually release it
+
+	XMOVEI T1,BFRQ(BFR)	; Item to dequeue
+	SKIPE (T1)		; If not queued, skip it
+	  CALL DQ		; Remove it from the done queue
+	OKSKED
+
+IFN BFRQ,<XMOVEI T1,-BFRQ(T1)>	; Point to top of structure
+	CALLRET RETBLK		; Release the storage
+
+
+;BBNCHK	Check to see if a BBN TCP JSYS is legal.  Always legal for the
+;monitor. If from user mode not legal for a DEC TCB.  If BBNOK is off
+;then never legal from user mode. Skip return if legal.
+
+BBNCHK:
+	XSFM T1			; Get PC Flags
+	TXNN T1,PCU		; Previous Context User on?
+	  RETSKP		; No, call is always legal for the monitor
+	MOVE T1,TCPSW		; Get TCP switches
+	TMNN TDEC,(TCB)		; Is this a DEC TCB?
+	 TXNN T1,BBNOK		; Not DEC TCB.  Are BBN Calls OK?
+	  TRNA
+	   RETSKP		; Skip return
+	MOVX T1,TCPX28		; Invalid BBN JSYS call
+	RET			; Not OK or this is a DEC TCB
+
+
+BBNCKK:				; Same as above but does not check the TCB
+	XSFM T1			; Get PC Flags
+	MOVE CX,TCPSW		; Get TCP switches
+	TXNN CX,BBNOK		; BBN Calls OK?
+         TXNN T1,PCU		; No. Previous Context User on?
+          RETSKP		; PCU off or BBNOK on.
+	MOVX T1,TCPX28		; Invalid BBN JSYS call
+	RET			; PCU on and BBNOK off.
+
+	TNXEND
+	END

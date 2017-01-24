@@ -1,0 +1,350 @@
+;<6-1-MONITOR>PNVSRV.MAC.6, 11-Apr-85 18:08:49, Edit by WHP4
+;<6-1-MONITOR>PNVSRV.MAC.5, 11-Apr-85 17:23:12, Edit by WHP4
+; add PNRRH routine for Pup NTINF% support
+;<6-1-MONITOR>PNVSRV.MAC.4, 23-Mar-85 23:31:59, Edit by LOUGHEED
+;<6-1-MONITOR>PNVSRV.MAC.3, 21-Mar-85 14:04:46, Edit by LOUGHEED
+;<6-1-MONITOR>PNVSRV.MAC.2, 14-Mar-85 01:19:01, Edit by LOUGHEED
+;<6-1-MONITOR>PNVSRV.MAC.1, 12-Mar-85 19:45:59, Edit by LOUGHEED
+; Turn TTPNDV into PNVSRV for Release 6.1
+
+
+SEARCH PROLOG,TTYDEF
+TTITLE (PNVSRV,PNVSRV,< -- PUP NVT Service>)
+SUBTTL Frank Gilmurray / SUMEX Project, Stanford University / 6-Jun-80
+
+;Define additional data in dynamic data block
+
+TTYPUP==:TTDEV			; PUP NVT data in device dependent word
+
+	RESCD			; This module is resident
+
+
+;TTCPNL - Check if Pup NVT logins are allowed
+
+TTCPNL::SAVELN			; Preserve static line number
+	MOVE T3,FACTSW		; Get the facts
+	TXNE T3,SF%PNV		; See if PUP NVT logins allowed
+	 JRST RETO		; Yes, return +1 with T1 negative
+	HRROI T1,[ASCIZ/
+?Logging in on PUP network terminals is currently disallowed.
+/]
+	CALL TTEMES		; Print an error message
+	JRST RETZ		; T1 is non-negative on failure
+
+;PUPSTP - Set terminal type and mechanical bits
+;Returns +1 always
+
+PUPSTP::CAIL T1,NTTYPS
+	 RET			; Terminal type out of range
+	STOR T1,TTTYP,(T2)	; Store new terminal type
+	LDB T3,[POINT 3,TTYPE0(T1),2] ; Get mechanical bits (TTMBIT in TTYSRV)
+	DPB T3,[POINT 3,TTFLGS(T2),3] ; Put where noticed
+	HRRZ T3,TTYPE1(T1)	; Get video attribute
+	SKIPE T3		; Is this a video terminal?
+	 MOVEI T3,1		; Yes
+	STOR T3,TTNXO,(T2)	; Set page-stop bit if video
+	RET
+
+;PUPACT - Set output in progress
+;Returns +1 always
+
+PUPACT::SETONE TTOTP,(T2)
+	RET
+
+;PUPACT - Clear output in progress
+;Returns +1 always
+
+PUPIAC::SETZRO TTOTP,(T2)
+	RET
+
+
+;CHKPNV - See if this line number is a PNV
+
+;Accepts:
+;	T2/ internal line number
+;	CALL CHKPNV
+
+;Returns +1: if not PNV
+;	 +2: if PNV
+;PUPCTY is alternative entry point with T2 containing dynamic data
+
+PUPCTY::SAVELN			; Save dynamic data pointer
+	DYNST			; Get static line nbr
+CHKPNV::ACVAR <W1>		; Get an AC to work with
+	LOAD W1,TTSTY,(T2)	; Get line type from static data
+	CAIE W1,TT.PNV		; Test for PUP NVT
+	 RETBAD			; No. Failure
+	RETSKP			; Return success
+
+	ENDAV.			; End ACVAR W1
+
+;Check TTMSG to a Pup NVT line
+PNVSND::SAVELN			; Save static line nbr
+	CALL STADYN		; Get corresponding dynamic addr
+	 RET			; Inactive, return +1
+	CALLRET CKPRT1		; Check if port attached and not hanging up
+
+;PPSOUT - Check for output waiting for BSP processing
+;Note that sense of skip in PPSOUT is different from PPSOBE and PPSALL
+;Returns +1 output of some type is pending
+;	 +2 no output need be done
+
+PPSOUT::TMNN <TTHPO,TTSAL>,(T2)	; If sendall output
+	SKIPE TTOCT(T2)		; Or normal output
+	 RET			; Take a non-skip return
+	RETSKP			; Skip return if no output
+
+;PPSOBE - Test for TTY output pending
+;Returns +1 TTY output buffer empty
+;	 +2 need to empty TTY output buffer
+
+PPSOBE::SKIPN TTOCT(T2)
+	 RET
+	RETSKP
+
+;PPSALL - Test for a non-empty sendall buffer 
+;Returns +1 sendall buffer is empty
+;	 +2 need to copy from sendall buffer to TTY buffer
+
+PPSALL::TMNN <TTHPO,TTSAL>,(T2)
+	 RET
+	RETSKP
+
+;GETAB routine for NVTPUP table (NVT offset already checked at .GETAB)
+GTBNVT::ADD T2,TT1LIN+TT.PNV	; Convert NVT offset to TTY line number
+	CALL STADYN		; Is line active?
+	 TDZA T1,T1		; No, return 0
+	MOVE T1,TTYPUP(T2)	; Yes, return PUP NVT info
+	RET
+
+;PNVCLX - Handle a hangup
+;We use the standard TTYDEA routine which knows how to handle the special
+; case of a PNV connection.
+;Returns +1 always
+;Preserves T2
+
+PNVCLX::CALL TTYDEA		; Invoke standard deassignment routine
+	IFNSK.
+	  HRLI T1,(T2)		; Static line number for scheduler test
+	  MDISMS		; Wait for PNV connection to close
+	  JRST PNVCLX		; Try again
+	ENDIF.
+	RET			; All done, take a single return
+
+;Flag user-invoked DETACH on PUP NVT (to avoid carrier-off PSI)
+;This prevents job from being logged out -- see JOBCOF
+;Called from LDATCH in the module MEXEC
+
+PNVDET::SKIPG T2,CTRLTT		; Get controlling TTY
+	 RET			; Inactive line or already detached
+	LOAD T3,TTSTY,(T2)	; Get line type from static data
+	CAIN T3,TT.PNV		; Is this line a PUP NVT?
+	 CALL STADYN		; Yes, get dynamic addr
+	  RET			; Here if not NVT or inactive
+	SETONE TTPDT,(T2)	; Flag user-invoked detach on PUP NVT
+	RET
+
+;Start output to a PUP NVT
+PNVSOU::DYNST T3		; Get static line number
+	XCALL (XCDSEC,PNVIN0)	; Schedule a scan request for this line
+	RETSKP			; Return to caller
+
+;Check if PUP NVT port attached and not hanging up
+CHKPRT:	SAVELN			; Save dynamic line nbr
+CKPRT1:	SKIPGE T2,TTYPUP(T2)	; Port attached
+	TXNE T2,HUREQF		;  and not hanging up?
+	 RETBAD			; No
+	RETSKP			; Yes
+
+;PNVDYM - set up dynamic data for a PUP/TTY buffer
+;Caller must be NOSKED with CHNOFF DLSCHN
+;Takes	T1/ byte allocation
+;	T2/ dynamic data pointer
+;	T3/ byte pointer to start of buffer
+;Returns +1 always
+
+PNVDYM::CAIGE T1,MINBYT		; Within expected range?
+	 BUG.(INF,PNVDYX,TTYSRV,SOFT,<Too small PNV buffer size>)
+	STOR T1,TOMAX,(T2)	; Set up buffer capacity
+	SKIPE TTOIN(T2)		; Sanity check
+	 BUG.(INF,PNVDYY,TTYSRV,SOFT,<PNV output pointer clobbered>)
+	MOVEM T3,TTOIN(T2)	; Store input byte pointer
+	MOVEM T3,TTOOUT(T2)	; Store output byte pointer
+	SKIPE TTOCT(T2)		; Another sanity check
+	 BUG.(INF,PNVDYZ,TTYSRV,SOFT,<PNV output count clobbered>)
+	MOVEI T1,1		; Only one output buffer
+	STOR T1,TTNOU,(T2)	; ...
+	STOR T1,TOWRN,(T2)	; Wakeup if one character in buffer
+	RET			; Return to caller
+
+;PNVREL - "Release" a TTY buffer belonging to a PNV
+;We just pretend to not have a buffer by clearing our pointers
+; and output byte count.  PNVBUF takes care of actually discarding
+; the storage. TTCOBI is the old name for the routine that would clear
+; a TTY output buffer without doing SYNCH negotiations (PNVCOB does that).
+;Takes	T2/ dynamic data pointer
+;Returns + 1 always
+
+TTCOBI::			;An old name for this function
+PNVREL::SETZM TTOIN(T2)		;Clear pointer for putting in
+	SETZM TTOOUT(T2)	;Clear pointer for taking out
+	SETZM TTOCT(T2)		;Clear output byte count
+	MOVEI T1,MINBYT		;Capacity of smallest PUP buffer we will get
+	STOR T1,TOMAX,(T2)	;Reset the buffer capacity
+	RET			;Return to caller
+
+;PNVOBP - return byte pointer to last output byte
+;Must be called NOSKED with CHNOFF DLSCHN
+;Takes	T2/ dynamic data pointer
+;Returns +1 always, T1/ output buffer byte pointer
+
+PNVOBP::MOVE T1,TTOIN(T2)	;Get pointer to last byte
+	RET			;Return to caller
+
+
+;PNVSAL - do sendall processing for PNV's
+;Must be called NOSKED and CHNOFF DLSCHN
+;Called immediately after PNVBUF.  We are thus ensured that there will be
+; room for at least one character.
+;Takes	T2/ dynamic data pointer
+;Returns +1 buffer ready for sending
+;Preserves T2,T3; clobbers T1,T4
+
+PNVSAL::TMNN <TTHPO,TTSAL>,(T2)	;Sendall or high priority?
+	 BUG.(INF,PNVSAX,TTYSRV,SOFT,<PNVSAL called but no sendall>)
+	LOAD T4,TOMAX,(T2)	;Get buffer capacity
+PNVSA0:	CALL PNVGTO		;Get next sendall character
+	 RET			;No more, return to caller with buffer space
+	JN TTFLO,(T2),PNVSA0	;Loop back again if flushing characters
+	IDPB T1,TTOIN(T2)	;Deposit character into output buffer
+	AOS T1,TTOCT(T2)	;Count another output character
+	CAIGE T1,(T4)		;Any more room in the buffer?
+	 JRST PNVSA0		;Yes, go for another character
+	RET			;Full. Must send off packet
+
+
+;PNVGTO - helper routine for PNVSAL, based on TTSND routine
+;Takes	T2/ dynamic data pointer
+;Returns +1 no more characters
+;	 +2 success, T1/ next character
+
+PNVGTO:	TMNN TTHPO,(T2)		;High priority message queued?
+	IFSKP.
+	  ILDB T1,TTSAL2(T2)	;Yes, get next char
+	  CAIE T1,.CHDEL	;End of string?
+	  RETSKP		;No, return character
+	  SETZRO TTHPO,(T2)	;Rubout marks end of string, clear
+	ENDIF.
+	TMNN TTSAL,(T2)		;Sendall?
+	IFSKP.
+	  ILDB T1,TTSAL2(T2)	;Get next character
+	  DECR TSALC,(T2)	;Decrement count of remaining characters
+	  TRZ T1,200		;Clear parity bit on PNV's
+	  OPSTR <SKIPG>,TSALC,(T2) ;Any more characters to send?
+	   CALL CLRSAL      	;Clear sendall for line
+	  RETSKP		;Return the char
+	ENDIF.
+	RET			;No more characters
+
+
+;PNVXOF - here when we have decided to XOFF. We set the standard
+; XOFF flag (TTSFG). We lower the capacity of our output buffer to match
+; the amount of output we have queued; this ensures we will send this
+; buffer and then block (most likely in the CTRLQW test).
+ 
+;This routine takes the place of the TTOPFC 9-bit character that is
+; inserted into a TTY output buffer to indicate a page full point.
+; We deal only with 8-bit bytes for efficiency reasons. 
+
+PNVXOF::JN TTSFG,(T2),R		;Do this only once
+	SETONE TTSFG,(T2)	;Set CTRL-S flag
+	NOSKED			;Prevent races
+	CHNOFF DLSCHN		;Turn off TTY scanning
+	SKIPG CX,TTOCT(T2)	;Get number of bytes queued for output
+	 MOVEI CX,1		;So we don't hang in TCOTST
+	STOR CX,TOMAX,(T2)	;Make our buffer look full
+	CHNON DLSCHN		;Reallow TTY scanning
+	OKSKED			;Resume scheduling
+	RET			;Skip return to caller
+
+;PNVSFG - test if we are in a page wait
+;Don't get another output buffer if CTRL-S has been typed
+;Returns +1 must block, T1/ scheduler test
+;	 +2 okay to get a buffer
+
+PNVSFG::JE <TTSFG>,(T2),RSKP	;Take a skip return if not in a page hold 
+	DYNST T1		;Else convert dynamic to static
+	HRLI T1,CTRLQW		;Set scheduler test
+	MOVSS T1		;Normalize
+	RET			;Return to caller
+
+;CTRLQW - wait until the CTRL-S flag is cleared
+
+CTRLQW:	MOVE T2,T1		;Copy static line number
+	CALL STADYN		;Convert to dynamic pointer
+	 JRST 1(T4)		;Nothing there?  Shouldn't happen.
+	JE <TTSFG>,(T2),1(T4)	;Wakeup if flag has been cleared
+	SKIPL TTYPUP(T2)	;Still assigned?
+	 JRST 1(T4)		;No, wakeup
+	JRST 0(T4)		;Keep on sleeping
+
+
+;PNRRH - PNV device dependent "return remote host" code
+;
+; Given the line #, returns the originating hostname, line and
+; network type. Places this info in the users NTINF% .NWRRH 
+; argument block.  NTINF has already checked the user arguments 
+; for validity.
+;
+; Call with T1/ address of internal arg block
+;
+;   ARG+.NWABC/ # of bytes available for host name
+;   ARG+.NWFNC/ not used
+;   ARG+.NWNNP/ byte pointer to store hostname string
+;   ARG+.NWLIN/ address of dynamic data for line
+;   ARG+.NWTTF/ flags, and network and terminal types
+;   ARG+.NWNNU/ node # word 1
+;   ARG+.NWNU1/ node # word 2
+;
+; Returns + 1 on error with T1/ error code
+;	  + 2 on success
+
+	SWAPCD
+
+PNRRH::	ACVAR <UAB>		;DECLARE A TEMPORARY WORKING AC
+	MOVE UAB,T1		;SAVE POINTER TO ARG BLOCK
+	MOVX T4,NW%PN		;SET NETWORK TYPE
+	DPB T4,[POINT 9,.NWTTF(UAB),17] ;STORE NETWORK TYPE
+	NOSKED			;DON'T LET THINGS GO AWAY
+	MOVE T2,.NWLIN(UAB)	;GET ADDRESS OF DYNAMIC DATA
+	CALL DYNSTA		;GET TTY LINE NUMBER
+	CALL STADYN		;IS IT OKAY?
+	 JRST PNRRH1		;NO, GO SET "NO NODE NAME KNOWN"
+	SKIPL T2,TTYPUP(T2)	;GET TTYPUP WORD FOR THIS CONNECTION
+	 JRST PNRRH1		;PNV NOT ASSIGNED
+	HRRZS T2		;CLEAR FLAG BITS
+	SKIPE T3,PUPFPT(T2)	;GET POINTER INTO PUP SECTION
+	MOVE T3,1(T3)		;GET HOST ADDRESS OR LEAVE ZERO IF FULLY WILD
+	OKSKED			;ALL OKAY AGAIN
+	MOVEM T3,.NWNNU(UAB)	;SAVE NET,,HOST INFORMATION
+	SETZ T4,		;NO PORT INFO WANTED
+	MOVE T1,.NWNNP(UAB)	;GET POINTER FOR DEPOSITING HOSTNAME
+	MOVE T2,[PN%FLD!PN%OCT!T3] ;NO DEFAULTS, SHOW CONSTANTS, ARGS IN T3,T4
+	PUPNM%			;TRANSLATE TO STRING
+	 ERJMPS PNRRH2		;SOME ERROR
+	RETSKP			;SUCCCESS, RETURN TO CALLER
+
+;HERE TO HANDLE ERROR RETURNS
+
+PNRRH1:	OKSKED			;ALLOW SCHEDULING AGAIN
+PNRRH2:	MOVX T1,NW%NNN		;SET "NO NODE NAME KNOWN" FLAG
+	IORM T1,.NWTTF(UAB)	;SET IN ARGUMENT BLOCK
+	RETSKP			;RETURN TO CALLER
+
+	ENDAV.
+
+	RESCD
+
+
+	TNXEND
+	END

@@ -1,0 +1,1062 @@
+;[MACBETH.STANFORD.EDU]SRC:<6.1.MONITOR.AP16.STANFORD>ARP.MAC.3, 17-Dec-87 12:47:03, Edit by A.ALDERSON
+; Add MONSYM to search path so that SC30SW is picked up properly
+;[MACBETH.STANFORD.EDU]SRC:<6.1.MONITOR.AP16.STANFORD>ARP.MAC.2, 15-Dec-87 15:10:06, Edit by A.ALDERSON
+; Install NI-related code for SC30-M
+;<6-1-MONITOR>ARP.MAC.72, 20-Jul-85 21:13:06, Edit by LOUGHEED
+; Fix XRXREP to set destination hardware address of reply to be
+;  the original requestor instead of broadcast.
+;<6-1-MONITOR>ARP.MAC.71,  7-Jun-85 15:01:09, Edit by LOUGHEED
+; ARPFIL discards Xerox ARP requests if we don't have subnets
+; HASH guards against returning negative offsets
+;<6-1-MONITOR>ARP.MAC.70, 16-Mar-85 22:51:57, Edit by LOUGHEED
+; Don't use SE1ENT under Release 6.1
+;<6-1-MONITOR>ARP.MAC.69, 16-Mar-85 20:50:31, Edit by LOUGHEED
+; Change MSEC1 reference to XCDSEC
+;<6-1-MONITOR>ARP.MAC.68, 15-Mar-85 15:06:17, Edit by LOUGHEED
+;<6-1-MONITOR>ARP.MAC.67, 15-Mar-85 12:08:08, Edit by LOUGHEED
+; Move into extended code section
+;<6-MONITOR>ARP.MAC.66, 30-Nov-84 15:07:20, Edit by LOUGHEED
+; Correctly set up Target Protocol field in ARP reply
+;<6-MONITOR>ARP.MAC.65, 27-Nov-84 02:08:17, Edit by LOUGHEED
+; Similar precautions for RESOLV routine (check for NOSKED)
+;<6-MONITOR>ARP.MAC.64, 26-Nov-84 19:45:25, Edit by LOUGHEED
+; LCKARP is careful not to block if caller is NOSKED
+;<6-MONITOR>ARP.MAC.63, 23-Nov-84 18:35:05, Edit by LOUGHEED
+;<6-MONITOR>ARP.MAC.62, 23-Nov-84 18:13:52, Edit by LOUGHEED
+; RESOLV returns failure if ARP process is not yet initialized
+; Remove previous edit history
+
+SEARCH PROLOG,ANAUNV,MONSYM
+IFN STANSW&SC30SW,<SEARCH NIPAR>
+TTITLE (ARP,ARP,< -- RFC826 and Xerox Address Resolution Protocols>)
+SUBTTL Kirk Lougheed  / Stanford University / 4-November-1983
+
+; Copyright (c) 1983, 1984, 1985
+; The Board of Trustees, Leland Stanford Junior University, Stanford, CA 94305
+; All Rights Reserved.
+
+; The information in this software is subject to change without notice
+; and should not be construed as a commitment by Stanford University.
+; Stanford assumes no responsibility for the use or reliability of
+; this software.
+
+IFNDEF REL6,<REL6==1>		;Default to assembly for Release 6
+
+IFE REL6,<DEFINE XSWAPCD <SWAPCD>>
+IFE REL6,<DEFINE XRESCD <RESCD>>
+
+EXTN <RETBUF,MEIBUG>		;Symbols defined in ENET.MAC
+EXTN <PKOWAF,WAIFLG,WA%ARP>	;Symbols defined in PKOPR.MAC
+
+DEFAC (ARP,P4)			;Pointer to current ARP packet
+
+SUBTTL Definitions and Storage
+
+;Ethernet encapsulation fields. Note that offset zero is a free storage header.
+
+OFFETH==<PKTELI-4-LCLPKT>	;Offset of start of 10MB encapsulation
+
+;Sanity check in case someone changes MAXLDR again
+
+IFL MAXLDR-5 <PRINTX % MAXLDR too small for 10MB Ethernet operation>
+
+DEFSTR ETDH0,OFFETH+0,31,16	;10MB First 16 bits of Destination host
+DEFSTR ETDH1,OFFETH+1,31,32	;10MB Last 32 bits of Destination host
+DEFSTR ETSH0,OFFETH+2,31,32	;10MB First 32 bits of Source host
+DEFSTR ETSH1,OFFETH+3,15,16	;10MB Last 16 bits of Source host
+DEFSTR ETTYP,OFFETH+3,31,16	;10MB Type code
+
+ET%ARP==4006			;Ethernet type code for RFC826 style ARP
+ET%XRX==1001			;Ethernet type code for Xerox PUP ARP
+ET%PUP==1000			;Ethernet type code for PUP datagrams
+
+;Definitions for ARP header
+
+DEFSTR ARHRD,OFFETH+4,15,16	;Hardware address space
+	HW$ETH==1		   ;10MB Ethernet
+DEFSTR ARPRO,OFFETH+4,31,16	;Protocol address space
+	PR$PUP==1000		   ;Xerox PUP
+	PR$IP==4000		   ;DOD IP
+DEFSTR ARHLN,OFFETH+5,7,8	;Byte length of each hardware address
+	HL$ETH==6		   ;10MB length
+DEFSTR ARPLN,OFFETH+5,15,8	;Byte length of each protocol address
+	PL$PUP==1		   ;PUP address length
+	PL$IP==4		   ;IP address length
+DEFSTR AROPC,OFFETH+5,31,16	;Opcode field
+	OP$REQ==1		   ;Request for information
+	OP$REP==2		   ;Reply
+
+;Definitions for IP ARP packet (10MB Ethernet hardware)
+
+DEFSTR IPSH0,OFFETH+6,31,32	;First 32 bits of source hardware address
+DEFSTR IPSH1,OFFETH+7,15,16	;Last 16 bits of source hardware address
+DEFSTR IPSP0,OFFETH+7,31,16	;First 16 bits of source IP protocol address
+DEFSTR IPSP1,OFFETH+10,15,16	;Last 16 bits of source IP protocol address
+DEFSTR IPTH0,OFFETH+10,31,16	;First 16 bits of target hardware address
+DEFSTR IPTH1,OFFETH+11,31,32	;Last 32 bits of target hardware address
+DEFSTR IPTP,OFFETH+12,31,32	;32 bits of target IP protocol address
+IPLEN==^D28			;Length of an IP ARP packet
+
+;Definitions for Xerox style ARP (10MB hardware, PUP protocols)
+
+XR$REQ==10101			;Requesting information
+XR$REP==7070			;Replying with information
+
+DEFSTR XROPC,OFFETH+4,15,16	;Opcode (one of XR$REQ or XR$REP)
+DEFSTR XRTH0,OFFETH+4,31,16	;First 16 bits of target hardware address
+DEFSTR XRTH1,OFFETH+5,31,32	;Last 32 bits of target hardware address
+DEFSTR XRTP,OFFETH+6,7,8	;8 bits of target protocol address
+;DEFSTR XRB1,OFFETH+6,15,8	;Blank space
+DEFSTR XRSH0,OFFETH+6,31,16	;First 16 bits of source hardware address
+DEFSTR XRSH1,OFFETH+7,31,32	;Last 32 bits of source hardware address
+DEFSTR XRSP,OFFETH+10,7,8	;8 bits of target protocol address
+;DEFSTR XRB2,OFFETH+10,15,8	;Blank space
+XRXLEN==^D18
+
+;Definitions for a hash table entry.
+
+ENTSIZ==5			;Number of words in an entry
+DEFSTR HSNXT,0,35,36		;Full word for pointer to next record
+DEFSTR HSPROT,1,35,36		;Allow a full word for the protocol address
+DEFSTR HSPTYP,2,17,18		;Half word for protocol type
+DEFSTR HSHW0,2,35,18		;Other half word for first 16-bits of hdw addr
+DEFSTR HSHW1,3,35,36		;Full word for last 32-bits of hdw address
+DEFSTR HSLTAD,4,35,36		;TODCLK of last update
+
+;Offsets into Internet buffers used by ARP
+;N.B. there are only 6 available offsets (we are using 1 of them)
+
+..PKT==PKTSII-LCLPKT		;We are using datagram relative pointers
+
+INPNCT==..PKT+0			;NCT that datagram was received on
+
+NXTTIM==^D60000			;Wakeup at least once a minute
+LCKTIM==^D500			;No one should ever hold ARPLOK this long
+HSHLEN==^D19			;Length of hash table (must be prime)
+TRYCNT==4			;RESOLV tries four times before giving up
+
+NR ARPFRK,1			;FORKX of ARP Fork
+NR HSBASE,1			;Pointer to hash table
+NR HSHTMR,1			;Timer for hash table GC routine
+RS ARPFLG,1			;Wakeup flag for ARP Fork
+RS ARPTMR,1			;Timer for ARP fork
+RS ARPHIQ,1			;Head of ARP input queue
+RS ARPTIQ,1			;Tail of ARP input queue
+RS ARPBUG,1			;-1 if ARP is being debugged
+IFN STANSW&SC30SW,<
+RS ARPPID			;ARP's NISRV portal ID
+RS ARPRBC			;Total number of receive buffers ARP has
+				;posted to NISRV.
+RSI ARPDRB,2			;Number of buffers we want to keep posted
+>;IFN STANSW&SC30SW
+
+RS ARPLOK,1			;Lock on hash table
+NR ARPLKT,1			;TODCLK when lock was claimed
+NR ARPLPC,1			;PC of code that claimed the lock
+NR ARPLKF,1			;FORKX of last locker
+
+;ARP Canonicalization Storage
+
+NR ARPTYP,1			;Type of ARP we are doing (ET%ARP or ET%XRX)
+NR REPLYF,1			;-1 if we should reply to this packet
+NR CPROTO,1			;Current protocol we are interested in
+NR NPROTO,1 			;Protocol address of interface
+NR SPADDR,1			;Source protocol address, right justified
+NR TPADDR,1			;Target protocol address, right justified
+NR SHRDW0,1			;First 16 bits of source hardware address
+NR SHRDW1,1			;Last 32 bits of source hardware address
+
+;Statistics Storage
+
+NR STAACC,1			;Packets accepted by ARP
+NR STAFLX,1			;Packets rejected by ARP filter
+NR STAIP,1			;Of valid packets, no. of RFC826 IP requests
+NR STAXRX,1			;Of valid packets, no. of Xerox PUP requests
+NR STARPR,1			;No. of RFC826 replies
+NR STARPX,1			;No. of Xerox replies
+NR STARQR,1			;No. of RFC826 requests
+NR STARQX,1			;No. of Xerox requests
+NR STAHCT,1			;Count of hash table entries
+NR STALCK,1			;Count of misses trying to lock ARP table
+
+SUBTTL Startup and Main Loop
+
+	XSWAPCD
+
+;Start up the ARP fork
+;Returns +1 always
+
+IFE REL6,<ARPBEG::>
+IFN REL6,<XNENT ARPBEG,G>
+	MOVX T1,CR%CAP		;Transmit capabilities
+	CFORK%			;Create fork
+	 BUG.(CHK,ARPBEA,SOFT,ENET,<ARP - CFORK% failed on background fork>)
+	XMOVEI T2,ARPBAK	;Start address of background fork
+	MSFRK%			;Start in monitor mode
+	RET			;Return to caller
+
+;ARPBAK - ARP process startup code
+
+ARPBAK:
+IFE REL6,<MOVX T1,UMODF		;Need to set up fork's context>
+IFN REL6,<MOVX T1,USRCTX	;Init context>
+	MOVEM T1,FFL		;Set up flags
+	SETZM FPC		;Set up PC word (location 0)
+	MCENTR			;Establish JSYS context
+IFE REL6,<SE1ENT		;Run in section one>
+IFE REL6,<MOVE T1,[XWD ITFPC,ARPUXI] ;Trap fatal interrupts>
+IFN REL6,<MOVE T1,[XWD XCDSEC,ARPUXI] ;Trap fatal interrupts>
+	MOVEM T1,MONBK		; ...
+	MOVE T1,CHNSON		; ...
+	MOVEM T1,MONCHN		; ...
+	MOVEI T1,INTON		;Address of IP layer on flag
+	CALL DISL		;Wait for IP layer to be initialized
+	CALL ARPINI		;Initialize data structures
+ARPBA0:	SETZM ARPFLG		;Clear request flag
+	CALL DOARPQ		;Process ARP queue
+	MOVE T1,TODCLK		;Get now
+	CAML T1,ARPTMR		;Has timer expired?
+	 CALL DOARPT		;Do ARP time driven things
+	JSP T4,ARPBKT		;Check flags again, avoid scheduler overhead
+	 SKIPA T1,[ARPBKT]	;Nothing to do, block for a while
+	  JRST ARPBA0		;More work to do, go to top of loop
+	MDISMS			;Sleep for a while
+	JRST ARPBA0		;Loop forever
+
+;Here on fatal interrupt
+
+ARPUXI: BUG.(CHK,ARPPSI,SOFT,ARP,<ARP - Background fork crashed, restarting>)
+IFE REL6,<SE1ENT		;Make sure we're in section one>
+	MCENTR			;Re-establish monitor context
+	JRST ARPBA0		;Restart at top of loop
+
+;ARPBKT - scheduler test for ARP process
+;Takes no data.
+
+	RESCD
+
+ARPBKT:	MOVE T1,TODCLK		;Get now
+	CAML T1,ARPTMR		;Has timer expired?
+	 JRST 1(T4)		;Yes, wakeup
+	SKIPN ARPFLG		;Something to do?
+	 JRST 0(T4)		;No, keep on sleeping
+	  JRST 1(T4)		;Yes, unblock
+
+	XSWAPCD
+
+;ARPINI - initialize Address Resolution Protocol (ARP) data structures
+;Note that setting HSBASE non-zero is a flag that the ARP process is
+; fully initialized.
+;Returns +1 always
+
+ARPINI:	MOVE T1,FORKX		;Record our fork number
+	MOVEM T1,ARPFRK		; ...
+	SETZM ARPTMR		;Make timer go off right away first time
+	SETOM ARPLOK		;Make sure hash table lock is free
+	MOVEI T1,HSHLEN		;Size of hash table
+	CALL GETBLK		;Get a piece of Internet storage
+	SKIPN T1		;Skip if we got something
+	 BUG.(HLT,ARPSTG,ARP,SOFT,<ARP - No storage for ARP hash table>)
+	PUSH P,T1		;Remember address of block
+	MOVEI T2,HSHLEN		;Size of block
+	CALL CLRBLK		;Zero the block
+	MOVE T1,DBUGSW		;Get value of master debug switch
+	CAILE T1,1		;Is system standalone?
+	 SETOM ARPBUG		;Yes, enable ARP bug reporting/tracing
+	POP P,HSBASE		;Set base address of table, ARP is now up.
+
+IFN STANSW&SC30SW,<
+	XMOVEI T1,NCTVT		;Set up pointer to NCT vector table
+ARPIN0:	LOAD T1,NTLNK,(T1)	;Get NCT pointer
+	JUMPE T1,RTN		;If nil, then done
+	LOAD T2,NTDEV,(T1)	;Get the device type
+	CAIN T2,NT.NIP		;An NI?
+	 SKIPA			;Yes, init ARP for the NI
+	JRST ARPIN0		;Loop over all NCT's
+
+;Initialize ARP for the NI
+;Called from ARPINI with T1 pointing at the NCT address
+
+	TRVAR (<<UNBLOK,UN.LEN>>) ;Arg block for NISRV
+
+	MOVE T2,T1		;Get the NCT address
+
+	SETZM ARPRBC		;Reset the number of buffers posted
+
+	STOR T2,UNUID,+UNBLOK	;Save the NCT address as the user ID
+
+	SETZRO <UNCHN,UNPAD>,+UNBLOK ;Use channel number 0, no padding
+
+	MOVX T1,ET%XRX		;Get the ARP protocol type
+	STOR T1,UNPRO,+UNBLOK	;Put it in the arg block
+
+	XMOVEI T1,ARPCBK	;Get the callback address
+	STOR T1,UNCBA,+UNBLOK	;Put callback address in the arg block
+
+	MOVX T1,NU.OPN		;Get the NISRV function code
+	XMOVEI T2,UNBLOK	;Get the address of the arg block
+	CALL DLLUNI		;Open the portal
+	 RET			;Sigh
+	LOAD T1,UNPID,+UNBLOK	;Get the portal ID
+	MOVEM T1,ARPPID		;Put it in a safe place
+
+	SETONE UNDAD,+UNBLOK	;Setup high order multicast address
+	SETONE UNDAD,+1+UNBLOK	;Setup low order multicast address
+
+	MOVX T1,NU.EMA		;Get NISRV function code
+	XMOVEI T2,UNBLOK	;Get NISRV arg block address
+	CALL DLLUNI		;Enable the broadcast address
+	 RET			; Sigh...
+
+	CALL ARPPST		;Post some buffers
+	RET
+
+;ARPPST - Post NI buffers for the ARP protocol
+;Has no args, smashes all Ts.
+
+	XRESCD
+
+ARPPST:	MOVE T1,ARPDRB		;Get the number of receive buffers desired
+	CAMG T1,ARPRBC		;Are enough posted?
+	 RET			; Yes, don't add any more
+	TRVAR (<<UNBLOK,UN.LEN>>) ;NISRV arg block
+	MOVE T1,ARPPID		;Get our portal ID
+	STOR T1,UNPID,+UNBLOK	;Put it in the arg block
+PSTLOP:	CALL GETBFF		;Get a buffer
+	 RET			; Just punt if no buffers available
+	STOR T1,UNRID,+UNBLOK	; Setup request ID to be buffer address
+
+	XMOVEI T1,$ARHRD(T1)	; Get start address of user data portion
+				;  of buffer
+	TXO T1,OWGP.(8)		; Make it a byte pointer
+	STOR T1,UNBFA,+UNBLOK	; Put it in the NISRV arg block
+
+	MOVX T1,^D300		; Get the length of the buffer
+	STOR T1,UNBSZ,+UNBLOK	; Put it in the arg block
+
+	MOVX T1,UNA.EV		; Get address space indicator
+	STOR T1,UNADS,+UNBLOK	; Buffer is in Exec virtual address space
+
+	MOVX T1,NU.RCV		; Get function code for NISRV
+	XMOVEI T2,UNBLOK	; Setup arg block address
+	CALL DLLUNI		; Post a receive buffer
+	 JRST ARPPS1		;  Failed, clean up nicely
+	AOS T1,ARPRBC		; Account for this buffer
+	CAMGE T1,ARPDRB		; Do we have enough buffers?
+	 JRST PSTLOP		;  No, do some more
+	RET			; Yes, all done
+
+ARPPS1:	BUG.(CHK,ARPNPF,ARP,SOFT,<ARP - Post receive buffer failed>)
+	LOAD T1,UNRID,+UNBLOK	;Get the buffer back
+	CALLRET RETBUF		;Dump the buffer and get out of here
+>;IFN STANSW&SC30SW
+
+Subttl  ARP Background Processing
+
+;DOARPQ - process ARP requests, update data structures
+;Returns +1 always
+
+DOARPQ:	CALL ARPDEQ		;Dequeue an ARP packet
+	 RET			;No pending request, so all done
+	SKIPE ARPBUG		;Debugging ARP activity?
+	 CALL ARPDEB		;Yes, see if someone wants to look at this
+	CALL ARPFIL		;Do some validity checking
+	 JRST DOARPX		;Bad packet, flush it
+	CALL ARPCAN		;"Canonicalize" the packet
+	CALL MERGE		;Update tables
+	 JRST DOARPX		;All done, flush packet
+	CALL SNDREP		;Send ARP reply using current buffer
+	JRST DOARPQ		;Loop over input queue
+
+DOARPX:	MOVE T1,ARP		;Get buffer pointer into place
+	CALL RETBUF		;Return buffer to free list
+	JRST DOARPQ		;Loop over input queue
+
+;ARPDEB - here if debugging ARP activity
+;Returns +1 always
+;Clobbers T1-T4
+
+ARPDEB:	MOVE T1,WAIFLG		;Get flag word for waif monitoring process
+	TXNN T1,WA%ARP		;Accept ARP packets?
+	 RET			;No, return now
+	MOVE T1,ARP		;T1/ buffer pointer
+	LOAD T2,ETTYP,(ARP)	;T2/ protocol type
+	MOVEI T3,^D100		;T3/ approximate packet length
+	CALL PKOWAF		;Let waif listener look at this packet
+	RET			;Return to caller
+
+;ARPFIL - filter out bad ARP requests
+;Takes	ARP/ buffer pointer
+;	P1/ NCT pointer
+;Returns +1 flush the packet
+;	 +2 packet appears to be good
+
+ARPFIL:	AOS STAACC		;Count packets received
+	LOAD T1,ETTYP,(ARP)	;Get datagram type
+	CAIE T1,ET%XRX		;Xerox style ARP?
+	 JRST ARPFL0		;No, must be RFC826 ARP
+	SKIPG NTSUBN(P1)	;Do we have subnets on this interface?
+	 JRST ARPFLX		;No, flush the datagram
+	RETSKP			;Accept the Xerox AR request
+
+ARPFL0:	LOAD T1,ARHRD,(ARP)	;Get hardware type
+	CAIE T1,HW$ETH		;10MB Ethernet?
+	 JRST ARPFLX		;No, flush it
+	LOAD T1,ARHLN,(ARP)	;Get length of hardware addresses
+	CAIE T1,HL$ETH		;Must be six octets
+	 JRST ARPFLX		;No, flush it
+	LOAD T1,ARPRO,(ARP)	;Get protocol type
+	LOAD T2,ARPLN,(ARP)	;Get protocol length
+	CAIN T1,PR$IP		;IP protocol?
+	 CAIE T2,PL$IP		;Yes, is address 4 octets long?
+	  JRST ARPFLX		;No to either, flush it
+	RETSKP			;Packet is valid AR request for an IP address
+
+ARPFLX:	SKIPE ARPBUG		;Skip if not debugging
+	 BUG.(INF,BADARP,ARP,SOFT,<ARP - bad datagram>,<<T1,PRO>,<T2,LEN>>)
+	AOS STAFLX		;Count filter rejections
+	RET			;Return to caller
+
+;ARPCAN - Canonicalize the RFC826 and Xerox ARP requests
+;Takes	ARP/ buffer pointer
+;	P1/ NCT pointer
+;Returns +1 always, following (global) locations updated:
+;	ARPTYP - type of ARP packet we are processing
+;	REPLYF - set to -1 if we should generate a reply 
+;	CPROTO - current protocol we are interested in
+;	NPROTO - protocol address of interface
+;	SPADDR - source protocol address, right justified
+;	TPADDR - target protocol address, right justified
+;	SHRDW0 - first 16 bits of source hardware address
+;	SHRDW1 - last 32 bits of source hardware address
+
+ARPCAN:	SETZM REPLYF		;Assume no reply needed
+	LOAD T1,ETTYP,(ARP)	;Get Ethernet type
+	MOVEM T1,ARPTYP		;Remember it
+	CAIE T1,ET%ARP		;Is is RFC826 ARP?
+	 JRST ARPCNX		;No, has to be Xerox ARP
+
+;Canonicalize for IP
+	AOS STAIP		;Count one for the statisticians
+	LOAD T1,AROPC,(ARP)	;Get our opcode
+	CAIN T1,OP$REQ		;A request?
+	SETOM REPLYF		;Yes, set flag to generate a reply
+	LOAD T1,ARPRO,(ARP)	;Get target protocol
+	MOVEM T1,CPROTO		;Remember it
+	MOVE T1,NTLADR(P1)	;Get IP address of NCT we came in on
+	MOVEM T1,NPROTO		;Save it
+	LOAD T1,IPTP,(ARP)	;Get target IP protocol address
+	MOVEM T1,TPADDR		;Save target protocol address
+	LOAD T1,IPSP0,(ARP)	;Get first 16 bits of source protocol addr
+	LSH T1,^D16		;Make some room
+	LOAD T2,IPSP1,(ARP)	;Get last 16 bits of source protocol addr
+	IORI T1,(T2)		;Canonicalize
+	MOVEM T1,SPADDR		;Save source protocol address
+	LOAD T1,IPSH0,(ARP)	;Get 32 bits of source hdw addr
+	SETZ T2,		;Clear T2 for shifting into
+	LSHC T1,-^D16		;Shovel middle 16 into T2
+	MOVEM T1,SHRDW0		;Save those first 16
+	LOAD T1,IPSH1,(ARP)	;Get last 16 bits
+	LSH T2,-4		;Push the middle 16 over a bit
+	IORI T2,(T1)		;OR together last 32 bits
+	MOVEM T2,SHRDW1		;Save canonicalized form
+	RET			;Return to caller
+
+;Canonicalize for Xerox style PUP ARP
+
+ARPCNX:	AOS STAXRX		;Count one for the statisticians
+	MOVEI T1,ET%PUP		;Protocol type is PUP
+	MOVEM T1,CPROTO		;Set current protocol type 
+	MOVE T2,NTSUBN(P1)	;Get our PUP subnet number
+	MOVE T1,NTHSTN(P1)	;Get our PUP host number from NCT
+	HRLI T1,(T2)		;Form subnet,,host
+	MOVEM T1,NPROTO		;Save as NCT protocol
+	LOAD T3,XRTP,(ARP)	;Get "target" PUP protocol address
+	HRLI T3,(T2)		;Form subnet,,host
+	MOVEM T1,TPADDR		;Save it
+	LOAD T4,XRSP,(ARP)	;Get "source" PUP protocol address
+	HRLI T4,(T2)		;Form subnet,,host
+	LOAD T1,XROPC,(ARP)	;Get opcode
+	CAIE T1,XR$REQ		;Is it a request?
+	 EXCH T3,T4		;No, a reply.  Swap the fields
+	MOVEM T3,TPADDR		;Set target protocol address
+	MOVEM T4,SPADDR		;Set source protocol address
+	CAIE T1,XR$REQ		;Check again for a request
+	IFSKP.
+	  SETOM REPLYF		;Yes, must send a reply	
+	  LOAD T1,XRSH0,(ARP)	;Get first 16 bits
+	  LOAD T2,XRSH1,(ARP)	;Get last 32 bits of hardware address
+	ELSE.
+	  LOAD T1,XRTH0,(ARP)	;Get first 16 bits
+	  LOAD T2,XRTH1,(ARP)	;Get last 32 bits of hardware address
+	ENDIF.
+	MOVEM T1,SHRDW0		;Save first part of hardware address
+	MOVEM T2,SHRDW1		;Save last part of hardware address
+	RET			;Return to caller
+
+;MERGE - merge information from ARP packet
+;Takes	ARP/ buffer pointer
+;	P1/ NCT pointer
+;Returns +1 no further processing required, flush buffer
+;	 +2 we are target protocol address, may need to send reply
+
+MERGE:	STKVAR <MERGEF,BUCKET>	;Declare local storage
+	SETZM MERGEF		;Set merge flag to false
+	MOVE T1,SPADDR		;Get sender's protocol address
+	MOVE T2,CPROTO		;Get protocol type
+	CALL HASH		;Compute hash code
+	MOVE T2,HSBASE		;Get base adddress of hash table
+	ADDI T2,(T1)		;Compute bucket address
+	MOVEM T2,BUCKET		;Save bucket address
+	CALL LCKARP		;Lock hash table to ensure consistency
+	 RET			;We (ARP process) should never get this return
+	SKIPN T1,(T2)		;Load first pointer
+	 JRST MERGE2		;Nothing in table, go check target protocol
+MERGE0:	LOAD T3,HSPROT,(T1)	;Get protocol address of hash entry
+	CAME T3,SPADDR		;Match the packet?
+	 JRST MERGE1		;No, keep on looking
+	LOAD T4,HSPTYP,(T1)	;Get protocol type of hash entry?
+	CAME T4,CPROTO		;Match the packet?
+	 JRST MERGE1		;No, keep on looking
+	MOVE T3,SHRDW0		;A hit!  Get first part of hardware address.
+	STOR T3,HSHW0,(T1)	;Update hash entry
+	MOVE T3,SHRDW1		;Get second part of hardware address
+	STOR T3,HSHW1,(T1)	;Update hash entry
+	MOVE T3,TODCLK		;Get now
+	STOR T3,HSLTAD,(T1)	;Store value of last TODCLK for aging
+	SETOM MERGEF		;Set merge flag to true
+	JRST MERGE2		;Go check target protocol
+
+MERGE1:	LOAD T1,HSNXT,(T1)	;Get pointer to next hash entry in this bucket
+	JUMPN T1,MERGE0		;If non-nil, go look at it
+MERGE2:	MOVE T4,NPROTO		;Get protocol address of NCT packet came in on
+	CAME T4,TPADDR		;Are we the target?
+	 JRST MERGE4		;No, no more to do
+	SKIPE MERGEF		;Is the merge flag false?
+	 JRST MERGE3		;No, return now.  May need to send reply.
+	CALL GETHSH		;Get some free storage
+	 JRST MERGE3		;No storage!  Continue along.
+	MOVE T2,SPADDR
+	STOR T2,HSPROT,(T1)	;Store protocol address
+	MOVE T2,CPROTO
+	STOR T2,HSPTYP,(T1)	;Store protocol type
+	MOVE T2,SHRDW0
+	STOR T2,HSHW0,(T1)	;Store first part of hardware address
+	MOVE T2,SHRDW1
+	STOR T2,HSHW1,(T1)	;Store last part of hardware address
+	MOVE T2,TODCLK
+	STOR T2,HSLTAD,(T1)	;Store time and date of last reference
+	MOVE T2,@BUCKET		;Get pointer in bucket header
+	STOR T2,HSNXT,(T1)	;Hang list off of new entry
+	MOVEM T1,@BUCKET	;Hang new entry off of bucket
+	AOS STAHCT		;Count another entry
+MERGE3:	SKIPN REPLYF		;Requestor wants reply from us?
+	 JRST MERGE4		;No, just flush packet
+	CALL ULKARP		;Unlock hash table
+	RETSKP			;Skip return, need to send reply
+
+MERGE4:	CALL ULKARP		;Unlock hash table
+	RET			;Take single return
+
+;SNDREP - send an ARP Reply for the current packet
+;Takes	ARP/ buffer pointer
+;	P1/ NCT pointer
+;Returns +1 always
+
+SNDREP:	MOVE T1,ARPTYP		;Get style of ARP we are using
+	CAIE T1,ET%ARP		;RFC826 style ARP?
+	IFSKP.
+	  AOS STARPR		;Count number of RFC826 replies generated
+	  XMOVEI T2,RFCREP	;Generate an RFC826 style reply
+	ELSE.
+	  AOS STARPX		;Count number of Xerox replies generated
+	  XMOVEI T2,XRXREP	;Generate a Xerox style ARP reply
+	ENDIF.
+	CALL 0(T2)		;Copy source to destination, set new source
+IFN STANSW&SC30SW,<
+	LOAD T2,NTDEV,(P1)	;Get the device type
+	CAIN T2,NT.NIP		;Is it an NI?
+	 JRST NIARPX		; Yes, send it over the NI
+>;IFN STANSW&SC30SW
+	MOVE T2,ARP		;T2/ buffer pointer
+	MOVEI T3,.PM32		;T3/ 32-bit MEIS data mode 
+	MOVEI T4,RETBUF		;T4/ buffer disposal routine
+	CALL BLDIOW		;Construct and queue up an Ethernet write
+	RET			;Return to caller
+
+;RFCREP - copy IP source fields to destination, set new source fields
+;Also performs 10MB Ethernet encapsulation
+;Takes	ARP/ buffer pointer
+;	P1/ NCT pointer
+;Returns +1 always, T1/ byte count of datagram body
+
+RFCREP: MOVEI T1,OP$REP		;Set opcode to reply
+	STOR T1,AROPC,(ARP)	;...
+	SETZ T2,		;Clear this AC for shifting
+	LOAD T1,IPSH0,(ARP)	;Get 32 bits of hardware source
+	LSHC T1,-^D16
+	STOR T1,IPTH0,(ARP)	;Set first 16-bits of hardware destination
+	STOR T1,ETDH0,(ARP)	;Do same for encapsulation
+	LOAD T1,IPSH1,(ARP)	;Get last 16 bits of hardware source
+	LSH T2,-4		;Nudge over bits from first shift
+	IOR T1,T2		;Create last 32 bits of new hardware dest
+	STOR T1,IPTH1,(ARP)	;Set it
+	STOR T1,ETDH1,(ARP)	;Set last 32 bits of encapsulation dest.
+	LOAD T1,IPSP0,(ARP)	;Get first 16 bits of source protocol
+	LOAD T2,IPSP1,(ARP)	;Get last 16 bits of source protocol
+	LSH T1,^D16		;Slide first bits left
+	IORI T1,(T2)		;OR in last few bits
+	STOR T1,IPTP,(ARP)	;Set 32 bits of target protocol
+	CALL IPSRC		;Set us up as an IP source
+	RET			;Return to caller
+	
+;IPSRC - Set source fields appropriate to selected interface
+;Takes	P1/ NCT pointer
+;	ARP/ buffer pointer
+;Returns +1 always, T1/ total length of datagram
+
+IPSRC:	LOAD T1,HRDW0,(P1)	;Get first 32 bits of our hdw address
+	STOR T1,IPSH0,(ARP)	;Set it in ARP datagram
+	STOR T1,ETSH0,(ARP)	;Set in encapsulation field as well 
+	LOAD T1,HRDW1,(P1)	;Get last 16 bits of our hdw address
+	STOR T1,IPSH1,(ARP)	;Set it in ARP datagram
+	STOR T1,ETSH1,(ARP)	;Set in encapsulation field as well
+	MOVE T1,NTLADR(P1)	;Get our IP protocol address
+	LSHC T1,-^D16		;Split it into two
+	STOR T1,IPSP0,(ARP)	;Set first 16 bits in ARP datagram
+	LSH T2,-^D20		;Shift the remaining bits over
+	STOR T2,IPSP1,(ARP)	;Set last 16 bits
+	MOVEI T1,IPLEN		;T1/ return length of IP ARP
+	RET			;All done, return to caller
+
+;XRXREP - generate a reply datagram for Xerox style ARP
+;Takes	ARP/ buffer pointer
+;	P1/ NCT pointer
+;Returns +1 always
+
+XRXREP:	MOVEI T1,XR$REP		;Opcode value is "reply"
+	STOR T1,XROPC,(ARP)	;Set it
+	LOAD T1,HRDW0,(P1)	;Get first 32 bits of our hardware address
+	STOR T1,ETSH0,(ARP)	;Set as source in encapsulation
+	SETZ T2,		;Clear this AC for shifting
+	LSHC T1,-^D16		;Isolate the first 16 bits
+	STOR T1,XRTH0,(ARP)	;Store first part of target field
+	LOAD T1,HRDW1,(P1)	;Get last 16 bits of our hardware address
+	STOR T1,ETSH1,(ARP)	;Set in encapsulation
+	LSH T2,-4		;Position the middle 16 bits
+	IORI T2,(T1)		;Create final 32 bits
+	STOR T2,XRTH1,(ARP)	;Set last 32 bits of target field
+	LOAD T1,XRSH0,(ARP)	;Get first 16 bits of source
+	STOR T1,ETDH0,(ARP)	;Set in encapsulation
+	LOAD T1,XRSH1,(ARP)	;Get last 32 bits of source
+	STOR T1,ETDH1,(ARP)	;Set in encapsulation
+	MOVEI T1,XRXLEN		;T1/ length of datagram
+	RET			;Return to caller
+
+;ARPENQ - append buffer to ARP input queue
+;Called from interrupt level
+;Takes	T1/ buffer pointer
+;	T2/ NCT address
+;Returns +1 always
+
+	XRESCD
+
+ARPENQ::SETZRO NBQUE,(T1)	;Clear pointer to next packet
+	MOVEM T2,INPNCT(T1)	;Remember NCT address in buffer
+	PIOFF			;Turn off interrupts just in case
+	MOVE T3,ARPTIQ		;Get tail of input queue
+	JUMPN T3,ARPRC0		;Queue not empty, go append buffer
+	MOVEM T1,ARPHIQ		;Was empty, this is now only item
+	SKIPA			;Make head and tail be same packet
+ARPRC0:	 STOR T1,NBQUE,(T3)	;Make old packet point to newest packet
+	MOVEM T1,ARPTIQ		;Set new tail pointer
+	PION			;Turn interrupts back on
+	AOS ARPFLG		;Wakeup ARP process
+	RET			;Return to caller
+
+IFN STANSW&SC30SW,<
+; Here at NISRV interrupt level
+
+ARPCBK:	JRST @1+.-NU.OPN(T1)	; Do the dispatch
+
+	TABBEG NU.OPN,NU.MAX,<IFIW RTN>
+	  TABENT NU.XMT,<IFIW ARPXMD>	;Transmit done
+	  TABENT NU.RCV,<IFIW ARPRCD>	;Receive done
+	TABEND
+
+; Here on completion of NISRV xtransmit
+
+ARPXMD:	LOAD T1,UNRID,(T2)	; Get the buffer address
+	CALLRET RETBUF		; Return the buffer
+
+; Here on input available
+
+ARPRCD:	LOAD T1,UNRID,(T2)	; Get the buffer address
+	LOAD T2,UNUID,(T2)	; Get the NCT address
+	MOVX T3,ET%XRX		; Get the desired protocol type
+	STOR T3,ETTYP,(T1)	; Make ARPFIL happy
+	CALL ARPENQ		; Queue the packet up for later
+	SOS ARPRBC		; One less buffer posted
+	CALLRET ARPPST		; Go post more
+>;IFN STANSW&SC30SW
+
+	XSWAPCD
+
+;ARPDEQ - remove packet from input queue
+;Call from process level
+;Returns +1 queue empty
+;	 +2 success, ARP/ buffer pointer
+;		     P1/ NCT pointer
+;Clobbers T1-T4, ARP, P1
+
+	XRESCD
+
+ARPDEQ:	PIOFF			;Protect queue integrity
+	MOVE ARP,ARPHIQ		;Get head of queue
+	JUMPE ARP,ARPDE1	;Queue is empty
+	LOAD T1,NBQUE,(ARP)	;Get successor
+	JUMPN T1,ARPDE0		;Queue not about to run dry
+	SETZM ARPTIQ		;Clear tail of queue
+	SKIPA			;Don't set section bits on a nil pointer
+ARPDE0:	 SETSEC T1,INTSEC	;Set extended address
+	MOVEM T1,ARPHIQ		;Update queue head
+	MOVE P1,INPNCT(ARP)	;Get NCT this packet came in on
+	AOS (P)			;Prepare skip return
+ARPDE1:	PION			;Restore PI system
+	RET			;Return to caller
+
+	XSWAPCD
+
+;DOARPT - do time dependent things
+;Returns +1 always
+
+DOARPT:	SKIPE ARPLKT		;Is the hash table lock being held?
+	 CALL CHKLOK		;Check if hash table lock is okay.
+	MOVE T1,TODCLK		;Get now
+	CAMLE T1,HSHTMR		;Time to GC the hash table?
+	 CALL HSHTMO		;Yes, flush unused entries
+	MOVE T1,TODCLK		;Get now
+	ADDI T1,NXTTIM		;Compute next forced wakeup
+	MOVEM T1,ARPTMR		;Reset timer
+	RET			;Return to caller
+Subttl Hash Table Management
+
+;HASH - Compute the hash table index
+;Takes	T1/ protocol address
+;	T2/ protocol type
+;Returns +1 always T1/ hash table index
+
+HASH:	HLRZ T2,T1		;Copy left half of address
+	XORI T1,(T2)		;Mash the bits up a bit
+	MOVMS T1		;Ensure non-negative offset
+	IDIVI T1,HSHLEN		;Compute hash code
+	MOVE T1,T2		;Copy hash bucket index into expected place 
+	RET			;Return to caller
+
+
+;GETHSH - get a block of storage to use as a hash table entry
+;Returns +1 no free storage
+;	 +2 success, T1/ pointer
+
+GETHSH:	MOVEI T1,ENTSIZ		;Size of a block
+	CALL GETBLK		;Get some storage
+	JUMPE T1,R		;Failed
+	PUSH P,T1		;Save pointer on stack
+	MOVEI T2,ENTSIZ		;Get size of block again
+	CALL CLRBLK		;Zero the storage
+	POP P,T1		;Restore block pointer
+	RETSKP			;Return to caller
+
+;RETHSH - return a hash block to free storage
+;Takes	T1/ buffer pointer
+;Returns +1 always
+
+RETHSH:	JRST RETBLK		;Return block to Internet free storage
+
+;LCKARP - lock the hash table
+;We remember lots of information for debugging and recovering from any
+; possible lock problems.
+;Returns +1 failure
+;	 +2 success, ARPLOK claimed
+
+LCKARP:	SKIPE NSKED		;Are we NOSKED?
+	 JRST LCKAR1		;Yes, be careful not to block
+	LOCK ARPLOK		;No, use standard AOSE lock
+LCKAR0:	PUSH P,T1		;Save this register 
+	MOVE T1,-1(P)		;Get our return PC 
+	MOVEM T1,ARPLPC		;Save PC of locker for debugging
+	MOVE T1,TODCLK		;Get current time and date
+	MOVEM T1,ARPLKT		;Remember that for timing out a lock
+	MOVE T1,FORKX		;Get fork number of current process
+	MOVEM T1,ARPLKF		;Remember it
+	POP P,T1		;Restore T1
+	RETSKP			;Return with the lock
+
+;Here to try locking when we're NOSKED and can't block. 
+ 
+LCKAR1:	AOSE ARPLOK		;Try for the lock
+	 AOSA STALCK		;Failed, and NOSKED.  Count failure and skip.
+	JRST LCKAR0		;Got it.  Go set up rest of data structure.
+	RET			;Take failure return 
+
+;ULKARP - unlock the hash table
+;Returns +1 always
+
+ULKARP:	SETZM ARPLKT		;Forget last time lock was held
+	UNLOCK ARPLOK		;Standard unlocking routine
+	RET			;Return having freed the lock
+
+;CHKLOK - see if hash table lock is hung and time it out if so.
+;A bit of paranoia to prevent locking bugs from hanging Ethernet service.
+;Returns +1 always
+
+CHKLOK:	SKIPN T1,ARPLKT		;Skip if lock is being held
+	 RET			;Lock is free, return now
+	ADDI T1,LCKTIM		;Compute lock timeout
+	CAMLE T1,TODCLK		;Has lock been locked a long time?
+	 RET			;No, return now
+	MOVE T1,ARPLKF		;Get FORKX of locker
+	MOVE T2,ARPLPC		;Get PC trace of locker
+	BUG.(CHK,ARPTMO,ARP,SOFT,<ARP - hash lock timed out>,<<T1,F>,<T2,PC>>)
+	CALLRET ULKARP		;Break the lock violently
+
+;HSHTMO - garbage collect old hash table entries.
+;Called by ARP background process
+;Enter at HSHCLR to flush the entire ARP table
+;Returns +1 always
+
+HSTTIM==^D60*^D60*^D1000	;Once an hour
+LNGTIM==6*HSTTIM		;If no reference in six hours, flush the entry
+
+HSHCLR::TDZA T1,T1		;Enter here to flush entire ARP table
+HSHTMO:	 MOVE T1,[LNGTIM]	;Standard entry point for timeouts
+	SAVEQ			;Preserve some registers
+	MOVE Q1,TODCLK		;Get now
+	SUB Q1,T1		;Compute reference time cutoff
+	MOVSI Q2,-HSHLEN	;Set up aobjn pointer
+HSHTM1:	MOVEI T1,(Q2)		;Get offset into hash table
+	ADD T1,HSBASE		;Compute absolute address of bucket
+	SKIPE (T1)		;Skip if bucket is empty
+	 CALL WALKIT		;Else walk the hash chain, flushing old entries
+	AOBJN Q2,HSHTM1		;Loop over all entries
+	MOVE T1,TODCLK		;Get now
+	ADD T1,[HSTTIM]		;GC the hash table at some future time
+	MOVEM T1,HSHTMR		;Store next wakeup time
+	RET			;Return to caller
+
+;WALKIT - helper routine for HSTTMO
+;Walks down a hash chain flushing old entries.  We lock the hash table at this
+; level instead of in HSHTMO to minimize any waiting on the part of user
+; processes.  Note also that this code assumes HSNXT is a zero offset.
+;Takes	T1/ bucket address
+;	Q1/ reference time cutoff
+;Returns +1 always.
+
+WALKIT:	CALL LCKARP		;Lock the entire hash table
+	 RET			;Shouldn't happen for ARP process
+	MOVE T2,T1		;Bucket address becomes the previous "record"
+	SKIPN T1,(T1)		;Get pointer to first record
+	 JRST WALKI3		;Quit if now if list is nil
+WALKI1:	LOAD T3,HSLTAD,(T1)	;Get TODCLK of last reference
+	CAMLE T3,Q1		;Recently referenced?
+	 JRST WALKI2		;Record okay, go look at next one
+	SOS STAHCT		;Decrement count of hash entries
+	LOAD T3,HSNXT,(T1)	;Get pointer to next record
+	STOR T3,HSNXT,(T2)	;Make previous record point to next record
+	PUSH P,T2		;Save pointer to previous record
+	CALL RETHSH		;Flush current record (pointed to by T1)
+	POP P,T1		;New current pointer is old previous pointer
+WALKI2:	MOVE T2,T1		;Current pointer becomes previous pointer
+	LOAD T1,HSNXT,(T1)	;Get pointer to next entry
+	JUMPN T1,WALKI1		;If not nil, go look at it
+WALKI3:	CALL ULKARP		;Release the hash table lock
+	RET			;End of list, return
+Subttl Address Resolution
+ 
+;RESOLV - lookup hardware address
+;On a successful lookup we move the target record to the head of the hash
+; bucket list to speed up future lookups.  On failure we send off an ARP
+; request before returning to our caller.
+;Takes	T1/ protocol address
+;	T2/ protocol type
+;	P1/ NCT address
+;Returns +1 Unable to resolve address
+;	 +2 address resolved, T1/ first 16 bits of destination host
+;			      T2/ last 32 bits of destination
+
+;T4 - Retry count
+;Q1 - protocol address
+;Q2 - protocol type
+;Q3 - address of hash bucket
+
+RESOLV::SAVEQ			;We clobber these AC's
+	MOVEI T4,TRYCNT		;Set up retry count in case we need to request
+	DMOVE Q1,T1		;Save arguments
+	CALL HASH		;Compute hash code
+	SKIPN Q3,HSBASE		;Get base adddress of hash table
+	 RET			;Return now if ARP is not yet initialized
+	ADDI Q3,(T1)		;Compute bucket address
+RESOL3:	CALL LCKARP		;Lock hash table to ensure consistency
+	 RET			;NOSKED and can't get lock on first try 
+	SKIPN T1,(Q3)		;Load first pointer
+	 JRST RESOL2		;Nothing in table, go enqueue an ARP request
+	SETZ T2,		;No previous record at this point
+RESOL0:	LOAD T3,HSPROT,(T1)	;Get protocol address of hash entry
+	CAME Q1,T3		;Match the packet?
+	 JRST RESOL1		;No, keep on looking
+	LOAD T3,HSPTYP,(T1)	;Get protocol type of hash entry
+	CAME Q2,T3		;Match the packet?
+	 JRST RESOL1		;No, keep on looking
+	IFN. T2			;A hit!  If not the first record, move to head.
+	  LOAD T3,HSNXT,(T1)	;Get pointer to successor of target
+	  STOR T3,HSNXT,(T2)	;Make our predecessor point to that record
+	  MOVE T3,(Q3)		;Get pointer to top of hash list
+	  STOR T3,HSNXT,(T1)	;Hang list off of target (move it to head)
+	  MOVEM T1,(Q3)		;Rehang list off of bucket
+	ENDIF.
+	MOVE T2,TODCLK		;Get current time and date
+	STOR T2,HSLTAD,(T1)	;Update time of last reference
+	LOAD T2,HSHW1,(T1)	;Get second part of hardware address
+	LOAD T1,HSHW0,(T1)	;Get first part of hardware address
+	CALL ULKARP		;Release lock on hash table
+	RETSKP			;Success return to caller
+
+;Here to look at next entry in the hash list
+
+RESOL1:	MOVE T2,T1		;Remember previous pointer
+	LOAD T1,HSNXT,(T1)	;Get pointer to next link in hash chain
+	JUMPN T1,RESOL0		;If non-nil, go look at next entry
+				;Fall through if at end of list and no match
+
+;Here to send an ARP request.  If we haven't exhausted our retry count and
+; we aren't a job zero process, we block for a while, waiting for a reply.
+; This reduces the number of packets we drop because of ARP failures.
+
+RESOL2:	CALL ULKARP		;Release lock on hash table
+	PUSH P,T4		;Save our retry count
+	CALL SNDREQ		;Send an ARP request
+	POP P,T4		;Restore retry count
+	SOJL T4,R		;Return failure if retry count exhausted
+	SKIPE JOBNO		;If we are job zero
+	 SKIPE NSKED		;Or if we are NOSKED
+	  RET			;Then don't risk blocking
+	MOVEI T1,^D1000		;Do a timed block of one second
+	CALL SETBKT		;Set up scheduler test argument
+	HRRI T1,BLOCKT		;Test is timed block
+	MDISMS			;Sleep for a while
+	JRST RESOL3		;Try resolving the address again
+
+;SNDREQ - send an ARP request for the RESOLV routine
+;Takes	Q1/ protocol address
+;	Q2/ protocol type
+;	P1/ NCT pointer
+;Returns +1 always
+
+SNDREQ:	SAVEAC<ARP>		;We use this AC
+	CALL GETBFF		;Get a free buffer
+	 RET			;No storage, quit now
+	MOVE ARP,T1		;Set up standard buffer pointer
+	SETONE ETDH0,(ARP)	;Encapsulation.  Set destination host...
+	SETONE ETDH1,(ARP)	; ...to -1, the broadcast address
+	XMOVEI T1,RFCREQ	;Assume RFC826 style ARP
+	CAIN Q2,ET%PUP		;Are we doing PUP?
+	XMOVEI T1,XRXREQ	;Yes, must use Xerox style ARP
+	CALL (T1)		;Stuff the datagram appropriately
+IFN STANSW&SC30SW,<
+	LOAD T2,NTDEV,(P1)	;Get the device type
+	CAIN T2,NT.NIP		;Is it an NI?
+	IFSKP.			;No, do MEIS stuff
+>;IFN STANSW&SC30SW
+	  MOVE T2,ARP		;T2/ buffer pointer
+	  MOVEI T3,.PM32	;T3/ 32-bit MEIS data mode 
+	  MOVEI T4,RETBUF	;T4/ buffer disposal routine
+	  CALL BLDIOW		;Construct and queue up an Ethernet write
+IFN STANSW&SC30SW,<
+	ENDIF.
+
+; Here to transmit an ARP over the NI
+
+NIARPX:	TRVAR(<<UNBLOK,UN.LEN>>) ;Get room for NISRV arg block
+	STOR T1,UNBSZ,+UNBLOK	;Save the size of the datagram
+	MOVE T1,ARPPID		;Get our NISRV portal ID
+	STOR T1,UNPID,+UNBLOK	;Put it in the NISRV arg block
+
+	STOR ARP,UNRID,+UNBLOK	;Save this buffer's ID
+
+	DMOVE T1,$ETDH0(ARP)	;Get the destination Ethernet address
+	LSH T1,-4		;Close the gap
+	LSHC T1,^D16		;Get two more bytes
+	LSH T1,4		;Open the gap again
+	OPSTR <DMOVEM T1,>,UNDAD,+UNBLOK ;Put it in the arg block
+	SETZRO UNPTR,+UNBLOK	;Indicate that we supplied an immediate address
+	XMOVEI T2,$ETDH0+4(ARP)	;Get start address of data
+	TXO T2,OWGP.(8)		;Turn it into a byte pointer
+	STOR T2,UNBFA,+UNBLOK	;Setup pointer to the real data
+	MOVX T1,UNA.EV		;Get address space indicator
+	STOR T1,UNADS,+UNBLOK	;Buffer is in Exec virtual memory
+	LOAD T1,UNBSZ,+UNBLOK	;Get the length of the datagram
+	CAIGE T1,^D46		;Is it long enough?
+	 MOVX T1,^D46		; Nope.  Now it is
+	STOR T1,UNBSZ,+UNBLOK	;Setup the datagram size
+	MOVX T1,NU.XMT		;Get NISRV function code
+	XMOVEI T2,UNBLOK	;Get arg block address
+	CALL DLLUNI		;Transmit the datagram
+	 BUG. (CHK,ARPNXF,ARP,SOFT,<ARP - NI transmit failed>)
+>;IFN STANSW&SC30SW
+	RET			;Return to caller
+
+;RFCREQ - set up an RFC826 ARP request
+;Takes	Q2/ protocol type
+;	ARP/ buffer pointer
+;	P1/ NCT pointer
+;Returns +1 always, T1/ datagram length
+
+RFCREQ:	AOS STARQR		;Count a request send out
+	MOVEI T1,ET%ARP
+	STOR T1,ETTYP,(ARP)	;Datagram type is ARP
+	MOVEI T1,HW$ETH
+	STOR T1,ARHRD,(ARP)	;Set hardware type to 10MB Ethernet
+	MOVEI T1,HL$ETH
+	STOR T1,ARHLN,(ARP)	;Set hardware address length
+	STOR Q2,ARPRO,(ARP)	;Set user specified protocol type 
+	MOVEI T1,PL$IP		;Get IP protocol address length
+	STOR T1,ARPLN,(ARP)	;Set protocol length
+	MOVEI T1,OP$REQ
+	STOR T1,AROPC,(ARP)	;Set opcode to request
+	SETZRO IPTH0,(ARP)	;Don't know target hardware address...
+	SETZRO IPTH1,(ARP)	;...so set those fields to zero
+	STOR Q1,IPTP,(ARP)	;Set target protocol address
+	CALL IPSRC		;Set us up as the IP source
+	RET			;Return to caller, T1/ datagram length
+
+;XRXREQ - send a Xerox style ARP request for PUP
+;Takes	Q1/ target PUP address
+;	ARP/ buffer pointer
+;	P1/ NCT pointer
+;Returns +1 always, T1/ datagram length
+
+XRXREQ:	AOS STARQX		;Count a request send out
+	MOVEI T1,ET%XRX		;Get type code
+	STOR T1,ETTYP,(ARP)	;Set it in encapsulation
+	MOVEI T1,XR$REQ		;Get opcode (request)
+	STOR T1,XROPC,(ARP)	;Set it up
+	SETZRO XRTH0,(ARP)	;Clear target hardware address
+	SETZRO XRTH1,(ARP)	;Clear target hardware address
+	STOR Q1,XRTP,(ARP)	;Set target protocol address
+	LOAD T1,HRDW0,(P1)	;Get first 32 bits of our hardware address
+	STOR T1,ETSH0,(ARP)	;Set up encapsulation
+	SETZ T2,		;Clear this for shifting
+	LSHC T1,-^D16		;Isolate first 16 bits
+	STOR T1,XRSH0,(ARP)	;Set first part of source hardware address
+	LSH T2,-4		;Nudge the middle 16 bits over
+	LOAD T1,HRDW1,(P1)	;Get last 16 bits of our hardware address
+	STOR T1,ETSH1,(ARP)	;Set up encapsulation
+	IORI T2,(T1)		;Build last 32 bits of our address
+	STOR T2,XRSH1,(ARP)	;Set last part of source hardware address
+	MOVE T1,NTHSTN(P1)	;Get our PUP host number
+	STOR T1,XRSP,(ARP)	;Set source protocol address
+	MOVEI T1,XRXLEN		;T1/ length of Xerox ARP datagram
+	RET			;Return to caller
+
+	TNXEND
+	END

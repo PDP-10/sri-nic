@@ -1,0 +1,918 @@
+;-*-Midas-*-
+
+	Title @INDEX - Make W7 index
+
+.DECSAV
+
+A=5
+B=6
+C=7
+T=10
+TT=11
+T3=12
+L=13
+S=14
+R=15
+F=16
+P=17
+
+PDLen==100
+WrdLen==20			;Word buffer size
+
+MaxFil==250.			;Max # of DICTION files we're expecting
+MaxME==63000.			;Maximum # of main entries
+MaxVR==27000.			;Expected # of "V"ariant and "R"un-on records
+MaxEnt==MaxVR+MaxME		;Expected total # of entries.
+
+.INSRT MID:SYMBOLS
+.INSRT MID:MACROS
+.INSRT W7:5TABLE
+
+Define SQUASH *string		;Construct a 5bit encoded string
+	.BYTE 5
+IRPC char,,[string]
+	%A+"!char-"a
+TERMIN
+	0 ? .BYTE
+Termin
+
+Define GETCHR
+	Call GetC
+	Jumpe A,GotEOF
+Termin
+
+PDL:	-PDLen,,.
+	Block PDLen
+
+InJFN:	0			;JFN on W7:*.DICTION.0 (i)
+OutJFN:	0			;JFN on W7:INDEX.BIN (o)
+TmpJFN:	0			;JFN on temporary work file
+
+zbeg::
+nFiles:	0			;# of files in InJFN sequence
+nEntry:	0			;# of entries in all files
+	0			;FilEnt-1 must be here and be 0
+FilEnt:	Block MaxFil		;# entries/file
+zend::
+
+IBufBP:	0			;BP into input buffer, 0 if not initialized.
+EOF:	0			;Set when EOF encountered in input file.
+
+FilPtr:	0			;Byte-offset (disk pointer) within file
+FilNam:	Block 40./5		;Space for name of file.
+
+Adjust:	0
+Total:	0
+
+NamAdr:	0			;Address of entry-name where saved in memory.
+EntFP:	0			;For an entry, this is the file-offset (bytes).
+
+BufPtr:	0
+OldLen:	0
+Alphap:	0
+RecTyp:	0
+
+FMain:	0			;Within a specific diction file, the # of
+FVandR:	0			;main and V&R entries gobbled.
+
+	440500,,Word1
+NewBP:	440500,,Word2
+
+	440500,,Word2
+OldBP:	440500,,Word1
+
+Word1:	Block 20
+Word2:	Block 20
+
+Digitp:	0			;Busy accumulating a digit
+DigExp:	0			;Busy expanding a digit
+Old2BP:	0			;When doing so, this is the old W2 BP
+Funp:	0			;Funny (non-A-Z) characters in mainent?
+FunBuf:	Block WrdLen		;Yes, they're saved here.
+Number:	0			;Accumulated string-# in word
+NumBuf:	Block WrdLen		;Number-Name is put here
+
+BinFil:	Asciz "W7:NEW-INDEX.BIN"
+DicFil:	Asciz "W7:*.DICTION.0"
+TmpFil:	Asciz "INDEX.TMP;T"
+
+DigNam:	[Squash "zero"]
+	[Squash "one"]
+	[Squash "two"]
+	[Squash "three"]
+	[Squash "four"]
+	[Squash "five"]
+	[Squash "six"]
+	[Squash "seven"]
+	[Squash "eight"]
+	[Squash "nine"]
+
+TeenTb:	[Squash "ten"]
+	[Squash "eleven"]
+	[Squash "twelve"]
+	[Squash "thirteen"]
+	[Squash "fourteen"]
+	[Squash "fifteen"]
+	[Squash "sixteen"]
+	[Squash "seventeen"]
+	[Squash "eighteen"]
+	[Squash "ninteen"]
+
+TenNam:	[Squash "twenty"]
+	[Squash "thirty"]
+	[Squash "forty"]
+	[Squash "fifty"]
+	[Squash "sixty"]
+	[Squash "seventy"]
+	[Squash "eighty"]
+	[Squash "ninety"]
+
+CRLF:	Asciz "
+"
+
+.INSRT LIB:PRARG
+.INSRT LIB:STCMP
+.INSRT LIB:SOUT
+
+Begin:	RESET%
+	Move P,PDL
+	Call GetOut		;Get handle on new INDEX.BIN file
+	Call GetIn		;and on DICTION.* sequence.
+	Call Init		;Zero critical memory &tc
+
+Loop:	Call ShoFile		;Show the file we're working on
+	Call Gobble		;then gobble it up
+	Call Stats		;and show what we got from it.
+	Move 1,InJFN
+	GNJFN%			;Get next file
+	  Skipa			;  no more
+	    Jrst Loop		;    got next, re-using JFN, so gobble it.
+	Call MakIdx		;Done, so write out the new index file
+Die:	.Logout			;and punt.
+	Jrst Die
+
+ShoFil:	Movei 1,.PRIOU
+	Hrrz 2,InJFN
+	Movx 3,JS%NAM		;Only show the filename ("A", "ACCLAIM", etc)
+	JFNS%
+	Type " . . . "
+	Return
+
+Stats:	Movei 1,.PRIOU
+	Move 2,FMain		;# of main entries in this file
+	Movei 3,10.
+	NOUT%
+	  Nop
+	Type " main (total "
+	Movei 1,.PRIOU
+	Move 2,nEntry		;total # of main entries in all files so far
+	NOUT%
+	  Nop
+	Type "), "
+	Movei 1,.PRIOU
+	Move 2,FVandR		;# of V&R entries in this file
+	NOUT%
+	  Nop
+	Type " V&R (total "
+	Movei 1,.PRIOU
+	Move 2,VRheap		;total # in all files
+	NOUT%
+	  Nop
+	TypeCR ")"
+	Skipa
+Popj1:	  Aos (P)
+CPopj:	Return
+
+QBarf:	CType "?
+	Call Terpri
+BarfCR:	Call Barf
+	AType CRLF
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Get a handle on a new output index file named INDEX.BIN
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+GetOut:	Movem 1,InJFN
+	Movx 1,GJ%SHT\GJ%FOU
+	Hrroi 2,BinFil
+	GTJFN%
+	  .Lose
+	Movem 1,OutJFN
+	Move 2,[Field(36.,OF%BSZ)+OF%WR]
+	OPENF%
+	  .Lose
+	Type "[Output file is "
+	Movei 1,.PRIOU
+	Move 2,OutJFN
+	Movx 3,JS%SPC
+	JFNS%
+	TypeCR "]"
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Get a temporary file, also close/re-open stuff
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+GetTmp:	Tdza 3,3
+ReGet0:	  Seto 3,
+	Movx 1,GJ%SHT\GJ%FOU\GJ%TMP
+	Hrroi 2,TmpFil
+	GTJFN%
+	  Jrst [Type "?Can't get JFN for temporary file "
+		AType TmpFIl
+		Type " -- "
+		Call BarfCR
+		Jrst Die]
+	Movem 1,TmpJFN
+	Skipe 3
+	  Skipa 2,[Field(36.,OF%BSZ)+OF%RD]
+	    Move 2,[Field(36.,OF%BSZ)+OF%WR]
+	OPENF%
+	  Jrst [Type "?Can't open temporary file "
+		AType TmpFil
+		Type " -- "
+		Call BarfCR
+		Jrst Die]
+	Return
+
+ReGet:	Move 1,TmpJFN
+	CLOSF%
+	  Jrst [Type "?Can't close temporary file -- "
+		Call BarfCR
+		Jrst Die]
+	Jrst ReGet0
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Get a handle on the source file sequence, and initialize mem.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+GetIn:	Movx 1,GJ%SHT\GJ%OLD\GJ%IFG
+	Hrroi 2,DicFil
+	GTJFN%
+	  Jrst [Type "?Can't get JFN for "
+		AType DicFil
+		Type " -- "
+		Call BarfCR
+		Jrst Die]
+	Movem 1,InJFN
+	Return
+
+Init:	Setzm zbeg
+	Move 1,[zbeg,,zbeg+1]
+	BLT 1,zend-1
+	Movei S,StrAdr
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Write out a new INDEX.BIN file.  If this is a partial new
+;;	version, then merge the data from the new DICTION files with
+;;	the index tables from the old INDEX.BIN
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+MakIdx:	Type "Writing index file..."
+	Setom Adjust		;Adjustment for VR pointers
+	Setz L,
+	Move R,VRheap
+	Subi S,StrAdr
+	Move T,nEntry
+	Movem T,Total
+	Call GetTmp		;Get a temporary file
+	
+Make1:	Skipg VRheap		;Any V&R's left?
+	  Jrst [Setz F,
+		Move TT,nEntry
+		Soja TT,Make2]
+	Push P,VRheap+1		;Save top of heap
+	Call Delete		;then flush it and restructure heap
+	Pop P,F
+	Call BSE		;Binary search
+	  Skipa			;  not found, good, goes after (TT)
+	    Jrst Make1		;    found, don't want duplicates
+	Aos Total
+Make2:	Caige TT,(L)
+	  Jrst Make2b
+	Move T,L
+	Subi T,1(TT)
+	Hrli T,PtrAdr(L)
+	Movss T
+	Move 1,TmpJFN
+Make2a:	Move 2,(T)
+	Sub 2,[StrAdr,,0]
+ifn 0,[
+	push p,t
+	hlrz t,(t)
+	hrli t,440500
+	call 5type
+	atype crlf
+	pop p,t
+];ifn 0
+	BOUT%
+	Addi L,1
+	Aobjn T,Make2a
+
+Make2b:	Jumpe F,Make3
+	Movem F,VRheap(R)	;Save at end of heap
+	Hrrz 2,F
+	Aos Adjust		;Adjust pointer adjuster
+	Add 2,Adjust		;and adjust adjust
+	Movns 2
+	Hrl 2,S			;where string will finally go
+ifn 0,[
+	type "  "
+	hlrz t,vrheap(r)
+	hrli t,440500
+	call 5type
+	atype crlf
+];ifn 0
+	BOUT%
+	Hlrz TT,VRheap(R)	;address of VR string
+Make2c:	Move 2,(TT)
+	Addi S,1
+	Trne 2,77		;Rightmost byte null?
+	  Aoja TT,Make2c	;  no, so more string to come
+	Soja R,Make1
+
+Make3:	Call ReGet		;ReGet the temp-file
+	Move 1,OutJFN
+	Hrlz 2,nFiles
+	Hrr 2,Total
+	BOUT%			;# files,,# entries...
+	Setz 2,
+	BOUT%			;0 entries before first file
+
+	Move 2,[444400,,FilEnt]
+	Movn 3,nFiles
+	SOUT%
+
+	Move T,Total
+	Add T,nFiles
+	Addi T,2
+	Hrlzs T
+	Move TT,Total
+
+Make4:	Move 1,TmpJFN
+	BIN%
+	Add 2,T
+	Move 1,OutJFN
+	BOUT%
+	Sojg TT,Make4
+
+	Move 2,[444400,,StrAdr]
+	Movei 3,StrAdr
+	Move T,nEntry
+	Hlrz T,PtrAdr-1(T)
+	Subi 3,(T)
+	SOUT%
+
+	Aos T,Adjust
+	Movns T
+	Hrli T,VRheap(R)
+	Movss T
+Make5:	Hlrz TT,(T)
+Make5a:	Move 2,(TT)
+	BOUT%
+	Trne 2,77
+	  Aoja TT,Make5a
+	Aobjn T,Make5
+
+	Move 1,OutJFN
+	CLOSF%
+	  .Lose
+	TypeCR "done"
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Binary search the main entry table for this V&R, return
+;;	+1 if not found, with TT being the entry which this V&R
+;;	should go after, +2 if found
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+BSE:	Setz A,
+	Move B,nEntry
+	Subi B,1
+	Hlrz T,F
+	Hrli T,440500
+	Move TT,[440500,,Buf1]
+	Call Standardize
+
+BSE0:	Movei T,1(B)
+	Subi T,(A)		;B-A
+	Lsh T,-1		;(B-A)/2 = Midpoint byte-offset.
+	Addi T,(A)
+
+	Push P,T
+	Hlrz T,PtrAdr(T)
+	Hrli T,440500
+	Move TT,[440500,,Buf2]
+	Call Standardize
+	Pop P,T
+
+	Move 1,[440500,,Buf1]
+	Move 2,[440500,,Buf2]
+	$STCMP
+	Jumpe 1,Popj1
+	Txnn 1,SC%GTR
+	  Jrst [Cail A,(B)
+		  Jrst [movei tt,-1(a)
+			return]
+		Movei B,-1(T)
+		Jrst BSE0]
+	Cail A,(B)
+	  Jrst [movei tt,(a)
+		return]
+	Movei A,1(T)
+	Jrst BSE0
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Suck in the current DICTION file and parse it up
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Gobble:	Hrrz 1,InJFN
+	Move 2,[Field(7,OF%BSZ)+OF%RD]
+	OPENF%
+	  .Lose
+	Setzm IBufBP		;Say no BP initialized yet,
+	Setzm EOF		;nor has EOF been hit.
+	Setom FilPtr		;FilPtr within file, -1 means never read.
+	Setzm FMain		;No main entries
+	Setzm FVandR		;of V&Rs yet read.
+
+Find:	GetChr			;Get char into A; entries start with "F:"
+	Caie A,"V
+	  Cain A,"R
+	    Jrst Find0		;V&R entries we want.
+	Caie A,"F
+	  Jrst SkipLine		;if not V&R, and not F, then skip it.
+Find0:	Movem A,RecTyp		;Save the record-code.
+	GetChr
+	Caie A,":		;Make sure right format
+	  Jrst SkipLine
+	Move T,FilPtr
+	Movem T,EntFP		;Save the file-offset for this entry.
+	Setcmm BufPtr		;Toggle the new/old offset.
+	Move T,BufPtr
+	Move TT,NewBP(T)	;TT gets BP to new/old word-buffer.
+	Setzb T3,Alphap		;# of characters in new word
+
+Loop0:	GetChr
+	Cain A,";		;Entry ends with a semi.
+	  Jrst Loopz
+IRP low,,["a,"A,"0]high,,["z,"Z,"9]crunch,,[%A,%A,%ZERO]
+	Cail A,low
+	  Caile A,high
+	    Skipa
+	   Jrst [Movei A,-low+crunch(A)
+		 Setom Alphap
+		 Jrst Loop0a]
+TERMIN
+	Cain A,"-
+	  Jrst [Movei A,%DASH1
+		Skipn Alphap
+		  Movei A,%DASH2
+		Jrst Loop0a]
+IRP char,,["',40,54,".,"/,"`]crunch,,[%APOS,%SPACE,%COMMA,%PERIOD,%SLASH,%GRAVE]
+	Cain A,char
+	  Jrst [Movei A,crunch
+		Jrst Loop0a]
+TERMIN
+	Call Terpri
+	Type "?Funny character in entry-name: ["
+	Caige A,40
+	  Jrst [CType "^
+		Tro A,100
+		Jrst .+1]
+	Movei 1,(A)
+	PBOUT%
+	Type "], previous entry: ["
+	Move T,BufPtr
+	Move T,NewBP(T)
+	Call 5Type
+	TypeCR "]"
+	Jrst SkipLine
+
+Loop0a:	Cail A,%EXTEND		;Extended character?
+	  Jrst [Movei 3,%META
+		Idpb 3,TT	;Yes, so meta prefix
+		Jrst .+1]	;%EXTEND bit will be stripped off by depositing
+	Idpb A,TT
+	Aoja T3,Loop0
+
+Loopz:	Setz 2,
+	Idpb 2,TT
+Loop0e:	Came T3,OldLen		;Same length as last word?
+	  Jrst [Movem T3,OldLen	;  No, so can't be the same.
+		Jrst Loop0f]
+	Move 1,NewBP(T)		;Yes, so see if it's a repeat.
+	Move 2,OldBP(T)
+	$STCMP
+	Jumpe 1,SkipLine	;Yes, same word as before, so ignore it.
+Loop0f:	Movem S,NamAdr		;Save the address on memory of this entryname.
+	Hrrz 1,S		;then copy the word to a permanent place
+	Hrli 1,440500
+	Move 2,NewBP(T)
+	Setz 3,
+	$SOUT			;Now copy from new/old buffer to permanent home
+	Idpb 3,1
+	Movei S,1(1)		;and adjust S to point to next available spot.
+	Camg S,NamAdr		;Might wrap around the address space
+	  Jrst [Call Terpri	;OOOOPS!!!
+		Type "?Out of string space"
+		Jrst Die]
+	Move A,RecTyp
+	Caie A,"F
+	  Jrst [Call SaveVR
+		Aos FVandR
+		Jrst SkipLine]
+	Aos R,nEntry
+	Caile R,MaxEnt
+	  Jrst [Call Terpri	;oooOOoooops!
+		Type "?Out of pointer space"
+		Jrst Die]
+	Move 2,NamAdr
+	Hrlm 2,PtrAdr-1(R)	;save pointer to word in LH
+	Move 2,EntFP
+	Sos 2
+	Hrrm 2,PtrAdr-1(R)	;and offset to start of entry in RH
+	Aos FMain
+
+SkipLine:
+	GetChr			;Skip ahead to end of line.
+	Caie A,^J
+	  Jrst SkipLine
+	Jrst Find
+
+GotEOF:	Hrrz 1,InJFN		;Close, but do not release JFN
+	Txo 1,CO%NRJ
+	CLOSF%
+	  .Lose
+	Aos T,nFiles		;and save the # of entries in this file
+	Move TT,nEntry
+	Movem TT,FilEnt-1(T)
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Here to save a "V"ariant or "R"un-on record in the VR-heap,
+;;	for sorting, and later inclusion in the main index.  AC4
+;;	has the address of the saved string...
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+.SCALAR Buf1(10),Buf2(10)
+
+SaveVR:	Aos T,VRheap		;T/ new #objects
+	Caile T,MaxVR
+	  Jrst [Call Terpri	;errrRRRRkkkK!!
+		Type "?Out of VR heap space"
+		Jrst Die]
+	Move TT,T
+
+	Pushn P,[T,TT]
+	Hrrz T,NamAdr
+	Hrli T,440500
+	Move TT,[440500,,Buf1]
+	Call Standardize
+ifn 0,	call debugx
+	Popn P,[TT,T]
+
+Save0:	IDivi TT,2		;TT = Floor(T/2)
+	Jumpe TT,Save1		;TT=0, so at top of tree.
+	Pushn P,[T,TT]
+	Hlrz T,VRheap(TT)
+	Hrli T,440500
+	Move TT,[440500,,Buf2]
+	Call Standardize
+	Popn P,[TT,T]
+	Move 1,[440500,,Buf1]
+	Move 2,[440500,,Buf2]
+ifn 0,	call debug0
+	$STCMP
+	Jumpe 1,CPopj
+	Txnn 1,SC%GTR
+	  Jrst [Move 2,VRheap(TT)	;Test < heaped
+		Movem 2,VRheap(T)
+ifn 0,		call debug1
+		Move T,TT
+		Jrst Save0]
+Save1:	Hrlz TT,NamAdr
+	Hrr TT,nEntry
+	Subi TT,1
+	Movem TT,VRheap(T)
+ifn 0,	call debug2
+	Return
+
+ifn 0,[
+debugx:	type "SAVEVR: test word is ["
+	move t,[440500,,buf1]
+	call 5type
+	typecr "]"
+	return
+
+debug0:	pushn p,[1,2,3,4,5,t,tt]
+	type "Comparing test word ["
+	move t,-6(p)
+	call 5type
+	type "] against heap word ["
+	move t,-5(p)
+	call 5type
+	type "] at location "
+	movei 1,.priou
+	move 2,(p)
+	movei 3,10.
+	nout%
+	  nop
+	atype crlf
+	popn p,[tt,t,5,4,3,2,1]
+	return
+
+debug1:	pushn p,[1,2,3]
+	type "Swapping heap slot "
+	movei 1,.priou
+	move 2,T
+	movei 3,10.
+	nout%
+	  nop
+	type " with slot "
+	movei 1,.priou
+	move 2,tt
+	nout%
+	  nop
+	atype crlf
+	popn p,[3,2,1]
+	return
+
+debug2:	type "storing word into slot "
+	movei 1,.priou
+	move 2,t
+	movei 3,10.
+	nout%
+	  nop
+	atype crlf
+	return
+];ifn 0
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Remove top item from the VR heap, and fix it up
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Delete:	Pushn P,[A,B,C]
+	Move A,VRheap		;Number of elements
+	Move T,VRheap(A)	;Last one.
+	Movem T,VRheap+1	;Blast over first one (top now clobbered)
+	Sosg VRheap		;One less thing now.
+	  Jrst DDone		;  Nothing left.
+	Movei A,1		;Where we are now.
+DLoop:	Move B,A
+	Lsh B,1			;B = 2*A
+	Camle B,VRheap		;Still within the tree?
+	  Jrst DDone		;  Nope, must be at bottom.
+	Movei C,1(B)		;C = (2*A)+1
+	Camle C,VRheap		;C in the tree?
+	  Jrst Delet0		;  No, so use B.
+	Hlrz T,VRheap(B)
+	Hrli T,440500
+	Move TT,[440500,,Buf1]
+	Call Standardize
+	Hlrz T,VRheap(C)
+	Hrli T,440500
+	Move TT,[440500,,Buf2]
+	Call Standardize
+	Move 1,[440500,,Buf1]
+	Move 2,[440500,,Buf2]
+	$STCMP
+	Txne 1,SC%GTR		;(B) <= (C)?
+	  Move B,C		;  No, so make sure B points to smaller.
+Delet0:	Hlrz T,VRheap(A)
+	Hrli T,440500
+	Move TT,[440500,,Buf1]
+	Call Standardize
+	Hlrz T,VRheap(B)
+	Hrli T,440500
+	Move TT,[440500,,Buf2]
+	Call Standardize
+	Move 1,[440500,,Buf1]
+	Move 2,[440500,,Buf2]
+	$STCMP
+	Txne 1,SC%GTR		;String belong in it's current position?
+	  Jrst [Move 2,VRheap(A)
+		Exch 2,VRheap(B)
+		Movem 2,VRheap(A)
+		Move A,B
+		Jrst DLoop]
+DDone:	Popn P,[C,B,A]
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Take the string pointed to by T, and standardizes it into
+;;	the buffer pointed to by TT.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+.SCALAR FromBP			;Source BP
+
+Standardize:
+	Movem T,FromBP
+	Push P,T3
+	Setzm Funp
+	Setzm Digitp		;Not accumulating digits,
+	Setzm DigExp		;or expand a number-name.
+	Move T3,[440600,,FunBuf]
+
+Stand0:	Ildb 1,FromBP
+	Cail 1,%A
+	  Caile 1,%Z
+	    Jrst NonAlf
+	Skipe Digitp			;Some digits before this alph?
+	  Jrst [Call NumExp
+		Jrst Stand0]
+	Idpb 1,TT
+	Jrst Stand0
+
+NonAlf:	Jumpe 1,EOW		;End of Word
+	Cain 1,%META		;Expand a leadered character
+	  Jrst [Ildb 1,FromBP
+		Addi 1,%EXTEND
+		Jrst .+1]
+	Cain 1,%SPACE
+	  Jrst Stand0		;Ignore spaces.
+	Cail 1,%ZERO
+	  Caile 1,%NINE
+	    Jrst [Idpb 1,T3	;Save in FunBuf
+		  Setom Funp
+		  Jrst Stand0]
+	Skipe Digitp		;Already started accumulating the number?
+	  Jrst [Movei 1,-%ZERO(1)
+		Exch 1,Number
+		IMuli 1,10.
+		Add 1,Number
+		Movem 1,Number
+		Jrst Stand0]
+	Setom Digitp		;flag that we're expanding a digit
+	Movei 1,-%ZERO(1)	;real digit value
+	Movem 1,Number		;and save for later accumulation.
+	Jrst Stand0
+
+EOW:	Skipe Digitp		;Ran into EOW while accumulating digits?
+	  Jrst [Call NumExp	;  Yes, so need to take care of that.
+		Jrst Stand0]
+	Skipe DigExp		;Just finished expanding a digit?
+	  Jrst [Seto 2,		;  Yep, so recover old BP
+		AdjBP 2,Old2BP	;  (want to reget digit after #)
+		Movem 2,FromBP
+		Setzm DigExp	;  clear flag,
+		Jrst Stand0]	;  and carry on.
+	Skipn 1,Funp		;EOW2.  Any stacked trailers?
+	  Jrst Stand2		;  No, so needn't do phase II.
+	Setz 1,
+	Idpb 1,T3		;Tie off the FunBuf string
+	Move 2,[440600,,FunBuf]
+Stand1:	Ildb 1,2
+	Idpb 1,TT
+	Jumpn 1,Stand1
+Stand2:	Idpb 1,TT
+	Pop P,T3
+	Return
+
+NumExp:	Push P,1
+	Push P,FromBP
+	Pop P,Old2BP
+	Move 2,Number		;Name this number
+	Move 3,[440500,,NumBuf]	;into this buffer.
+	Call NameNo		;Name that Number!
+	Movem 3,FromBP
+	Setzm Digitp		;Mark finished accumulating,
+	Setom DigExp		;and that we're expanding now.
+	Pop P,1
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;	Given a number in AC2, and a BP to a buffer in AC3, return
+;;	a BP (in 3) to the name of the number.  It could either be
+;;	a BP to the given buffer, or into some table
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+NameNo:	Skipl 2			;Don't know what to do with
+	  Caile 2,9999.		;  negative or  
+	    Jrst [Call Terpri	;    real large ones, so just do "zero"
+		  Type "?NameNo given 0>n>9999, n = "
+		  Movei 1,.PRIOU
+		  Movei 3,10.
+		  NOUT%
+		    Nop
+		  Jrst Die]
+	Caig 2,19.		;Have a non-generatable name?
+	  Jrst [Move 3,DigNam(2);  Yes, so use it.
+		Hrli 3,440500	;Just a digit, so point to it's name.
+		Return]
+	Pushn P,[1,2,3]		;Need this for BP
+	Move 1,3		;Destination BP
+	IDivi 2,100.
+	Skipe 2
+	  Call 2Digit
+	Move 2,3
+	Call 2Digit
+	Popn P,[3,2,1]
+	Return
+
+2Digit:	Push P,3
+	Caig 2,19.
+	  Jrst 2Digi0
+	IDivi 2,10.
+	Pushn P,[2,3]
+	Move 2,TenNam-2(2)
+	Hrli 2,440500
+	Setz 3,
+	$SOUT
+	Popn P,[3,2]
+	Skipn 2,3
+	  Jrst 2Digi1
+2Digi0:	Move 2,DigNam(2)
+	Hrli 2,440500
+	Setz 3,
+	$SOUT
+2Digi1:	Pop P,3
+	Return
+
+5Type:	Movei 1,.PRIOU
+5Type0:	Ildb 2,T
+	Jumpe 2,CPopj
+	Cain 2,%META		;Meta-prefix?  Extended character?
+	  Jrst [Ildb 2,T	;  Yes, to get character
+		Addi 2,%EXTEND	;  and bump up to extended region
+		Jrst .+1]
+	Move 2,5Table(2)
+	BOUT%
+	Jrst 5Type0
+
+GetC:	Skipe IBufBP
+	  Jrst [Ildb A,IBufBP
+		Jumpn A,[Aos FilPtr
+			 Return]
+		Skipe EOF
+		  Return	;If real EOF, return the null
+		Jrst .+1]
+	Pushn P,[1,2,3]
+	Hrrz 1,InJFN
+	Move 2,[440700,,InBuf]
+	Movem 2,IBufBP
+	Movni 3,InBufl*5-1
+	SIN%			;Suck in another bufferful
+	  Ernop
+	Setz 1,
+	Idpb 1,2
+	Skipe 3
+	  Setom EOF
+	Popn P,[3,2,1]
+	Jrst GetChr
+
+ShowVR:	Skipg VRheap
+	  Return
+	Push P,VRheap+1
+	Call Delete
+	Pop P,TT
+	Hlrz T,TT
+	Hrli T,440500
+	Call 5Type
+	Type " --> "
+	Hlrz T,PtrAdr(TT)
+	Hrli T,440500
+	Call 5Type
+	AType CRLF
+	Jrst ShowVR
+
+Constants
+Variables
+
+VRheap:	0
+	Block MaxVR
+
+InBufl==<./1000+1>*1000-.-1
+	INFORM InBufL = ,\InBufL
+InBuf:	Block InBufl
+	0
+
+PtrPag==<./1000>+1
+PtrAdr=PtrPag*1000
+
+StrPag==PtrPag+<MaxME/1000>+1
+StrAdr=StrPag*1000
+
+	End Begin

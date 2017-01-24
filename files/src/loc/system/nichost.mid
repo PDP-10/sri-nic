@@ -1,0 +1,179 @@
+	Title  NicHost	-- Make local host table
+	Subttl          -- by Mark K. Lottor, May, 1988
+
+.DECSAV
+
+P=17
+
+;insertions
+.INSRT	MID:MACROS
+.INSRT	MID:SYMBOLS
+
+Define RetSkp
+	Jrst Popj1
+Termin
+
+PDLen==40
+PDL:	Block PDLen
+
+InJFN:	0			;input JFN
+OutJFN:	0			;output JFN
+
+InBuf:	Block	1000
+
+
+Start:	RESET%
+	Move	P,[PDL(-PDLen)]	;init stack
+	TypeCR	"Generate NIC host table"
+
+	TypeCR	"Input file:  NETINFO:HOSTS.TXT.0"
+	Movx	1,gj%old!gj%sht
+	Hrroi	2,[asciz /NETINFO:HOSTS.TXT.0/]	
+	GTJFN%
+	 Erjmp	Die
+	Movem	1,InJFN
+	Move	2,[Field(7,OF%BSZ)\OF%RD]
+	OPENF%
+	 Erjmp	Die
+
+	TypeCR	"Output file:  SYSTEM:HOSTS.TXT.-1"
+	Movx	1,GJ%SHT\GJ%NEW\GJ%FOU
+	Hrroi	2,[asciz /SYSTEM:HOSTS.TXT.-1/]
+	GTJFN%
+	 Erjmp	Die
+	Movem	1,OutJFN
+	Move	2,[Field(7,OF%BSZ)\OF%WR]
+	OPENF%
+	 Erjmp	Die
+
+Loop:	Move	1,InJFN
+	Hrroi	2,InBuf
+	Movei	3,2550.
+	Movei	4,.CHLFD
+	SIN%
+	 Erjmp	InEOF
+	Setz	1,
+	Idpb	1,2
+	Move	1,InBuf
+	Camn	1,[ascii /NET :/]
+	 Jrst   Keep		;keep NET entries
+	Ldb	1,[350700,,InBuf]
+	Cain	1,73		;semicolon?
+	 Jrst	Keep
+	Move	1,[440700,,InBuf]
+FCol0:	Ildb	2,1
+	Jumpe	2,Loop
+	Caie	2,":
+	 Jrst	FCol0
+MorNum:	Ildb	2,1		;get space
+	Cain	2,":
+	 Jrst	Loop		;if no more addresses then don't keep
+	Movei	3,10.
+	NIN%			;get first octet of host number
+	 Erjmp	LinCpy
+;	Cain	2,10.		;net 10?
+;	 Jrst	LinCpy
+	Cain	2,26.		;net 26?
+	 Jrst	LinCpy
+;read next 3 octets
+	NIN%
+	 Erjmp	LinCpy
+	NIN%
+	 Erjmp	LinCpy
+	NIN%
+	 Erjmp	LinCpy
+	Jrst	MorNum		;see if another address is listed
+
+LinCpy:
+;don't copy if its a TAC
+Col1:	Ildb 2,1		;get a char
+	Jumpe 2,Loop		;error, don't copy
+	Caie 2,":
+	 Jrst Col1
+;just past host numbers
+Col2:	Ildb 2,1		;get a char
+	Jumpe 2,Loop		;error, don't copy
+	Caie 2,":
+	 Jrst Col2
+;just past hostname
+Col3:	Ildb 2,1		;get a char
+	Jumpe 2,Loop		;error, don't copy
+	Caie 2,":
+	 Jrst Col3
+;just past hardware field
+	Ildb 2,1
+	Caie 2,.chspc
+	 Jrst CProt1
+	Ildb 2,1
+	Caie 2,"T
+	 Jrst CProt1
+	Ildb 2,1
+	Caie 2,"A
+	 Jrst CProt1
+	Ildb 2,1
+	Caie 2,"C
+	 Jrst CProt1
+	Ildb 2,1
+	Caie 2,.chspc
+	 Jrst CProt1
+	Jrst Loop		;TAC -- skip it
+
+;check protocol field
+CProt:  Ildb 2,1
+Cprot1:	Jumpe 2,Keep
+	Caie 2,":		;get to protocol field
+	 Jrst CProt
+	Ildb 2,1
+	Caie 2,.chspc
+	 Jrst Keep
+	Ildb 2,1
+	Caie 2,"X
+	 Jrst Keep
+	Ildb 2,1
+	Caie 2,".
+	 Jrst Keep
+	Ildb 2,1
+	Caie 2,"2
+	 Jrst Keep
+	Ildb 2,1
+	Caie 2,"5
+	 Jrst Keep
+	Jrst Loop		;X.25 -- kill it
+
+Keep:	Move	1,OutJFN
+	Hrroi	2,InBuf
+	Setz	3,
+	SOUT%
+	Jrst	Loop
+
+InEof:	TypeCR "New table created."
+	Jrst	Done
+
+
+;; Miscellany
+
+Popj1:	Aos	(P)
+R:	Ret
+
+ErrRet:	Type	"%"
+Error:	Movei	1,.PRIOU
+	Hrloi	2,.FHSLF
+	Setz	3,
+	ERSTR%
+	 jfcl
+	 jfcl
+	TypeCR	"."
+	Ret
+
+Die:	Type	"?"
+	Call	Error
+Done:	Move	1,InJFN
+	CLOSF%
+	 Erjmp	.+1
+	Move	1,OutJFN
+	CLOSF%
+	 Erjmp	.+1
+DieHlt:	Haltf%
+	Jrst	DieHlt
+
+	End Start

@@ -1,0 +1,572 @@
+TITLE	PASSRT - PASCAL INTERFACE TO STAND-ALONE SORT
+
+;To use this, simply include the following declaration in your
+;Pascal program:
+;  procedure sort(s:string);extern;
+;then call it, passing the same argument that you would pass to
+;sort if you were using it standalone.  This calls SORT in a
+;subfork.  It is modelled after the Fortran interface, but
+;essentially none of the code from the Fortran interface is
+;left now.
+
+
+
+repeat 0,<
+
+		Implementation notes for Tops-20
+
+Every implementation has its dangers.  The most reasonable alternatives
+for this interface are:
+  - like the DEC interface for Fortran.  This maps SYS:SORT.EXE into
+	your program's fork and PUSHJ's to it.  In order to avoid
+	clobbering your runtime system, SORT gets and releases memory
+	using FUNCT., which your runtime system must supply.  Advantage:
+	supported by DEC.  Disadvantages:  takes up locations 600000 and
+	up of your core image;  depends upon implementation of Fortran
+	interface, which may change with new versions of Sort or
+	Fortran.  But by looking at the Fortran interface supplied by
+	DEC, one can probably update.
+  - run SORT as a regular program in a subfork, passing arguments to it
+	in some convenient way.  The best way would be via PRARG, i.e.
+	simulated TMPCOR.  But as far as I can see, SORT does not
+	support TMPCOR, nnnSRT.TMP, or even rescanning.  Thus one would
+	have to play some games with primary input and push in the
+	command that way.  Advantage:  does not depend upon any knowlege
+	of innards of SORT;  disadvantage:  primary input games tend
+	to cause programs to hang, and there can be problems if two
+	such programs are running at the same time in parallel forks.
+  - run SORT in a subfork, but calling it with a Fortran-like interface.
+	Since it is alone in the fork, the FUNCT. can be fairly
+	simple, just getting memory at .JBFF.  This allows you to
+	pass arguments cleanly.  Advantage: the code is clean;
+	disadvantage: depends upon implementation of Fortran interface,
+	which may change with new versions of Sort or Fortran.  But
+	by looking at the Fortran interface supplied by DEC, one can
+	probably update.
+
+We have chosen the last alternative.  This involves starting a subfork.
+The subfork has a small driver program, which calls SORT using the same
+interface technique that Fortran uses.  This interface requires that
+the caller supply a FUNCT. that does memory management.  So our driver
+consists mostly of the FUNCT. memory management routines.  Since there
+is nothing else in this fork to worry about, these routines are as
+simple as possible.
+
+The SORT routine in the main fork has to copy the user's command string
+into the subfork and then start the driver program.  In order to
+minimize complexity for the user, we have the driver program in the
+main fork, and BLT it into the subfork through a PMAP'ed window.
+The easiest thing would be to have it as an .EXE file and GET it into
+the subfork.  But that would mean you have to have an extra .EXE file
+lying around.  In order to understand how this code works, you should
+read carefully
+  - the section in the MACRO manual describing how the PHASE pseudoop
+	works.  
+  - the section in Monitor Calls describing PMAP from process to
+	process.
+
+The code for copying the command string into the subfork works by
+PMAP'ing a buffer in the main fork into the subfork.  It then copies
+the argument into the buffer.  The only complexity is that the
+argument is a string of arbitrary size.  So we must check to see if
+we have gone beyond the end of the buffer.  If so, we expand the
+buffer by mapping the next page above the buffer into the next page
+of the subfork.  After doing this copying, the next address in the
+subfork is set as .JBFF.  Memory allocation in the driver program
+is done from .JBFF.
+
+> ;repeat 0
+
+;FEATURE TEST SWITCHES
+;FTOPS20		;TOPS-20 VERSION
+
+;NOTE - Tops10 version is not yet supported.  (It will be if someone
+;  will give me access to a Tops-10 system with SORT on it.)
+
+IFNDEF FTOPS20,<FTOPS20==1>
+
+IFN FTOPS20,<SEARCH	MACSYM,MONSYM,PASUNV>
+IFE FTOPS20,<SEARCH	MACTEN,UUOSYM,PASUNV>
+
+;ACCUMULATOR DEFINITIONS (SAME AS SRTPRM)
+
+T1=1
+T2=2
+T3=3
+T4=4
+P1=5
+L=16
+P=17
+
+ENTRY	SORT
+SUBTTL	DEFINITIONS -- Typeout Macros
+
+
+DEFINE TYPE(MESSAGE)<
+  IFE FTOPS20,<
+    OUTSTR [ASCIZ \MESSAGE\]
+  >
+  IFN FTOPS20,<
+    HRROI T1,[ASCIZ \MESSAGE\]
+;;*;[2] Replace in TYPE macro	DZN	9-Nov-78
+    PSOUT%				;;[2]
+  >
+>
+
+DEFINE TYPEC(ACC)<
+  IFE FTOPS20,<
+    OUTCHR ACC
+  >
+  IFN FTOPS20,<
+    IFN <ACC>-T1,<
+      HRRZ T1,ACC
+    >
+    PBOUT
+  >
+>
+
+DEFINE $ERROR(Q,CODE,TEXT,MORE)<
+E$$'CODE:
+  IFB <MORE>,<
+    TYPE <Q'SRT'CODE TEXT
+>
+  >
+  IFNB <MORE>,<
+    TYPE <Q'SRT'CODE TEXT>
+  >
+  IFIDN <Q'MORE><?>,<
+    JRST DIE
+  >
+>
+SUBTTL	TOPS-20 VERSION -- Data in the main fork
+
+
+IFN FTOPS20,<
+
+SRTEXE:	ASCIZ	/SYS:SORT.EXE/		;[2] NAME TO DO A GET% JSYS ON
+
+srtfrk:	BLOCK	1
+srtpag:	block	1			;current page mapped into srtfrk
+arg1:	block 1
+arg2:	block 1
+subacs:	block 20			;place to put AC's read from subfork
+
+SUBTTL	TOPS-20 VERSION -- routine called from Pascal in main fork
+
+;AC usage:
+;  T1-T4 are temps
+;  P1 is the address in the main fork that is mapped into address 0
+;	in the subfork.  This can be used to relocate subfork addresses
+;	into the main fork address that will map into it.
+
+SORT:	movem t2,arg1			;save user args
+	movem t3,arg2
+;create a subfork.  It gets these things:
+;   code for the subfork, BLT'ed from here
+;   the argument block from the user
+;   sort.exe, upper segment
+  ;make the fork
+	movsi t1,(cr%cap)		;pass cap
+	cfork
+	 jrst e$$fkf			;fork creation failed
+	movem t1,srtfrk
+  ;get the next free page in the main fork.  This is the first page
+  ;of the "window" that will be mapped into the subfork.  Its address
+  ;goes into P1 as the relocation constant.
+	move p1,.jbff##			;get a free page
+	subi p1,1			;  round up to a page
+	tro p1,777
+	addi p1,1			;p1 = this fork's copy of subfork 0
+	move t1,p1			;t1 - source handle,,page
+	lsh t1,^D-9			;  make it page number
+	hrli t1,.fhslf
+	hrlz t2,srtfrk			;t2 - dest handle,,page
+	movsi t3,(pm%rd!pm%ex!pm%cpy)	;t3 - access
+	pmap
+	setzm srtpag			;page zero now mapped
+  ;now initialize subfork by copying driver program from this fork
+	hrli t1,srtphs			;address of code in this fork
+	hrri t1,srtcod(p1)		;address of copy mapped to other fork
+	blt t1,srtend-1(p1)		;now we have the code we need in subfrk
+  ;now copy the user's argument (a string) into the subfork
+	move t2,arg1
+	hrli t2,440700			;t2 - byte ptr to string arg
+	move t3,arg2
+	movei t4,srtend(p1)		;t4 - byte ptr to copy at .JBFF in fork
+	hrli t4,440700
+argcp1:	sojl t3,argcp2			;done if count exhausted
+	ildb t1,t2			;copy char
+	jumpe t1,argcp1			;ignore nulls
+	pushj p,chkadr			;validate addr
+	idpb t1,t4
+	jrst argcp1
+argcp2:	setz t1,			;make asciz
+	pushj p,chkadr
+	idpb t1,t4
+	movei t4,1(t4)			;t4 - first loc beyond copy
+	sub t4,p1			;unrelocate from this fork
+	movem t4,.jbff(p1)		;update .JBFF in subfork
+   ;now put SORT.EXE into high segment of subfork
+	movx t1,gj%old!gj%sht		;find sort.exe
+	hrroi t2,srtexe
+	gtjfn%
+	 erjmp e$$cfs
+	hrl t1,srtfrk			;and GET it
+	txo t1,gt%adr			;into 600 to 677
+	move t2,[xwd 600,677]
+	get%
+   ;get entry vector to verify that it is the new SORT.  Also, save
+   ;entry address in .JBSA of subfork, for the driver.
+	move t1,srtfrk
+	gevec%
+	movem t2,.jbsa##(p1)		;put it in subfork's .JBSA
+	hlrz t1,t2			;length of entry vector
+	cain t1,(jrst)			;if JRST, it is old sort
+	jrst e$$sv4
+   ;now actually start the subfork
+	move t1,srtfrk			;now start the thing
+	movei t2,srtcod			;at our interface
+	sfork
+	move t1,srtfrk			;and wait for it
+	wfork
+   ;get return code, which is in AC1 of subfork
+	move t1,srtfrk			;get their acs
+	movei t2,subacs
+	rfacs
+   ;clean up by killing the fork and pages we created
+	move t1,srtfrk			;must kill it, since can't reuse
+	kfork
+	seto t1,			;unmap pages
+	move t2,p1
+	lsh t2,^D-9			;turn into page number
+	hrli t2,.fhslf
+	move t3,srtpag			;last page
+	addi t3,1			;count is last +1
+	tlo t3,(pm%cnt)
+	pmap
+   ;now exit, normal or abnormal as appropriate
+	skipn subacs+t1			;returned OK?
+	popj p,				;yes
+	jrst quit##			;no
+
+;chkadr - validate address of ildb in T4.  Preserves T1 to T3.
+;  this routine is needed because we don't know how long the user's
+;  string will be.  We start by mapping only one page from main
+;  fork to subfork.  If the string is too long, we could go beyond
+;  this one-page window.  In that case, we make the window bigger
+;  by mapping the next page.  T4 is the byte pointer into the
+;  window.  If it is about to overflow into the next page, we
+;  expand the window.
+chkadr:	push p,t1
+	move t1,t4			;word ildb will go to
+	ibp t1
+	tlz t1,777777
+	caml t1,lstnew##		;make sure not overlapping heap
+	jrst e$$nec
+	xor t1,t4			;different page?
+	trnn t1,777000
+	jrst chkadx			;no - done
+	push p,t2
+	push p,t3
+	move t1,p1			;t1 - source handle,,page
+	lsh t1,^D-9			;  make it page number
+	aos srtpag			;now on a new page
+	add t1,srtpag
+	hrli t1,.fhslf
+	hrr t2,srtpag			;t2 - dest handle,,page
+	hrl t2,srtfrk
+	movsi t3,(pm%rd!pm%ex!pm%cpy)	;t3 - access
+	pmap
+	pop p,t3
+	pop p,t2
+chkadx:	pop p,t1
+	popj p,
+
+	lit
+
+;Here is the code for the sort subfork
+
+srtphs=.
+
+;This code appears at address SRTPHS in the main program.  However
+;after BLT'ing into the subfork, it ends up starting at location
+;140.  Thus we must do PHASE 140 so that its labels are relative
+;to 140 instead of the locations in the main program.
+
+	phase 140
+
+;here we are in the subfork.
+
+srtcod:	move p,[iowd 40,srtstk]		;give him a small stack
+	movei l,argblk			;here is the arg
+	move p1,.jbsa##			;this is entry vector
+	pushj p,4(p1)			;call 4th location
+	setz t1,			;no problems
+	haltf				;return to top level
+
+subdie:	seto t1,			;error return
+	haltf
+
+
+;This is FUNCT., called by sort for memory allocation.  FUNCT. is
+;defined in the LINK manual.  The only thing SORT uses it for
+;is to ask for memory, so that is all we implement.  The others
+;call "UNIMP", which gives an error return.
+
+funct.:	move t1,@(l)		;function code
+	cail t1,0
+	caile t1,maxfun
+	jrst unimp
+	jrst @fundsp(t1)	;go to routine
+
+;This is a dispatch table, with the address of the routine to
+;handle each of the FUNCT. function codes.
+
+fundsp:	unimp			;ill
+	unimp			;gad
+	getcor			;cor
+	retcor			;rad
+	unimp			;gch
+	unimp			;rch
+	getcor			;got
+	retcor			;rot
+	unimp			;rnt
+	unimp			;ifs
+	retok			;cbc
+	unimp			;rrs
+	unimp			;wrs
+maxfun=.-fundsp-1
+
+;unimp is for unimplemented functions.  It returns error status.
+
+unimp:	setom @2(l)		;status
+	setzm @1(l)		;error code
+	popj p,
+
+;getcor asks for a specified amount of memory.  We get it at .JBFF.
+
+getcor:	move t1,@4(l)		;arg 2 = size
+	move t2,.jbff##		;start at .jbff
+	addb t1,.jbff		;update .jbff
+	cail t1,600000		;overlap high seg
+	jrst errnec		;not enough core
+	movem t2,@3(l)		;return address of block
+retok:	setzm @2(l)		;ok status
+	setzm @1(l)		;no error code
+	popj p,
+
+;retcor returns a specified block of memory.  Since we don7t have a
+;memory manager we can't do this in general.  We can do it only if
+;the block being returned happens to be at the very end of the
+;allocated piece of memory.  If so, we just move .JBFF below it,
+;effectively putting it back in the unallocated area.  Fortunately,
+;SORT seems to return memory in reverse address order, so this
+;routine manages to return all blocks of memory.
+
+retcor:	move t1,@3(l)		;arg 1 = addr
+	move t2,@4(l)		;arg 2 = size
+	add t2,t1		;t2 - end of block
+	camge t2,.jbff		;if anything after it
+	jrst retok		;can't do anything - say we did it
+	movem t1,.jbff		;return it - move .jbff 
+	jrst retok		;that's all we have to do
+
+;can't return core, error 1
+errcrc:
+
+;not enough core, error 1
+errnec:	movei t1,1
+	movem t1,@2(l)		;error 1
+	setzm @1(l)		;no error codes for now
+	popj p,
+
+;srtarg is the Fortran-style argument list for Sort.  In our case it is
+;an ASCIZ string.
+
+	XWD -1,0			;number of args
+SRTARG:	EXP 17B12!SRTEND		;ASCIZ
+
+;argblk is the actual argument list passed to SORT.  as you can see,
+;the first argument is srtarg.  I am not sure why they make one
+;argument another argument list in this way, but this is the way
+;DEC has defined the interface.
+
+ARGBLK:	EXP	SRTARG			;addr of arg to SORT
+	JRST	FUNCT.			;PASS THESE PASCAL ROUTINES
+	JRST	SUBDIE			;  TO SORT
+
+;stack for driver program
+
+srtstk:	block 40
+	lit				;make sure literals are in phase
+
+srtend=.
+
+	dephase
+
+;addressing is now back up in the main program
+
+SUBTTL	TOPS-20 VERSION -- Error Messages
+
+E$$FKF:	$ERROR	(?,FKF,<Failed to create subfork for SORT>)
+
+E$$SV4:	$ERROR	(?,SV4,<SORT version 4 or later required.>)
+
+E$$NEC:	$ERROR	(?,NEC,<Not enough free space below heap>)
+
+E$$CFS:	$ERROR	(?,XGF,<Can't get  >,+)	;[4]
+	HRROI	T1,SRTEXE		;[4] TYPE WHAT WE COULDN'T FIND
+	PSOUT%				;[2]   ..
+	TYPE	<, >			;  FOLLOWED BY WHY (LAST PROCESS ERROR)
+PRCERR:	MOVX	T1,.PRIOU		;TYPE LAST PROCESS ERROR
+	MOVX	T2,<.FHSLF,,-1>		;  ..
+	SETZ	T3,			;  ..
+	ERSTR%				;[2]   ..
+	  ERJMP	.+2			;IGNORE ERRORS AT THIS POINT
+	  ERJMP	.+1			;  ..
+	TYPE	<.
+>
+DIE:	HALTF%				;[2] STOP THE JOB
+	JRST	SORT			;IN CASE USER FIXED THINGS
+
+		
+
+
+>;END IFN FTOPS20
+SUBTTL	TOPS-10 VERSION - NOT SUPPORTED
+
+IFE FTOPS20,<
+
+;FORTRAN DATA TYPES
+
+TP%UDF==0			;UNDEFINED TYPE
+TP%LOG==1			;LOGICAL
+TP%INT==2			;INTEGER
+TP%REA==4			;REAL
+TP%OCT==6			;OCTAL
+TP%LBL==7			;LABEL OR ADDRESS
+TP%DOR==10
+TP%DOT==12
+TP%COM==14
+TP%LIT==17			;ASCIZ TEXT (LITERAL STRING)
+
+;FUNCT. ARGUMENTS
+
+F.GCH==4			;GET CHANNEL ARGUMENT
+F.RCH==5			;RETURN CHANNEL NUMBER
+
+;LOCAL DEFINITIONS
+
+DIRLEN==5				;ALL WE SHOULD NEED OF .EXE DIRECTORY
+PAGLEN==^D32				;MAX. PAGES NEEDED FOR HIGH SEG CODE
+	'SORT  '			;NAME FOR TRACE.
+SORT:	MOVEM	L,SAVEL
+	MOVEI	L,1+[-4,,0
+		     Z TP%INT,[F.GCH]
+		     Z TP%LIT,[ASCIZ /SRT/]
+		     Z TP%INT,CHSTAT
+		     Z TP%INT,SRTCHN]
+	PUSHJ	P,FUNCT.##		;ASK FOROTS FOR A CHANNEL
+	SKIPE	CHSTAT			;DID WE GET IT?
+	JRST	E$$CAS			;NO
+	MOVE	T1,SRTCHN
+	DPB	T1,[POINT 4,SRTCHN,12]	;PUT IN ACC FIELD
+	HLLZ	T1,SRTCHN
+	IOR	T1,[OPEN OBLK]
+	XCT	T1			;OPEN SYS
+	 JRST	E$$OPN			;FAILED?
+	HLLZ	T1,SRTCHN
+	IOR	T1,[LOOKUP LBLK]
+	XCT	T1			;LOOKUP SYS:SRTFOR.EXE
+	  JRST	E$$LKP			;FAILED
+	HLLZ	T1,SRTCHN
+	IOR	T1,[IN	DIRIOW]
+	XCT	T1
+	  SKIPA	T1,SRTDIR		;OK, GET DIRECTORY HEADER
+	JRST	E$$INP			;ERROR
+	CAME	T1,[1776,,5]		;WHAT WE EXPECT
+	JRST	E$$DUF			;NO
+	HRRZ	T1,SRTDIR+3		;GET FILE PAGE
+	LSH	T1,2			;4 BLOCKS PER PAGE
+	ADDI	T1,1			;START AT 1
+	HLL	T1,SRTCHN
+	TLO	T1,(USETI)
+	XCT	T1			;SET ON HIGH SEG PAGES
+	LDB	T1,[POINT 9,SRTDIR+4,8]	;GET REPEAT COUNT
+	CAILE	T1,PAGLEN		;TOO BIG
+	JRST	E$$HTB			;YES
+	MOVEM	T1,PAGARG		;LOAD UP ARG COUNT
+	MOVN	T1,T1
+	HRLZ	T1,T1			;AOBJN POINTER
+	HRRZ	T2,SRTDIR+4		;CORE PAGE
+	MOVEM	T2,PAGARG+1(T1)		;STORE PAGE #
+	ADDI	T2,1
+	AOBJN	T1,.-2			;FILL UP ARG BLOCK
+	MOVE	T1,[.PAGCD,,PAGARG]
+	PAGE.	T1,
+	  JRST	E$$PCF			;FAILED
+	HRRZ	T2,PAGARG+1		;GET FIRST PAGE
+	LSH	T2,^D9			;INTO WORDS
+	SUBI	T2,1
+	MOVE	T3,PAGARG		;GET NUMBER OF PAGES
+	LSH	T3,^D9
+	MOVN	T3,T3
+	HRL	T2,T3			;I/O WORD
+	HLLZ	T1,SRTCHN
+	IOR	T1,[IN T2]
+	SETZ	T3,
+	XCT	T1
+	  SKIPA
+	JRST	E$$INP
+	PUSH	P,.JBHSA##+1(T2)	;GET START ADDRESS
+	MOVEI	L,1+[-4,,0
+		     Z TP%INT,[F.RCH]
+		     Z TP%LIT,[ASCIZ /SRT/]
+		     Z TP%INT,CHSTAT
+		     Z TP%INT,SRTCHN]
+	PUSHJ	P,FUNCT.		;RESTORE CHAN TO FOROTS
+	POP	P,T1			;GET BACK START ADDRESS
+	MOVE	L,SAVEL			;RESTORE STRING POINTER
+	PUSHJ	P,(T1)			;START SORT
+
+	MOVSI	T1,-PAGLEN
+	MOVSI	T2,(1B0)
+	IORM	T2,PAGARG+1(T1)		;SET DESTROY BIT
+	AOBJN	T1,.-1			;FOR ALL OF SORT PAGES
+	MOVE	T1,[.PAGCD,,PAGARG]
+	PAGE.	T1,
+	  JFCL				;TOO BAD
+	POPJ	P,			;RETURN TO CALLER
+
+OBLK:	EXP	.IODMP
+	SIXBIT	/SYS/
+		0
+
+LBLK:	EXP	.RBEXT			;.RBCNT
+		0			;.RBPPN
+	SIXBIT	/SRTFOR/		;.RBNAM
+	SIXBIT	/EXE/			;.RBEXT
+
+DIRIOW:	IOWD	DIRLEN,SRTDIR
+	0
+	
+
+E$$CAS:	$ERROR	(?,CAS,<Channel not available for FORTRAN SORT/MERGE.>)
+E$$OPN:	$ERROR	(?,OPN,<OPEN failed for SYS:SRTFOR.EXE.>)
+E$$LKP:	$ERROR	(?,LKP,<LOOKUP failed for SYS:SRTFOR.EXE.>)
+E$$DUF:	$ERROR	(?,DUF,<SYS:SRTFOR.EXE directory not in expected format.>)
+E$$HTB:	$ERROR	(?,HTB,<SYS:SRTFOR.EXE high segment too big.>)
+E$$PCF:	$ERROR	(?,PCF,<PAGE. UUO failed for FORTRAN SORT/MERGE.>)
+E$$INP:	$ERROR	(?,INP,<Input error for SYS:SRTFOR.EXE.>)
+
+DIE:	EXIT
+
+SAVEL:	BLOCK	1		;SAVE L
+CHSTAT:	BLOCK	1		;STATUS OF FUNCT. CALL
+SRTCHN:	BLOCK	1		;CHAN USED FOR I/O
+SRTDIR:	BLOCK	DIRLEN
+PAGARG:	BLOCK	PAGLEN
+
+>;END IFE FTOPS20
+
+	END

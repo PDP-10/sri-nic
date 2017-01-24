@@ -1,0 +1,2170 @@
+                       FUNCTIONAL ORGANIZATION OF JSYS'S                         FUNCTIONAL ORGANIZATION OF JSYS'S
+
+
+                            SFUST(CS)     N      N      Y
+
+      31     .FBTDT         Archive or collection tape-write date and
+                            time.
+                            This is the date and time (in internal
+                            format) that file was last written
+                            to tape (for either archiving or
+                            migration).
+
+                            JSYS        WRITE  OWNER  W/OPR
+
+                            ARCF          N      N      Y
+
+      32     .FBFET         Offline expiration date and time.
+                            Specifies the date
+                            and time (or interval) after which a file
+                            in the archives or on virtual disk is
+                            considered expired.  Used for tape
+                            recycling.  Modified by SFTAD.
+
+                            JSYS        WRITE  OWNER  W/OPR
+
+                            SFTAD         Y      Y      Y
+
+
+
+      33     .FBTP1         Contains the tape ID for the first archive
+                            or collection run.
+
+                            JSYS        WRITE  OWNER  W/OPR
+
+                            ARCF          N      N      Y
+
+      34     .FBSS1         Contains the saveset and tape file numbers
+                            for the first
+                            tape.  The left half is the number of the
+                            saveset in which the file is 
+                            recorded, and
+                            the right half is the tape file number
+                            within that saveset.
+
+                            JSYS        WRITE  OWNER  W/OPR
+
+                            ARCF          N      N      Y
+
+                                Table 2-1 (Cont.)
+                           File Descriptor Block (FDB)
+
+
+     Word    Symbol                          Meaning
+
+
+      35     .FBTP2         Tape ID for second archive or collection
+                            run.  Otherwise
+                            similar to .FBTP1.
+
+                            JSYS        WRITE  OWNER  W/OPR
+
+                            ARCF          N      N      Y
+
+       36    .FBSS2         Saveset and tape file numbers for the
+                            second archive 
+                            or collection run.  Otherwise similar to
+                            .FBSS1.
+
+
+                                      2-18
+                       FUNCTIONAL ORGANIZATION OF JSYS'S                         FUNCTIONAL ORGANIZATION OF JSYS'S
+
+
+                            JSYS        WRITE  OWNER  W/OPR
+
+                            ARCF          N      N      Y
+
+
+   The maximum length FDB block that TOPS-20 will create (37  octal)  may
+   be specified with the symbol .FBLEN.
+
+
+
+   2.1.9  Primary Input and Output Files          Primary Input and Output Files
+
+   Each process in a job has a primary input file and  a  primary  output
+   file.   Both  files  are normally the controlling terminal, but can be
+   changed to other files (with the SPJFN call).
+
+   The primary input and output files  are  referenced  with  designators
+   .PRIIN  (JFN 100) and .PRIOU (JFN 101), respectively.  Programs should
+   be coded to do their "terminal" I/O to these designators, so that they
+   can  be used with command files without modification.  Only in extreme
+   cases should a program reference  its  controlling  terminal  (.CTTRM)
+   directly.
+
+
+
+   2.1.10  Methods of Data Transfer           Methods of Data Transfer
+
+   The most simple form of I/O is sequential byte I/O, as  shown  in  the
+   sample  program.  (Refer to Section 2.2.5.) This form of data transfer
+   may be used with any file.  A pointer maintained  in  the  monitor  is
+   implicitly  initialized  when a file is opened and advanced as data is
+   transferred.  For files on disk, there are two other methods  of  data
+   transfers.   First,  random  access  byte I/O is possible by using the
+   SFPTR call or the RIN/ROUT calls.  Second, entire pages of data may be
+   mapped with the PMAP call.
+
+
+
+   2.1.11  File Byte Count           File Byte Count
+
+   For disk files, TOPS-20 maintains a file byte count  (.FBSIZ)  in  the
+   FDB.   This  count is set by the monitor when sequential output (e.g.,
+   BOUT, SOUT) occurs  to  the  file  and  thus,  on  sequential  output,
+   reflects the number of bytes written in the file.
+
+   When output occurs to the file using the PMAP call, the  monitor  does
+   not set the file byte count.  In this case, the number of bytes in the
+   file may be different from the file byte count stored in the FDB.   To
+   allow  sequential  I/O  to occur later to the file, the program should
+   update the file byte count (.FBSIZ) and the file byte size (FB%BSZ) in
+   the  FDB before closing the file.  This is done with the CHFDB monitor
+   call.
+
+   When output occurs to the file using random output  calls  (ROUT,  for
+   example), the file byte count is a number one greater than the highest
+   byte number in the file.
+
+   The file byte count is interpreted according to the byte  size  stored
+   in the FDB, not the byte size specified when the file is opened.  When
+   a new file is opened, the byte size stored in  the  FDB  is  36  bits,
+   regardless  of  the  byte  size  specified  in the OPENF call.  If the
+   program executes a CHFDB call to change the file byte count,  it  must
+   usually  change the byte size (FB%BSZ) so that both values reflect the
+   same size bytes.
+
+
+                                      2-19
+                       FUNCTIONAL ORGANIZATION OF JSYS'S                         FUNCTIONAL ORGANIZATION OF JSYS'S
+
+
+   2.1.12  EOF Limit           EOF Limit
+
+   There is an EOF limit associated with every opening of a  file.   This
+   limit  is the number of bytes that can be read with a sequential input
+   call (e.g., BIN, SIN).  When the program attempts to read beyond  this
+   limit  using  sequential  input,  the  call  returns  a  0 byte and an
+   end-of-file  condition.   This  condition  may  generate  a   software
+   interrupt (refer to Section 2.6) if the user has not included an ERJMP
+   or ERCAL as the  next  instruction  following  the  call.   (Refer  to
+   Chapter 1.)
+
+   The EOF limit is computed when the file is opened with the OPENF call.
+   The  monitor  computes  this  limit by determining the total number of
+   words in the file and dividing this number by the byte size  given  in
+   the  OPENF  call.  The total number of words in the file is determined
+   from the file byte count (.FBSIZ) and  the  file  byte  size  (FB%BSZ)
+   stored in the FDB.
+
+   Note that page-mode I/O JSYS's, such as PMAP, ignore the EOF limit and
+   can read any existing page of the file.  However, page-mode JSYS's can
+   only read pages within an existing file section (the address space  of
+   a file delimited by 1 index block - 512 pages).
+
+
+
+   2.1.13  Input/Output Errors           Input/Output Errors
+
+   While performing I/O or I/O-related  operations,  it  is  possible  to
+   encounter one or more error conditions.  Some of these are user-caused
+   errors (e.g., illegal access attempts), and others are I/O  device  or
+   medium  errors.   TOPS-20  indicates  such error conditions by setting
+   error bits in the JFN status word (refer to the  GTSTS  call)  and  by
+   initiating  a software interrupt request (refer to Section 2.6) if the
+   user has not included an ERJMP  or  ERCAL  after  the  call.   If  the
+   process  in  which  an I/O error occurs is not prepared to process the
+   interrupt,  the  interrupt  is  changed  into  a  process  terminating
+   condition  with  the  expectation that the process' immediate superior
+   will handle the error condition.   The  TOPS-20  Command  Language  is
+   prepared  to  detect and diagnose I/O errors;  thus, a process running
+   directly beneath the process containing the Command Language need  not
+   do  its  own  I/O  error  handling  unless  it chooses to do something
+   special.
+
+
+   I/O errors can occur while a process  is  executing  ordinary  machine
+   instructions  as  well as JSYS's.  For example, if a PMAP operation is
+   performed that maps a page of a file into a page  of  a  process,  the
+   file  I/O transfer does not usually occur until a reference is made by
+   the process to that particular page of the file.  If there is  an  I/O
+   error in the transfer, it is detected at the time of this reference.
+
+   An attempt to do I/O to a terminal that is assigned to another job (as
+   a  controlling  terminal or with the ASND call) normally results in an
+   error, but is legal if the process has the WHEEL capability enabled.
+
+
+
+   2.1.13.1  Testing  for   End-of-File - The   GTSTS   JSYS,   used   in             Testing  for   End-of-File
+   conjunction  with  ERCAL  (or ERJMP), is used to test for end-of-file.
+   The following code fragment illustrates this:
+
+
+           MOVE    T1,INJFN        ;Get input JFN
+           BIN%                    ;Read a byte
+           ERCAL EOFTST
+
+                                      2-20
+                       FUNCTIONAL ORGANIZATION OF JSYS'S                         FUNCTIONAL ORGANIZATION OF JSYS'S
+
+
+           .
+           .                       ;Process byte 
+           .
+   EOFTST: MOVE    T1,INJFN        ;Get input JFN
+           GTSTS%                  ;Get status of that JFN
+           TLNN    T2,(GS%EOF)     ;Did end of file occur?
+           PUSHJ   P,FATAL         ; No, I/O error occurred
+           MOVE    T1,INJFN        ; Yes, close file
+           CLOSF%
+           ERCAL   FATAL           ;If can't close, issue message
+           POPJ    P,              ;OK to return
+      
+   FATAL:  .                       ;Here to issue error messages
+           .                       ; on fatal file errors
+           .
+           HALTF%                  ;Halt on fatal error
+      
+      
+   In the example above, the ERCAL after the BIN is executed  only  if  a
+   file  error condition arises.  The code that is entered as a result of
+   the ERCAL can then do a GTSTS for the appropriate file  and  test  for
+   end-of-file.
+
+   An alternate method to test for end-of-file is to use the  GETER  JSYS
+   and  determine  if the last error for the process is IOX4 (end of file
+   reached).
+
+   The monitor calls used in referencing files are:
+
+        GTJFN     Assigns a JFN to a file
+        GNJFN     Assigns a JFN to the next file
+        JFNS      Translates a JFN to a string
+        WILD%     Compares a wild file specification against  a  non-wild
+                  file specification.  Also compares strings.
+        SPJFN     Sets primary JFN's
+        GPJFN     Returns primary JFN's
+        SWJFN     Transposes two JFN's
+        RLJFN     Releases a JFN
+
+        OPENF     Opens a file
+        CLOSF     Closes a file
+        CLZFF     Closes a process' files
+
+        BIN       Reads the next byte
+        BOUT      Writes the next byte
+        FLIN      Reads a floating-point number
+        FLOUT     Writes a floating-point number
+        NIN       Reads a number
+        NOUT      Writes a number
+        PSOUT     Writes string to primary output designator
+        PBIN      Reads byte from primary input designator
+        PBOUT     Output byte to primary output designator
+        SIN       Reads a string
+        SOUT      Writes a string
+        SINR      Reads a record
+        SOUTR     Writes a record
+        RIN       Reads a byte nonsequentially
+        ROUT      Writes a byte nonsequentially
+        DUMPI     Reads data in unbuffered data mode
+        DUMPO     Writes data in unbuffered data mode
+        PMAP      Maps pages
+
+        RSCAN     Reads and outputs rescan buffer
+        RDTTY     Reads data from primary input designator
+        TEXTI     Reads data from terminal or file
+
+                                      2-21
+                       FUNCTIONAL ORGANIZATION OF JSYS'S                         FUNCTIONAL ORGANIZATION OF JSYS'S
+
+
+        CRLNM     Creates a logical name
+        INLNM     Writes logical names
+        LNMST     Translates logical name to string
+
+        CHFDB     Changes a File Descriptor Block
+        GTFDB     Reads a File Descriptor Block
+        SFUST     Changes the author or last writer name string
+        GFUST     Reads the author or last writer name string
+        CHKAC     Checks access to a file
+        ACCES     Specifies access to a directory
+        DIRST     Translates directory or user number to a string
+        RCDIR     Translates directory name to number
+        RCUSR     Translates user name to number
+
+        SIZEF     Obtains file's length
+        SFBSZ     Sets file's byte size
+        RFBSZ     Reads file's byte size
+        SFPTR     Sets file's pointer
+        RFPTR     Reads file's pointer
+        BKJFN     Backspaces file's pointer
+        RNAMF     Renames a file
+        SFTAD     Sets file's time and dates
+        RFTAD     Reads file's time and dates
+        STSTS     Sets file's status
+        GTSTS     Reads file's status
+        UFPGS     Updates file's pages
+
+        DELF      Deletes a file
+        DELDF     Expunges deleted files
+        DELNF     Retains specified number of generations of file
+
+        FFFFP     Finds first free file page
+        FFUFD     Finds first used file page
+
+
+
+   2.2  OBTAINING INFORMATION        OBTAINING INFORMATION
+
+   The monitor calls in this group are used to  obtain  information  from
+   the  system,  such  as  the time of day, resources used by the current
+   job, error conditions, and the contents of system tables.
+
+   Several of these calls return time values (intervals  and  accumulated
+   times,  for  example).   Unless  otherwise specified, these values are
+   integer numbers in units of milliseconds.
+
+
+
+   2.2.1  Error Mnemonics and Message Strings          Error Mnemonics and Message Strings
+
+   Each failure for a JSYS is associated with an error number identifying
+   the  particular  failure.   These  error  numbers are indicated in the
+   manual by mnemonics (DEVX1, for example),  and  are  listed  with  the
+   appropriate calls.
+
+   Some  calls  return  the  error  number  in  the  right  half  of   an
+   accumulator,  usually  in AC1;  however, all calls leave the number in
+   the Process Storage Block for the process in which the error occurred.
+   Thus, a process can obtain the number for the last error that occurred
+   (by means of the GETER call).
+
+   In addition to the mnemonic of six  characters  or  less,  each  error
+   number  has a text message associated with it that describes the error
+   in more detail.  The ERSTR call can be  used  to  return  the  message
+   string  associated  with  any given error number.  This call should be
+
+                                      2-22
+                       FUNCTIONAL ORGANIZATION OF JSYS'S                         FUNCTIONAL ORGANIZATION OF JSYS'S
+
+
+   used for handling error returns.
+
+   Refer to Chapter 3 and  Appendix  B  for  the  listing  of  the  error
+   numbers, mnemonics, and messages.
+
+
+
+   2.2.2  System Tables          System Tables
+
+   The contents of several system tables are available  to  programs  for
+   such  purposes  as  generating  status  reports  and collecting system
+   performance statistics.  Each table is identified by a fixed  name  of
+   up  to  six  characters, and consists of a variable number of entries.
+   The -1 entry in each table is the  negative  of  the  number  of  data
+   entries  in  the  table;   the data entries are identified by an index
+   that increments from 0.
+
+   Two calls exist for accessing tables.  The  first,  SYSGT,  accepts  a
+   table  name  and returns the table length, its first data entry, and a
+   number identifying the table.  The second, GETAB,  accepts  the  table
+   number  returned  by  SYSGT,  or  obtained  from  the MONSYM file, and
+   returns additional entries from the table.
+
+   The system tables are as follows.  Numeric table indexes are given  in
+   octal.   Parallel  tables,  those  for  which  a  given index produces
+   related information, are indicated by  "(Pn)"  where  n  is  a  unique
+   number for that set of parallel tables.
+
+
+                                    Table 2-2
+                                  System Tables
+
+
+      Name     Index                            Contents
+
+
+     APRID                         Processor serial number
+
+     BLDTD                         Date and time system was generated
+
+     DBUGSW                        Debugging information
+
+               0                   state of operator coverage
+                                   0 = unattended
+                                   1 = attended
+                                   2 = debugging
+               1                   state of BUGCHK handling
+                                   0=proceed
+                                   1=breakpoint
+
+     DEVCHR    (P1)                Device  characteristics   word,   as
+                                   described  under  the  DVCHR JSYS in
+                                   Chapter 3, except that B5 (DV%AV) is
+                                   not meaningful.
+
+     DEVNAM    (P1)                SIXBIT device  name  including  unit
+                                   number, e.g., MTA3
+
+     DEVUNT    (P1)           LH:  Job  number  to  which   device   is
+                                   assigned   (with  ASND),  or  -1  if
+                                   device is not  assigned,  or  -2  if
+                                   reserved for device allocator.
+                              RH:  unit number, or -1 if device has  no
+                                   units (e.g., DSK:)
+
+
+                                      2-23
+                       FUNCTIONAL ORGANIZATION OF JSYS'S                         FUNCTIONAL ORGANIZATION OF JSYS'S
+
+
+     DRMERR                        Information on drum errors
+
+               0                   number of recoverable errors
+               1 to n              varies depending  on  type  of  drum
+                                   being used
+
+
+     DSKERR                        Information on disk errors
+
+               0                   number of recoverable disk errors
+               1 to n              varies depending  on  type  of  disk
+                                   being used
+
+     DWNTIM                        Downtime information
+
+               0                   date and time when  system  will  be
+                                   shut down next
+               1                   date  and  time  when  system   will
+                                   subsequently be up
+
+     HQLAV                         High queue load averages
+
+                                Table 2-2 (Cont.)
+                                  System Tables
+
+
+      Name     Index                            Contents
+
+
+     IMPLT1    c(P2)               ARPANET - 1 fullword for each link:
+
+                              LH:  internal  connection  number,  index
+                                   for:
+
+                                   NETAWD
+                                   NETBAL
+                                   NETBTC
+                                   NETBUF
+                                   NETFSK
+                                   NETLSK
+                                   NETSTS
+
+                                   or -1 if control link
+
+                              RH:  B18-19  00  receive
+                                           10  send
+                                           11  free
+                                           01  delete
+                                   B20-27  host number
+                                   B28-35  link number
+
+                                           c (index)  is  derived  from
+                                           bits 24-35 of NETAWD.
+
+     IMPLT2    c(P2)               ARPANET - 1 fullword for each link:
+
+                              LH:  B0-9    flags
+                                   B10-17  byte size of buffer
+                              RH:  address of input buffer
+
+                                   c (index) is derived from bits 24-35
+                                   of NETAWD.
+
+     IMPLT3    c(P2)               ARPANET - 1 fullword for each link:
+
+
+                                      2-24
+                       FUNCTIONAL ORGANIZATION OF JSYS'S                         FUNCTIONAL ORGANIZATION OF JSYS'S
+
+
+                              LH:  address of output buffer
+                              RH:  message saved for retransmission
+
+                                   c (index) is derived from bits 24-35
+                                   of NETAWD.
+
+     IMPLT4    c(P2)               ARPANET - 1 full word for each link
+
+                              LH:  address of current buffer
+                              RH:  message allocation in bits
+
+                                   c (index) is derived from bits 24-35
+                                   of NETAWD.
+
+     JBONT     Job #               Owning job for CRJOB-created jobs.
+
+                                Table 2-2 (Cont.)
+                                  System Tables
+
+
+      Name     Index                            Contents
+
+
+     JOBNAM    Job #          LH:  reserved for DEC
+                              RH:  index into the system program tables
+                                   for the system program being used by
+                                   this job  (determined  by  the  last
+                                   SETSN call executed by the job)
+
+     JOBPNM    Job #               SIXBIT name of  program  running  in
+                                   this job
+
+     JOBRT     Job #               CPU  time used by the job  (negative
+                                   if no such job)
+
+     JOBTTY    Job #          LH:  controlling terminal line number, or
+                                   -1 if none (i.e., job is detached)
+                              RH:  reserved for DEC
+
+     LOGDES                        Logging information
+
+               0                   designator for logging information
+
+               1                   designator  for  job  0  and   error
+                                   information
+
+     LQLAV                         Low queue load averages
+
+     NETHST    c(P2)               ARPANET  -  1  full  word  for  each
+                                   internal connection:
+
+                                   -1 if no foreign host, otherwise the
+                                   same as IMPLT5.
+
+                                   c (index) is derived from bits 24-35
+                                   of NETAWD.
+
+     NETAWD    c(P2)               ARPANET  -  1  full  word  for  each
+                                   internal connection:
+
+                                   B0-8    link number
+                                   B9-17   unused
+                                   B18-23  timeout countdown
+
+                                   B24-35 index to link tables
+
+                                      2-25
+                       FUNCTIONAL ORGANIZATION OF JSYS'S                         FUNCTIONAL ORGANIZATION OF JSYS'S
+
+
+                                   c  (index)  is  internal  connection
+                                   (see IMPLT1).
+
+     NETBAL    c(P2)               ARPANET - number of  bits  allocated
+                                   to each internal connection
+
+                                   c  (index)  is  internal  connection
+                                   (see IMPLT1).
+
+                                Table 2-2 (Cont.)
+                                  System Tables
+
+
+      Name     Index                            Contents
+
+
+     NETBTC    c(P2)               ARPANET  -  byte  count  statistics:
+                                   the  number of bits sent or received
+                                   over each internal connection  since
+                                   the socket was created.
+
+                                   c  (index)  is  internal  connection
+                                   (see IMPLT1).
+
+     NETBUF    c(P2)               ARPANET  -  1  fullword   for   each
+                                   internal connection:
+
+                              LH:  bytes per buffer
+                              RH:  buffer location -1
+
+                                   c  (index)  is  internal  connection
+                                   (see IMPLT1).
+
+     NETFSK    c(P2)               ARPANET - foreign socket number  (32
+                                   bits) for each internal connection
+
+                                   c  (index)  is  internal  connection
+                                   (see IMPLT1).
+
+     NETLSK    c(P2)               ARPANET - local  socket  number  for
+                                   each internal connection
+
+                                   c  (index)  is  internal  connection
+                                   (see IMPLT1).
+
+     NETRDY                        ARPANET operational status table
+
+               0                   0       IMP down
+                                   .GT.0   IMP going down
+                                   -1      IMP up
+               1                   0 = network off, non-zero =  network
+                                   on
+               2                   flags for NETSER (not for user)
+               3                   time of last NCP cycle up
+               4                   last IMP GOING DOWN message
+                                   B0-15   reserved
+                                   B16-17  0  panic
+                                           1  scheduled hardware PM
+                                           2  software reload
+                                           3  emergency restart
+                                   B18-21  number    of     5-minute
+                                           intervals  before  IMP  goes
+                                           down
+                                   B22-31  number of 5-minute intervals
+                                           IMP will be down
+
+                                      2-26
+                       FUNCTIONAL ORGANIZATION OF JSYS'S                         FUNCTIONAL ORGANIZATION OF JSYS'S
+
+
+               5                   time of last IMP ready drop
+               6                   time of last IMP ready up
+               7                   time of IMP GOING DOWN message
+
+|    MONVER                        Monitor version number (contents  of
+|                                  location 137)
+
+     NCPGS                         One-word table containing number  of
+                                   pages  of  real (physical) user core
+                                   available in system.  Note that this
+                                   value  includes  resident variables,
+                                   and thus not all of the pages can be
+                                   assigned to a user process.
+
+     NSWPGS                        Default swapping pages
+
+     PTYPAR                        Pseudo-TTY parameter information
+
+                  0           LH:  number of PTYs in system
+                              RH:  TTY number of first PTY
+
+     QTIMES    0 to n              Accumulated runtime of jobs on the n
+                                   scheduler queues
+
+     SNAMES    (P3)                SIXBIT name of system program, or  0
+                                   if  this entry is unused in this and
+                                   the corresponding four tables.
+
+     SNBLKS    (P3)                Number of  samples  in  working  set
+                                   size integral
+
+     SPFLTS    (P3)                Total  number  of  page  faults   of
+                                   system program
+
+     SSIZE     (P3)                Time integral of working set size
+
+     STIMES    (P3)                Total runtime of system program
+
+     SYMTAB                        SIXBIT  table  names  of  all  GETAB
+                                   tables
+
+     SYSTAT                        Monitor statistics.  The entries  in
+                                   this table are as follows:
+
+               0                   time with no runnable jobs
+               1                   waiting time with 1 or more runnable
+                                   jobs (waiting for page swapping)
+               2                   time spent in scheduler
+               3                   time spent processing pager traps
+               4                   number of drum reads
+               5                   number of drum writes
+               6                   number of disk reads
+               7                   number of disk writes
+               10                  number of terminal wakeups
+               11                  number of terminal interrupts
+               12                  time integral of number of processes
+                                   in the balance set
+               13                  time integral of number of  runnable
+                                   processes
+               14                  exponential  1-minute   average   of
+                                   number of runnable processes
+               15                  exponential  5-minute   average   of
+                                   number of runnable processes
+               16                  exponential  15-minute  average   of
+                                   number of runnable processes
+
+                                      2-27
+                       FUNCTIONAL ORGANIZATION OF JSYS'S                         FUNCTIONAL ORGANIZATION OF JSYS'S
+
+
+               17                  time integral of number of processes
+                                   waiting for the disk
+               20                  time integral of number of processes
+                                   waiting for the drum
+               21                  number of terminal input characters
+               22                  number of terminal output characters
+               23                  number  of  system  core  management
+                                   cycles
+               24                  time spent doing postpurging
+               25                  number of forced balance set process
+                                   removals
+               26                  time integral of number of processes
+                                   in swap wait
+               27                  scheduler  overhead  time  (same  as
+                                   entry 2) in high precision units
+               30                  idle time (same as entry 0) in  high
+                                   precision units
+               31                  lost time (same as entry 1) in  high
+                                   precision units
+               32                  user time
+               33                  time integral of number of processes
+                                   on  high queue.  (High queue is high
+                                   priority, low numerical value.)
+               34                  time integral of number of processes
+                                   on  low  queue.   (Low  queue is low
+                                   priority, high numerical value.)
+               35                  sum of process disk-write waits
+               36                  number  of  forced  adjustments   to
+                                   balance set
+               37                  integral of number of reserve  pages
+                                   of all processes in memory
+               40                  integral  of  number  of  pages   on
+                                   replaceable  queue.  The replaceable
+                                   queue contains pointers to all  free
+                                   memory pages.
+               41                  high precision pager trap time
+               42                  number of context switches
+|              43                  high   precision   time   spent   on
+|                                  background   tasks.    These   tasks
+|                                  include low-level data  transfer  in
+|                                  communications   layers,   including
+|                                  network   and    terminal    service
+|                                  routines.
+               44                  total system page traps
+               45                  total saves from replacement  queue.
+                                   A  "save" occurs when a desired page
+                                   is found on  the  replacement  queue
+                                   and need not be paged in.
+               46                  number of pages removed from  memory
+                                   during      system-wide      garbage
+                                   collection
+               47                  integral of number of  working  sets
+                                   in memory
+|              50                  wait time without swap waits in high
+|                                  precision units
+               51                  count of working set loads
+               52                  count of runable  processes  removed
+                                   from balance set
+               53                  number of pages removed from  memory
+                                   during      process-wide     garbage
+                                   collection
+|              54                  count of terminal input wakeups
+|              55                  count   of   read-after-write   disk
+|                                  verifications
+
+
+                                      2-28
+                       FUNCTIONAL ORGANIZATION OF JSYS'S                         FUNCTIONAL ORGANIZATION OF JSYS'S
+
+
+                                                   NOTE
+
+                                       This  table  is  subject  to
+                                       change  (usually  additions)
+                                       as  measuring  routines  are
+                                       added to the system.
+
+
+     SYSVER                        An  ASCIZ  string  identifying   the
+                                   system name, version, and date.  The
+                                   string has the following format:
+
+                                   string, TOPS-20 Monitor n.m(o)-p
+
+                                   where    "string"    is   the   text
+                                   contained      in      the      file
+                                   structure:<SYSTEM>MONNAM.TXT, "n" is
+                                   the  major  version  number  (1 to 3
+                                   digits), "m" is  the  minor  version
+                                   number  (0  to 2 digits), "o" is the
+                                   edit number (1 to 6 digits), and "p"
+                                   is the number of the group that last
+                                   edited the version (0 or 1 digit).
+
+                                   If "m" is zero, it and its preceding
+                                   period are omitted.  If "p" is zero,
+                                   it  and  its  preceding  hyphen   is
+                                   omitted.   Otherwise, the period and
+                                   the hyphen are stored along with the
+                                   other   information,  including  the
+                                   spaces and parentheses as shown,  in
+                                   the table.
+
+     TICKPS                        One-word table containing number  of
+                                   clock ticks per second.
+
+     TTYJOB    line #         LH:  positive job number for  which  this
+                                   is the controlling terminal, or
+                                   -1 for unassigned line, or
+                                   -2   for   line   currently    being
+                                   assigned,  or  job  number  to which
+                                   this line is assigned.
+
+                              RH:  -1 if  no  process  is  waiting  for
+                                   input  from  this  terminal;   other
+                                   than -1 if some process  is  waiting
+                                   for input.
+
+
+   The system program being run by a specific job may be determined  from
+   SNAMES, using an index obtained from table JOBNAM.
+
+   The following monitor calls are used for obtaining information:
+
+        GETER    Returns the last error condition
+        ERSTR    Translates an error number to a string
+        ESOUT    Returns an error string
+        SYSGT    Returns values for a system table
+        GETAB    Returns a word from a system table
+        GETNM    Returns the program name being used by the job
+        GETJI    Returns job information for specified job
+        GJINF    Returns job information for current job
+        GTAD     Returns the system's date
+        TIME     Returns the time since the system was restarted
+        RUNTM    Returns the runtime of a job or process
+
+                                      2-29
+                       FUNCTIONAL ORGANIZATION OF JSYS'S                         FUNCTIONAL ORGANIZATION OF JSYS'S
+
+
+        HPTIM    Returns the high-precision clock values
+        GTDAL    Returns the disk allocation of a directory
+        GTRPI    Returns the paging trap information
+        GTRPW    Returns the trap words
+
+
+
+   2.3  COMMUNICATING WITH DEVICES        COMMUNICATING WITH DEVICES
+
+   The monitor calls in this group  are  used  to  communicate  with  the
+   devices  on  the  system.   Some  of  these devices are line printers,
+   magnetic tapes, terminals, and card readers.
+
+   Many of the monitor calls in this group take a device designator as an
+   argument.  This designator can be either
+
+        LH: .DVDES(600000)+device type number
+        RH: unit number for devices that have units, arbitrary code
+            for structures, or -1 for non-structure devices that do not
+            have units
+
+   or
+
+        LH: 0
+        RH: .TTDES(400000)+terminal number, or .CTTRM(0,,-1) for
+            controlling terminal
+
+   The  STDEV  monitor  call  is  used  to  convert  a  string   to   its
+   corresponding device designator.
+
+   The various devices are as follows:
+
+
+                                    Table 2-3
+                                  Device Types
+
+
+     Name            Description            Type       Symbol     Units
+
+
+     DSK:        disk structure               0        .DVDSK       no
+     MTA:        magnetic tape                2        .DVMTA      yes
+     MT:         logical magnetic tape        2        .DVMTA      yes
+     LPT:        spooled line printer         7        -           yes
+     PLPT:       physical line printer        7        .DVLPT      yes
+     CDR:        spooled card reader         10        -           yes
+     PCDR:       physical card reader        10        .DVCDR      yes
+     FE:         front-end
+                 pseudo-device               11        .DVFE        no
+     TTY:        terminal                    12        .DVTTY      yes
+     PTY:        pseudo-terminal             13        .DVPTY      yes
+     NUL:        null device                 15        .DVNUL       no
+|    TCP:        ARPA network                16        .DVNET       no
+     CDP:        spooled card punch          21        -           yes
+     PCDP:       physical card punch         21        .DVCDP      yes
+     DCN:        DECnet active
+                 component                   22        .DVDCN       no
+     SRV:        DECnet passive
+                 component                   23        .DVSRV       no
+
+
+   Device-designators may be formed for the devices shown above by taking
+   the given symbolic device-type and adding .DVDES (600000).
+
+   The null device is an infinite sink for unwanted output and returns an
+
+                                      2-30
+                       FUNCTIONAL ORGANIZATION OF JSYS'S                         FUNCTIONAL ORGANIZATION OF JSYS'S
+
+
+   EOF on input.
+
+   Device-dependent status bits are defined for some devices.  These bits
+   can be set or returned with the SDSTS or GDSTS call, respectively.
+
+   When an assignable device is assigned (by the ASND call) or opened (by
+   the OPENF call) by one job, other jobs cannot do the following:
+
+        1.  Assign the device with ASND.
+
+        2.  Execute an OPENF  call  for  the  device,  even  if  the  JFN
+            properly represents the device.
+
+   Structures are not restricted to these  limitations;   more  than  one
+   user   can   simultaneously  execute  the  OPENF  call  for  files  on
+   structures.
+
+|  The following sections describe many of  the  devices  listed  in  the
+   table  above.   The sections are in alphabetic order by generic device
+   type (thus PCDR: and CDR: are listed under "c").
+
+
+
+   2.3.1  Physical Card Reader (PCDR:)          Physical Card Reader (PCDR:)
+
+   The following device-dependent status bits are defined  for  the  card
+   reader.   These  bits  can be obtained with the .MORST function of the
+   MTOPR call.
+
+
+                                    Table 2-4
+                                PCDR: Status Bits
+
+
+     Bit      Symbol                         Meaning
+
+
+     B0       MO%COL       Device is on line.
+
+     B10      MO%FER       Fatal hardware error.  This error  generates
+                           an  interrupt  on  software  channel .ICDAE.
+                           (Refer to Section 2.6.1.)
+
+     B12      MO%EOF       Card reader is at end of file.
+
+     B13      MO%IOP       I/O in progress.
+
+     B14      MO%SER       Software   error.    (Would   generate    an
+                           interrupt on an assignable channel.)
+
+     B15      MO%HE        Hardware   error.    (Would   generate    an
+                           interrupt on software channel .ICDAE.)
+
+     B16      MO%OL        Device is off line.
+
+     B17      MO%FNX       Device is nonexistent.
+
+     B31      MO%SFL       Output stacker full.
+
+     B32      MO%HEM       Input hopper empty.
+
+     B33      MO%SCK       Stack check.
+
+     B34      MO%PCK       Pick check.
+
+
+                                      2-31
+                       FUNCTIONAL ORGANIZATION OF JSYS'S                         FUNCTIONAL ORGANIZATION OF JSYS'S
+
+
+     B35      MO%RCK       Read check.
+
+
+
+
+
+   2.3.2  Spooled Card Reader (CDR:)          Spooled Card Reader (CDR:)
+
+   On most systems, the physical card reader devices (PCDR: devices)  are
+   under  the  control  of  the card reader spooler, SPRINT, and thus the
+   ordinary user cannot open a PCDR: device,  and  must  instead  open  a
+   spooled card reader device (CDR:).
+
+   When a GTJFN is performed on device CDR:, the  device  characteristics
+   (returned  by  DVCHR)  are  the same as those for device PCDR:.  Thus,
+   CDR: devices have units, and a unit number may be  specified  for  the
+   GTJFN.
+
+   When the OPENF  is  performed,  However,  the  device  characteristics
+   become the same as device DSK:.  This is because data read from device
+   CDR: is actually read from a file in the spool directory <SPOOL>.  The
+   file  is  spooled  from  the  PCDR:  device  to the spool directory by
+   SPRINT.
+
+   Thus device CDR: is effectively a disk device,  and  no  monitor  call
+   that can be used only to set the characteristics of a PCDR: device can
+   be used for a CDR: device.  Also, disk-only operations (such as  PMAP)
+   should  not  be done for a CDR: device.  Both ASCII and image mode are
+   supported for CDR: devices.
+
+
+
+   2.3.3  Physical Card Punch (PCDP:)          Physical Card Punch (PCDP:)
+
+   The following device-dependent bits are defined for the  card  reader.
+   These  functions can be obtained with the .MORST function of the MTOPR
+   monitor call.
+
+
+                                    Table 2-5
+                                PCDP: Status Bits
+
+
+     Bit      Symbol                         Meaning
+
+
+     B10      MO%FER       Fatal error condition
+
+     B12      MO%EOF       All pending output has been processed
+
+     B13      MO%IOP       Output in progress
+
+     B14      MO%SER       Software error has occurred (would  generate
+                           interrupt on an assignable channel)
+
+     B15      MO%HE        Hardware error has occurred (would  generate
+                           interrupt on channel .ICDAE)
+
+     B16      MO%OL        Card-punch is off-line.   This  bit  is  set
+                           when operator intervention is required (card
+                           jam, hopper empty, stacker full).
+
+     B17      MO%FNX       Card punch doesn't exist
+
+     B32      MO%HEM       Stacker is full or hopper is empty
+
+                                      2-32
+                       FUNCTIONAL ORGANIZATION OF JSYS'S                         FUNCTIONAL ORGANIZATION OF JSYS'S
+
+
+     B33      MO%SCK       Stacker is full or hopper is empty (same  as
+                           above)
+
+     B34      MO%PCK       Pick check
+
+
+
+
+
+   2.3.4  Spooled Card Punch (CDP:)          Spooled Card Punch (CDP:)
+
+   On most systems, the physical card punch devices (PCDP:  devices)  are
+   under  the  control  of  the  card punch spooler, SPROUT, and thus the
+   ordinary user cannot open a PCDP: device,  and  must  instead  open  a
+   spooled card punch device (CDP:).
+
+   When a GTJFN is performed on device CDP:, the  device  characteristics
+   (returned  by  DVCHR)  are  the same as those for device PCDP:.  Thus,
+   CDP: devices have units, and a unit number may be  specified  for  the
+   GTJFN.    However,   when   the   OPENF   is   performed,  the  device
+   characteristics become the same as device DSK:.  This is because  data
+   written  to  device  CDP:  is  actually written to a file in the spool
+   directory <SPOOL>.  The file is then spooled from the spool  directory
+   to the PCDR: device by SPROUT.
+
+   Thus device CDP: is effectively a disk device,  and  no  monitor  call
+   that can be used only to set the characteristics of a PCDP: device can
+   be used for a CDP: device.  Also, disk-only operations (such as  PMAP)
+   should  not  be done for a CDP: device.  Both ASCII and image mode are
+   supported for CDP: devices.
+
+
+
+   2.3.5  Physical Line Printer (PLPT:)          Physical Line Printer (PLPT:)
+
+   The line printer normally accepts the 128 7-bit ASCII character  codes
+   (0-177  octal).   However, by specifying a byte size of 8 when opening
+   the printer, a program can transfer 8-bit bytes.   Thus,  the  program
+   can take advantage of printers that have more than 128 characters.
+
+   Each code sent usually causes a graphic to be printed.  (Note that  on
+   a  64-character  printer,  lower case letters are represented as upper
+   case.) However, the carriage control characters do not cause a graphic
+   to  be printed;  instead they cause specific actions to be taken.  The
+   actions taken are determined by the translation RAM and  the  Vertical
+   Formatting  Unit.  These actions can be redefined by the installation,
+   and the method by which they are redefined  depends  on  the  type  of
+   printer being used.
+
+   For  the  LP10  printer,  which  has  a  carriage  control  tape,  the
+   installation must change the tape to redefine the resulting actions.
+
+   For the LP05 and LP14 printers, which have a  direct  access  Vertical
+   Formatting  Unit  and a programmable translation RAM, the installation
+   can redefine the resulting actions by:
+
+        1.  Reprogramming the VFU by  changing  the  VFU  file  with  the
+            MAKVFU program and reloading this file and the RAM.
+
+        2.  Reprogramming the translation RAM by changing  the  RAM  file
+            with the MAKRAM program and reloading this file.
+
+   Refer to the LPINI and MTOPR monitor calls for the functions  used  in
+   loading the VFU and RAM files.
+
+
+                                      2-33
+                       FUNCTIONAL ORGANIZATION OF JSYS'S                         FUNCTIONAL ORGANIZATION OF JSYS'S
+
+
+   The default actions taken on the carriage  control  characters,  along
+   with  the  default  channels  that  determine  these  actions,  are as
+   follows:
+
+
+                                    Table 2-6
+                            PLPT: Control Characters
+
+
+     ASCII Character  Default        Name                Default
+          Code        Channel                            Action
+
+
+           11                   Tab            No   vertical    motion.
+                                               Skips  to  the beginning
+                                               of every 8th  column  on
+                                               the same line.
+
+           12           8       Line feed      Skips to column 1 on the
+                                               next line.  The last six
+                                               lines of each  page  are
+                                               skipped.
+
+           13           7       Vertical tab   Skips to column 1 on the
+                                               line  at  the next third
+                                               of a page.
+
+           14           1       Form feed      Skips to column 1 on the
+                                               top of the next page.
+
+           15                   Carriage return
+                                               No   vertical    motion.
+                                               Returns  to  column 1 of
+                                               the  current  line   and
+                                               does   not  advance  the
+                                               paper.
+
+           20           2       Half page      Skips to column 1 on the
+                                               next half page.
+
+           21           3       Alternate lines
+                                               Skips to column 1 on the
+                                               next even line.
+
+           22           4       Three lines    Skips to column 1 on the
+                                               next   of   every  third
+                                               line.
+
+           23           5       Next line      Skips to column 1 on the
+                                               next     line    without
+                                               skipping  the  last  six
+                                               lines on a page.
+
+           24           6       Sixth page     Skips to column 1 on the
+                                               next sixth of a page.
+
+
+   The association between the ASCII code and the channel  is  determined
+   by  the  RAM.   The  association  between  the channel and the default
+   action is determined by the VFU.   Therefore,  a  change  in  the  VFU
+   changes  the  association  between  the  channel and the action, which
+   causes the ASCII code to be associated with the new action.
+
+
+
+
+                                      2-34
+                       FUNCTIONAL ORGANIZATION OF JSYS'S                         FUNCTIONAL ORGANIZATION OF JSYS'S
+
+
+   2.3.5.1  PLPT: Status  Bits - The  following  device-dependent  status            PLPT: Status  Bits
+   bits  are  defined  for  the line printer.  These bits can be obtained
+   with the .MORST function of the MTOPR call.
+
+
+                                    Table 2-7
+                                PLPT: Status Bits
+
+
+     Bit     Symbol                        Meaning
+
+
+     B0      MO%LCP     Lower case printer
+
+     B10     MO%FER     Fatal hardware error.  This error generates  an
+                        interrupt  on software channel .ICDAE (refer to
+                        Section 2.6.1).
+
+     B12     MO%EOF     All data sent to the printer has actually  been
+                        printed.
+
+     B13     MO%IOP     I/O in progress
+
+     B14     MO%SER     Software error (e.g., interrupt character, page
+                        counter overflow)
+
+     B15     MO%HE      Hardware error.  Forms must be realigned.  This
+                        error   generates   an  interrupt  on  software
+                        channel .ICDAE.
+
+     B16     MO%OL      Device is off line
+
+     B17     MO%FNX     Device is nonexistent
+
+     B30     MO%RPE     RAM parity error
+
+     B31     MO%LVU     Optical VFU
+
+     B33     MO%LVF     VFU error
+
+     B34     MO%LCI     Character   interrupt.    This   generates   an
+                        interrupt on channel .ICDAE.
+
+     B35     MO%LPC     Page counter register overflow
+
+
+
+
+
+   2.3.6  Spooled Line Printer (LPT:)          Spooled Line Printer (LPT:)
+
+   On most systems, the physical line printer devices (PLPT: devices) are
+   under  the  control  of  the line printer spooler, LPTSPL and thus the
+   ordinary user cannot open a PLPT: device and  must,  instead,  open  a
+   spooled line printer device (LPT:)
+
+   When a GTJFN is performed on device LPT:, the  device  characteristics
+   (returned  by  DVCHR)  are  the same as those for device PLPT:.  Thus,
+   LPT: devices have units, and a unit number may be  specified  for  the
+   GTJFN.    However,   when   the   OPENF   is   performed,  the  device
+   characteristics become the same as device DSK:.  This is because  data
+   written  to  device  LPT:  is  actually written to a file in the spool
+   directory PS:<SPOOL>.  When device LPT: is closed, the file in <SPOOL>
+   is  closed  and  a  message  sent  to  the line printer spooler LPTSPL
+   causing it to print the file on the line printer.
+
+                                      2-35
+                       FUNCTIONAL ORGANIZATION OF JSYS'S                         FUNCTIONAL ORGANIZATION OF JSYS'S
+
+
+   Thus device LPT: is effectively a disk device, and none of the monitor
+   calls  that  can  be  used  only to set the characteristics of a PLPT:
+   device can be used for a  LPT:  device.   Also,  disk-only  operations
+   (such  as  PMAP)  should not be performed for LPT: devices.  Note that
+   LPTSPL writes only 7-bit bytes, so opening  a  LPT:  device  with  any
+   other  byte  size will cause erroneous results.  Also, only ASCII mode
+   is supported for LPT: devices.
+
+
+
+   2.3.7  Physical Magnetic Tape (MTA:)          Physical Magnetic Tape (MTA:)
+
+   The following device-dependent bits are defined for magnetic tape.
+
+
+                                    Table 2-8
+                                MTA: Status Bits
+
+
+     Bit     Symbol                        Meaning
+
+
+     18      MT%ILW     Drive is write protected
+
+     19      MT%DVE     Device error (hung or data late)
+
+     20      MT%DAE     Data error
+
+     21      MT%SER     Suppress automatic error recovery procedures
+
+     22      MT%EOF     Device EOF (file) mark
+
+     23      MT%IRL     Incorrect record length (not the same number of
+                        words as specified by the read operation or not
+                        a whole number of words)
+
+     24      MT%BOT     Beginning of tape
+
+     25      MT%EOT     End of tape
+
+     26      MT%EVP     Even parity
+
+     29-31   MT%CCT     Character counter if MT%IRL is on.  In the case
+                        of  an  error  generated by an incorrect record
+                        length, this field contains the number of bytes
+                        actually transferred.
+
+     32      MT%NSH     The  selected  data  mode  or  density  is  not
+                        supported   by  the  hardware  (such  as  using
+                        ANSI-ASCII mode on a TMO3 controller).
+
+
+   Data transfers to and from the magnetic tape can  be  performed  using
+   either buffered or unbuffered I/O.
+
+
+
+   2.3.7.1  Buffered  I/O - The  monitor  uses  buffered  I/O  when   the            Buffered  I/O
+   sequential  I/O calls (e.g., BIN/BOUT, SIN/SOUT) are used to read from
+   or write to the magnetic tape.  When the tape is opened for sequential
+   I/O  (data mode .GSNRM on the OPENF call), the monitor reserves buffer
+   space large enough to hold two records of data.  The maximum  size  of
+   the  records  is  specified with the SET TAPE RECORD-LENGTH command or
+   the .MOSRS function of the MTOPR monitor  call.   The  maximum  record
+   lengths  for  magnetic  tapes  supported  by TOPS-20 are listed in the
+
+                                      2-36
+                       FUNCTIONAL ORGANIZATION OF JSYS'S                         FUNCTIONAL ORGANIZATION OF JSYS'S
+
+
+   description of the .MOSRS function of the  MTOPR  monitor  call.   The
+   buffers  reserved  by  the monitor allow the user's program to overlap
+   computation with the transfer of data to and from the tape.
+
+   The BIN monitor call is used to read one byte from the tape, with  the
+   monitor  filling  one  buffer with data as the user program is reading
+   bytes from the other buffer.  A program reading  data  from  the  tape
+   with  successive BIN calls obtains a stream of bytes until a tape mark
+   is read.  The SIN monitor call is used to read a specified  number  of
+   bytes  with  the  monitor again performing the double buffering.  Both
+   the BIN and the SIN calls read across record boundaries on  the  tape.
+   The SINR monitor call is used to read variable-length records from the
+   tape because each call returns one record to the user program.  If the
+   record on the tape contains more data than the SINR call requests, the
+   remaining bytes in the record are  discarded.   The  SINR  call  never
+   reads  across  record  boundaries  on  the tape.  Thus, each SINR call
+   begins reading at the first byte of the next record on the tape.  With
+   all  three  calls, the specified record size must be at least as large
+   as the largest record being read from the tape.
+
+   The BOUT monitor call is used to  write  one  byte  on  the  tape.   A
+   program  writing  data on the tape with successive BOUT calls writes a
+   stream of bytes packed into records of the specified size.   The  SOUT
+   monitor  call  is  used  to write a specified number of bytes into one
+   record equal to the given record size.  The  SOUTR  call  is  used  to
+   write  variable-length records on the tape because each call writes at
+   least one record.  The size of the  record  is  equal  to  either  the
+   number  of  bytes  specified  in the SOUTR call or the number of bytes
+   specified in the maximum record size, whichever is  smaller.   If  the
+   number  of  bytes  requested in the call is greater than the specified
+   record size, then records  of  the  maximum  size  are  written,  plus
+   another  record  containing  the  remaining bytes.  If the end of tape
+   marker is reached during sequential mode output, the data  is  written
+   and  an  error  return  is  given.   Bit MT%EOT (bit 25) in the device
+   status word will be set to indicate this condition.
+
+   When a CLOSF monitor call is executed for a  magnetic  tape  to  which
+   buffered  output  is  being  done, any data remaining in the monitor's
+   buffers will be written to the tape.   The  monitor  writes  two  tape
+   marks  after  the  last  record written and backspaces over the second
+   mark.  This allows a subsequent write operation to overwrite the  last
+   tape  mark,  and  always leaves two tape marks (a logical end of tape)
+   after the last record written.
+
+   The monitor does not write records of less than four words long.  Thus
+   if  the user requests less than four words to be written on a SOUTR or
+   DUMPO (see  below)  call,  the  monitor  writes  a  four-word  record,
+   completing  it  with  zeros.   On a SOUT call, if less than four words
+   remain in the buffer at the time of the CLOSF call, the monitor  again
+   fills the record with zeros.
+
+
+
+   2.3.7.2  Unbuffered I/O - The DUMPI and DUMPO monitor calls  are  used            Unbuffered I/O
+   to read from or write to the magnetic tape without using buffered I/O.
+   (Unbuffered I/O is sometimes called dump  mode  I/O.)  Unbuffered  I/O
+   uses  a  program-supplied  command list to determine where to transfer
+   data into or out of the program's address space.  The command list can
+   contain three types of entries:
+
+        1.  IOWD n, loc transfers n words from loc through loc+n-1.   The
+            next  command  is  obtained  from  the location following the
+            IOWD.  Each IOWD word reads or  writes  a  separate  magnetic
+            tape record.
+
+
+                                      2-37
+                       FUNCTIONAL ORGANIZATION OF JSYS'S                         FUNCTIONAL ORGANIZATION OF JSYS'S
+
+
+        2.  XWD 0, y takes the next command from location y.
+
+        3.  0 terminates the command list.
+
+   Refer to the DUMPI call description for more information.
+
+   On input, a new record is read for each  IOWD  entry  in  the  command
+   list.   If  the  IOWD  request  does  not equal the actual size of the
+   record on the tape, an error (IOX5) is returned.   The  GDSTS  monitor
+   call  can  then  be  executed  to  examine  the status bits set and to
+   determine the number of bytes transferred.  In  addition,  if  a  tape
+   mark is read, an error (IOX4) is returned.  On output, a new record is
+   written for each IOWD entry in the command list.
+
+   There are two modes available in unbuffered I/O.  In the normal  mode,
+   the  monitor  waits for the data transfer to complete before returning
+   control to the program.  In the  no-wait  mode,  the  monitor  returns
+   control  immediately  after  queuing  the  first  transfer so that the
+   program can set up the second transfer.  The monitor  then  waits  for
+   the  first  transfer  to  complete  before queuing the second.  If the
+   first transfer is successful, the second one is started,  and  control
+   is  returned to the program.  If the first transfer is not successful,
+   an error is returned in AC1, and the second one is not  started.   The
+   desired  mode  is specified by bit DM%NWT in AC1 on the DUMPI or DUMPO
+   call.
+
+
+
+   2.3.7.3  Magnetic Tape Status - The status word of a magnetic tape can            Magnetic Tape Status
+   be  obtained  with  the  GDSTS  call  or individual status bits can be
+   obtained with the MTOPR call.  The GDSTS call waits for  all  activity
+   to  stop  during  sequential  mode  output,  dump  mode,  and  spacing
+   operations before obtaining the status.  A GDSTS call executed  during
+   sequential mode input returns the status of the current record.
+
+   Reading from or writing to a magnetic tape cannot be done if there are
+   any  errors  set  in  the  device  status word.  The program can clear
+   errors with the SDSTS call or the .MOCLE function of the MTOPR call.
+
+
+
+   2.3.7.4  Reading a Tape in the  Reverse  Direction - With  the  .MOSDR            Reading a Tape in the  Reverse  Direction
+   function  of the MTOPR call, the program can cause the tape to move in
+   the reverse direction (toward the beginning of the tape)  during  read
+   operations.   The  data  in  each  record  are returned in the forward
+   order, but the records themselves are returned in the  reverse  order.
+   The  sensing-foil  marking  the beginning of tape is treated as an EOF
+   tape mark.
+
+   When the SIN call is used to read data in the reverse  direction,  the
+   byte  size  and  record  length specified in the call should equal the
+   byte size and record length of the records on the tape.  If the record
+   characteristics specified in the call do not equal the characteristics
+   of the records on tape, the bytes are returned out of phase  with  the
+   bytes in the tape record.
+
+   When the SINR call is used to read data in the reverse direction,  the
+   number  of  bytes requested by the call should be at least as large as
+   the size of the record on  the  tape.   If  the  requested  number  is
+   smaller  than  the  number  of bytes in the tape record, the remaining
+   bytes in the record are discarded from the beginning of the record and
+   not from the end of the record.
+
+
+
+
+                                      2-38
+                       FUNCTIONAL ORGANIZATION OF JSYS'S                         FUNCTIONAL ORGANIZATION OF JSYS'S
+
+
+   2.3.7.5  Hardware Data Modes - By using the  .MOSDM  function  of  the            Hardware Data Modes
+   MTOPR  call,  the  program  can  set  the  mode  for storing data on a
+   magnetic tape.  The  following  descriptions  indicate  how  bits  are
+   stored  in  the  tracks  and  the number of frames required to store a
+   36-bit word of data.
+
+   The parity bit is represented in the diagrams by "P".
+
+
+                                    NOTE
+
+                  Data undergoes 2 transformations  before
+                  it is actually written to magnetic tape.
+                  The first transformation occurs  when  a
+                  word  of  data  is formed into frames by
+                  the tape  controller.   The  formats  of
+                  these  frames  are  illustrated  in  the
+                  diagrams below.
+
+                  A second transformation occurs when  the
+                  tape drive receives a frame of data from
+                  the controller,  and  physically  writes
+                  that frame to tape:  the bits within the
+                  frame are rearranged and  then  written.
+                  This   final   format   is  standardized
+                  throughout the computer industry and  is
+                  designed  to  (among other things) place
+                  the parity bit in the center of the tape
+                  (the   "safest"   part   of  the  tape).
+                  Because    this    final    format    is
+                  standardized, it is "invisible" and does
+                  not affect user programs in any way.
+
+                  Programmers  who  must  deal  with   the
+                  problem of transferring data between DEC
+                  machines  and  the  machines  of   other
+                  vendors  need  only  concern  themselves
+                  with the  formats  shown  below.   Thus,
+                  while  it  is  technically  incorrect to
+                  think of the diagrams below  as  showing
+                  the  physical format of a word stored on
+                  magnetic tape, it is  convenient  to  do
+                  so,  and  this simplification is made in
+                  this manual.
+
+
+
+   This mode stores a word of data as a 36-bit byte in five frames  of  a
+   9-track tape.  Note that the fifth frame is partially used.  This mode
+   is normally the default mode.
+
+
+                            TRACKS                          FRAMES
+
+       9     8     7     6     5     4     3     2     1
+
+      B0    B1    B2    B3    B4    B5    B6    B7     P      1
+      B8    B9   B10   B11   B12   B13   B14   B15     P      2
+     B16   B17   B18   B19   B20   B21   B22   B23     P      3
+     B24   B25   B26   B27   B28   B29   B30   B31     P      4
+       0     0     0     0   B32   B33   B34   B35     P      5
+
+
+   Industry Compatible Mode   Industry Compatible Mode
+
+
+                                      2-39
+                       FUNCTIONAL ORGANIZATION OF JSYS'S                         FUNCTIONAL ORGANIZATION OF JSYS'S
+
+
+   This mode stores a word of data as four 8-bit bytes in four frames  of
+   a  9-track  tape.  On a read operation, four frames of 8-bit bytes are
+   read, left-justified, into a word.  The remaining  four  bits  of  the
+   word  are  0,  or  are  copies  of  the  parity bits, depending on the
+   hardware;  these bits  are  not  data.   On  a  write  operation,  the
+   leftmost  four  8-bit  bytes (i.e., bits 0 through 31) of the word are
+   written in four frames on the tape.  The rightmost  four  bits  (i.e.,
+   bits 32 through 35) of the word are ignored and are not written on the
+   tape.  This mode is compatible with any machine that reads and  writes
+   8-bit bytes.
+
+
+                            TRACKS                          FRAMES
+
+       9     8     7     6     5     4     3     2     1
+
+      B0    B1    B2    B3    B4    B5    B6    B7     P      1
+      B8    B9   B10   B11   B12   B13   B14   B15     P      2
+     B16   B17   B18   B19   B20   B21   B22   B23     P      3
+     B24   B25   B26   B27   B28   B29   B30   B31     P      4
+
+
+   ANSI ASCII Mode   ANSI ASCII Mode
+
+   This mode stores a word of data as five 7-bit bytes in five frames  of
+   a  9-track  tape.  On a read operation, five frames of 7-bit bytes are
+   read, left-justified, into a word.  The remaining bits  (bits  35)  of
+   each  frame  are  ORed together, and the result is placed in bit 35 of
+   the word.  On a write operation, the leftmost five 7-bit bytes of  the
+   word  are written in five frames on the tape.  Bit 35 of the word must
+   be zero to  conform  to  ANSI  standards.   It  is  written  into  the
+   high-order  bit  of the fifth frame, and the remaining high-order bits
+   of the first four frames are 0.  This mode is useful when transferring
+   ASCII  data from TOPS-20 to machines that read 8-bit bytes.  This mode
+   is available on any 9-track drive connected to a  TM02  or  DX20  tape
+   controller.
+
+
+                            TRACKS                          FRAMES
+
+       9     8     7     6     5     4     3     2     1
+
+       0    B0    B1    B2    B3    B4    B5    B6     P      1
+       0    B7    B8    B9   B10   B11   B12   B13     P      2
+       0   B14   B15   B16   B17   B18   B19   B20     P      3
+       0   B21   B22   B23   B24   B25   B26   B27     P      4
+     B35   B28   B29   B30   B31   B32   B33   B34     P      5
+
+
+   SIXBIT Mode   SIXBIT Mode
+
+   This mode stores a word of data as six 6-bit bytes in six frames of  a
+   7-track  tape.   This  mode  is  the  only supported hardware mode for
+   7-track tapes.
+
+
+                        TRACKS                  FRAMES
+
+       7     6     5     4     3     2     1
+
+      B0    B1    B2    B3    B4    B5     P      1
+      B6    B7    B8    B9   B10   B11     P      2
+     B12   B13   B14   B15   B16   B17     P      3
+     B18   B19   B20   B21   B22   B23     P      4
+     B24   B25   B26   B27   B28   B29     P      5
+
+                                      2-40
+                       FUNCTIONAL ORGANIZATION OF JSYS'S                         FUNCTIONAL ORGANIZATION OF JSYS'S
+
+
+     B30   B31   B32   B33   B34   B35     P      6
+
+
+   High Density Mode   High Density Mode
+
+   In this mode, two 36-bit words are stored in 9 frames.   High  density
+   mode is available on any 9-track drive connected to a DX20 controller.
+
+
+                            TRACKS                          FRAMES
+
+       9     8     7     6     5     4     3     2     1
+
+      B0    B1    B2    B3    B4    B5    B6    B7     P      1
+      B8    B9   B10   B11   B12   B13   B14   B15     P      2
+     B16   B17   B18   B19   B20   B21   B22   B23     P      3
+     B24   B25   B26   B27   B28   B29   B30   B31     P      4
+     B32   B33   B34   B35    B0    B1    B2    B3     P      5
+      B4    B5    B6    B7    B8    B9   B10   B11     P      6
+     B12   B13   B14   B15   B16   B17   B18   B19     P      7
+     B20   B21   B22   B23   B24   B25   B26   B27     P      8
+     B28   B29   B30   B31   B32   B33   B34   B35     P      9
+
+
+
+   2.3.8  Logical Magnetic Tape (MT:)          Logical Magnetic Tape (MT:)
+
+   Logical magnetic tape devices are used so that the system operator can
+   fulfill  a  MOUNT request with any available tape drive that meets the
+   requirements of the MOUNT request.  The user never knows and need  not
+   know which physical drive (MTA:) is mapped to the logical drive (MT:).
+
+   Some JSYS functions available for MTA: devices are not  available  for
+   MT:  devices.   Also,  MT: devices are commonly used in a tape-labeled
+   environment which causes further restrictions in  the  JSYS  functions
+   available  for  MT:  devices.   See  the  appropriate  JSYS's  for any
+   restrictions that may apply.
+
+
+
+   2.3.9  Terminal (TTY:)          Terminal (TTY:)
+
+   Most monitor calls in  this  group  return  an  error  if  the  device
+   referenced  is assigned to another job.  However, a process with WHEEL
+   capability enabled can reference a terminal assigned  to  another  job
+   (as  controlling terminal or with ASND).  The monitor calls pertaining
+   to terminals have no effect, or return default-value information, when
+   used with other devices.
+
+
+   The following status bits are defined for TTY's.
+
+   Bit       Symbol                         Meaning
+
+   B35       GD%PAR    The TTY will tolerate a parity bit.   Any  program
+                       producing  binary  output  for  a TTY should check
+                       this bit to determine if it should  apply  parity.
+                       If parity is to be applied, the TTY must be opened
+                       with  an  8-bit  bytesize;   otherwise,  a   7-bit
+                       bytesize must be used.
+
+                       DECNET NVT's will not accept a parity bit.
+
+
+
+
+                                      2-41
+                       FUNCTIONAL ORGANIZATION OF JSYS'S                         FUNCTIONAL ORGANIZATION OF JSYS'S
+
+
+   2.3.9.1  JFN Mode Word - Each terminal in TOPS-20 is associated with a            JFN Mode Word
+   mode word.  This word can be read with the RFMOD call and changed with
+   the SFMOD and STPAR calls.  The SFMOD call affects only the modes that
+   are  program-|related:   wakeup  control, echo mode, and terminal data
+   mode;  thus a program can  execute  a  SFMOD  call  without  affecting
+   previously-|established  device  modes.   The STPAR call, on the other
+   hand, affects  fields  that  describe  device  parameters  (mechanical
+   characteristics,  page  length  and width, case conversion, and duplex
+   control).  Table 2-9 shows the format of the JFN mode word.
+
+
+                                    Table 2-9
+                                  JFN Mode Word
+
+
+     Bit    Symbol  Changed by                 Function
+
+
+     0      TT%OSP     SFMOD   output   suppress   control    (1=ignore
+                               output;  0=allow output)
+     1      TT%MFF     STPAR   has mechanical form feed
+     2      TT%TAB     STPAR   has mechanical tab
+     3      TT%LCA     STPAR   has lower case
+     4-10   TT%LEN     STPAR   page length
+     11-17  TT%WID     STPAR   page width
+     18-23  TT%WAK     SFMOD   wakeup control on:
+                               B18: not used
+            TT%IGN             B19: ignore the other TT%WAK bits
+            TT%WKF             B20: formatting control character
+            TT%WKN             B21: non-formatting control character
+            TT%WKP             B22: punctuation character
+            TT%WKA             B23: alphanumeric character
+     24     TT%ECO     SFMOD   echos on
+     25     TT%ECM     STPAR   echo mode
+     26     TT%ALK     TLINK   accept links
+     27     TT%AAD     TLINK   accept advice
+     28-29  TT%DAM     SFMOD   terminal data mode
+            .TTBIN             00:  no translation
+            .TTASC             01:  translate both echo and output
+            .TTATO             10:  translate output only
+            .TTATE             11:  translate echo only
+     30     TT%UOC     STPAR   upper case output control
+                               0:   do not indicate
+                               1:   indicate by 'X
+     31     TT%LIC     STPAR   lower case input control
+                               0:   no conversion
+                               1:   convert lower to upper
+     32-33  TT%DUM     STPAR   duplex mode
+            .TTFDX             00:  Full duplex
+            .TTHDX             10:  Character half duplex
+            .TTLDX             11:  Line half duplex
+                               01:  Reserved for DEC
+     34     TT%PGM     STPAR   pause-on-command     mode      (1=enable
+                               pause-on-command     mode,     0=disable
+                               pause-on-command mode.)
+
+                               This   function   enables/disables   the
+                               TOPS-20  feature  that  allows a user to
+                               manually stop TTY  output  with  ^S  and
+                               resume  it  with ^Q.  See MTOPR function
+                               .MOXOF for pause-at-end-of-page mode.
+     35     TT%CAR             system carrier state;  on if line  is  a
+                               dataset and the carrier is on.
+
+
+
+                                      2-42
+                       FUNCTIONAL ORGANIZATION OF JSYS'S                         FUNCTIONAL ORGANIZATION OF JSYS'S
+
+
+   Bit 0 (TT%OSP) implements the CTRL/O function.  If this  bit  is  set,
+   all  program  output  directed to the terminal is discarded.  When the
+   bit is off, program output is buffered and sent as usual.  The current
+   contents  of  the  output buffer are not cleared when this bit is set;
+   clearing the buffer must be done explicitly (by  means  of  the  CFOBF
+   call)  if  output  is  to  be stopped immediately.  Any input function
+   clears this bit.
+
+   Bits 1, 2, and 3 (TT%MFF, TT%TAB, and TT%LCA) define  several  of  the
+   mechanical  capabilities of the terminal and affect character handling
+   on both input and output.  Form feeds and tabs are  simulated  if  the
+   terminal  does  not  have  the  required  mechanical capability, or if
+   simulation has been requested by the SFCOC call.
+
+   Bits 4-10 (TT%LEN) determine the number of  line  feeds  necessary  to
+   simulate  a  formfeed,  or  the  number of lines to fit on the display
+   screen.   A  0  value  means  the  declared  length  of  the  page  is
+   indefinitely large.
+
+   Bits 11-17 (TT%WID) determine the point at which the output line  must
+   be  continued  on  the  next  line by inserting a carriage return-line
+   feed.  If 0, no line folding occurs.
+
+   Bits 18-23 (TT%WAK) define the particular class  of  characters  that,
+   when  input  from the terminal, will wake up a waiting program.  Refer
+   to Section 2.4.9.3 for the definitions of the  wakeup  classes.   Note
+   that  the  class-wakeup  scheme  is  maintained for compatibility with
+   older programs.  Newer programs should use the .MOSBM function of  the
+   MTOPR JSYS as it has more resolution and causes less system load.
+
+   Bit 24 (TT%ECO) defines if echos are to be given.  If this bit is off,
+   echoing is turned off.  This is useful when the program is accepting a
+   password or is simulating non-standard echoing procedures.
+
+   Bit 25 (TT%ECM) defines when the echo will occur.  If this bit is off,
+   the  echo  will  occur when the program reads the character.  That is,
+   the echo occurs immediately if the program is waiting for input or  is
+   deferred  if  the  program  is  not  waiting  for  input.  This is the
+   standard echo mode  which  produces  a  correctly  ordered  typescript
+   (i.e.,  program  input  and  output  appear in the order in which they
+   occurred).  If this bit  is  on,  the  echo  occurs  as  soon  as  the
+   character  is  typed.  Note that this mode may cause editing to appear
+   out of order on  the  typescript.   This  occurs  because  editing  is
+   performed  as the program reads the character and not necessarily when
+   the echo occurs.
+
+   Bits 28-29 (TT%DAM) define the terminal data mode.  The four  possible
+   data modes are:
+
+        00   Binary (.TTBIN), 8-bit input and output.  There is no format
+             control   or  control  group  translation  and  no  echoing.
+             However, ^S and ^Q are still under control of TT%PGM.
+
+        01   ASCII (.TTASC), 7-bit input and output, plus parity  on  for
+             control  group  output.   There is format control as well as
+             simulation and translation of control group for input (echo)
+             and output according to the control words given on the SFCOC
+             JSYS.  This is the usual terminal data mode.
+
+        10   Disable the translation of  echo  (.TTATO).   In  all  other
+             respects, same as .TTASC.
+
+        11   Disable the translation of output (.TTATE).  Obeys the  CCOC
+             word on input only.  In all other respects, same as .TTASC.
+
+
+                                      2-43
+                       FUNCTIONAL ORGANIZATION OF JSYS'S                         FUNCTIONAL ORGANIZATION OF JSYS'S
+
+
+   The last two data modes allow the  user  to  selectively  disable  the
+   translation   of   control  characters  for  input  or  output.   When
+   translation  is  disabled,  control  characters   are   always   sent.
+   Simulation  of  formatting  control  characters  is still performed if
+   requested by  the control  words  of the RFCOC or SFCOC JSYS or if the
+   device   does  not  have  the  required  mechanical  capability.   The
+   translation  typically  results  in  some  control  characters   being
+   indicated  by  graphics  instead  of  being  sent as is.  For example,
+   disabling the translation of output characters is appropriate for some
+   display  terminals  when  the  program  must send untranslated control
+   characters to control the  display,  but  requires  that  the  control
+   characters typed by the user be indicated in the usual way.
+
+   Bit 30 (TT%UOC) specifies that upper case terminal  output  is  to  be
+   indicated  by 'X (single quote preceding character that is upper case)
+   if TT%LCA is not set.  This is primarily intended for  terminals  that
+   are not capable of lower case output.
+
+   Bit 31 (TT%LIC) specifies that lower case  terminal  input  is  to  be
+   translated  to  upper  case  and  that  codes  175  and  176 are to be
+   converted to code 33.  This is useful for older  terminals  that  send
+   codes 175 or 176 in response to the ALT or ESC key.
+
+   Bits 32-33 (TT%DUM) define the three duplex modes presently available.
+   Full  duplex  (.TTFDX) requires the system to generate the appropriate
+   echo for each character typed  in.   Character  half  duplex  (.TTHDX)
+   assumes  the  terminal  will  internally echo each character typed but
+   will require an additional echo  for  formatting  characters  such  as
+   carriage  return.   Line  half duplex (.TTLDX) is similar to character
+   half duplex but does not generate a line feed echo  after  a  carriage
+   return.
+
+   Bit 34 (TT%PGM) specifies the output mode.  In display mode, the  user
+   can  create  a  pause in the output while he reads material that would
+   otherwise quickly disappear off the screen.   The  output  is  stopped
+   with  the  CTRL/S  character  and  started  with the CTRL/Q character.
+   Also, output automatically  stops  whenever  a  page,  as  defined  by
+   TT%LEN, has been output;  output is resumed with CTRL/Q.
+
+   Bit 35 (TT%CAR) indicates  the  carrier  state.   If  the  line  is  a
+   dataset,  this  bit  is on if the carrier is on.  If the line is not a
+   dataset, this bit is undefined.
+
+
+
+   2.3.9.2  Control Character  Output  Control - Each  terminal  has  two            Control Character  Output  Control
+   control  character output control (CCOC) words.  Each word consists of
+   2-bit bytes, one byte for each of the control characters (ASCII  codes
+   0-37).  The bytes are interpreted as follows:
+
+        00:  ignore (send nothing)
+        01:  indicate by ^X (where X is the character)
+        10:  send character code
+        11:  simulate format action
+
+   The RFCOC and SFCOC monitor calls read and manipulate the CCOC  words.
+   Table 2-10 lists the ASCII code for each character.
+
+
+
+
+
+
+
+
+
+                                      2-44
+                       FUNCTIONAL ORGANIZATION OF JSYS'S                         FUNCTIONAL ORGANIZATION OF JSYS'S
+
+
+   2.3.9.3  Character  Set - The  following  information  describes  each            Character  Set
+   character  in  the  TOPS-20  character  set  that  is pertinent to the
+   monitor calls in this group.  The wakeup class  (refer  to  TT%WAK  in
+   Section 2.3.9.1) is abbreviated as follows:
+
+        F  formatting control character
+        C  non-formatting control character
+        P  punctuation character
+        A  alphanumeric character
+
+   Refer to Section 2.3.9.2 for the explanation of the control  character
+   output control (CCOC) words.
+
+   The following table lists the wakeup classes for the TOPS-20 character
+   set (ASCII):
+
+
+                                   Table 2-10
+                          Wakeup Classes/CCOC Word Bits
+
+
+     ASCII     Wakeup    CCOC        Character or Control Character
+     code      class     word(bits)  
+
+
+        0        C       1(B0,1)     Ctrl/@  null,break
+        1        C       1(B2,3)     Ctrl/A
+        2        C       1(B4,5)     Ctrl/B
+        3        C       1(B6,7)     Ctrl/C
+        4        C       1(B8,9)     Ctrl/D
+        5        C       1(B10,11)   Ctrl/E
+        6        C       1(B12,13)   Ctrl/F
+        7        C       1(B14,15)   Ctrl/G  bell
+       10        F       1(B16,17)   Ctrl/H  backspace
+       11        P       1(B18,19)   Ctrl/I  horizontal tab
+       12        F       1(B20,21)   Ctrl/J  line feed
+       13        C       1(B22,23)   Ctrl/K  vertical tab
+       14        F       1(B24,25)   Ctrl/L  form feed
+       15        F       1(B26,27)   Ctrl/M  carriage return
+       16        C       1(B28,29)   Ctrl/N
+       17        C       1(B30,31)   Ctrl/O
+       20        C       1(B32,33)   Ctrl/P
+       21        C       1(B34,35)   Ctrl/Q
+       22        C       2(B0,1)     Ctrl/R
+       23        C       2(B2,3)     Ctrl/S
+       24        C       2(B4,5)     Ctrl/T
+       25        C       2(B6,7)     Ctrl/U
+       26        C       2(B8,9)     Ctrl/V
+       27        C       2(B10,11)   Ctrl/W
+       30        C       2(B12,13)   Ctrl/X
+       31        C       2(B14,15)   Ctrl/Y
+       32        C       2(B16,17)   Ctrl/Z
+       33        All     2(B18,19)   Escape (Altmode)
+       34        C       2(B20,21)   Ctrl/Backslash
+       35        C       2(B22,23)   Ctrl/Right Square Bracket
+       36        CxD     2(B24,25)   Ctrl/Uparrow
+       37        F       2(B26,27)   Ctrl/Backarrow
+       40        P                    Space
+       41        P                    !
+       42        P                    "
+       43        P                    #
+       44        P                    $
+       45        P                    %
+       46        P                    &
+       47        P                    '
+
+                                      2-45
+                       FUNCTIONAL ORGANIZATION OF JSYS'S                         FUNCTIONAL ORGANIZATION OF JSYS'S
+
+
+       50        P                    (
+       51        P                    )
+       52        P                    *
+       53        P                    +
+       54        P                    ,
+
+                               table 2-10 (cont.)
+                          Wakeup Classes/CCOC Word Bits
+
+
+     ASCII     Wakeup    CCOC        Character or Control Character
+     code      class     word(bits)
+
+
+       55        P                    -
+       56        P                    .
+       57        P                    /
+       60-71     A                    0-9
+       72        P                    :
+       73        P                    ;
+       74        P                    <
+       75        P                    =
+       76        P                    >
+       77        P                    ?
+      100        P                     @
+      101-132    A                     Upper Case Letters A-Z
+      133        P                     [
+      134        P                     \
+      135        P                     ]
+      136        P                     ^
+      137        P                     _
+      140        P                     Accent (Grave)
+      141-172    A                     Lower Case Letters a-z
+      173(1)     P                     Left Brace
+      174(1)     P                     Vertical Bar
+      175(1)     P                     Right Brace
+      176(1)     P                     Tilde
+      177        All                   Delete (Rubout)
+
+
+
+                                    NOTE
+
+
+                  1.  Escape(33)   and   Delete(177)   are
+                      considered   to  be  in  all  wakeup
+                      classes.
+
+                  2.  If the terminal has  B31(TT%LIC)  on
+                      in  the JFN mode word, codes 175 and
+                      176 are  converted  to  code  33  on
+                      input.
+
+                  3.  The    class-wakeup    scheme     is
+                      maintained  for  compatibility  with
+                      older programs.  New programs should
+                      use the .MOSBM function of the MTOPR
+                      JSYS, as it has more resolution  (it
+                      allows  a  4-word  character mask to
+                      specify      individual       wakeup
+                      characters)  and  causes less system
+                      load (low-level monitor I/O routines
+                      are  subjected  to  fewer  wakeups).
+                      Both the SFMOD JSYS and  the  .MOSBM
+                      function    set   the   same   mask;
+
+                                      2-46
+                       FUNCTIONAL ORGANIZATION OF JSYS'S                         FUNCTIONAL ORGANIZATION OF JSYS'S
+
+
+                      however,   SFMOD   computes   wakeup
+                      classes  from  the mask while .MOSBM
+                      uses character-oriented wakeups.
+
+
+
+
+   2.3.9.4  Terminal  Characteristics  Control - The  various  types   of            Terminal  Characteristics  Control
+   terminals   have  different  characteristics  for  output  processing,
+   depending on their type and speed.  The characteristics  that  can  be
+   associated with terminals are:
+
+        1.  Mechanical form feed and tab
+
+        2.  Lower case
+
+        3.  Padding after carriage return
+
+        4.  Padding after line feed
+
+        5.  Padding after mechanical tab
+
+        6.  Padding after mechanical form feed
+
+        7.  Page width and length
+
+        8.  Cursor commands
+
+   Instead of setting each of these parameters for his line, the user can
+   specify   a   terminal  type  number,  which  causes  the  appropriate
+   parameters to be set.  Refer to the STTYP monitor call.   The  defined
+   terminal types, along with their characteristics, are listed below.
+
+
+                                   Table 2-11
+                            Terminal Characteristics
+
+
+     Number    Terminal    Symbol             Characteristics
+
+
+        0    TTY model 33  .TT33    no mechanical form feed or tab, has
+                                    upper  case  only, no padding after
+                                    carriage  return  and  line   feed,
+                                    padding  after  tab  and form feed,
+                                    page width 72, page length 66
+
+        1    TTY model 35  .TT35    has mechanical form feed  and  tab,
+                                    has  upper  case  only,  no padding
+                                    after  carriage  return  and   line
+                                    feed,  padding  after  tab and form
+                                    feed, page width 72, page length 66
+
+        2    TTY model 37  .TT37    no mechanical  form  feed  or  tab,
+                                    lower   case,   no   padding  after
+                                    carriage  return  and  line   feed,
+                                    padding  after  tab  and form feed,
+                                    page width 72, page length 66
+
+        3    TI/EXECUPORT  .TTEXE   no mechanical  form  feed  or  tab,
+                                    lower  case, padding after carriage
+                                    return only  page  width  80,  page
+                                    length 66
+
+        4-7                         reserved for customer
+
+                                      2-47
+                       FUNCTIONAL ORGANIZATION OF JSYS'S                         FUNCTIONAL ORGANIZATION OF JSYS'S
+
+
+                               Table 2-11 (Cont.)
+                            Terminal Characteristics
+
+
+      Number  Terminal     Symbol           Characteristics
+
+
+|       8     Default      .TTDEF   no mechanical  form  feed  or  tab,
+|                                   lower   case,  full  padding,  page
+|                                   width 72, page length 66
+|  
+|       9     Ideal        .TTIDL   has mechanical form feed  and  tab,
+|                                   lower    case,   no   padding,   no
+|                                   specified width and length
+|  
+|       10    VT05         .TTV05   no  mechanical   form   feed,   has
+|                                   mechanical   tab,  has  upper  case
+|                                   only,  no  padding  after  carriage
+|                                   return  and tab, padding after line
+|                                   feed and form feed, page width  72,
+|                                   page length 20, has cursor commands
+|  
+|       11    VT50         .TTV50   no mechanical form feed or tab, has
+|                                   upper  case  only, no padding, page
+|                                   width  80,  page  length  12,   has
+|                                   cursor commands
+|  
+|       12    LA30         .TTL30   no mechanical form feed or tab, has
+|                                   upper case only, full padding, page
+|                                   width 80, page length 66
+|  
+|       13    GT40         .TTG40   no mechanical  form  feed  or  tab,
+|                                   lower  case, no padding, page width
+|                                   80, page length 30
+|  
+|       14    LA36         .TTL36   no mechanical  form  feed  or  tab,
+|                                   lower  case, no padding, page width
+|                                   132, page length 66
+|  
+|       15    VT52         .TTV52   no  mechanical   form   feed,   has
+|                                   mechanical   tab,  lower  case,  no
+|                                   padding, page width 80, page length
+|                                   24
+|  
+|       16    VT100        .TT100   no  mechanical   form   feed,   has
+|                                   mechanical   tab,  lower  case,  no
+|                                   padding, page width 80, page length
+|                                   24, has cursor commands
+|  
+|                                   When  used  in   VT52   mode,   the
+|                                   terminal  type  should  be  set  to
+|                                   .TTV52.
+|  
+|       17    LA38         .TTL38   no  mechanical   form   feed,   has
+|                                   mechanical   tab,  lower  case,  no
+|                                   padding,  page  width   132,   page
+|                                   length 66
+|  
+|                              Table 2-11 (Cont.)
+|                           Terminal Characteristics
+|  
+|  
+|     Number  Terminal     Symbol           Characteristics
+
+
+
+                                      2-48

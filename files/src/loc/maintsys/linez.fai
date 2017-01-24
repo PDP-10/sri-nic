@@ -1,0 +1,277 @@
+;<SOURCES>LINEZ.FAI.19 17-Mar-82 22:28:52, Edit by LARSON
+;1 Corrected length of JOBIN block to be same length as requested data.
+;1 Commented out TERM, it is not referenced.
+;<SOURCES>LINEZ.FAI.6, 28-Feb-81 21:48:55, Edit by ROODE
+;Add printing of status of remote and auto bits
+;<SOURCES>LINEZ.FAI.3, 12-Jul-79 22:58:40, Edit by MCLURE
+;Fix to get i/o speeds properly
+
+	title	linez - Hack for Line magic
+	subttl	McLure/April '77
+	search  monsym
+	asuppress
+
+
+; AC's
+f_0					; Flags
+a_1					; Temp and JSYS
+b_2					; Ditto
+c_3					; Ditto
+d_4					; Ditto
+e_5					; Temp & local to routine
+t_6					; Ditto
+u_7					; Ditto
+v_10					; Ditto 
+w_11					; Ditto
+l_12
+m_13
+n_14
+o_15
+x_16
+p_17
+
+opdef	call	[pushj	p, 0]
+opdef	ret	[popj	p, 0]
+opdef	uerr	[1b8]
+
+define	error	(x)
+   <	uerr	[asciz /x/]
+   >
+
+loc	41
+	call	errh
+reloc
+
+;; Main program
+ 
+go: 	reset
+	move	p, [iowd npdl, pdl]
+	movei	a, .fhslf
+	rpcap
+	ior	3, 2
+	epcap
+	trnn	c, sc%whl!sc%opr	; Wheel? or Opr?
+	 jrst	[error (You dont have the necessary capabilities)
+		 haltf
+		 jrst .-1]
+	movei 1,.ptypa			;pty table
+	getab
+	 error <GETAB failed>
+	soj 1,
+	hrrm 1,maxtty
+	setz	1,
+	rscan				; Anything in rscan buffer?
+	 jrst	wondr			; Nope, forget it then	
+go0:	pbin				;input byte
+	cain	1, 12			;is it a linefeed?
+	 jrst	wondr			;yes prompt him
+	caie	1, " "			;no, if not space, eat another char
+	 jrst	go0
+go1:	pbin				;another byte
+	cain	1, 12			;linefeed?
+	 jrst	wondr
+	setzm multfl			;single request only
+	move	2, [point 7, tty]	;set up pointer to strbuf
+go2:	idpb	1, 2			;put char in
+	pbin				;get new char
+	caie	1, 12			;linefeed?
+	 jrst	go2			;no, keep eating characters
+	hrroi	a, tty
+	 jrst	wondr1
+
+wondr:	setom multfl			;will be doing multiple
+	hrroi	a, [asciz/TTY? /]
+       	move	c, a
+	psout				; Whereto?
+	movei	a, .priin		; Now is it a tty?
+wondr1:	bin
+	cain 2,"*"
+	 jrst doall
+	cain 2,12
+	 jrst doall
+	cain 2,32			;^Z terminates
+	 jrst dohalt
+	bkjfn
+	 error <BKJFN failed>
+	movei	c, =8			; Octal of course!
+	nin				; Could it be you're certain
+	 error	(That is not a valid terminal!)
+	camg	b,maxtty		; Max ttyno
+	 camge b,0
+	  jrst	.-3
+	movem	b, ttyno		; Safe ttyno
+	call terml
+haltst:	skipe multfl
+	 jrst wondr
+dohalt:	haltf
+	jrst go
+
+doall:	movei 15,1
+	movem 15,ttyno
+doall1:	call terml
+	aos 15,ttyno
+	camg 15,maxtty
+	 jrst doall1
+	jrst haltst
+
+terml:	move	a, ttyno		; Finds the i/o speeds of 
+	addi	a, 400000		; Specified tty
+	movei	b, .morsp		; Switch to return speeds
+	mtopr				; The JSYS to do it
+	movem	c, actual		; Now save it in actual (speeds)
+	movem b,remfl			;store remote bit status
+
+	hrroi 1,[asciz/TTY/]
+	psout
+	movei 1,101
+	move 2,ttyno
+	movei 3,10
+	nout
+	 jfcl
+	hrroi 1,[asciz/:  (/]
+	psout
+	move	a, ttyno		; Mumble
+	addi	a, 400000		; Mumble
+dogji:	move	b, [-30,,jobin]		; Stuff for getji
+	setz	c, 0			; First word of table
+	getji				; Do it
+	 error	(Cant get job info!)	; Woops...fatal error
+	move	a, jobin		; Save the number of 
+	movem	a, jobno		; Job in jobno
+	camn a,[-1]
+	 jrst [hrroi 1,[asciz /NO JOB ON TERMINAL)/]
+		psout
+		jrst cont1]
+	hllz a,a
+	camn a,[200000,,0]
+	 jrst [hrroi 1,[asciz /ASSIGNED BY /]
+		psout
+		hrrz 1,jobno
+		jrst dogji]
+	hrroi	a, [asciz/JOB) /]	; Job blurb
+	psout				; Give info on jobno
+	movei	a, .priou		; Prepare primary designator
+	move	b, jobno		; Load jobno to ac2
+	movei	c, =10			; Radix is 10
+	nout				; And output the number
+       	jfcl				; No-op
+cont:	move	1, jobno
+	jumpl 1,cont1			;redundant test in case -2, -3 etc.
+	move 2,jobin+.jitno		;controlling terminal num
+	jumpge 2,dotty			;-1 means detached
+	hrroi 1,[asciz/ (DETACHED)/]
+	psout
+	jrst doprog
+dotty:	camn 2,ttyno
+	 jrst doprog
+	hrroi	1, [asciz/ (TTY) /]	; Now give info on ttyno
+	psout				; Info prompt
+       	movei	a, .priou		; Primary input designator
+	movei	c, =8			; Radix is 8
+	nout				; Output the ttyno
+	 jfcl
+doprog:	hrroi	a, [asciz/ (PROGRAM) /]	; Dummy space 
+	psout				; For simple spacing
+	move	e, jobin+5		; Prog name in sixbit
+	movei	t, 6			; # of charac.
+	call	nex1			; Another character left
+	hrroi	a, [asciz/ (USER) /]	; Give info on username
+	psout			 	; By dirst
+	movei	a, .priou		; Primary output designator
+	move	b, jobin+2		; Dir no for translation
+	dirst				; Do the transl
+	jfcl				; No-op
+	hrroi 1,[asciz/
+	/]
+	psout
+	move 1,ttyno
+	addi 1,.ttdes
+	rfmod
+	ercal [hrroi 1,[asciz/(INACTIVE)/]
+		psout
+		setz 2,
+		ret]
+	trnn 2,1b35			;skip if carrier
+	 jrst cont1
+	hrroi 1,[asciz/(CARRIER)/]
+	psout
+cont1:	hrroi 1,[asciz/ (REMOTE)/]
+	move 2,remfl
+	tlne 2,(1b0)			;skip if not remote
+	psout
+	hrroi 1,[asciz/ (AUTO)/]
+	tlne 2,(1b1)			;skip if not auto
+	psout
+
+	hrroi	1, [asciz/ (INPUT) /]	; Now for the tspeed
+	psout				; Useful for feez features
+	movei	1, .priou		; Primary output designator
+	movei	3, =10			; Radix is 10
+	hlrz	2, actual
+	nout				; Output the input speed
+	 jfcl
+	hrroi	1, [asciz/ (OUTPUT) /]	; Dummy space
+	psout				; For silly spacing
+	movei	1, .priou		; Primary output designator
+	movei	3, =10			; Radix is 10
+	hrrz	2, actual
+	nout				; Output the output speed
+	 jfcl
+	hrroi	1, [asciz/
+/]					; Dummy carriage return
+	psout				; For stupid routine
+	ret
+
+nex1:	movei	4, 0			; Zero extended word
+	lshc	4, 6			; Shift in sixbits
+	addi	4, 40			; Convert to ascii
+	lsh	4, =29			; Shift to left side
+	movem	4, out			; Out to 4 containing byte
+	hrroi	1, out			; And byte out using
+	psout				; Ye old psout
+	sojg	6, nex1			; Another byte to go
+	ret
+
+ 
+errh:	hrro	1, 40
+	esout
+	hrroi	1, [asciz/... error: /]
+	psout
+	movei   1, .priou       	; Primary output designator
+	move	2, [.fhslf,,-1]		; Jfn for this process
+	movei	3, 0			; And zero ac3
+	erstr				; Output the error string
+	jfcl
+	jfcl
+	haltf				; Fatal error,  halt
+
+;; Impure storage
+
+out:	block	20			; For outing jobnm
+dirno:	0				; Directory number of current
+name:	block	50			; Name of luser
+multfl:	0				; flag for multiple tty's
+maxtty:	0				;one less than # of first pty
+ttyno:	0				; Ttynumber of current
+jobno:	0				; Jobnumber of current
+jobnm:	block	20			; For the jobname
+pdlst:	block	17			; Stack, etc.
+jobin:	block	30			; Info from GETJI  ;1 changed from 25
+;1 term:	0				; Term speed ;1 no longer used
+actual:	0				; Actual term speed
+remfl:	0				;flags from reg 2 of .MORSP MTOPR
+buff2:	block	20			; For RDTTY in tell
+tty:	block	15			; Hold tty
+flag:	0				; If tty has no job, flag set
+npdl	__ 17
+pdl:	block	npdl
+p=17
+
+
+; Local modes:
+; Mode: FAIL
+; Comment col:40
+; Comment begin:; 
+; End:
+
+	end 	go

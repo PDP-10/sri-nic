@@ -1,0 +1,747 @@
+;<PAETZOLD.SOURCE>UPHOST.MAC.3, 28-Aug-80 11:13:01, Edit by PAETZOLD
+;document the following known bug...
+;
+;	The following bug has been experienced but unable to reproduce.
+;When using octal and decimal host numbers included (arguments in AC1)
+;many weird things have been been seen in the output.  This bug only
+;occured at DEC-2136 and it does not occur there anymore.  Gut feelings
+;say that it is somehow related to the host table in use at that system.
+;Please let me know if you ever see this bug.
+;<PAETZOLD.WORK>UPHOST.MAC.2, 14-Aug-80 19:59:53, Edit by PAETZOLD
+;add extra crlf in output
+;<PAETZOLD.WORK>UPHOST.MAC.1, 14-Aug-80 19:56:17, Edit by PAETZOLD
+;Genesis
+
+; end of revision history
+
+	title UPHOST - TOPS-20 ARPAnet Status Host Interface
+
+	comment \
+
+	This program will retrieve the ARPAnet status information
+from official ARPAnet status hosts.
+
+	This program serves the same purpose as the old HOSTAT program.
+The main difference between this program and the old HOSTAT program is
+that this one has been written not to fail when the ARPAnet gets larger 
+and larger.  This program requires the extended string instructions of
+the KL10 and KS10.  This program also uses jsys's TENEX doesn't have.
+This program will not work on a non TOPS-20 system.  Apparently
+the TWENEX operating system is a figment of the imagination of
+certain individuals.  Life is tough in the big city.
+
+	This program accepts arguments in AC1 just as HOSTAT.
+
+AC1 Arguments are:
+
+Bit	Description
+-------------------------------------------------------
+
+35	Give decimal host numbers.
+
+34	Give octal host numbers.
+
+33	Don't give host status.
+
+32	Don't give TIP status.
+
+31	Suppress alphabetic order of host names.
+	(Asserting this bit makes the output look the same way
+	 that HOSTAT listed it.)
+
+	This program written by:
+
+		Kevin W. Paetzold
+		Digital Equipment Corporation
+
+\
+
+	subttl  macros, symbols, etc...
+
+	ifndef debug,<debug==0>
+	search monsym,macsym
+	.require sys:macrel.rel
+	.directive flblst
+	ife debug,<sall>
+
+	define sym(a,b),<a=b>
+	define syms(a,b),<a==b>
+	define dsym(a,b),<ifndef a,<a=b>>
+	define dsyms(a,b),<ifndef a,<a==b>>
+
+				; version information
+	dsyms vwho,1		; who last modified
+	dsyms vmajor,1		; major version number
+	dsyms vminor,0		; minor version number
+	dsyms vedit,0		; edit number
+	version==<vwho>b2!<vmajor>b11!<vminor>b17!<vedit>b35
+
+				; arpanet socket information
+	dsyms stsock,17		; socket to icp to
+	dsyms lclskt,770	; local socket (job relative) to use
+
+	opdef jsysr [ercal .jsysr]
+	define noerr,<erjmp .+1>
+
+				; ac names
+	sym f,0			; flags
+	sym t1,1		; temporary
+	sym t2,2
+	sym t3,3
+	sym t4,4
+	sym t5,5
+	sym t6,6
+	sym t7,7
+	sym bp,10		; output buffer pointer
+	sym p1,11		; general purpse acs
+	sym p2,12
+	sym p3,13
+	sym p4,14
+	sym p5,15
+	sym cx,16		; scratch ac for macsym
+	sym p,17		; pdl stack pointer
+
+				; flags
+	syms f%dec,1b35		; do decimal host numbers
+	syms f%oct,1b34		; do octal host numbers
+	syms f%nhst,1b33	; dont do hosts
+	syms f%ntip,1b32	; dont do tips
+	syms f%nalp,1b31	; dont do alphabetical
+
+	subttl io macros
+
+	define type(string),<
+	hrroi t1,[asciz\
+string\]
+	psout>
+
+	define typen(string),<
+	hrroi t1,[asciz\string\]
+	psout>
+
+	define tchar(chr),<
+	movei t1,chr
+	pbout>
+
+	define tnumo(adr,rdx,siz),<
+	movei t1,.priou
+	move t2,adr
+	movx t3,<<siz>b17!<rdx>b35>
+	nout
+	jsysr>
+
+	define btype(string),<
+	move t1,bp
+	hrroi t2,[asciz\
+string\]
+	setzb t3,t4
+	sout
+	jsysr
+	move bp,t1>
+
+	define btypen(string),<
+	move t1,bp
+	hrroi t2,[asciz\string\]
+	setzb t3,t4
+	sout
+	jsysr
+	move bp,t1>
+
+	define bchar(chr),<
+	movei t2,chr
+	idpb t2,bp>
+
+	define bnumo(adr,rdx,siz),<
+	move t1,bp
+	move t2,adr
+	movx t3,<no%lfl!<siz>b17!<rdx>b35>
+	nout
+	jsysr
+	move bp,t1>
+
+	define btypea(adr),<
+	move t1,bp
+	hrro t2,adr
+	setzb t3,t4
+	sout
+	jsysr
+	move bp,t1>
+
+	subttl mainline
+
+evec:	jrst uphost
+	jrst uphost
+	version
+
+uphost:				; and let us begin
+	reset			; you cant go home again
+	move p,[iowd pdlsiz,pdl] ; get pdl pointer
+	move f,t1		; save the flags
+	setz p1,		; zero the index
+uploop:				; this loop looks for a host to talk to
+	move t1,hosts(p1)	; get a host number
+	call doicps		; try to icp to that host
+	skipa			; icp failed!
+	jrst uphst2		; now try to get status
+uphst1:				; here to try the next host
+	skipl hosts+1(p1)	; is there another host to try?
+	aoja p1,uploop		; yes so try it
+	type <%No other hosts to connect to>
+	jrst stopus		; stop
+uphst2:				; here when we have a host that is up
+	call doread		; try to read status from that host
+	skipa			; error on read!
+	jrst uphst3		; success!
+	call doclrs		; close the connections
+	noerr
+	jrst uphst1		; try the next host
+uphst3:				; read was succesfull
+	call doclos		; close the connections
+	noerr
+	hlrz t1,hosts(p1)	; get the timezone
+	call tparse		; parse the status table
+	txnn f,f%nalp		; suppress alpha list?
+	call linkem		; no so get string lengths and link 
+	txne f,f%nalp		; did we suppress alpha list?
+	call lnkfak		; yes so do a fake link
+	move bp,[point 7,buffer] ; get a pointer to the tty buffer
+	call report		; output the host status's
+				; now output the buffer
+	hrroi t1,buffer		; get pointer to the buffer
+	psout			; output the whole thing
+stopus:				; here to stop
+				; somehow garbage gets into input buffer
+	movei t1,.priin		; input side of tty
+	cfibf			; clear input buffer 
+	jsysr
+	move t1,f		; dont mess up flags
+	haltf			; stop
+	jrst uphost		; on continue do it again
+
+	subttl error handling code
+
+typerr:				; routine to type the last error
+	type <Error was >
+	movei t1,.priou
+	movx t2,<.fhslf,,-1>
+	setzb t3,t4
+	erstr
+	noerr
+	noerr
+	ret
+
+.jsysr:				; here on jsys errors
+	movem 17,erracs+17	; save ac 17
+	hrrzi 17,erracs		; get blt ac
+	blt 17,erracs+16	; save acs 0-16
+	move 17,erracs+17	; get ac 17 back
+	hrrz t1,(p)		; get the error pc
+	movem t1,errpc		; and save it
+	type <?JSYS error at user pc >
+	tnumo errpc,10,0		; output the pc
+	call typerr		; type out the error
+	skipn dbugsw		; are we debugging?
+	haltf			; no so stop
+	skipe 770000		; ddt present?
+	jrst 770000		; yes so go there
+	type <%DDT not present>
+	move t1,f		; dont mess up flags
+	haltf			; stop
+	jrst .-1		; no continues
+
+	subttl doicps - routine to do an icp
+
+doicps:				; host index is in t1, call is via pushj
+	stkvar <f4nhst>
+	movem t1,f4nhst		; save the host number
+	type < Attempting connection to >
+	movei t1,.gthns		; host name function
+	movei t2,.priou		; output to tty
+	move t3,f4nhst		; get host number
+	gthst			; output host name
+	jsysr			; handle error
+	typen < ... >		; prompt next output
+	setzm rcvjfn		; zero jfns as flags
+	setzm sndjfn
+	setzm icpjfn
+	move t1,f4nhst		; get host name
+	movei t2,stsock		; get icp socket
+	movei t3,lclskt		; get local socket
+	call netnam		; build network gtjfn string
+	movx t1,<gj%sht>	; short mode gtjfn
+	hrroi t2,socbuf		; pointer to socket buffer
+	gtjfn			; get a jfn on the socket
+	erjmp icpbad
+	movem t1,icpjfn		; save the icp's jfn
+	movx t2,<40b5!of%rd>	; openf flags
+	openf			; open up the icp socket
+	erjmp icpbad
+	move t1,icpjfn		; get the jfn
+	bin			; read in one byte
+	erjmp icpbad		; handle error
+	movem t2,f4nrcv		; save his socket 
+	aoj t2,			; bump by one
+	movem t2,f4nsnd		; save his send socket
+	closf			; close the icp socket
+	erjmp icpbad
+				; no to open data sockets
+	move t1,f4nhst		; get host name
+	move t2,f4nsnd		; get his send socket
+	movei t3,lclskt+2	; get our receive socket
+	call netnam		; build netword gtjfn string
+	movx t1,<gj%sht>
+	hrroi t2,socbuf		; name buffer
+	gtjfn			; get handle on our receive socket
+	erjmp icpbad
+	movem t1,rcvjfn		; and save it
+	movx t2,<10b5!of%rd>	; open socket for reading
+	openf			; attemp to open the socket
+	erjmp icpbad		; handle error
+				; now open the other socket
+	move t1,f4nhst		; get the host
+	move t2,f4nrcv		; get his receive socket
+	movei t3,lclskt+3	; get our send socket
+	call netnam		; build network gtjfn string
+	movx t1,<gj%sht>
+	hrroi t2,socbuf		; get name buffer pointer
+	gtjfn			; get handle on our send socket
+	erjmp icpbad
+	movem t1,sndjfn		; save the sending jfn
+	movx t2,<10b5!of%wr>	; open socket for writing
+	openf			; attempt to open the socket
+	erjmp icpbad
+				; tell user it worked
+	typen <OK>
+	jrst ret2		; icp successfull so return skip
+
+icpbad:				; here on an error during icp
+	typen <Can't because >
+	movei t1,.priou
+	movx t2,<.fhslf,,-1>
+	setzb t3,t4
+	erstr
+	noerr
+	noerr
+	skipe t1,icpjfn		; icp open?
+	closf			; yes so close it
+	noerr
+	skipe t2,rcvjfn		; receive open?
+	closf			; yes so close it
+	noerr
+	skipe t3,sndjfn		; send open?
+	closf			; yes so close it
+	noerr
+	ret			; return to error return
+
+	subttl netnam - routine to build a network gtjfn string
+
+netnam:				; routine to build network gtjfn string
+				; t1/ host number
+				; t2/ foriegn socket number
+				; t3/ local job relative socket number
+	stkvar <phost,pf4n,ploc>
+	movem t1,phost
+	movem t2,pf4n
+	movem t3,ploc
+	hrroi t1,socbuf		; initialize socket string pointer
+	hrroi t2,[asciz/NET:/]	; device name
+	setzb t3,t4
+	sout			; start us off
+	jsysr
+	move t2,ploc		; local socket number
+	movei t3,10		; in base 8
+	nout
+	jsysr
+	movei t2,"."		; get a dot
+	idpb t2,t1		; deposit the byte
+	move t2,phost		; get host number
+	movei t3,10		; in base 8
+	nout
+	jsysr
+	movei t2,"-"		; get a dash
+	idpb t2,t1		; deposit the byte
+	move t2,pf4n		; get foriegn socket
+	movei t3,10		; base 8
+	nout			; append it
+	jsysr
+	movei t2,";"		; get a semicolin
+	idpb t2,t1		; deposit the byte
+	movei t2,"T"		; job relative
+	idpb t2,t1		; deposit the byte
+	setz t2,		; make a null byte
+	idpb t2,t1		; deposit it
+	ret			; return to caller
+
+	subttl doread and doclos/doclrs
+
+doread:				; routine to read the data
+	move t1,rcvjfn		; get handle on receive socket
+	hrroi t2,status		; get pointer to status area
+	movei t3,stsize		; max size of status buffer
+	movei t4,"-"		; stop the sin on a dash
+	sin			; read in most of the data
+	erjmp readrr		; handle error
+	movem t2,stsend		; save the byte pointer
+	bin			; read in one more byte
+	erjmp readrr		; handle error
+	jrst ret2		; return at skip return
+
+readrr:				; here on a read error from ncp
+	type <?Error from NCP while transferring status information>
+	call typerr		; type out the error
+	ret			; just return at non-skip return
+
+				; routine to close data sockets
+doclos:	skipa t4,[0]		; normal entry point
+doclrs:	movx t4,<cz%abt>	; error entry point
+	setzm 1(p)		; zero we are pissed flag
+	move t1,rcvjfn		; get receive socket
+	hll t1,t4		; get special bits
+	closf			; close the socket
+	ercal closrr		; handle error
+	move t1,sndjfn		; get send socket
+	hll t1,t4		; get special bits
+	closf			; close the file
+	ercal closrr		; handle error
+	skipn 1(p)		; were we pissed?
+ret2:	aos (p)			; no so bump the pc
+	ret			; return to user
+
+closrr:				; here on error from closf
+	type <?Error from NCP while closing data socket>
+	call typerr		; type out the error
+	ret			; return to caller
+
+	subttl tparse - routine to parse the status data
+
+tparse:
+				; timezone is in t1
+	stkvar <stsptr,timzon,smonth,sday,syear,shour,smin>
+	setzm stsflg		; initialize statuf present flags
+	move t1,[stsflg,,stsflg+1] ; build the blt ac
+	blt t1,stsflg+stsmax	; zero them all
+	movem t1,timzon		; save the time zone
+	hrroi t1,status		; get pointer to status buffer
+	movei t3,12		; base 10
+	nin			; get the month
+	jsysr
+	soj t2,			; decrement
+	movem t2,smonth
+	nin			; get the day
+	jsysr
+	soj t2,			; decrement
+	movem t2,sday
+	nin			; get the year
+	jsysr
+	movem t2,syear
+	nin			; get the hour
+	jsysr
+	imuli t2,^d3600		; convert to seconds
+	movem t2,shour
+	nin			; get the minute
+	jsysr
+	imuli t2,^d60		; convert to seconds
+	movem t2,smin
+	movem t1,stsptr		; save the pointer
+				; get prepare acs for idcnv
+	move t2,smonth		; get the month
+	hrl t2,syear		; get the year
+	move t3,sday		; get the day
+	hrlzs t3		; put it in correct place
+	move t4,shour		; get the hour
+	add t4,smin		; add the minutes
+	hrl t4,timzon		; get the timezone
+;	txo t4,<ic%dsa>		; daylight savings if needed
+	idcnv			; convert date/time to internal
+	jsysr
+	movem t2,datime		; save the date/time
+				; now read host data
+	setz p2,		; reset index
+	hrroi p3,hasciz		; initialize name pointer ac
+parse2:				; this is the loop
+	move t1,stsptr		; get the pointer back
+	movei t3,12		; base 10
+	nin			; read in host number
+	jsysr
+	jumple t2,parse3	; on zero or -1 we are done
+	movem t2,hnums(p2)	; save the host number
+	nin			; read in status
+	jsysr
+	movem t2,hstats(p2)	; save the status
+	nin			; read in response time
+	jsysr
+	movem t1,stsptr		; save the pointer
+	movei t1,.gthns		; get host name string function
+	move t2,p3		; get destination
+	hrrm p3,hnames(p2)	; save pointer to host name
+	hrli t5,440700		; get pointer left half
+	hllm t5,hnames(p2)	; save the pointer part
+	move t3,hnums(p2)	; get the host number
+	gthst			; get host name and status
+	erjmp [	setz t3,	; get a null byte
+		idpb t3,t2	; deposit it
+		jrst .+1]	; join rest of code
+	ldb t4,[point 6,t4,26]	; get the type code
+	txne f,f%ntip		; are we not doing tips?
+	caie t4,.hstip_<-11>	; we arent doing tips...is this a tip?
+	skipa			; not a tip or we want them
+	jrst parse2		; ignore this host becuase it is a tip
+	txne f,f%nhst		; are we not doing hosts?
+	cain t4,.hstip_<-11>	; we arent doing hosts....is this a host
+	skipa			; we are doing hosts or this is a tip
+	jrst parse2		; dont do this one..it is a host
+	ibp t2			; space over the null from gthst
+	hrroi p3,1(t2)		; get new name pointer
+parse4:
+	move t1,hstats(p2)	; get the status code for this host
+	setom stsflg(t1)	; set the presence flag
+	aoja p2,parse2		; keep going until the end
+parse3:				; here when all hosts parsed
+	soj p2,			; decrement index
+	movem p2,nhosts		; save the number of hosts
+	ret			; return to caller
+
+	subttl various string manipulations
+
+lstrng:				; routine to calculate string length
+				; pointer is in t1..length returned in t2
+	setz t2,		; zero the count
+	movx t4,<ildb t3,t1>	; get the byte
+	movx t5,<skipe t3>	; is the string a null
+	movx t6,<aoja t2,t4>	; no so get next char
+	movx t7,<ret>		; no so return
+	jrst t4			; go to routine in the acs
+
+cstrng:				; routine to compare strings
+				; skip return means string 2 is greater
+				; t1/ string 1 pointer
+				; t2/ string 2 pointer
+	stkvar <str1p,str1l,str2p>
+	movem t1,str1p		; save pointers
+	movem t2,str2p
+	call lstrng		; get length of string 1
+	camle t2,maxlen		; new high for string lengths?
+	movem t2,maxlen		; yes so save it
+	movem t2,str1l		; save it
+	move t1,str2p		; get string 2 pointer
+	call lstrng		; get its length
+	camle t2,maxlen		; new high for string lengths?
+	movem t2,maxlen		; yes so save it
+	move t4,t2		; put it in correct place
+	move t5,str2p		; get its pointer
+	move t1,str1l		; get string one length
+	move t2,str1p		; get string one pointer
+	setzb t3,t6		; zero unwanted acs
+	extend t1,[cmpsge
+		   z
+		   z]
+	aos (p)			; bump return pc
+	ret			; return to caller
+
+	subttl sprint - routine to print the host name
+
+sprint:				; routine to put host name into buffer
+				; hnames index is in p4
+	txnn f,f%dec		; printing decimal?
+	jrst sprin4		; no
+	bnumo hnums(p4),12,3	; output host name
+	bchar "."		; do a decimal point
+	bchar " "		; do a space
+sprin4:
+	txnn f,f%oct		; printing octal?
+	jrst sprin5		; no
+	bnumo hnums(p4),10,3	; output octal host number
+	bchar " "		; do a space
+sprin5:
+	move t1,hnames(p4)	; get string address
+	setz t2,		; reset counter
+	movei t4," "		; get an ascii space
+sprin2:				; this is the loop
+	ildb t3,t1		; get a byte
+	jumpe t3,sprin3		; is it a null?
+	idpb t3,bp		; deposit the byte
+	aoja t2,sprin2		; bump count and do it again
+sprin3:				; here on the first null
+	caml t2,maxlen		; max length?
+	ret			; yes so return
+	idpb t4,bp		; no append a space
+	aoja t2,sprin3		; bump and loop
+
+	subttl linkem - routine to link the host names
+
+linkem:				; routine to build linked list
+	setom hlinks		; init the first link entry
+	move t1,[hlinks,,hlinks+1] ; build the blt ac
+	move t2,nhosts		; get number of hosts
+	blt t1,hlinks(t2)	; init all link entries
+	movei p1,1		; initialize the counter
+	setzm firstl		; initialize the first link
+link2:				; this is the loop
+	call lnkadd		; add to linked list
+	camge p1,nhosts		; are we done?
+	aoja p1,link2		; no so keep looping
+	ret			; yes so return
+
+lnkadd:				; work routine to add entry to linked list
+	move p2,firstl		; get number of initial item
+	move p3,p2		; last link also
+lnkad2:				; loop to scan down list
+	move t1,hnames(p2)	; get pointer
+	move t2,hnames(p1)	; get pointer to newest string
+	call cstrng		; compare the strings
+	jrst lnkher		; old string more than new so add it here
+	move p3,p2		; save old link number
+	skipl p2,hlinks(p2)	; get the new link number
+	jrst lnkad2		; and keep looking
+lnkher:				; here to add the item (may fall through)
+	movem p2,hlinks(p1)	; set our link
+	came p3,firstl		; was this the first link?
+	movem p1,hlinks(p3)	; no... so set its link to us
+	camn p2,firstl		; was this the first link?
+	movem p1,firstl		; yes... so set initial link
+	ret			; done so return
+
+lnkfak:				; routine to do fake link
+	setzm maxlen		; initialize maximum string length
+	setzm firstl		; initialize first link pointer
+	movei p1,1		; initialize index
+lnkfk2:				; loop to dummy links
+	movem p1,hlinks-1(p1)	; set dummy link
+	move t1,hnames-1(p1)	; get a pointer to the host name
+	call lstrng		; calculate string length for maxlen
+	camle t2,maxlen		; is it a new maximum length
+	movem t2,maxlen		; yes so save it
+	camge p1,nhosts		; all hosts done?
+	aoja p1,lnkfk2		; no so keep going
+	setom hlinks(p1)	; flag last host as last link
+	move t1,hnames(p1)	; get name pointer
+	call lstrng		; get its length
+	camle t2,maxlen		; is it a new high
+	movem t2,maxlen		; yes so save it
+	ret			; return to caller
+
+	subttl report - routine to print host status's
+
+report:
+	movei t1,.priou		; tty designator
+	movei t2,.morlw		; return line width
+	mtopr			; get the page width
+	jsysr			; handle any errors
+	move t1,t3		; put it in proper place
+	move t2,maxlen		; get the max length of a name
+	addi t2,2		; compensate for two spaces
+	txne f,f%oct		; print octal?
+	addi t2,4		; yes so compensate
+	txne f,f%dec		; print decimal?
+	addi t2,5		; yes so compensate
+	idiv t1,t2		; divide by max name length
+	movem t1,hstlin		; save hosts per line
+	btype < Host status survey of >
+	move t1,bp
+	move t2,datime
+	setzb t3,t4
+	odtim
+	jsysr
+	move bp,t1
+	btype <>		; extra crlf
+	setz p1,		; initialize the index
+rprt2:				; loop to print status groups
+	hlrz p2,stscod(p1)	; get the group to print
+	skipe stsflg(p2)	; does this group have any members?
+	call rprint		; yes so print the group
+	caige p1,stsmax		; done?
+	aoja p1,rprt2		; no so bump and continue
+	btype <>		; [1] extra crlf
+	ret			; yes so return
+
+rprint:				; routine to print a group
+				; group number is in p2
+	btype < >		; do crlf
+	btypea stscod(p2)	; output the group header
+	bchar ":"		; output a colon
+	btype <>		; extra crlf
+	move p4,firstl		; get the first entry
+rprnt2:				; major loop for new line
+	move p3,hstlin		; get hosts per line
+	btype < >		; crlf
+rprnt3:				; minor loop for a single line
+	came p2,hstats(p4)	; one of our group?
+	jrst rprnt4		; no
+	call sprint		; print the host name
+	btypen <  >		; do two spaces
+	skipge p4,hlinks(p4)	; get the next link
+	jrst rprnt5		; this was the last one
+	sojg p3,rprnt3		; more for ths line?
+	jrst rprnt2		; no so start a new line
+rprnt4:				; here when we didnt print this one
+	skipl p4,hlinks(p4)	; get the next link
+	jrst rprnt3		; if not the end check it out
+rprnt5:				; all done with this group
+	btype <>		; extra crlf
+	ret			; and return to caller
+
+	subttl pure data storage
+
+hosts:				; table of hosts we can talk to
+	5,,106			; mit-dms in eastern time
+	-1			; flag end of list
+	block 10		; room for other host numbers
+
+stscod:				; host status codes
+				; right half contains status indexed by code
+				; left half contains pointer to type of 
+				; status to print index'ed by a parameter
+				; Care should be taken when modifying this
+				; table
+	5,,[asciz/Unknown status code (0)/]	; 0
+	4,,[asciz/Dead (1)/]			; 1
+	3,,[asciz/No NCP (2)/]			; 2
+	2,,[asciz/Not responding (3)/]		; 3
+	1,,[asciz/Refusing (4)/]		; 4
+	7,,[asciz/Logging (5)/]			; 5
+	6,,[asciz/Unknown status code (6)/]	; 6
+	0,,[asciz/Unable to poll (7)/]		; 7
+	stsmax==.-stscod-1
+
+	lit			; make sure literals are in pure area
+
+	subttl impure data storage
+
+dbugsw:	debug			; debug mode switch
+rcvjfn:	z			; receive socket jfn
+sndjfn:	z			; send socket jfn
+icpjfn:	z			; icp socket jfn
+f4nrcv:	z			; his receive socket
+f4nsnd:	z			; his send socket
+stsend:	z			; byte pointer after the string
+firstl:	z			; initail link address
+errpc:	z			; pc of jsys error
+erracs:	block 20		; error ac save block
+datime:	z			; date and time of report
+nhosts:	z			; number of hosts parsed
+maxlen:	z			; maximum string length
+hstlin:	z			; number of hosts per line
+stsflg:	block stsmax+1		; ststus present flags
+
+	define blocks(name,symbol,length),<
+	dsyms symbol,length
+name:	block symbol>
+
+	define blockc(name,symbol,length),<
+	dsyms symbol,length
+name:	block <symbol/5>+1>
+
+	blocks pdl,pdlsiz,100	; stack
+	blockc socbuf,socsiz,200 ; socket name string buffer
+
+	sym buffer,100000	; tty output buffer
+	sym status,140000	; status string
+	sym stsize,<37777*5>	; max size of status buffer
+	sym hnums,200000	; host numbers
+	sym hlinks,210000	; host link and status information
+	sym hnames,220000	; host name string pointers
+	sym hstats,230000	; host status storage
+	sym hasciz,240000	; host names storage
+
+	end <3,,evec>		; thats all folks
+

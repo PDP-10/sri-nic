@@ -1,0 +1,577 @@
+
+
+; CFSSRV.MAC.1 & CFSSRV.KL.1 27-Apr-88 1651	PAGE 1
+
+
+
+LINE 1, PAGE 1
+1)	; *** Edit 7315 to CFSSRV.MAC by LOMARTIRE on 11-Jun-86, for SPR #21144
+LINE 1, PAGE 1
+2)	;STRIPE:<61MONITOR.NEW>CFSSRV.MAC.2, 22-Apr-88 14:42:24, Edit by LARSON
+2)	;150 Install CFCTNF fix from SPR 20-21495 (part of edit 7507).
+2)	; *** Edit 7464 to CFSSRV.MAC by LOMARTIRE on 29-Apr-87, for SPR #21438
+2)	; Rework CFS structure tokens and structure create/mount handling 
+2)	; *** Edit 7445 to CFSSRV.MAC by LOMARTIRE on 13-Apr-87, for SPR #21307
+2)	; Use correct algorithm in CFCNCK to determine an open connection 
+2)	; *** Edit 7348 to CFSSRV.MAC by LOMARTIRE on 1-Aug-86
+2)	; Prevent OPNX9 errors from stale ENQ tokens remaining on system 
+2)	; *** Edit 7330 to CFSSRV.MAC by LOMARTIRE on 27-Jun-86, for SPR #21275
+2)	; Prevent CFSTUC BUGHLTs 
+2)	; *** Edit 7315 to CFSSRV.MAC by LOMARTIRE on 11-Jun-86, for SPR #21144
+
+
+LINE 29, PAGE 21
+1)	CFSRS0:	JN <HSHUGD,HSHKPH,HSHWVT>,(T1),RSKP ;If voting, or forced here, keep it
+1)	   IFN DEBUG,<			;If debugging
+LINE 29, PAGE 21
+2)	CFSRS0:
+2)	;150	JN <HSHUGD,HSHKPH,HSHWVT>,(T1),RSKP ;If voting, or forced here, keep it
+2)		JN <HSHUGD,HSHKPH,HSHWVT,hshtam>,(T1),RSKP ;150 If voting, or forced here, keep it
+2)	   IFN DEBUG,<			;If debugging
+
+
+LINE 42, PAGE 29
+1)		  SKIPN T1,CFSHST(T3)	;Get connect ID to host for this offset
+1)		  IFSKP.		;A valid one did exist
+LINE 42, PAGE 29
+2)	;**;[7445]  Replace 1 line with 2 at CFCNCK:+5		DML	13-Apr-87
+2)		  SKIPE T1,CFSHST(T3)	;[7445] Is there a CID for this host offset?
+2)		  SKIPL CFHSTS(T3)	;[7445] Is it fully active?
+2)		  IFSKP.		;A valid one did exist
+
+
+LINE 22, PAGE 112
+1)	
+1)	CFSSMT::SAVEAC<Q1,Q2,Q3,P1>
+1)		STKVAR <SDBADR,STRNM>
+1)	   IFN CFSSCA,<			;Only if SCA is present
+LINE 22, PAGE 112
+2)	;[7464] 
+2)	;[7464]  Note that this routine is now only called from MNTPS during system
+2)	;[7464]  startup in order to register the PS structure.  All other mounts
+2)	;[7464]  (via MSTR) use CFSSMI to acquire the Structure Tokens.
+2)	
+2)	CFSSMT::SAVEAC<Q1,Q2,Q3,P1>
+2)	;**;[7464]  Replace 1 line at CFSSMT+1			MAT	21-Apr-87       
+
+; CFSSRV.MAC.1 & CFSSRV.KL.1 27-Apr-88 1651	PAGE 2
+
+
+2)		STKVAR <SDBADR,STRNM,SDBOFF>  ;[7464] 
+2)	   IFN CFSSCA,<			;Only if SCA is present
+
+
+LINE 37, PAGE 112
+1)		MOVE T1,SDBUDB(T1)	;Get first unit
+1)		MOVE P1,UDBDSH(T1)	;Get the high-order bits
+1)		TXO P1,STRCTK		;Make it unique!
+1)		MOVE Q1,UDBDSN(T1)	;Get DSN
+1)		;..
+LINE 42, PAGE 112
+2)	;**;[7464]  Replace 4 lines by 5 at CFSSMT+13		MAT	21-Apr-87       
+2)		MOVE T2,SDBUDB(T1)	;[7464] Get first unit
+2)		MOVE P1,UDBDSH(T2)	;[7464] Get the high-order bits
+2)		TXO P1,STRCTK		;[7464] Make it unique!
+2)		MOVE Q1,UDBDSN(T2)	;[7464] Get DSN
+2)		MOVEM T1,SDBOFF		;[7464] Remember SDBUDB offset
+2)		;..
+
+
+LINE 15, PAGE 113
+1)		TLNN Q1,-1		;See if need to swap DSN
+1)		MOVSS Q1		;We do
+1)		CALL CFMDSN		;Now register the DSN
+1)		IFSKP. <RETSKP>		;If made it, done
+1)		MOVEM T2,Q1		;Save denial reason code from CFMDSN
+LINE 15, PAGE 113
+2)	;**;[7464]  Replace 1 line at CFSSMT+29			MAT	21-Apr-87       
+2)	CFSSM1:	TLNN Q1,-1		;[7464] See if need to swap DSN
+2)		MOVSS Q1		;We do
+2)		CALL CFMDSN		;Now register the DSN
+2)	;**;[7464]  Replace 1 line by 17 at CFSSMT+33		MAT	21-Apr-87       
+2)		IFSKP.			;[7464] Ok
+2)		  CAIE Q2,.HTOEX	;[7464] Got it exclusive?
+2)		  IFSKP.		;[7464] If so
+2)		   MOVE T1,SDBADR	;[7464] Get address of SDB
+2)		   SETONE STEXL,(T1)	;[7464] Set exclusive bit
+2)		  ENDIF.		;[7464]
+2)		  MOVE T1,SDBOFF	;[7464] Get SDBUDB offset
+2)		  ADDI T1,1		;[7464] Get next unit
+2)		  HRRZ T2,SDBUDB(T1)	;[7464] UDB address
+2)		  SKIPN T2		;[7464] Was it last?
+2)		  RETSKP		;[7464] Yes all done
+2)		  MOVEM T1,SDBOFF	;[7464] Save SDBUDB offset
+2)		  MOVE P1,UDBDSH(T2)	;[7464] Get high order bits
+2)		  TXO P1,STRCTK		;[7464] Make it unique
+2)		  MOVE Q1,UDBDSN(T2)	;[7464] Get DSN
+2)		  JRST CFSSM1		;[7464] Do it for this unit
+2)		ENDIF.			;[7464]
+2)		MOVEM T2,Q1		;Save denial reason code from CFMDSN
+
+
+; CFSSRV.MAC.1 & CFSSRV.KL.1 27-Apr-88 1651	PAGE 3
+
+
+
+LINE 1, PAGE 114
+1)	^L	SUBTTL	Structure resource manager -- CFMNAM (Register structure name)
+LINE 44, PAGE 113
+2)	;**;[7464]  Add 1 line after CFMNAM:-13			MAT 	21-Apr-87
+2)		ENDSV.			;[7464] 
+2)	^L	SUBTTL	Structure resource manager -- CFMNAM (Register structure name)
+
+
+LINE 30, PAGE 116
+1)		CAIN Q2,.HTOEX		;Got it exclusive?
+1)		IFNSK.			;If so
+1)		 MOVE T1,SDBADR		;Get address of SDB
+1)		 SETONE STEXL,(T1)	;Set exclusive bit
+1)		ENDIF.
+1)	   >	;IFN CFSSCA
+1)		RETSKP			;And done
+1)		ENDSV.
+1)	^L	SUBTTL	Structure resource manager -- CFSSUG (Upgrade or downgrade mount)
+LINE 30, PAGE 115
+2)	;**;[7464]  Remove 5 lines at CFMDSN+17			MAT	21-Apr-87       
+2)	   >	;IFN CFSSCA
+2)		RETSKP			;And done
+2)	;**;[7464]  Remove 1 line at CFMDSN+25			MAT	21-Apr-87       
+2)	^L	SUBTTL	Structure resource manager -- CFSSMI (Acquire structure resource)
+2)	;**;[7464] Add new routine CFSSMI			MAT	21-Apr-87
+2)	;[7464] CFSSMI - Acquire structure resource when creating a new structure.
+2)	;Routines to handle structures. Structure resources control the
+2)	;use of aliases as well as specify if structures are sharable.
+2)	;
+2)	;This routine is called in MSTR whenever a mount is performed to acquire
+2)	;the necessary Structure Tokens.  These consist of 1 Structure Name Token, 
+2)	;and a DSN Token for each unit in the structure.
+2)	;
+2)	;Call with:
+2)	;	T1/ Pointer to Parameter area in Monitor (set by MSTR)
+2)	;	T2/ type of access
+2)	;		0=) shared
+2)	;		<>0=) exclusive
+2)	;	Q3/ Alias
+2)	;Returns:
+2)	;	+1 failed. Can't mount it this way
+2)	;	+2 OK
+2)	;
+2)	;CFSSMI accomplishes the same things as CFSSMT but is called at structure 
+2)	;       creation and we do not have a SDB
+2)	
+2)	CFSSMI::
+2)	   IFE CFSSCA,<RETSKP>
+2)	   IFN CFSSCA,<			;Only if SCA is present
+
+; CFSSRV.MAC.1 & CFSSRV.KL.1 27-Apr-88 1651	PAGE 4
+
+
+2)		SAVEAC<Q1,Q2,Q3,P1>
+2)		STKVAR <UNIADR,AOBPTR,FTIM,BLADR>
+2)		MOVEM T1,BLADR		;Save the parameter  block address
+2)		SETZM FTIM		;First time
+2)		SKIPL MYPOR1		;Are we a dummy?
+2)		SKIPA			;Yes, force exclusive then
+2)		SKIPE T2		;Share or exclusive?
+2)		SKIPA Q2,[.HTOEX]	;Exclusive
+2)		MOVEI Q2,.HTOAD		;Read-share
+2)		MOVEI T2,.MSISU(T1)	;Get address of first unit
+2)		HRRZ T1,.MSIUNU(T1)	;Get number of units
+2)		MOVN T1,T1		;Negate it
+2)		MOVSI T1,(T1)		;Form AOBJN pointer
+2)	CFSSI1: MOVEM T1,AOBPTR		;Save it
+2)		MOVEM T2,UNIADR		;Save adress of unit
+2)		MOVE T3,.MSIUN(T2)	;Get Unit
+2)		DMOVE T1,.MSICH(T2)	;Get Chan ,Kont
+2)		CALL CHKCKU		;(T1,T2,T3/T1)Get UDB address
+2)		 RET			;Erreur, code in T1
+2)		MOVE P1,UDBDSH(T1)	;Get high order bits
+2)		TXO P1,STRCTK		;Make it unique
+2)		MOVE Q1,UDBDSN(T1)	;Get DSN
+2)		SKIPE FTIM		;Is it first time?
+2)		IFSKP.			;Yes
+2)		  SETOM FTIM		;There is only one first time
+2)		  CALL CFMNAM		;First register the name
+2)		  IFNSK.		;Can't
+2)		    CAIN T2,.CDVUC	;Fail due to unmatch serial number?
+2)		    RETBAD(MSTX45)	;Yes, return correct error
+2)		    CALLRET CFMDER	;(T2,Q2) No - analyze error
+2)		  ENDIF.
+2)		ENDIF.
+2)		TLNN Q1,-1		;Do we need to swap SN?
+2)		MOVSS Q1		;Yes
+2)		CALL CFMDSN		;Now register DSN
+2)		IFSKP.			;done
+2)		  MOVE T2,UNIADR	;Get unit address
+2)		  MOVE T1,AOBPTR	;get AOBJN pointer
+2)		  ADDI T2,.MSTNO	;Get next unit address
+2)		  AOBJN T1,CFSSI1	;Go do next unit
+2)		  RETSKP		;All done
+2)		ENDIF.
+2)		MOVEM T2,Q1		;Save denial reason code from CFMDSN
+2)		MOVE T1,BLADR		;Get parameter block address
+2)		CALL CFSSDI		;(T1,Q3/)Undo the mount
+2)		MOVE T2,Q1		;Get denial reason code
+2)		CAIN T2,.CDVUC		;Fail due to unmatch alias name?
+2)		RETBAD(MSTX49)		;Yes, return correct error
+2)		CALLRET CFMDER		;(T2,Q2) No - analyze error
+2)		ENDSV.
+2)	  >	;IFN CFSSCA
+
+; CFSSRV.MAC.1 & CFSSRV.KL.1 27-Apr-88 1651	PAGE 5
+
+
+2)	^L	SUBTTL	Structure resource manager -- CFSSUG (Upgrade or downgrade mount)
+
+
+LINE 15, PAGE 117
+1)		SKIPL MYPOR1		;Are we a real node?
+LINE 15, PAGE 117
+2)	;**;[7464]  Add 1 line at CFSSUG+2			MAT	21-Apr-87       
+2)		STKVAR <SDBOFF>		;[7464] For SDBUDB offset
+2)		SKIPL MYPOR1		;Are we a real node?
+
+
+LINE 21, PAGE 117
+1)		MOVE T1,SDBUDB(T1)	;Get SDB address
+1)		MOVE T2,UDBDSH(T1)	;Get the high-order bits
+1)		MOVE T1,UDBDSN(T1)	;Get DSN
+1)		TLNN T1,-1
+LINE 23, PAGE 117
+2)	;**;[7464]  Replace 3 lines by 4 at CFSSUG+9		MAT	21-Apr-87       
+2)	CFSSU1:	MOVE T2,SDBUDB(T1)	;[7464] Get SDB address
+2)		MOVEM T1,SDBOFF		;[7464] Save SDB offset
+2)		MOVE T1,UDBDSN(T2)	;[7464] Get DSN
+2)		MOVE T2,UDBDSH(T2)	;[7464] Get the high-order bits
+2)		TLNN T1,-1
+
+
+LINE 37, PAGE 117
+1)		JRST CFSRSK		;Yes. Done.
+1)		MOVE Q2,T1		;Save entry
+1)		DMOVE T1,HSHROT(T1)	;Get codes
+1)		MOVE T3,Q1		;Access
+1)		CALL CFSUGA		;Do it
+1)		IFNSK.
+1)		  MOVE Q2,Q1		;Can't upgrade - get desired access
+1)		  CALLRET CFMDER	;(T2,Q2) Return appropriate error
+1)		ENDIF.
+1)		DECR HSHCNT,(Q2)	;Don't need this
+1)	   >	;IFN CFSSCA
+1)		RETSKP			;And done
+1)	^L	SUBTTL	Structure resource manager -- CFMDER (Mount/Dismount error)
+LINE 41, PAGE 117
+2)	;**;[7464]  Replace 1 line at CFSSUG+26			MAT	21-Apr-87       
+2)		IFSKP.			;[7464] No
+2)		  MOVE Q2,T1		;Save entry
+2)	 	  DMOVE T1,HSHROT(T1)	;Get codes
+2)		  MOVE T3,Q1		;Access
+2)		  CALL CFSUGA		;Do it
+2)		  IFNSK.
+2)		    MOVE Q2,Q1		;Can't upgrade - get desired access
+2)		    CALLRET CFMDER	;(T2,Q2) Return appropriate error
+2)		  ENDIF.
+2)	;**;[7464]  Replace 1 line by 10 at CFSSUG+9		MAT	21-Apr-87       
+
+; CFSSRV.MAC.1 & CFSSRV.KL.1 27-Apr-88 1651	PAGE 6
+
+
+2)	       	  DECR HSHCNT,(Q2)	;[7464] Don't need this
+2)		ELSE.			;[7464] Type is the same
+2)		  CFSULK		;[7464] Unlock because CFSUGA does it too
+2)		ENDIF.			;[7464]
+2)		MOVE T1,SDBOFF		;[7464] Get SDBUDB offset
+2)		ADDI T1,1		;[7464] Get next unit
+2)		HRRZ T2,SDBUDB(T1)	;[7464] UDB address
+2)		SKIPN T2		;[7464] Was it last?
+2)		RETSKP			;[7464] Yes, done
+2)		JRST CFSSU1	  	;[7464] Do next unit	
+2)	   >	;IFN CFSSCA
+2)		RETSKP			;And done
+2)	;**;[7464]  Add 1 line after CFMDER:-11			MAT	21-Apr-87
+2)		ENDSV.			;[7464] 
+2)	^L	SUBTTL	Structure resource manager -- CFMDER (Mount/Dismount error)
+
+
+LINE 10, PAGE 118
+1)	CFMDER:	SKIPG T2		;Did we receive an expected error code?
+1)	        JRST CFMDE1		;No - invalid error code
+1)		CAIE T2,.CDOCT		;Fail because it is owned on another system?
+LINE 10, PAGE 118
+2)	;**;[7330]  Replace 2 lines with 4 at CFMDER:		DML	16-Jun-86
+2)	CFMDER:	SKIPN T2		;[7330] Did we receive an expected error code?
+2)	        JRST CFMDE1		;[7330] No - invalid error code
+2)		SKIPG T2		;[7330] Did the mount fail on this system?
+2)		RETBAD(MSTX50)		;[7330] Yes, so say so
+2)		CAIE T2,.CDOCT		;Fail because it is owned on another system?
+
+
+LINE 17, PAGE 118
+1)	CFMDE1: BUG. (HLT,CFSTUC,CFSSRV,SOFT,<CFSSRV - Unexpected error encountered during structure operation>,<<T2,CODE>>,<
+1)	
+1)	Cause:	A structure mount or dismount failed and generated an unexpected or
+1)		illegal error code.  If the error code is -1 then the failure was
+1)		local to this system.  This should not happen for structures.
+1)		Also, there should never be an error code of zero.
+1)	
+1)	Data:	CODE - Bogus  error code
+1)	>)
+1)	^L	SUBTTL	Structure resource manager -- CFSSDM (Release mount resource)
+LINE 20, PAGE 118
+2)	
+2)	;**;[7330]  Change BUGHLT text at CFMDE1:		DML	16-Jun-86
+2)	CFMDE1: BUG. (HLT,CFSTUC,CFSSRV,SOFT,<CFSSRV - Unexpected error encountered during structure operation>,<<T2,CODE>>,<
+2)	
+2)	Cause:	A structure mount or dismount failed and generated an unexpected or
+2)		illegal error code of zero.  This should never happen.
+2)	
+2)	Data:	CODE - Bogus error code
+2)	>)				;[7330]
+
+; CFSSRV.MAC.1 & CFSSRV.KL.1 27-Apr-88 1651	PAGE 7
+
+
+2)	^L	SUBTTL	Structure resource manager -- CFSSDM (Release mount resource)
+
+
+LINE 10, PAGE 119
+1)		SAVEAC <Q1,Q2,Q3,P1>		;Get some regs to work with
+1)		MOVE Q3,T1		;Save STR number
+LINE 10, PAGE 119
+2)		SAVEAC <Q1,Q2,Q3,P1>	;Get some regs to work with
+2)	;**;[7464]  Add 1 line at CFSSDM+4			MAT	21-Apr-87       
+2)		STKVAR <SDBOFF>		;[7464] SDBUDB offset
+2)		MOVE Q3,T1		;Save STR number
+
+
+LINE 15, PAGE 119
+1)		MOVE T1,SDBUDB(T1)	;Get UDB of first unit
+1)		MOVE Q1,UDBDSN(T1)	;Get serial number
+1)		MOVE P1,UDBDSH(T1)	;Get the high-order bits
+1)		TXO P1,STRCTK
+1)		TLNN Q1,-1		;Something in the LH?
+1)		MOVSS Q1		;No
+1)	
+1)	;Now have:
+LINE 17, PAGE 119
+2)	;**;[7464]  Replace 3 lines by 4 at CFSSDM+8		MAT	21-Apr-87       
+2)		MOVE T2,SDBUDB(T1)	;[7464] Get UDB of first unit
+2)		MOVE Q1,UDBDSN(T2)	;[7464] Get serial number
+2)		MOVE P1,UDBDSH(T2)	;[7464] Get the high-order bits
+2)		MOVEM T1,SDBOFF		;[7464] Save SDBUDB Offset
+2)		TXO P1,STRCTK
+2)		TLNN Q1,-1		;Something in the LH?
+2)		MOVSS Q1		;No
+2)	;Now have:
+
+
+LINE 35, PAGE 119
+1)		CALL HSHLOK		;Look it up
+1)		 SKIPA
+1)		CALL CFSRMV		;And remove it
+1)		CALLRET CFSFAL		;And done
+1)	   >	;IFN CFSSCA
+1)	^L	SUBTTL	Structure resource manager -- STRVER (Structure verify)
+LINE 38, PAGE 119
+2)	;**;[7464]  Replace 1 line at CFSSDM+28			MAT	21-Apr-87       
+2)	CFSSD1: CALL HSHLOK		;[7464] (T1,T2/T1,T2)Look it up
+2)		 SKIPA
+2)		CALL CFSRMV		;And remove it
+2)	;**;[7464]  Replace 1 line by 13 at CFSSDM+31		MAT	21-Apr-87       
+2)		MOVE T1,SDBOFF		;[7464] Get SDBUDB offset
+2)		ADDI T1,1		;[7464] Get next unit
+2)		HRRZ T2,SDBUDB(T1)	;[7464] UDB address
+2)		SKIPN T2		;[7464] Was it last ?
+
+; CFSSRV.MAC.1 & CFSSRV.KL.1 27-Apr-88 1651	PAGE 8
+
+
+2)		CALLRET CFSFAL		;[7464] yes All done	
+2)		MOVEM T1,SDBOFF		;[7464] Save SDB offset
+2)		MOVE T1,UDBDSN(T2)	;[7464] Get serial number
+2)		MOVE T2,UDBDSH(T2)	;[7464] Get high order bits
+2)		TXO T2,STRCTK		;[7464] Make it unique
+2)		TLNN T1,-1		;[7464] Something in the LH?
+2)		MOVSS T1		;[7464] No
+2)		JRST CFSSD1		;[7464] Do it for next unit
+2)		ENDSV.			;[7464] 
+2)	  >	;IFN CFSSCA
+2)	^L	SUBTTL	Structure resource manager -- CFSSDI (Release mount resource)
+2)	
+2)	;**;[7464] Add new routine CFSSDI			MAT	21-Apr-87
+2)	;[7464] CFSSDI - Routine to undo the MOUNT entry when we do not have SDB yet 
+2)	;(in case of structure creation)
+2)	;
+2)	;Call with:
+2)	;	T1/ User block address in monitor space (from MSTR)
+2)	;	Q3/ Alias
+2)	;Returns:	+1 always
+2)	
+2)	CFSSDI::
+2)	   IFE CFSSCA,<RET>
+2)	   IFN CFSSCA,<			;Only if SCA is present
+2)		SAVEAC <Q1,Q2,Q3,P1>	;Get some regs to work with
+2)		STKVAR <UNIADR,AOBPTR,FTIM>
+2)		SETZM FTIM		;It is first time
+2)		MOVEI T2,.MSISU(T1)	;Get address of first unit
+2)		HRRZ T1,.MSIUNU(T1)	;Get number of units
+2)		MOVN T1,T1		;Negate it
+2)		MOVSI T1,(T1)		;Form AOBJN pointer
+2)		CFSLOK			;Lock up CFS database
+2)	CFSDI1: MOVEM T1,AOBPTR		;Save it
+2)		MOVEM T2,UNIADR		;Save Unit address
+2)		MOVE T3,.MSIUN(T2)	;Get Unit nb
+2)		DMOVE T1,.MSICH(T2)	;Get Chan,Kont
+2)		CALL CHKCKU		;(T1,T2,T3/T1) Get UDB address
+2)		 RET			;Failed erreur code in T1
+2)		MOVE Q1,UDBDSN(T1)	;Get DSN
+2)		MOVE P1,UDBDSH(T1)	;Get high order bits
+2)		TXO P1,STRCTK		;Make it unique
+2)		TLNN Q1,-1		;Do we have to swap?
+2)		MOVSS Q1		;Yes
+2)		SKIPE FTIM		;Is it first time?
+2)		IFSKP.			;Yes
+2)		  SETOM FTIM		;No more first time
+2)		  MOVE T1,Q3		;Get Alias
+2)		  MOVX T2,STRCTN	;Get proper qualifier
+2)		  CALL HSHLOK		;(T1,T2/T1,T2)Look it up
+2)		  SKIPA			;not there
+2)		  CALL CFSRMV		;(T1/)Remove it
+
+; CFSSRV.MAC.1 & CFSSRV.KL.1 27-Apr-88 1651	PAGE 9
+
+
+2)		ENDIF.
+2)		MOVE T1,Q1		;Get DSN
+2)		MOVE T2,P1		;Get qualifier
+2)		CALL HSHLOK		;(T1,T2/T1,T2)Look it up
+2)		SKIPA			;Not here
+2)		CALL CFSRMV		;(T1/)Remove it
+2)		MOVE T2,UNIADR		;Get address of unit
+2)		MOVE T1,AOBPTR		;Get AOBJN pointer
+2)		ADDI T2,.MSTNO		;Get address of next unit
+2)		AOBJN T1,CFSDI1		;Do it for next unit
+2)		CALLRET CFSFAL		;All done
+2)		ENDSV.
+2)	  >   ;IFN CFSSCA
+2)	^L	SUBTTL	Structure resource manager -- STRVER (Structure verify)
+
+
+LINE 18, PAGE 121
+1)		LOAD Q3,STRX,(T1)
+1)		CALL ENQSET		;Set up args
+1)		 JRST RSKP		;Local. All set
+1)		SAVEQ			;Work regs
+1)		DMOVE Q1,T1
+LINE 18, PAGE 122
+2)	;**;[7348]  Add 2 lines after CFSENQ::+0		DML	1-Aug-86
+2)		STKVAR <OFNENQ>		;[7348]
+2)		MOVEM T1,OFNENQ		;[7348] Save the OFN
+2)		LOAD Q3,STRX,(T1)
+2)		CALL ENQSET		;Set up args
+2)		 JRST RSKP		;Local. All set
+2)	;**;[7348]  Remove 1 line at CFSENQ:+4			DML	1-Aug-86
+2)		DMOVE Q1,T1
+
+
+LINE 42, PAGE 121
+1)		RETSKP			;And done
+1)	   >	;IFNDEF CFSDUM
+LINE 45, PAGE 122
+2)	;**;[7348]  Replace 1 line with 17 at CFSDEQ::-8	DML	1-Aug-86
+2)		CFSLOK			;[7348] Lock the database
+2)		DMOVE T1,Q1		;[7348] Get root and qualifier
+2)		CALL HSHLOK		;[7348] (T1,T2/T1,T2)Find the entry
+2)		 BUG.(HLT,CFEQHF,CFSSRV,SOFT,<ENQ token not found>,,<
+2)	
+2)	Cause:	An ENQ token was just created and one already existed so the block
+2)		which was passed has been released.  Now, we are attempting to find
+2)		the original block and this has failed.
+2)	
+2)	Action: Look in CFS free space to try to find the remains of the original 
+2)		block.  Try to determine how the block could have been released even 
+2)		though this routine acquired it.
+2)	>)				;[7348] Error!
+
+; CFSSRV.MAC.1 & CFSSRV.KL.1 27-Apr-88 1651	PAGE 10
+
+
+2)		MOVE T2,OFNENQ		;[7348] Get the OFN for this ENQ
+2)		MOVEM T2,HSHCOD(T1)	;[7348] Put it in the token
+2)		JRST CFSRSK		;[7348] Unlock database and return success
+2)		ENDSV.			;[7348] End of STKVAR
+2)	   >	;IFNDEF CFSDUM
+
+
+LINE 22, PAGE 128
+1)		SAVEAC <Q1,Q2>		;Save some work registers
+1)		STKVAR <NUDB,OUDB>
+LINE 22, PAGE 129
+2)	;**;[7464]  Replace 1 line at CFRDSN::+4		MAT	21-Apr-87
+2)		SAVEQ			;[7464] Save some work registers
+2)		STKVAR <NUDB,OUDB>
+
+
+LINE 57, PAGE 128
+1)		SAVEAC <Q1,Q2>		;Save some work registers
+1)		STKVAR <NUDB,HDSN,LDSN>
+LINE 58, PAGE 129
+2)	;**;[7464]  Replace 1 line at CFSDSN::+4		MAT	21-Apr-87
+2)		SAVEQ			;[7464] Save some work registers
+2)		STKVAR <NUDB,HDSN,LDSN>
+
+
+LINE 7, PAGE 129
+1)		TLNE T3,-1		;Is this the first unit?
+1)		RET			;No. All done then
+1)	
+1)	;This is the first unit of a structure. Rename the CFS resource.
+1)	
+LINE 7, PAGE 130
+2)	;**;[7464]  Replace 3 lines with 8 at CFDSN1:+3		MAT	21-Apr-87
+2)		SETZM Q3		;[7464] Assume that this is the 1st unit
+2)		TLNE T3,-1		;[7464] Is this the first unit?
+2)		SETOM Q3		;[7464] No. So remember this.
+2)	
+2)	;[7464] Rename the CFS resource.
+2)	;[7464] The DSN Token will be unlinked, changed, and relinked.
+2)	;[7464] The Name Token will have HSHCOD changed if the first unit is the
+2)	;[7464] one which is affected.
+2)	
+
+
+; CFSSRV.MAC.1 & CFSSRV.KL.1 27-Apr-88 1651	PAGE 11
+
+
+
+LINE 75, PAGE 129
+1)		MOVE T1,HSHCOD(T2)	;Get the STRUCTURE name
+1)		MOVX T2,STRCTN		;Look up the name
+1)		CALL HSHLOK		;(T1,T2/T1,T2) Do it
+1)		IFSKP.			;We should have found the resource!!
+1)		 MOVE T2,NUDB		;Get the new UDB
+1)		 MOVE T3,UDBDSN(T2)	;Get the low order DSN
+1)		 MOVE T4,UDBDSH(T2)	;Get the high order DSN
+1)		 TXO T4,STRCTK		;Make high order word unique
+1)		 XOR T3,T4		;Make the hash code
+1)		 MOVEM T3,HSHCOD(T1)	;Stash in the packet as the code
+1)		ENDIF.
+1)		RET			;And done
+LINE 80, PAGE 130
+2)	;**;[7464]  Add 1 line after CFCBRD::-32		MAT	21-Apr-87
+2)		IFE. Q3			;[7464]  If this is first unit, fix Name Token
+2)		  MOVE T1,HSHCOD(T2)	;Get the STRUCTURE name
+2)		  MOVX T2,STRCTN	;Look up the name
+2)		  CALL HSHLOK		;(T1,T2/T1,T2) Do it
+2)		  IFSKP.		;We should have found the resource!!
+2)		   MOVE T2,NUDB		;Get the new UDB
+2)		   MOVE T3,UDBDSN(T2)	;Get the low order DSN
+2)		   MOVE T4,UDBDSH(T2)	;Get the high order DSN
+2)		   TXO T4,STRCTK	;Make high order word unique
+2)		   XOR T3,T4		;Make the hash code
+2)		   MOVEM T3,HSHCOD(T1)	;Stash in the packet as the code
+2)		  ENDIF.
+2)	;**;[7464]  Add 1 line after CFCBRD::-21		MAT	21-Apr-87
+2)		ENDIF.			;[7464] 
+2)		RET			;And done
+

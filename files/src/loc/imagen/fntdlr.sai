@@ -1,0 +1,475 @@
+Entry;
+begin "-- Raster Font File Handler --"
+
+require "genhdr.sai"source!file;
+require "ebgsrc.sai"source!file;
+
+! **********************************************************************
+* This file contains the set of routines needed to handle raster       *
+* format font files.  The basic work area used by this routine is      *
+* comprised of pages 500-577 and 700-727 of the TOPS20 virtual memory  *
+* space.   Of these, 700-727 are reserved for directory pages (page 0  *
+* of a raster format file), while the rest are handled by a simple     *
+* cyclic paging algorithm.  At sometime in the future this rather      *
+* obscure bit of documentation will be improved.		       *
+************************************************************************;
+
+require "RstHdr.sai"source!file;
+		! various definitions;
+
+!	Externals;
+
+External safa integer array glyph[0:MAXF,0:MAXCH,0:3];
+				! Glyph information table, with the
+				  following format:
+						
+				   glyph[f,c,0] = pointer to glyst array,
+				   glyph[f,c,1] = advancewidth in pixels,
+				   glyph[f,c,2] = advancewidth in input
+						  file units,
+				   glyph[f,c,3] = space taken up in glyph
+						  table by this font,
+				
+				  all for character #c in font #f;
+
+External simp procedure MakeExt(reference string name; string ext);
+External simp procedure MakeDir(reference string name; string dir);
+External simp procedure 
+	InMap(integer jfn, filepage, procpage, number);
+					       ! Handles PMAPping of read
+						 read only files;
+
+External simp procedure       Error(string s); ! Error handling;
+
+External simp string procedure GetDir(reference string s);
+	! parses string s for TOPS20 file identifier format and returns
+	  	directory name if one exists;
+External simp procedure BlkTrnsfr(reference integer source; integer count;
+					      reference integer destination);
+	! used to transfer raster masks;
+External simp integer procedure Wordsin(integer chan);
+	! returns length (in words) of the disk file associated with chan;
+
+! 	GetBy, TwoBytes, ThreeBytes, FourBytes; 
+
+
+!	G E T B Y
+!
+! **********************************************************************
+! Retrieves one byte from the specified location.
+! **********************************************************************;
+simp integer procedure GetBy(reference integer pnt); 
+	begin "-- getby --"
+	integer b;
+	printf8(<nl,"In GetBy(), pointer ",cvos(pnt)>)
+	b_ildb(pnt); 
+	printf8(<nl,"In GetBy(), pointer ",cvos(pnt)," value ",b>)
+    	return(b)  
+	end   "-- getby --";
+
+
+! ********** T W O   B Y T E S **********;
+define TwoBytes(pnt) = {((((GetBy(pnt) lsh 8) lor GetBy(pnt)) lsh 20)
+								ash -20)};
+
+! ********** T H R E E   B Y T E S **********;
+define ThreeBytes(pnt) = 
+    {((((((GetBy(pnt) lsh 8) lor GetBy(pnt)) lsh 8) lor GetBy(pnt)) lsh 12)
+								   ash -12)};
+
+! ********** F O U R   B Y T E S  **********;
+define  FourBytes(pnt) = 
+    {((((((((GetBy(pnt) lsh 8) lor GetBy(pnt)) 
+			lsh 8) lor GetBy(pnt)) lsh 8) lor GetBy(pnt)) 
+							     lsh 4) ash -4)};
+
+!	Global variables;
+
+
+! The following arrays are used to implement the virtual memory system for
+  font files.  They are used only in this module and are declared external
+  here because of a bug in SAIL's allocation scheme for static arrays;
+
+External safa integer array
+	       Pages[firstfntpage:lastfntpage],   ! page table for fonts;
+	       DirPage[Firstdirpage:Lastdirpage], ! page table for ffont
+						    directories;
+	       fonts[0:MAXF];			  ! Pointers to page table;
+
+Internal Record!Class  FI(	! Font information record;
+	    string	fname;	! Font's file name;
+	    boolean  openable;	! Indicates font could be opened;
+	    integer firstchar,	! Code of first char in font;
+		     lastchar,	! Code of last  char in font;
+			xline,	! Suggested interline spacing;
+			spwid,	! Suggested interword spacing;
+	      	     dirpoint,	! Pointer to start of directory;
+		        check,	! Checksum, for comparison with Raster file 
+								    Checksum;
+		          jfn;	! JFN for this font file;
+	   real	          mag	! magnification;
+			      );
+
+Internal Record!Pointer (FI) safa array fntinf[0:MAXF];	! Pointer to font
+							information records;
+
+Integer 		        dirpagepointer,	! Points to next available
+						  free page in directory
+							page area;
+				dirpageaddress,	! dirpagepointer*512;
+				fntpagepointer, ! Points to next available
+						  free page in font page
+							area;
+				fntpageaddress;	! fntpagepointer*512;
+
+Internal real 			      wdfactor; ! Input file units per pixel;
+
+
+define HasDir(name) =	{(not getdir(name)=null)};
+
+!	OpenFontFile;
+
+
+!	O P E N   F O N T   F I L E
+!
+! **********************************************************************
+! Selects a proper extension and try to opens the appropriate font file.
+! Returns the corresponding channel number.  As is the convention is 
+! SAIL, a return of -1 indicates failure.  Note that the default
+! directory is searched only if no explicit directory name is given, and
+! that the connected directory is searched before the default in that
+! case.
+! **********************************************************************;
+simp integer procedure OpenFontFile(integer fontno);
+	begin "-- open font file --"
+	integer mag,chan;
+	string ext,s1,s2;
+
+	define gotit = {begin "-- have font --"
+			FI:jfn[fntinf[fontno]]_cvjfn(chan);
+			printf2(<nl,"JFN(",FI:fname[fntinf[fontno]],") = ",
+						  FI:jfn[fntinf[fontno]]>)
+			FI:openable[fntinf[fontno]]_TRUE;
+			return(chan)
+			end    "-- have font --"};
+	
+	printf2(<nl,"In OpenFontFile, font #"&cvs(fontno)&
+				", file ",FI:fname[fntinf[fontno]]>)
+	mag_FI:mag[fntinf[fontno]] * 10 + .5; 
+	ext_"r"&cvs(mag); s1_FI:fname[fntinf[fontno]];
+	MakeExt(s1,ext); ! set up extension;
+	printf3(<nl,"In OpenFontFile, font name ",s1>)
+	chan_openfile(s1,"RE"); ! first attempt;
+	if (chan  -1) then gotit;
+	if not HasDir(FI:fname[fntinf[fontno]]) then ! look in default
+								directory;
+		begin "-- try FONTDIR --"
+		s2_s1; MakeDir(s2,FONTDIR);
+		printf3(<nl,"In OpenFontFile, font name ",s2>)
+		chan_openfile(s2,"RE");
+		if (chan  -1) then gotit
+		end   "-- try FONTDIR --";
+
+	s2_FI:fname[fntinf[fontno]];
+	MakeExt(s2,"r10"); ! still no, try no magnification;
+	chan_openfile(s2,"RE");
+	if (chan  -1) then
+		begin "-- warn --"
+		print(nl,"Warning, font ",s1," replaced by ",s2,".");
+		FI:mag[fntinf[fontno]]_1.0;
+		gotit
+		end   "-- warn --";
+
+	if HasDir(FI:fname[fntinf[fontno]]) then 
+			! failure without looking at default directory; 
+		begin "-- error --"
+		Error("Can't find font file "&s1&" or "&s2&
+				".  Will ignore references to this font.");
+		return(-1)
+		end  "-- error --"
+
+	else ! try default directory again;
+		begin "-- try FONTDIR --"
+		MakeDir(s2,FONTDIR); 
+		chan_openfile(s2,"RE"); 
+		if (chan  -1) then
+			begin "-- warn --"
+			print(nl,"Warning, font ",s1," replaced by ",s2,".");
+			FI:mag[fntinf[fontno]]_1.0;
+			gotit
+			end   "-- warn --"
+		else ! otherwise failure in spite of looking at default 
+								  directory;
+			begin "-- error --"
+			s2_FI:fname[fntinf[fontno]]; MakeExt(s2,"r10");
+			Error("Can't open font "&s1&" or "&s2&" on either"&
+			      " your connected"&cr&lf&"directory or "&
+			      FONTDIR&".  Will ignore references to this font.");
+			return(-1)
+			end   "-- error --"
+		end  "-- try FONTDIR --"
+	end   "-- open font file --";
+
+!	TableSet, Convfctr;
+
+
+!	T A B L E   S E T
+!
+! **********************************************************************
+! Sets up page table for the font pages.
+! **********************************************************************;
+Internal simp procedure TableSet;
+	begin "-- table set --"
+	integer i;
+	integer		fontpointer;	! pointer for setting up paging
+								      space;
+
+	arrclr(pages,Emptymark); arrclr(dirpage, Emptymark);
+	fontpointer_Fonttablearea;
+	for i_0 step 1 until MAXF do if (fntinf[i] neq Null!Record) then
+		begin "-- set up table --"
+		integer chan,pagesize,j;
+
+		printf2(<nl,"TableSet, font ",FI:fname[fntinf[i]],
+							      ", font #",i>)
+		if (chan_OpenFontFile(i)) = -1 then pagesize_1
+		else pagesize_(wordsin(chan)+511) div 512;
+		printf2(<nl,"TableSet, font #",i," has ",pagesize,
+		" pages, channel #",chan,", JFN ",FI:jfn[fntinf[i]]>)
+		fonts[i]_fontpointer;
+		for j_0 step 1 until (pagesize-1) do 
+				memory[fontpointer+j]_Emptymark;
+		fontpointer_fontpointer + pagesize;
+		if chan-1 then rljfn(chan)
+		end   "-- set up table --";
+	for i_Fonttablearea step 1 until fontpointer do memory[i]_NAmark;
+
+	! Initialize the two page pointers;
+	dirpagepointer_Firstdirpage; 
+	Fntpagepointer_Firstfntpage;
+	end   "-- table set --";
+
+
+!	C O N V E R S I O N   F A C T O R
+!
+! **********************************************************************
+! Sets wdfactor to the porper size for fix to rsu conversion.
+! **********************************************************************;
+internal simp procedure Convfctr; wdfactor_wdfactor*Pixel!Fix;
+
+!	LoadFont;
+
+
+!	L O A D   A   F O N T
+!
+! **********************************************************************
+! Loads the directory page of a font.
+! **********************************************************************;
+procedure LoadFont(integer fontno);
+	begin "-- load font --"
+	integer mag,pointer,word;
+		
+	dirpageaddress_dirpagepointer * 512;
+	printf4(<nl,"In LoadFont, font ",FI:fname[fntinf[fontno]],
+				", dirpagepointer ",cvos(dirpagepointer)>)
+
+	! update directory page table, if necessary;
+	if dirpage[dirpagepointer]  emptymark then 
+	       memory[fonts[dirpage[dirpagepointer]]]_NAmark;
+
+	InMap(FI:jfn[fntinf[fontno]],0,dirpagepointer,1);
+	if memory[dirpageaddress]  Rastmark then 
+		begin "-- not raster file --"
+		printf2(<nl,"Font ",FI:fname[fntinf[fontno]],
+			" has first word ",memory[dirpagepointer]>)
+		Error("Font #"&cvs(fontno)&", "&FI:fname[fntinf[fontno]]&
+			".r"&cvs(mag_10*FI:mag[fntinf[fontno]])&
+				", is not a raster format font file.  "
+			&"Will ignore references to this font");
+		memory[dirpageaddress]_Emptymark;
+		FI:openable[fntinf[fontno]]_FALSE;
+		return
+		end   "-- not raster file --";
+
+	word_dirpointword+dirpageaddress;
+	pointer_point(RstBpB,memory[word],dirpointoffset);
+	FI:dirpoint[fntinf[fontno]]_ThreeBytes(pointer);
+	FI:firstchar[fntinf[fontno]]_TwoBytes(pointer);
+	FI:lastchar[fntinf[fontno]]_TwoBytes(pointer); 
+	mag_FourBytes(pointer);
+	if abs(mag - FI:mag[fntinf[fontno]]*1000) > 10 then
+		begin "-- differing magnifications --"
+		print(nl,"Warning: Specified magnification ",
+			FI:mag[fntinf[fontno]]*1000," and raster",
+		      "	file magnification ", mag," do not match for font ",
+			FI:fname[fntinf[fontno]],", font #",fontno,nl,
+		      "Raster file magnification superseding, output may ",
+			"be improperly aligned.");
+		FI:mag[fntinf[fontno]]_mag/1000
+		end   "-- differing magnifications --";
+
+	temp_FourBytes(pointer); ! ignore four bytes;
+	FI:xline[fntinf[fontno]]_Pixel!Fix*FourBytes(pointer);
+	FI:spwid[fntinf[fontno]]_Pixel!Fix*FourBytes(pointer) + .5;
+	memory[fonts[fontno]]_dirpageaddress; 
+	dirpage[dirpagepointer]_fontno;
+	if dirpagepointer = lastdirpage then dirpagepointer_firstdirpage
+	else dirpagepointer_dirpagepointer + 1;
+	printf4(<nl,"In LoadFont, font #",fontno," first character", 
+		FI:firstchar[fntinf[fontno]],", directory pointer ",
+		cvos(FI:dirpoint[fntinf[fontno]]),", magnification ",
+		FI:mag[fntinf[fontno]]>)
+	end   "-- load font --";
+
+!	LoadFntPage
+
+
+!	L O A D   F O N T   P A G E
+!
+! *********************************************************************
+! Loads a page from a font file and updates the appropriate table.
+! *********************************************************************;
+simp procedure LoadFntPage(integer fontno, pageno);
+	begin "-- load font page --"
+	fntpageaddress_fntpagepointer * 512;
+	printf5(<nl,"In LoadFntPage, font ",FI:fname[fntinf[fontno]],
+		  ", font #",fontno,", page number ",cvos(pageno),
+				", fntpagepointer ",cvos(fntpagepointer)>)
+	! update font page table if necessary;
+	if pages[fntpagepointer]  Emptymark then
+	    memory[fonts[(pages[fntpagepointer] lsh -18) land '77]+
+		      (pages[fntpagepointer] land '777777)]_NAmark;
+	InMap(FI:jfn[fntinf[fontno]],pageno,fntpagepointer,1);
+	memory[fonts[fontno]+pageno]_fntpageaddress;
+	pages[fntpagepointer]_(fontno lsh 18) lor pageno;
+	if fntpagepointer = lastfntpage then fntpagepointer_firstfntpage
+	else fntpagepointer_fntpagepointer + 1;
+	printf5(<nl,"In LoadFntPage, font ",FI:fname[fntinf[fontno]],
+		   ", font #",fontno,", page number ",cvos(pageno),
+			", location in memory ",
+				cvos(memory[fonts[fontno]+pageno])>)
+	end   "-- load font page --";
+
+!	GetGlyphInfo;
+
+
+!	G E T   G L Y P H   I N F O R M A T I O N
+!
+!
+! **********************************************************************
+! Gets the directory information on the appropriate glyph and puts it in
+! the glyph array.
+! **********************************************************************;
+internal simp procedure GetGlyphInfo(integer   fontno, 	! Font number;
+					       charno;	! Character code;
+			     reference integer	    x,	! x offset;
+						    y,	! y offset;
+					       height,	! Pixel height;
+					        width,	! Pixel width;
+					        space,	! # of bytes in 
+								raster mask;
+					         pnt);	! Pointer to raster
+								mask data;
+	begin "-- get glyph info --"
+	integer pointer,byte,word,offset,hdr,mask;
+	real advance;
+
+	printf7(<nl,"In GetGlyphInfo, font ",FI:fname[fntinf[fontno]],
+				", font #",fontno," character code ",charno>)
+	if not FI:openable[fntinf[fontno]] then
+		begin "-- ignore --"
+		x_y_space_height_width_0;
+		return
+		end   "-- ignore --";
+
+	! load font directory page if not already in memory;
+	if memory[fonts[fontno]] = NAmark then LoadFont(fontno);
+	if charno<FI:firstchar[fntinf[fontno]]
+			or charno>FI:lastchar[fntinf[fontno]] then
+		begin "-- ignore --"
+		x_y_space_height_width_0;
+		return
+		end   "-- ignore --";
+
+	byte_FI:dirpoint[fntinf[fontno]] +
+				(charno - FI:firstchar[fntinf[fontno]])*15;
+	word_(byte div RstBpW) + memory[fonts[fontno]];
+	offset_byte mod RstBpW;
+	pointer_point(RstBpB,memory[word],offset*RstBpB-1);
+	height_TwoBytes(pointer); width_TwoBytes(pointer);
+	y_TwoBytes(pointer); x_TwoBytes(pointer);
+	advance_FI:mag[fntinf[fontno]]; ! to prevent forming record temporary;
+	advance_advance*FourBytes(pointer);
+	glyph[fontno,charno,1]_Pixel!Fix*advance + .5;
+	glyph[fontno,charno,2]_wdfactor*advance + .5;
+	printf7(<nl,"GetGlyphInfo, rsu error = ",
+	(glyph[fontno,charno,1]*wdfactor/Pixel!Fix) - glyph[fontno,charno,2]>)
+
+! the following routine was removed to prevent undefined glyph error messages
+  in RELEASE 1 and greater IMAGENs;
+!	if height = 0 or width = 0 then ! now must handle the case of a
+					  blank character with nonzero advancewidth;
+!		begin "-- ignore --"
+		x_y_space_height_width_glyph[fontno,charno,1]_0;
+!		return
+		end   "-- ignore --";
+
+	! Now calculate the amount of space needed in the glyph table;
+	space_height*((width+7) div 8);
+	hdr_(if (height lor width lor abs(2*x) lor abs(2*y)) < 256
+							 then 12 else 16);
+   	mask_2*((width + 15) div 16)*height + (if width < 17 then 2 else 0);
+	glyph[fontno,charno,3]_hdr + mask;
+	pnt_ThreeBytes(pointer);
+	printf7(<nl,"In GetGlyphInfo, font ",FI:fname[fntinf[fontno]],
+			", font #",fontno," character code ",charno,
+			", height ",height,", width ",width,", advwdth ",
+			glyph[fontno,charno,1],nl, ", space ",
+				glyph[fontno,charno,3], ", pointer ",pnt>)
+	end   "-- get glyph info --";
+
+!	GetRasterInfo;
+
+
+!	G E T   R A S T E R   C H A R A C T E R
+!
+! **********************************************************************
+! Finds a charcter, and writes its mask into the indicated location;
+! **********************************************************************;
+internal simp procedure GetRasterInfo(integer fontno, rstpointer, space, 
+								destination);
+	begin "-- get raster mask --"
+	boolean finished,firstpointer,lastpointer;
+	
+	finished_FALSE; firstpointer_rstpointer;
+	printf7(<nl,"In GetRasterInfo, font ",FI:fname[fntinf[fontno]],
+			     ",	font #",fontno,", pointer ",rstpointer>)
+
+	while not finished do
+		begin "-- get page --"
+		integer pnt,base,page,pageaddress,count;
+
+		page_firstpointer div RstBpR;
+		pageaddress_firstpointer mod RstBpR;
+		if memory[fonts[fontno] + page] = NAmark then
+						LoadFntPage(fontno,page);
+		base_memory[fonts[fontno] + page] + (pageaddress div RstBpW);
+		pnt_point(RstBpB,memory[base],
+					(pageaddress mod RstBpW)*RstBpB-1);
+
+		if ((firstpointer mod RstBpR) + space)  RstBpR then
+			begin "-- overlaps page boundary --"
+			count_RstBpR - pageaddress;
+			space_space - count;
+			lastpointer_firstpointer + count
+			end   "-- overlaps page boundary --"
+		else 
+			begin "-- simple case --"
+			count_space; finished_TRUE
+			end   "-- simple case --";
+		BlkTrnsfr(pnt,count,destination);
+		firstpointer_lastpointer
+		end   "-- get page --"
+	end "-- get raster mask --";
+
+end "-- Raster Font File Handler --"

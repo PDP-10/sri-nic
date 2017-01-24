@@ -1,0 +1,832 @@
+	title	xxxnet	cross net printing routines
+	subttl	Alan Larson  1 Apr 82
+
+	search	monsym
+
+;accumulators
+f==0				;flags
+t1=1				;jsys & temp
+t2=2
+t3=3
+t4=4
+p1=5				;preserved
+p2=6
+p3=7
+p4=10
+p=17				;stack
+
+
+;Assembly options
+VERBOS=0			;Verbose, to show a lot of stuff on console
+
+
+;error message macros
+	define	error(str)<
+	pushj	p,err
+	cai	0,[asciz |str|]
+	>
+	define	jerror(str)<
+	pushj	p,err
+	cai	4,[asciz |str|]
+	>
+	define	fatal(str)<
+	pushj	p,err
+	cai	10,[asciz |str|]
+	>
+	define	jfatal(str)<
+	pushj	p,err
+	cai	14,[asciz |str|]
+	>
+	subttl	G T J F N
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;								;;
+;;			G T J F N				;;
+;;								;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+ugtjfn::pushj	p,.save		;save caller's accumulators
+
+	pushj	p,getloc	;get location from filename string
+	 jrst	gtjfai		;fail if no such name
+
+	movem	t1,usracs+t1	;save node address as jfn in T1 of caller
+
+	aos	(p)		; and skip
+	popj	p,		;  return
+
+;fail return
+gtjfai:	movei	t1,gjfx16	;no such device
+
+	move	t2,-1(p)	;get return address
+	hrrz	t3,(t2)		;it is an erjmp, get Y, assume it is E
+	hrrm	t3,-1(p)	;save as return address
+	popj	p,		; and go to error return
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;								;;
+;;		Get location from filename in gtjfn.		;;
+;;								;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+getloc:	setz	t4,		;clear sixbit value
+	move	t3,[point 6,t4]	;get pointer to sixbit dst
+
+;check for funny lh of ac2, 0 or -1 becomes 440700
+	tlce	t2,-1		;lh = 0
+	tlcn	t2,-1		; or -1
+	hrli	t2,(point 7)	;yes
+
+getlo1:	ildb	t1,t2		;get a character from string
+	cain	t1,":"		;end of node name?
+	jrst	getlo2		;yes
+	cail	t1,140		;is it lowercase?
+	subi	t1,40		;yes, make uppercase
+	subi	t1,40		;make sixbit
+	tlne	t3,770000	;is there room to store it?
+	idpb	t1,t3		;yes, store it
+	jrst	getlo1		;go do next
+
+getlo2:	movei	t1,nodes	;point to list
+getlo3:	camn	t4,(t1)		;is this it?
+	jrst	getlo4		;yes
+	addi	t1,$len		;no, step to next
+	caige	t1,enodes	;past end of list?
+	jrst	getlo3		;no, keep going
+	popj	p,		;yes, fail return
+; found node, show it
+getlo4:	aos	(p)		;skip
+	popj	p,		; return
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;								;;
+;;		Destination node table.				;;
+;;								;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+$name==0			;sixbit /name/  of node
+$gtjfn==1			;address of gtjfn routine
+$openf==2			;address of openf routine
+$mteof==3			;address of mteof routine
+$closf==4			;address of closf routine
+$sout==5			;address of sout routine
+$hostn==6			;address of arpanet host name string if net
+$len==7				;length of entry
+
+nodes:
+;;	sixbit	/srikl/		;node name
+;;	0			;address of gtjfn routine
+;;	0			;address of openf routine
+;;	0			;address of mteof routine
+;;	0			;address of closf routine
+;;	0			;address of sout routine
+;;	0			;address of host name string
+
+;;	sixbit	/sriai/		;node name
+;;	0			;address of gtjfn routine
+;;	0			;address of openf routine
+;;	0			;address of mteof routine
+;;	0			;address of closf routine
+;;	0			;address of sout routine
+;;	0			;address of host name string
+
+	sixbit	/kl/		;node name
+	0			;address of gtjfn routine
+	0			;address of openf routine
+	tceof			;address of mteof routine
+	tceof			;address of closf routine
+	tcsen			;address of sout routine
+	[asciz /SRI-KL/]	;address of host name string
+
+	sixbit	/aic/		;node name
+	0			;address of gtjfn routine
+	0			;address of openf routine
+	tceof			;address of mteof routine
+	tceof			;address of closf routine
+	tcsen			;address of sout routine
+	[asciz /SRI-AI/]	;address of host name string
+
+	sixbit	/crvax/		;node name
+	0			;address of gtjfn routine
+	0			;address of openf routine
+	tceof			;address of mteof routine
+	tceof			;address of closf routine
+	tcsen			;address of sout routine
+	[asciz /SRI-VAX/]	;address of host name string
+
+	sixbit	/ovax/		;node name
+	0			;address of gtjfn routine
+	0			;address of openf routine
+	tceof			;address of mteof routine
+	tceof			;address of closf routine
+	tcsen			;address of sout routine
+	[asciz /SRI-OVAX/]	;address of host name string
+
+	sixbit	/gizmo/		;node name
+	0			;address of gtjfn routine
+	0			;address of openf routine
+	tceof			;address of mteof routine
+	tceof			;address of closf routine
+	tcsen			;address of sout routine
+	[asciz /SRI-Gizmo/]	;address of host name string
+
+;;	sixbit	/unix/		;node name
+;;	0			;address of gtjfn routine
+;;	opnftp			;address of openf routine
+;;	mtef70			;address of mteof routine
+;;	clos70			;address of closf routine
+;;	sout70			;address of sout routine
+;;	[asciz /SRI-UNIX/]	;address of host name string
+
+	sixbit	/laser/		;node name
+	0			;address of gtjfn routine
+	0			;address of openf routine
+	lsreof			;address of mteof routine
+	lsreof			;address of closf routine
+	lsrout			;address of sout routine
+	[asciz /SRI-LASER/]	;address of host name string
+
+	sixbit	/bldge/		;node name
+	0			;address of gtjfn routine
+	0			;address of openf routine
+	tceof			;address of mteof routine
+	tceof			;address of closf routine
+	tcsen			;address of sout routine
+	[asciz /SRI-NIC/]	;address of host name string
+
+enodes==.			;end of node tables
+	subttl	O P E N F and C L O S F
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;								;;
+;;			O P E N F				;;
+;;								;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+uopenf::pushj	p,.save		;save caller's accumulators
+
+	move	p1,t1		;get jfn (node table entry address)
+
+	skipe	$openf(p1)	;skip if none defined
+	pushj	p,@$openf(p1)	;do destination dependent openf
+
+	aos	(p)		;skip
+	popj	p,		; return
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;								;;
+;;			C L O S F				;;
+;;								;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+uclosf::pushj	p,.save		;save caller's accumulators
+
+	move	p1,t1		;get jfn (node table entry address)
+
+	pushj	p,@$closf(p1)	;do destination dependent close
+
+	aos	(p)		;skip
+	popj	p,		; return
+	subttl	M T O P R
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;								;;
+;;			M T O P R				;;
+;;								;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+umtopr::pushj	p,.save		;save caller's accumulators
+
+	move	p1,t1		;get jfn (node table entry address)
+
+	cain	t2,.morst	;reading status?
+	jrst	umtsts		;yes
+	caie	t2,.moeof	;is this end of listing?
+	jrst	umtret		;no, go around
+	skipe	$mteof(p1)	;can we do this to this destination?
+	pushj	p,@$mteof(p1)	;yes, eof it
+
+umtret:	popj	p,		; and return
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;								;;
+;;		Return status of printer			;;
+;;								;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+umtsts:	movei	p2,(t3)		;address of block word 0
+	jumpe	p2,.+3		;around if 0
+	caig	p2,16		;is it an accumulator
+	addi	p2,usracs	;yes, adjust
+	movei	p3,1(t3)	;address of block word 1
+	jumpe	p3,.+3		;around if 0
+	caig	p3,16		;is it an accumulator
+	addi	p3,usracs	;yes, adjust
+	movei	p4,2(t3)	;address of block word 2
+	jumpe	p4,.+3		;around if 0
+	caig	p4,16		;is it an accumulator
+	addi	p4,usracs	;yes, adjust
+
+	move	t1,(p2)		;get length of block
+	move	t2,[mo%lcp!mo%eof!mo%lvu] ;lower case, all output sent, no vfu
+	cail	t1,2		;is there room for this reply?
+	movem	t2,(p3)		;yes, store it
+	cail	t2,3		;is there room for page counter register
+	setom	(p4)		;yes, say no value defined
+	jrst	umtret		;return
+	subttl	S O U T
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;								;;
+;;			S O U T					;;
+;;								;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+usout::	pushj	p,.save		;save caller's accumulators
+
+	move	p1,t1		;get jfn (node table entry address)
+
+	pushj	p,@$sout(p1)	;do destination dependent sout
+
+	popj	p,		;return
+	subttl	LASER Printer routines.
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;								;;
+;;			Laser printer SOUT			;;
+;;								;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+lsrout:	hlrz	t1,usracs+t2	;get his byte pointer
+	caie	t1,(point 8)	;is it what we expected?
+	FATAL	<Unexpected format byte pointer in LSROUT>
+
+	skipe	tcpjfn		;is output open?
+	jrst	lsrou1		;yes, go around
+	pushj	p,lsropn	;no, open it
+	dmove	t2,usracs+t2	;get byte pointer and length
+	aojn	t3,lsrou1	;check for length of -1, go around if not
+	ildb	t1,t2		;get the byte
+	caie	t1,14		;was it a formfeed?
+	jrst	lsrou1		;no, continue
+	dmovem	t2,usracs+t2	;save modified accumulators back
+	popj	p,		; and return - this was the flushed formfeed
+
+lsrou1:	move	t1,tcpjfn	;get jfn
+	move	t3,usracs+t2	;get byte pointer
+	movm	t4,usracs+t3	;get positive length
+lsrou2:	ildb	t2,t3		;get a byte
+	cain	t2,"S"&37	;is it ^S ?
+	movei	t2,12		;yes, make linefeed (sorry about that)
+	BOUT			;send the byte
+	sojg	t4,lsrou2	;do all bytes
+	dmovem	t3,usracs+t2	;save final byte pointer and length (now 0)
+
+	popj	p,		;all done, return
+
+
+;
+;  Open laser file
+;
+lsropn:	movsi	t1,(gj%sht)	;short gtjfn
+	hrroi	t2,[asciz /tcp:.20004405377-35;connection:active/]
+	gtjfn			;get jfn for it
+	 jrst	[movei t1,^d20000 ;error, wait 20 seconds
+		 disms		;wait
+		 jrst lsropn]	;and try again
+	movem	t1,tcpjfn	;save jfn
+	move	t2,[^d8b5!<.tcmwh>b9!of%wr!of%rd]
+	openf
+	 jrst	[move t1,tcpjfn	;error, get jfn
+		 rljfn		; and release it
+		  trn		;ignore error here
+		 movei t1,^d20000 ;wait 20 seconds
+		 disms		; zzz...
+		 jrst lsropn]	;and try again
+
+	hrroi	t2,[asciz /@Document(language printer,formwidth 132,linesperpage 66)/]
+	setz	t3,		;end on null
+	sout			;send it
+	popj	p,		;return
+
+;
+; close it
+;
+lsreof:	skipn	t1,tcpjfn	;is there a jfn for us
+	popj	p,		;no, strange, but just quit
+	movei	t2,.tcpsh	;push data
+	TCOPR%			;send it
+;BEGIN KLUDGE
+	MOVE	T1,[CR%CAP!CR%ST!CR%ACS!P1]
+	SETZ	T2,
+	MOVE	P1,[MOVE T1,P4]
+	MOVE	P2,[BIN]
+	MOVE	P3,[JRST P1]
+	MOVE	P4,TCPJFN
+	CFORK
+	 TRN
+	MOVE	T4,T1		;SAVE FORK HANDLE
+	MOVEI	T1,^D5000	;WAIT 5 SECONDS FOR IT TO RUN
+	DISMS
+	MOVE	T1,T4		;GET HANDLE
+	KFORK			;KILL THE FORK
+;END KLUDGE
+	move	t1,tcpjfn	;be sure we have jfn
+	CLOSF			;close it
+	 jrst	[move t1,tcpjfn	;failed ...
+		 RLJFN		; so just release it
+		  trn		;ignore errors here
+		 jrst .+1]	;continue
+	setzm	tcpjfn		;say no more
+	popj	p,		;return, all done
+
+	subttl	TCP server routines.
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;								;;
+;;			TCP SOUT				;;
+;;								;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+tcp%pu==1b16			;push flag
+
+tcsen:	skipn	tcpjcn		;is output open?
+	pushj	p,tcopn		;no, open it
+
+	hlrz	t1,usracs+t2	;get his byte pointer
+	caie	t1,(point 8)	;is it what we expected?
+	FATAL	<Unexpected format byte pointer in TCSEN>
+
+;;	movsi	t1,(tcp%pu)	;push flag
+;;	movem	t1,outhdr	;store in TCP buffer header
+	setzm	outhdr		;no flags in buffer header
+	hrrz	t1,usracs+t2	;get address from byte pointer
+	movem	t1,outhdr+1	;store data address in header
+	skipl	t1,usracs+t3	;get length (in bytes)
+	FATAL	<Byte count .ge. 0 in USOUT>
+	movmm	t1,outhdr+2	;save positive count in header
+	setzm	outhdr+3	;no options
+	setzm	outhdr+4	;no special ip info
+;*** KLUDGE *** THE NEXT TWO LINES KLUDGE AROUND A MONITOR BUG
+	MOVSI	T1,(TCP%PU)	;*** KLUDGE *** PUSH BUFFERED DATA
+	IORM	T1,OUTHDR	;*** KLUDGE *** SET THIS IN HEADER
+	move	t1,tcpjcn	;get jcn
+	tlo	t1,(tcp%wt)	;set wait flag for data to be taken from buffer
+	movei	t2,outhdr	;pointer to buffer header
+	movei	t3,^d300	;timeout in 5 minutes
+	setz	t4,		;retransmit parameters (use system default)
+	SEND%			;send the data
+	 jrst	[pushj p,tcperr	;report the error
+		 trne t1,040	;permanent?
+		 haltf		;yes, quit
+		 movei t1,^d30000 ;no, wait 30 seconds
+		 disms		  ; for things to change
+		 jrst tcsen]	  ;  then try it all over
+	movm	t2,usracs+t3	;get positive number of bytes sent
+	addm	t2,usracs+t2	;adjust byte pointer
+	setzm	usracs+t3	;set user count to zero (all data sent)
+	popj	p,		;all done, return
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;								;;
+;;			TCP Error, report it			;;
+;;								;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+tcperr:	push	p,t1		;save error code
+	push	p,t2		; and another ac
+	hrroi	t1,[asciz |TCP error |]
+	esout
+	move	t2,-1(p)	;get error code back
+	hrroi	t1,[asciz |Error|] ;first flag bit
+	trne	t2,200		;was it set?
+	psout			;yes, show it
+	hrroi	t1,[asciz |+Local|] ;second flag bit
+	trnn	t2,100		;was it set?
+	hrroi	t1,[asciz |+Remote|] ;no, say remote instead
+	psout			;show it
+	hrroi	t1,[asciz |+Permanent  |]
+	trnn	t2,040		;was it set?
+	hrroi	t1,[asciz |+Temporary  |]
+	psout			;show it
+	andi	t2,37		;keep just part to show string
+	hrro	t1,terrtb(t2)	;get string pointer
+	psout			;show it
+	hrroi	t1,[byte (7)15,12] ;crlf
+	psout			;send it
+	pop	p,t2		;restore
+	pop	p,t1		; accumulators
+	popj	p,		;return
+
+	define	xx(num,str)<
+   ifn ^d'num+terrtb-.,<printx entrys out of order>
+	[asciz |str|]
+	>
+
+TERRTB:
+xx 0,<No Error.>
+xx 1,<Argument Error in jsys.>
+xx 2,<Unknown TCP error 2.>
+xx 3,<Connection Not Open.>
+xx 4,<Temporarily Out of Resources (JCNs, free storage).>
+xx 5,<Wild foreign host/port only allowed if listening.>
+xx 6,<Connection Already Exists (or use of TCP%JS with OPEN).>
+xx 7,<Connection Error or Rejected (No such TCB either here or there).>
+xx 8,<Unknown TCP error 8.>
+xx 9,<Transmission Timeout.>
+xx 10,<Unknown TCP error 10.>
+xx 11,<Unknown TCP error 11.>
+xx 12,<Connection Closed or Closing.>
+xx 13,<Wild local port is illegal (OPEN).>
+xx 14,<Connection Reset.>
+xx 15,<Bad Buffer Argument.>
+xx 16,<No space right now.>
+xx 17,<Bad Argument to CHANL.>
+xx 18,<Unknown TCP error 18.>
+xx 19,<Unknown TCP error 19.>
+xx 20,<Funny pointer to STAT (wraps around memory, etc).>
+xx 21,<Bad Transfer Size to STAT.>
+xx 22,<Invalid symbolic name given to STAT.>
+xx 23,<Unknown TCP error 23.>
+xx 24,<Unknown TCP error 24.>
+xx 25,<Unknown TCP error 25.>
+xx 26,<Unknown TCP error 26.>
+xx 27,<Unknown TCP error 27.>
+xx 28,<Unknown TCP error 28.>
+xx 29,<Cannot change security level (SCSLV).>
+xx 30,<Only internet fork can run TVTs (OPEN with TCP%VT).>
+xx 31,<TCP Not Available (not on or initialized).>
+   ifn .-terrtb-40,<printx TERRTB is wrong length>
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;								;;
+;;			Open a TCP connection			;;
+;;								;;
+;;	  This routine is called for the first SOUT for		;;
+;;	each job printed.  It is not called by the OPENF	;;
+;;	since that is only when the printer is started.		;;
+;;	(note though, net printers are shutdown when they	;;
+;;	go idle, and are restarted when work appears.)		;;
+;;								;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+tcopn:	time			;get time we started trying to open
+	movem	t1,time0	;save that in case OPEN fails
+tcopn1:	movei	t1,.gthsn	;convert name to number
+	hrro	t2,$hostn(p1)	;get host name string pointer
+	gthst			;get info about host
+	 JFATAL	<GTHST failed>
+
+	setzm	tcpcnb		;clear local host number in conn block
+				; (I don't even know why it is there...)
+	aos	t1,tcpcnb+1	;incr local port number
+	andi	t1,377		;keep 8 bits
+	iori	t1,177000	;put 376 in left byte
+	movem	t1,tcpcnb+1	;store local port number
+	movem	t3,tcpcnb+2	;foreign host internet address
+	movei	t1,200		;port for TCP print server
+	movem	t1,tcpcnb+3	;foreign port
+	setzm	tcpcnb+4	;ip options addr,,tcp options addr
+	setzm	tcpcnb+5	;other random junk
+
+	move	t1,[tcp%wt!tcp%fs!tcp%ps!tcpcnb] ;wait for open, force sync,
+						 ; persistent, address of block
+	movei	t2,^d15		;timeout, seconds
+	setz	t3,		;retransmission parameter word
+	OPEN%			;open the connection
+	 jrst	[pushj p,tcperr	;report problem
+		 hlrz t1,t1	;get jcn from left half
+		 tlo t1,(tcp%js) ;say this is a jcn
+		 ABORT%		;abort it
+		  trn		;ignore errors
+		 TIME		;get time
+		 sub t1,time0	;see how long we have been trying
+		 caige t1,^d3000 ;wait at least
+		 movei t1,^d3000 ; three seconds
+		 caile t1,^d262143 ;wait at most
+		 movei t1,^d262143 ; 4.37 minutes
+		 disms		;wait a while
+		 jrst tcopn1]	; then try again
+	movem	t1,tcpjcn	;save jcn
+   IFN VERBOS,<
+	HRROI	T1,[ASCIZ /LPTXN: OPENED JCN /]
+	PSOUT
+	MOVEI	T1,.PRIOU
+	MOVE	T2,TCPJCN	;GET JCN
+	MOVE	T3,[NO%MAG!^D8]	;OCTAL
+	NOUT
+	 JERROR	<NOUT FAILED!>
+	HRROI	T1,[BYTE (7)15,12]
+	PSOUT
+   >;END IFN VERBOS
+	pushj	p,.bout3	;initalize output buffer pointer and counter
+
+;send initial information
+j=15		;parameters from
+j$rlim==1001	; lptspl and
+.eqjob==11	;  glxlib
+	move	t2,.eqjob(j)	;get job name
+	pushj	p,tcssix	;send sixbit word
+	movei	t2,","		;send a comma after
+	pushj	p,.bout		;send it
+	move	t1,j$rlim(j)	;page limit
+	pushj	p,tcsdec	;send decimal number
+	movei	t2,15		;cr
+	pushj	p,.bout
+	movei	t2,12		;lf
+	pushj	p,.bout
+	pushj	p,.bout2	;force out buffer
+	popj	p,		;return
+
+;
+;  send sixbit word from T2
+;
+tcssix:	push	p,t3		;save t3
+	move	t3,t2		;copy data
+	setz	t2,		;clear dest
+	lshc	t2,6		;get a char
+	addi	t2,40		;convert to ascii
+	pushj	p,.bout		;store it
+	jumpn	t3,.-4		;do all of word
+	pop	p,t3		;restore t3
+	popj	p,		;return
+
+;
+;  send decimal number from T1.  Destroys T1 and T2.
+;
+tcsdec:	idivi	t1,^d10		;divide by radix
+	hrlm	t2,(p)		;store digit
+	caie	t1,0		;done?
+	pushj	p,tcsdec	;no, recurse
+	hlrz	t2,(p)		;get digit value
+	addi	t2,"0"		;make ascii
+;;;	caile	t2,"9"		;if greater than 9	** For hexidecimal
+;;;	addi	t2,"A"-"9"-1	; make into a letter	**  version only
+	;pjrst	.bout		;send character (fall into)
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;								;;
+;;		Write one byte to TCP connection		;;
+;;								;;
+;;	Accepts:						;;
+;;	   T1:	The JCN.  [IGNORED FOR NOW]			;;
+;;	   T2:	The byte (in low order 8 bits).			;;
+;;								;;
+;;	Returns:						;;
+;;	    +1:	Success.					;;
+;;								;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+.bout:	skipg	outbfc		;is there room to store byte
+	pushj	p,.bout2	;no, dump current buffer
+	idpb	t2,outbfp	;store character in buffer
+	sosle	outbfc		;count character, dump if full
+	popj	p,		;return
+
+.bout2:	setzm	outhdr		;set up output buffer header
+	movei	t2,outbuf	;address of buffer
+	movem	t2,outhdr+1	;save in header
+	movei	t2,outbfl*4	;length in octets of output buffer
+	sub	t2,outbfc	;subtract amount that was not filled
+	jumpe	t2,.bout3	;return if none to send
+	movem	t2,outhdr+2	;save in header
+	setzm	outhdr+3	;there are no buffer options
+	setzm	outhdr+4	;there is no IP info (whatever that is...)
+	move	t1,tcpjcn	;get jcn
+	TLO	T1,(TCP%WT)	;wait for data taken from buffer
+;;	tlo	t1,(tcp%pu)	;push the data (??)
+	movsi	t2,(tcp%pu)	;push the data
+	iorm	t2,outhdr	; store in buffer header
+	movei	t2,outhdr	; and buffer header address
+	push	p,t3
+	push	p,t4
+	setzb	t3,t4
+	SEND%
+	 jrst	[pushj p,tcperr	;report the error
+		 trne t1,040	;permanent?
+		 haltf		;yes, quit
+		 movei t1,^d30000 ;no, wait 30 seconds
+		 disms		  ; for things to change
+		 jrst .bout2]	  ;  then try it all over
+	pop	p,t3
+	pop	p,t4
+	skipge	outhdr		;error in header?
+	 FATAL	<header error after good return>
+.bout3:	movei	t2,outbfl*4	;output buffer length
+	movem	t2,outbfc	;save in count
+	move	t2,[point 8,outbuf] ;pointer to data
+	movem	t2,outbfp	;save it
+	popj	p,		;return
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;								;;
+;;			EOF a TCP connection			;;
+;;								;;
+;;	  This routine closes the TCP connection for end	;;
+;;	of job.  It is called by MTEOF or CLOSF.  Normally,	;;
+;;	it will be done by MTEOF.				;;
+;;								;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+tceof:	skipn	t1,tcpjcn	;is there a connection?
+	popj	p,		;no, return
+	tlo	t1,(tcp%wt)	;yes, set wait bit for close
+	CLOSE%			; and close the connection
+	 jrst	[ERROR <CLOSE% failed>
+		 move t1,tcpjcn	;be sure we have jcn
+		 ABORT%		;abort the connection to be sure
+		  ERROR <ABORT% failed>
+		 jrst .+1]	;continue
+   IFN VERBOS,<
+	HRROI	T1,[ASCIZ /LPTXN: CLOSED JCN /]
+	PSOUT
+	MOVEI	T1,.PRIOU
+	MOVE	T2,TCPJCN	;GET JCN
+	MOVE	T3,[NO%MAG!^D8]	;OCTAL
+	NOUT
+	 JERROR	<NOUT FAILED!>
+	HRROI	T1,[BYTE (7)15,12]
+	PSOUT
+   >;END IFN VERBOS
+	setzm	tcpjcn		;no longer have a connection
+	popj	p,		;all done, return
+	subttl	General subroutines
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;								;;
+;;			STRING COPY				;;
+;;	Accepts:						;;
+;;	   T1:	Destination pointer.				;;
+;;	   T2:	Source pointer.					;;
+;;	Returns:						;;
+;;	    +1:	Always.						;;
+;;								;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+strcpy:	tlce	t1,-1		;lh = 0
+	tlcn	t1,-1		; or -1
+	hrli	t1,(point 7)	;yes
+	tlce	t2,-1		;lh = 0
+	tlcn	t2,-1		; or -1
+	hrli	t2,(point 7)	;yes
+	ildb	t3,t2		;get char
+	idpb	t3,t1		;store it
+	jumpn	t3,.-2		;do all
+	add	t1,[7b5]	;adjust so next strcpy will append
+	popj	p,		;return
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;								;;
+;;			Save accumulators			;;
+;;								;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+   repeat 0,<
+.save:	exch	t1,0(p)		;save T1 and get pc
+	adjsp	p,7		;make room for next 7 ac's
+	movem	t1+1,-6(p)	;save T2
+	dmovem	t1+2,-5(p)	;save T3 and T4
+	dmovem	p1,-3(p)	;save P1 and P2
+	dmovem	p3,-1(p)	;save P3 and P4
+	push	p,.+3		;save return address
+	hrli	t1,-10(p)	;set address JRA will reload T1 from.
+	jra	t1,(t1)		;call caller
+	 caia	.		;non skip return, restore routine addr in rh
+	aos	-10(p)		;skip return
+	dmove	p3,-1(p)	;restore P3 and P4
+	dmove	p1,-3(p)	;restore P1 and P2
+	dmove	t3,-5(p)	;restore T3 and T4
+	dmove	t1,-7(p)	;restore T1 and T2
+	adjsp	p,-10		;adjust stack
+	popj	p,		;give skip or non skip return
+   >;end repeat 0
+
+.save:	movem	16,usracs+16	;save last one
+	movei	16,usracs	;save others with blt
+	blt	16,usracs+15	; more quickly
+ 
+	movei	t1,.rest	;restore address
+	exch	t1,(p)		;put it on stack, get continue address
+	push	p,t1		;put continue address on stack
+	move	t1,usracs+t1	;restore t1
+	popj	p,		;"return" to continue routine
+
+.rest:	trna			;here if no skip return
+	aos	(p)		;here if skip return
+	movsi	16,usracs	;set up to reload accumulators with blt
+	blt	16,16		;load them
+	popj	p,		;return
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;								;;
+;;			Error message routines			;;
+;;								;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+err:	push	p,t1		;save ac's
+	push	p,t2
+	push	p,t3
+	push	p,t4
+	move	t4,@-4(p)	;get cai flgs,adr
+	hrro	t1,t4		;get -1,,string address
+	esout			;show error message
+	hrroi	t1,[byte (7)15,12] ;crlf
+	psout			;send it
+
+	tlnn	t4,(1b10)	;jsys error also?
+	jrst	err2		;no
+	movei	t1,.priou	;send to primary output
+	hrloi	t2,.fhslf	;this fork, most recent error
+	setz	t3,		;no size limit
+	erstr			;show error message
+	 jrst	errx1		;undefined error number
+	 jrst	errx2		;string size out of bounds or invalid dest
+err1:	hrroi	t1,[byte (7)15,12] ;crlf
+	psout			;send it
+err2:	tlne	t4,(1b9)	;fatal error?
+	haltf			;yes, halt, continue if continue typed
+	pop	p,t4		;restore ac's
+	pop	p,t3
+	pop	p,t2
+	pop	p,t1
+	popj	p,		;continue
+
+errx2:	hrroi	t1,[asciz |ERSTR: String size out of bounds or illegal dest|]
+	caia
+errx1:	hrroi	t1,[asciz |Unknown error code |]
+	psout
+	movei	t1,.fhslf	;this fork
+	geter			;get error
+	movei	t1,.priou	;send to tty
+	hrrz	t2,t2		;rh only
+	movei	t3,^d8		;in octal
+	nout			;send it
+	 jrst	[hrroi t1,[asciz /(NOUT to print error failed)/]
+		 psout
+		 jrst .+1]
+	jrst	err1		;continue
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;								;;
+;;			Data and stuff...			;;
+;;								;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;
+;  User accumulator save area
+;
+usracs:	block	17		;caller's accumulators 0-16
+
+;
+;  Data for local net print to KL and AIC
+;
+time0:	block	1		;uptime we started trying to open connection
+tcpjcn:	block	1		;tcp transfer job connection number
+tcpcnb:	block	6		;tcp connection block
+outhdr:	block	5		;tcp output buffer header
+outbfp:	block	1		;tcp output byte pointer
+outbfc:	block	1		;tcp output byte counter
+outbfl==10			;tcp output buffer length
+outbuf:	block	outbfl		;tcp output buffer (data)
+
+;
+;  Data for Laser print with tcp
+;
+tcpjfn:	block	1		;tcp jfn
+
+	end

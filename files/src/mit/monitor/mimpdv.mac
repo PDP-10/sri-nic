@@ -1,0 +1,3504 @@
+;3032 Random ISI merge fixes, including better fix to ;3019
+;[MIT-XX]M5:<BERLIN>MIMPDV.MAC.11,  4-Jan-83 09:36:23, Edit by BERLIN
+;3019 IMPFRK shouldn't hog system (ie imp goes down!)
+;     This is a temporary fix - the routines inn question should be fixed
+;     so that the wakeup time is always updated!
+;[MIT-XX]SSY:<BERLIN.M5>MIMPDV.MAC.8,  3-Jan-83 11:17:25, Edit by BERLIN
+;3017 Maybe no NVT's?
+;<BERLIN.M5>MIMPDV.MAC.5, 20-Sep-82 12:08:47, Edit by BERLIN
+;1025 LNKLH0 now INF, not HLT
+;1025 Also MLCF ==> 0
+;[BBNF]<TAPPAN.NEW>MIMPDV.MAC.19, 12-Aug-82 12:59:17, Edit by: TAPPAN
+; re-arrange things at IMICHK to try to prevent running
+; out of buffers if input flood comes in
+; Slow down sending of resets, so the flood of RRP's is
+; slower after a ready line flap
+;<TAPPAN.NEW>MIMPDV.MAC.15,  8-Jul-82 09:46:38, Edit by TAPPAN
+; Fix bug at IMPQOF (Buffer not getting saved in IMPLT3)
+;<TAPPAN.NEW>MIMPDV.MAC.3,  9-Apr-82 13:25:10, Edit by TAPPAN
+; Remove echo testing, to see if it helps keep overhead down.
+;<BBN-4-MONITOR>MIMPDV.MAC.19, 27-Mar-82 15:27:25, Edit by TAPPAN
+; Removed calls to MLCBEG and INTBEG from IMPBEG
+;<TAPPAN.4>MIMPDV.MAC.7,  1-Mar-82 13:30:02, Edit by TAPPAN
+; Conditionalize some stuff in IMPHDR (saves time if MAXLDR = .NBHHL
+;<BBN-4-MONITOR>MIMPDV.MAC.12, 22-Jan-82 17:50:00, Edit by TAPPAN
+; Merge in a few DEC changes to IMPDV
+;<BBN-4-MONITOR>MIMPDV.MAC.10, 22-Oct-81 18:55:02, Edit by TAPPAN
+;100: some changes to simplify multiple protocal NVT's
+;SNARK:<BBN-4-MONITOR>MIMPDV.MAC.9 22-Sep-81 09:45:39, Edit by RBASCH
+; Fix last bug fix (it PUSHed when it should have POPped)
+;<BBN-4-MONITOR>MIMPDV.MAC.8, 17-Sep-81 11:27:33, Edit by TAPPAN
+; Bug fix, T1 getting clobbered in call from IMPKO3
+;<TAPPAN.4>MIMPDV.MAC.3, 22-Jul-81 16:33:34, Edit by TAPPAN
+; Fix clobbered registers in IMPSTA
+; Don't try sending RST's if interface is down.
+;<TAPPAN.4>MIMPDV.MAC.2,  1-Jul-80 15:21:57, Edit by TAPPAN
+; Conversion to Multinet conventions
+; This module now contains Arpa type net specific routines for
+; driving NCP and interfaces to nets that use NCP
+; MNETWK.MAC contains interfaces to the file system and some
+; more general routines
+; MNETDV.MAC contains routines general to all Multinet networks
+;[BBNF]<TCP-BBN-4-MONITOR>IMPDV.MAC.4016,  5-Jun-80 16:37:24, Ed: PLUMMER
+; IMPRBF expects arg in T2
+;[BBNF]<TCP-BBN-4-MONITOR>IMPDV.MAC.4012,  6-May-80 17:05:35, Ed: PLUMMER
+;
+; Many changes....
+;
+;<BBN-3-MONITOR>IMPDV.MAC.1,  4-Aug-78 14:55:40, EDIT BY CLEMENTS
+;<3-CLEMENTS>IMPDV.MAC.25, 30-Jul-78 23:27:24, EDIT BY CLEMENTS
+; Begin conversion for release 3. Extended addressing mods, and
+;  merge of long leader driver with DEC's other release 3 changes.
+
+
+	SEARCH IMPPAR,PROLOG,MNTPAR,INPAR
+	TTITLE	MIMPDV
+
+	ASCIZ	/
+	MIMPDV
+	COPYRIGHT (C) 1980,1981,1982 BOLT BERANEK and NEWMAN INC.
+	/
+
+; Accumulators
+
+DEFAC (IMPUN,Q1)	; SAME AS "UNIT" ELSEWHERE
+
+; Parameters
+
+SIQMAX==10		; Maximum messages allowed on siq
+RFNTMO==^D20000		; RFNM time-out interval (three of these)
+UPROBI==^D600000	; Interval at which to probe every up host
+UPROBT==^D60000		; Time to spend probing every down host
+SIQTM0==^D30000		; Special queue time-out interval
+NEGTM0==^D30000		;100: Negotiation time-out for NVTs
+NINBFS==^D6		; NUMBER OF IMP INPUT BUFFERS TO KEEP READY
+
+
+
+;MAXIMUM NUMBER OF WORDS IN A NET MSG. USED FOR I/O CONTROL AND
+; BUFFER ASSIGNMENT
+
+MAXWPM::EXP 400			; EXACTLY HOLDS WORST CASE 32 BIT MSG
+MAXBPM::^D7987			; MAX DATA BITS PER MESSAGE
+
+; Macros
+
+; Lock imp device lock
+
+DEFINE ILOCK (A)
+<	CALL LCKIDV
+IFB <A>,<0>
+IFNB<A>,<A>
+>
+
+; Unlock imp device lock
+
+DEFINE IUNLK
+<	CALL ULKIDV>
+
+; Call clock switch code
+
+DEFINE	IMSCLK(CLOCK)<
+REPEAT 0,<MOVE T1,[IFIW!CLOCK]
+	CALL IMUCLK>>
+
+; Called by periodic check routine
+; First, type out any errors. Should go in SYSERR, too.
+
+	SWAPCD
+
+CHKIMP::
+	SKIPE IMPGDM		; Any "imp going down" messages?
+	 CALL CHKI7		; Yes, go print it
+	RET			; And return
+
+
+;;; Broadcast imp going down message
+;;; There are two potential weaknesses here right now
+;;; a) only one buffer for storing reason
+;;; b) nowhere to store which imp it is ( though could get that from the NCT)
+;;; These don't seem all that critical since imps don't go down all
+;;; that often, and its unlikely for more than one to go down at once
+;;;
+CHKI7:	STKVAR <<CHKIBF,20>>
+	HRROI T1,CHKIBF		; Buffer on pdl
+	HRROI T2,[ASCIZ /[IMP going down for /]
+	SETZ T3,
+	SOUT
+	LDB T2,[POINT 10,IMPGDM,31]
+	IMULI T2,5		;Number of minutes it will be down
+	MOVEI T3,^D10
+	NOUT
+	 NOP
+	HRROI T2,[ASCIZ / min in /]
+	SETZ T3,
+	SOUT
+	LDB T2,[POINT 4,IMPGDM,21]
+	MOVEI T3,^D10
+	IMULI T2,5		; How long till it happens
+	NOUT
+	 NOP
+	HRROI T2,[ASCIZ / min due to /]
+	SETZ T3,
+	SOUT
+	LDB T2,[POINT 2,IMPGDM,17]	; Get code for reason
+	HRRO T2,[[ASCIZ /Panic]
+/]
+		[ASCIZ /Scheduled Hardware PM]
+/]
+		[ASCIZ /Software Reload]
+/]
+		[ASCIZ /Emergency Restart]
+/]](T2)
+	SOUT
+	HRROI T2,CHKIBF		; Point to the text
+	SETO T1,		; Tell everyone
+	TTMSG
+	SETZM IMPGDM		; Don't say it again
+	RET
+
+
+	RESCD
+REPEAT 0,<		; In order to save space this stuff is 
+			; commented out
+
+;;; Routines to make footprints for debugging
+
+;;; Take imp footprints jsys
+;;; Call:	1	; Jfn of output file
+;;;		2	; Word count (stops at first opportunity past this)
+;;;	3	; B0: Re-init and look at B1,2,3
+;;;		; B1: Report NCP bugs
+;;;		; B2: Report normal NCP events
+;;;		; B3: Report Internet stuff
+
+.DBGIM::MCENT
+	HRRZS T1			; Don't allow byte pointers
+	MOVEI T4,SC%WHL!SC%NWZ
+	TDNN T4,CAPENB
+	 EMRETN (NTWZX1)
+	JUMPG T3,DBGIM0		; Skip init stuff
+	NOSKED
+	SETZM DBGNWD
+	SETZM DBGSP
+	SETZM DBGFAC
+	SETZM DBGERR
+	TLNE T3,(1B1)
+	SETOM DBGERR
+	SETZM DBGNCP
+	TLNE T3,(1B2)
+	SETOM DBGNCP
+IFN INETN,<
+	SETZM DBGINT
+	TLNE T3,(1B3)
+	SETOM DBGINT
+>
+	OKSKED
+	SETZM DBGRP
+	AOS DBGRP		; Point at first word
+DBGIM0:	PUSH P,T2		; Save count on stack
+	PUSH P,T1		; And JFN
+DBGDBL:	SKIPG T3,DBGNWD		; Anything in buffer?
+	 JRST DBGDBW		; No. Wait.
+	MOVEI T4,DBGNBF		; Get size of buffer
+	SUB T4,DBGRP		; Space to end of buffer
+	CAMGE T3,T4
+	 MOVEM T3,T4		; Keep min count of how much to write
+	MOVN T3,T4		; Get neg count of words used
+	MOVE T2,DBGRP		; Get pointer for removing from bfr
+	ADD T2,[POINT 36,DBGBUF] ; Make it point to buffer
+	SOUT			; Write to file
+	MOVN T3,T4		; Get neg of amount written
+	ADDM T3,DBGNWD		; Update number of words used in bfr
+	ADDB T4,DBGRP		;  and removal pointer
+	CAIL T4,DBGNBF		; At end of buffer?
+	 SETZB T4,DBGRP		; Yes, reset removal pointer
+	ADDB T3,-1(P)		; Count words written
+	JUMPG T3,DBGDBL		; Continue if still .gr. 0
+	UMOVEM T3,3		; Else return updated count
+	SUB P,BHC+2		; Clear stack
+	SMRETN			; Skip return
+
+DBGDBW:	MOVEI T1,DBGNWD		; Scheduler test for wait
+	CALL DISG		; Wait for some words
+	MOVE T1,0(P)		; Get JFN back
+	JRST DBGDBL		; Go write them to file
+
+
+; DBGIIM - Stash input irregular msg
+
+DBGIIM:	SKIPN DBGNCP		; Want NCP format messages?
+	 RET			; If not, return.
+	PUSH P,T2		; Yes. SAve an AC
+	MOVEI T2,3		; Three words of leader
+	CALL DBGCKS		; Check for space
+	 JRST DBGXIT		; Not available
+	CALL DBGS2B		; OK, store count and timestamp
+	HRLI T1,-3		; Count three words of leader
+DBGIIL:	MOVE T2,0(T1)		; Get a word from irreg msg buffer
+	CALL DBGS1B		; Put it in debug buffer
+	AOBJN T1,DBGIIL		; Do whole leader
+DBGXIT:	OKSKED
+	POP P,T2
+	RET
+
+DBGINM:	SKIPN DBGNCP		; Want NCP format messages?
+	 RET			; No.
+	PUSH P,T2		; Yes. Save an AC
+	LOAD T2,IHLNK,(T1)	; Link number of this msg
+	SKIPE T2		; Control link?
+	 SKIPA T2,[5]		; No. Assume length 5
+	  LOAD T2,NBBSZ,(T1)	; Yes, Get its length.
+DBGSM:	SOS T2			; One less for buffer header
+	CALL DBGCKS		; Go reserve space
+	 JRST DBGXIT		; Not available
+	PUSH P,T1		; Save buffer address
+	CALL DBGS2B		; Write header and timestamp
+	HRRZS T2		; Get count of words
+	MOVE T1,0(P)		; Point into buffer
+	PUSH P,T2		; Save count on stack
+DBGSLP:	SOSGE 0(P)		; Count the words
+	JRST DBGSL1		; Finished. Quit.
+	MOVE T2,1(T1)		; Get a word from message
+	CALL DBGS1B		; Put it in debug buffer
+	AOJA T1,DBGSLP		; Go do next word
+DBGSL1:	POP P,T2		; Remove count from stack
+	POP P,T1		; Restore caller's T1
+	JRST DBGXIT
+
+DBGOM:	SKIPN DBGNCP		; Want NCP form messages?
+	 RET			; No.
+	PUSH P,T2		; Yes, save caller's AC
+	LOAD T2,IHMTY,(T1)	; What type msg is this?
+	JUMPN T2,[ HRROI T2,2
+		JRST DBGSM]
+	LOAD T2,IHLNK,(T1)	; Which link?
+	JUMPE T2,DBGOM1
+	HRROI T2,5		; Not control link
+	JRST DBGSM
+DBGOM1:	LOAD T2,NBBSZ,(T1)	; Message size
+	HRROS T2		; Set LH to show output side.
+	JRST DBGSM
+
+IFN INETN,<
+DBGIN::	SKIPN DBGINT		; Want Internet messages?
+	 RET			; No.
+	PUSH P,T2		; Yes, save AC2 of caller
+	LOAD T2,NBBSZ,(T1)	; Get msg size
+	HRLI T2,-2		; Flag for Internet
+	JRST DBGSM		; Go store message
+>
+
+; Store header word (in T2) and time stamp
+
+DBGS2B:	CALL DBGS1B		; Store entry header word
+	PUSH P,T2		; Save header
+	EXCH T1,T2		; And save T1
+	GTAD			; Get timestamp
+	EXCH T1,T2		; Restore T1, time to T2
+	CALL DBGS1B		; Stash the timestamp
+	POP P,T2		; Restore header
+	RET
+
+; Store 1 word (in T2) in debug buffer
+
+DBGS1B:	PUSH P,T1		; Preserve T1
+	AOS T1,DBGSP		; Step the Store pointer
+	CAIL T1,DBGNBF		; To the end of buffer?
+	 SETZB T1,DBGSP		; Yes, wrap around
+	MOVEM T2,DBGBUF(T1)	; Store the datum
+	AOS DBGNWD		; Count it
+	POP P,T1		; Restore T1
+	RET
+
+; Check for sufficient space to make new entry
+
+DBGCKS:	SKIPE DBGFAC		; Any intervening failures?
+	 AOJA T2,DBGCK2		; Yes
+DBGCK1:	PUSH P,T1		; Preserve T1
+	NOSKED			; Make sure space stays for caller
+	MOVE T1,DBGNWD		; Check the space available
+	ADDI T1,2(T2)		; Need header space, too
+	CAIG T1,DBGNBF		; Is there this much?
+	 AOSA -1(P)		; Yes, skip return
+	  AOS DBGFAC		; No, log failure.
+	POP P,T1
+DBGCK3:	RET
+
+DBGCK2:	CALL DBGCK1		; Go ahead and do current entry + 1
+	 SOJA T2,DBGCK3		; Did not have space
+	EXCH T2,DBGFAC		; Get count of lost entries
+	HRLI T2,T1		; Indicate type of entry for losses
+	CALL DBGS1B		; Log the losses
+	SOS T2,DBGFAC		; Restore T2
+	SETZM DBGFAC		; Zero counter of losses
+	RET
+>				; End of REPEAT 0, around .DBGIM
+REPEAT 1,<			; These are substitute routines 
+				; to replace the calls 
+DGBOM:				; Output message
+DBGINM:				; Regular message
+DBGIIM:				; Irregular message
+DBGIN::				; Internet
+	RET			; Null routines
+>			;; End of repeat 1 around substitute .DBGIM routines
+
+
+;;; NCP asynchronous process
+;;; Started once, call from RUNDD
+
+IMPBEG::MOVX T1,CR%CAP		; Create a Job 0 fork, with capabilities
+	CFORK
+	 MNTBUG(HLT,IMPCCF,<CAN'T CREATE IMP FORK>)
+	MOVEI T2,IMPBP0
+	MSFRK			; Start fork in monitor
+	RET
+
+;;; Init the fork and some net storage
+
+IMPBP0:	SE1ENT			; Run in section one
+	MCENTR			; And in monitor space
+	MOVEI T1,.FHSLF		; Give us some priority
+	MOVEI T2,1		;  by running in queue 0
+	SPRIW%
+	 ERJMP .+1
+
+	MOVEI T1,101		;KLUDGE TO GET HIGH PRIORITY
+	MOVEM T1,JOBBIT
+	CALL SETSPQ		;NCP RUNS ON SPQ ALWAYS
+	MOVE T1,FORKX		; Remember FORKX
+	MOVEM T1,NCPFRK		; For others to find
+	MOVE T1,[XWD ITFPC,IMPUXI]
+	MOVEM T1,MONBK		; Trap any interrupts
+	MOVE T1,CHNSON		; Trap all these channels
+	MOVEM T1,MONCHN
+	CALL SQINI		; Initialize special Q variables
+	MOVEI T1,NETSUP		; Wait for
+	CALL DISL		; network hardware to be initialized
+	CALL IMPIN0		; Init variables and devices
+REPEAT 0,<			; No clocks presently
+	MOVEI T1,T2
+	MOVEM T1,IMCLST		; Make last clock be dummy (ac 2)
+>				; End of repeat 0
+	JRST	IMPBP1		; JOIN BELOW
+
+
+	.PSECT	RSDAT
+
+CLSNVT::0			; Count of log files to close
+CLSPTR::IOWD	20,CLSSTK	; stack pointer
+CLSSTK:	BLOCK	20		; stack of NVT's to close
+
+	RESCD
+
+IMPBP1:	IMSCLK(IMCIDL)		; Start charging time to imcidl
+	SETZM IMPFLG		; Clear request flag
+REPEAT 1,<
+
+IMPBPC:	SKIPG	CLSNVT		; any log files to close?
+	 JRST	IMPBPD		; no
+
+	NOSKED
+	MOVE	T2,CLSPTR
+	POP	T2,T1		; get a JFN
+	MOVEM	T2,CLSPTR	; restore pointer
+	SOS	CLSNVT		; count down
+
+	OKSKED
+	CLOSF			; close the file
+	 ERJMP	.+1		; ignore error
+	JRST IMPBPC		; loop
+IMPBPD:
+>
+	SKIPE IMINFB		; Garbage buffers to release?
+	CALL IMINRB		; Yes
+	CALL IMICHK		; Do input type processing stuff
+	MOVE T1,LNKNDL		; Deletes in link table
+	CAIL T1,IMPNLK/2	; Time for gc?
+	 CALL IMPGC		; Yes
+	MOVE T1,NETFRE+2	; Get current available buffer space
+	SKIPE TTNOF		; Scan of net ttys requested?
+	CAMG T1,ASNTHR		; and enough space left?
+	 SKIPA			; No, don't scan TTY's
+	  CALL IMPTS		; Yes, Look at TTY's
+	SKIPE IMPNOS		; Need output scan?
+	 CALL IMPOS		; Yes
+	IMSCLK(IMCIDL)		; Back to imcidl for charging
+;;; Falls thru
+
+;;; Falls thru from above
+
+IMPBP2:	MOVE T1,TODCLK
+	CAML T1,IMPTIM		; Time for local checks?
+	 CALL NETCH0		; Yes
+	CAML T1,RFNTIM		; Time for overdue RFNM check?
+	 CALL RFNCHK		; Yes
+	CAML T1,NETTIM		; Time for netwrk checks?
+	 CALL CONNCK		; Yes
+	CAML T1,NEGTIM
+;;; 100: Begin change
+	 JRST [ CALL NEGCHK		; Check incomplete negotiations
+		MOVE T1,TODCLK		;NO.  GET TIME OF DAY
+		ADDI T1,NEGTM0		;ADD TIME OUT QUANITY
+		MOVEM T1,NEGTIM		;SAVE TIME FOR NEXT CHECK
+		JRST .+1]
+;;;100: end change
+	MOVE T1,TODCLK		; Get clock back
+	CAML T1,SIQNXT		; Any messages due?
+	 CALL SIQCHK		; Returns in T1 TODCLK of next msg due
+	MOVEM T1,SIQNXT		; Save 
+	CAMLE T1,IMPTIM
+	MOVE T1,IMPTIM		; Compute min clocks as
+	CAMLE T1,NETTIM		; Next time to wakeup
+	MOVE T1,NETTIM
+	CAMLE T1,RFNTIM
+	MOVE T1,RFNTIM
+	CAMLE T1,NEGTIM
+	 MOVE T1,NEGTIM
+	move t2,todclk		;3019 Get 'now'
+	camge t2,t1		;3019 next wakeup in the future?
+	IFSKP.
+	 addi t2,^d100		;3019 No, make it be
+	 move t1,t2		;3019 later than now
+	ENDIF.
+	MOVEM T1,IBPTIM		; Save time to dismiss until
+	MOVEI T1,IMPBPT		; Address of NCPFRK's default wait rtn
+	JSP T4,IMPBPT		; Anything to activate us?
+	 MDISMS			; No, dismiss until something to do
+	JRST IMPBP1		; And loop
+
+;SCHEDULER ACTIVATION TEST FOR NCP FORK
+
+IMPBPT:	SKIPE IMPFLG		; Flag set?
+	JRST 1(T4)		; Yes, wakeup
+	MOVE T2,TODCLK		; Check alarm clock
+	CAML T2,IBPTIM
+	JRST 1(T4)		; Wake due to time
+	SKIPGE IDVLCK		; Lock clear and out scan needed?
+	SKIPG IMPNOS
+	JRST 0(T4)		; No, keep waiting
+	JRST 1(T4)		; Yes, wakeup
+
+IMPBP3:	MOVE T1,TODCLK
+	CAML T1,NETTIM		; Time to check background stuff?
+	 CALL CONNCK		; Continue calling CONNCK if net down
+	MOVEI T1,^D10000
+	DISMS			; Wait 10 sec
+	JRST IMPBP1		; And try again
+
+;;; Unexpected interrupt
+
+IMPUXI:	MNTBUG(INF,IMPUX0,<IMP JB0 FORK - UNEXPECTED INTERRUPT>)
+	SE1ENT			; Make sure in section one
+	MCENTR
+	JRST IMPBP1		; Recover processing
+
+;;;
+;;; IMICHK - Input processing, maintaining routines, called from IMPBP1
+;;; and occaisionally from CHKR to keep things moving
+;;;
+IMICHK::
+	SKIPE IMP8XC		; Irreg msgs for processing?
+	 CALL IMP8XM		; Yes
+;;; Fall through
+;;; IMICK0 - Process all waiting input buffers
+IMICK0:	SKIPN IMPIBO		; Input buffers ready?
+	 JRST IMICK1
+	CALL IMIP1		; Yes, process 1
+	JRST IMICK0		; and loop until no more
+
+IMICK1:	SKIPE IMPNCL		; Control msgs for processing?
+	 CALL IMPCN0		; Yes
+	CALL IMPGIB		; Get input buffers if needed
+	CALLRET IMPIST		; Start input if needed
+
+
+;;; Update imp clocks
+
+REPEAT 0,<
+IMUCLK:	PUSH P,T1		; Save new clock cell
+	SUBI T1,IMCIDL		; Make into table index
+	AOS IMNIDL(T1)		; Count entries
+	CALL GETFRT		; GET FORK RUNTIME IN 1, IN HP UNITS
+	SUB T1,IMCCLK		; Time since last measurement
+	ADDM T1,IMCCLK		; Update to be time of this measurement
+	ADDM T1,@IMCLST		; Charge to current clock
+	POP P,IMCLST		; Set to new clock
+	RET
+>
+; Set idvlck
+
+LCKIDV:	NOINT
+	CSKED
+	LOCK IDVLCK,<JRST LCKID1>
+	MOVE CX,0(P)		; Get PC
+	HRL CX,FORKX		; And fork number
+	MOVEM CX,IDVLLK		; Save away
+	RETSKP			; Successfully locked.
+
+;;; Here if failed to lock on first try
+
+LCKID1:	ECSKED
+	OKINT
+	SKIPE @0(P)		; Wait wanted?
+	 RET
+	PUSH P,T1
+	MOVEI T1,IDVTST		; Want to wait. Set test for sched
+	MDISMS
+	POP P,T1
+	JRST LCKIDV		; Go try to lock it again
+
+;;; Unlock idvlck
+
+ULKIDV:	UNLOCK IDVLCK
+	ECSKED
+	OKINT
+	RET
+
+;;; Here's the resident scheduler test
+
+IDVTST:	SKIPL IDVLCK		; Is the lock still set?
+	 JRST 0(T4)		; Yes, keep waiting
+	JRST 1(T4)		; No, try to grab it again
+
+;;; Release buffers left by pi routines
+
+IMINRB:	IMSCLK(IMCNRB)		; Charge time to releasing buffers
+IMINRF:	SETZ T4,
+	EXCH T4,IMINFB		; Get all garbage buffers
+IMINR1:	JUMPE T4,R		; Quit when all released
+	SETSEC T4,ANBSEC	; In the right section
+	MOVE T2,T4		; Copy address
+	HLRZ T4,0(T4)		; Follow down any chain
+	CALL RLNTBF		; Release one
+	JRST IMINR1		; See if any more on chain
+
+;;; Get one buffer for input and lock it in core
+
+IMPGIB:	SKIPG T2,IMPNFI		; Are there enough buffers now?
+	 SETOM NOIBFS		; Flag that count hit zero
+	CAML T2,IMPNIB		; Or do we want more yet?
+	 RET
+	MOVE T2,MAXWPM		; For max input msg
+	CALL ASNTBI		; Assign from pool
+	 JRST IMPB03		; None left
+	MOVE T2,T1		; Got one. Address into T2
+	CALL IMPLKB		; Lock buffer
+	PIOFF
+	EXCH T2,IMPFRI		; Put bfr on input free list
+	HRLM T2,0(T1)		; Put old top of list in new buffer
+	AOS IMPNFI		; Count the free buffers
+	PION
+	JRST IMPGIB		; See if we need more
+
+
+;;; Scan net tty lines
+
+IMPTS:	IMSCLK(IMCTS)		; Charge to IMCTS
+	SETZM TTNOF		; Indicate this scan has been done
+	MOVE P1,NVTPTR		; Count thru NVT lines
+IMPTS1:	HRRZ T2,P1		; Get terminal number
+	jumpe t2,r		;3017 No NVT's?
+	CALL LCKTTY		; Get address of dynamic data for it
+	 JUMPLE T2,IMPTS2	; If non-standard blk, check for output
+	PUSH P,T2		; Save address of dynamic data
+	MOVE T1,TTFLG1(T2)	; Get flags for the line
+	TXNN T1,TT%SAL		; TTMSG output for this line?
+	CALL TTSOBE		; Any output?
+	 CALL NETTCS		; Yes
+	POP P,T2		; Get back addr of dynamic data
+IMPTS2:	CALL ULKTTY		; Unlock TTY data base
+	AOBJN P1,IMPTS1
+	SKIPN T2,ITMSTM		; Any TTMSG's out?
+	RET			; Done if not.
+	CAMLE T2,TODCLK		; Yes, time to flush yet?
+	RET			; No, return.
+	NOSKED			; Prevent anyone from changing data
+	CALL TMSNTR		; Flush all TTMSG's to NVT's
+	OKSKED
+	SETZM ITMSTM		; Clear timer
+	RET
+
+;;; Scan all connections for output possible
+;;; Called by NCPFRK
+
+IMPOS:	IMSCLK(IMCOS)		; Charge to imcos
+	HRREI Q2,-IMPNLK	; Get counter
+	PUTSEC Q3,ANBSEC	; Point Q3 into right section
+	SETZM IMPNOS		; Cancel request for scan
+IMPOS2:	HRRZ T2,IMPLT1(Q3)	; Get state of link
+	TXNE T2,L1%SND		; Output connection has send bit on
+	 TXNE T2,L1%FRE		; And is not free
+	  TRNA			; No
+	   JRST IMPOS3		; Check it
+IMPOS1:	AOS Q3			; Try another
+	AOJGE Q2,R		; Return when done
+	JRST IMPOS2		; loop through all
+
+IMPOS3:	ILOCK(<JRST [AOS IMPNOS	; Try again later
+		RET]>)		; Return if can't set lock
+	MOVE T1,Q3		; GET LT INDEX INTO T1
+	CALL IMPKO1		; Check and send if possible
+	JRST IMPOS1		; See if any more to do
+
+; Distribute incoming buffers to proper queues
+
+IMIP1:	IMSCLK(IMCP1)		; Charge to IMCP1
+	MOVE T2,IMPIBO		; Try to get next buffer
+	JUMPE T2,R		; None left
+	PIOFF			; Protect list for a moment
+	HLRZ T3,0(T2)		; Get next buffer in chain
+	JUMPN T3,IMIP1A
+	SETZM IMPIBI		; There are no more
+	SKIPA			; Don't set section number
+IMIP1A:	SETSEC T3,ANBSEC	; Put it in right section
+	MOVEM T3,IMPIBO		; Update removal pointer
+	PION
+	PUSH P,T2		; Save bfr address
+	MOVE T1,T2		; Copy address
+	CALL DBGINM		; Save things for debugging
+	NOSKED
+	LOAD T2,NBBSZ,(T2)	; Check size field for an address
+	CAMLE T2,MAXWPM		; MAKE SURE ITS NOT ON FREELIST
+	 JSP CX,IMPAFB		; bughlt if so
+	MOVE T2,0(P)		; Restore address of buffer
+	CALL MULKSP		; Unlock head
+	SETZRO NBQUE,(T2)	; Clear fwd pointer
+	LOAD T3,IHHST,(T2)	; Check for high-numbered addresses
+	CAIL T3,FKHOST		; Is it a fake host?
+	 JRST IMIPSQ		; Yes. Only on special queues.
+	LOAD T3,IHADR,(T2)	; Get full address
+	LOAD T1,IHNET,(T2)	; Net part of address
+	LSH T1,^D24		; Shift over
+	IOR T1,T3		; Merge them together for full address
+	LOAD T3,IHLNK,(T2)	; Tack on the link field
+	CAILE T3,LLINK		; Normal link?
+	 JRST IMIPSQ		; No, dispatch to special Q
+	OKSKED
+;;; Fall thru for normal NCP traffic
+
+;;; Falls thru. Here with normal NCP traffic
+IMIP1N:	ILOCK
+	MOVE T2,T3		; Link to AC2 for LNKLUK
+	CALL LNKLUK		; See if connection exists
+	 JRST [	TXNE T3,L1%LNK	; Doesn't. Control link?
+		 JRST IMIBB	; No. Error, no such link.
+		HRLI T3,^D8	; Create connection, byte size is 8
+		CALL IMPOP1
+		HRROS IMPLT1(T1) ; Make unit -1, showing control link
+		MOVEI T3,377777
+		HRRM T3,IMPLT4(T1) ; Set infinite msg alloc
+		AOS IMPNCL	; Count control connections
+		JRST .+1]
+	POP P,T2		; Get back this buffer addr
+	HRRZ T3,IMPLT2(T1)	; Add to connection's chain
+	HRRM T2,IMPLT2(T1)
+	JUMPE T3,[HRLM T2,IMPLT3(T1) ; No old buffer, set removal ptr
+		JRST IMIP1B]	; No queue to update
+	SETSEC T3,ANBSEC	; Set section number for buffers
+	HRLM T2,0(T3)		; Put msg on Q for connection
+IMIP1B:	HLRE IMPUN,IMPLT1(T1)
+	IUNLK
+	JUMPL IMPUN,R		; See if nvt connection. Not if link 0
+	SETSEC IMPUN,ANBSEC	; In proper section
+	HRRZ T2,NETBUF(IMPUN)	; Get NVT number
+	CALL NVTCHK		; Is it an NVT?
+	 RET			; Isn't
+REPEAT 0,<			; As long as we aren't keeping clocks
+	PUSH P,T2		; Save addr of dynamic data
+	PUSH P,T1		; And LT index
+	IMSCLK(IMCNVI)		; Account the time for NVT input
+	POP P,T1		; Restore LT index
+	POP P,T2		; Get back base of dynamic TTY data
+>	;; End of Repeat 0,
+	CALL NVTUPI		; Unpack nvt input
+	CALLRET ULKTTY		; Release the TTY data base
+
+
+;;; IMIPSQ - Add message to special queue
+
+;;;	T2/  Buffer address
+
+IMIPSQ:	MOVSI T3,-NSQ		; Set AOBJN counter thru all sp Q's
+IMIPS1:	SKIPGE T1,SQJOB(T3)	; Is this queue in use?
+	 JRST IMIPQA		; No.
+	LSH T1,2		; Align value with internet dispatch
+	XOR T1,.NBHHL+2(T2)	; compare them
+	LSH T1,6		; Align with mask
+	AND T1,SQJOB(T3)	; Mask bits to compare
+	TLNE T1,177400		; Only consider these bits
+	 JRST IMIPQA		; It doesn't match this queue
+	MOVE T1,.NBLD0(T2)	; Check the leader against the queue
+	XOR T1,SQVAL1(T3)	; These bits should become zero
+	TDNE T1,SQMSK1(T3)	; In positions where this mask is 1
+	JRST IMIPQA		; If not, this isn't for this queue.
+	MOVE T1,.NBLD1(T2)	; Check all three words of leader
+	XOR T1,SQVAL2(T3)
+	TDNE T1,SQMSK2(T3)	; ..
+	JRST IMIPQA		; Not right.
+	MOVE T1,.NBLD2(T2)	; Last word
+	XOR T1,SQVAL3(T3)
+	TDNE T1,SQMSK3(T3)
+IMIPQA:	AOBJN T3,IMIPS1		; Not for this Q, try another
+	JUMPGE T3,IMIPS2	; Found nobody, go throw away
+	MOVE T1,SIQSPC(T3)	; How much space in use?
+	CAIL T1,SIQMAX		; Less than max?
+	 JRST IMIPS2		; No, too much, go throw away
+	MOVE T1,TODCLK		; Compute time this msg will atrophy
+	ADDI T1,SIQTM0		; This long from now
+	SKIPN T4,SIQIBI(T3)	; First one (queue empty?)
+	 JRST [	MOVEM T1,SIQTIM(T3) ; Record discard time
+		MOVEM T2,SIQIBO(T3) ; Update removal pointer, also.
+		JRST IMPSQ4]	; No queue to update
+	HRLM T2,0(T4)		; Put new buffer on chain
+IMPSQ4:	MOVEM T2,SIQIBI(T3)	; Save new buffer address as end.
+	AOS SIQSPC(T3)		; Count messages on queue
+	OKSKED
+	JRST IMIPS3
+
+IMIPS2:	OKSKED
+	CALL RLNTBF		; Throw message away
+IMIPS3:	POP P,0(P)	; FLUSH BUFFER ADDRESS
+	RET
+
+;;; IMIBB - SEND NXR AND DO UNKNOWN LINK BUGINF
+;;;
+;;;	T1/  HOST
+;;;	T3/  LINK PLUS SEND BIT IN RH, AND SIZE IN LH
+;;;	0(P)/ BUFFER ADDRESS
+
+IMIBB:	IUNLK
+	MOVE T2,T3		; Link into T2
+	ANDX T2,L1%LNK		; Just the link number
+	PUSH P,T1		; Save the host
+	PUSH P,T2		; and link
+	CALL IMPNXR		; Send NXR
+	POP P,T2		; Restore for BUGINF
+	POP P,T1
+	 MNTBUG (INF,IMPMUL,<RECEIVED MSG FOR UNKNOWN LINK>,<<T1,D>,<T2,D>>)
+	POP P,T2		; Get buffer address back
+	CALLRET RLNTBF		; Release the buffer
+
+;;; Send RST to all named hosts on startup
+
+NETCH0:	IMSCLK(IMCNCK)		; Charge to imcnck
+	SKIPA P1,NCTVT		; Point to NCT vector table
+NETCH1:	LOAD P1,NTLNK,(P1)	; get next entry
+	JUMPE P1,ntdset		;3032 If none left
+	LOAD T1,NTTYP,(P1)	; get network type
+	SKIPE NTORDY(P1)	; Output enabled?
+	 CAIE T1,NT.NCP		; NCP Type?
+	  JRST NETCH1		; No loop to next 
+	SKIPGE Q3,IMPCCH(P1)	; Sending rst's?
+REPEAT 0,<
+	 JRST IMPET		; No.
+>
+REPEAT 1,<
+	 JRST IMPEET		; No
+>
+IMPRC1:	CALL IMPRCC		; Check for space in link table
+	 JRST [	MOVEI T1,^D5000	; Wait a little while and try again
+		JRST IMPET1]
+	SETSEC Q3,MNTSEC	; be sure points to proper section
+	MOVE T1,HOSTNN(Q3)	; Get a possible host number
+	JUMPE T1,IMPRC2		; If not assigned, go loop
+	CALL NETCMP		; On the right net?
+	 JRST IMPRC2		; No
+	SKIPG T2,HSTSTS(Q3)	; Is it up?
+	 JRST IMPRC2		; Yes
+	LDB T3,[POINT 4,T2,26]	; get host type	
+	CALL LCLHST		; Is this me?
+	 CAIN T3,.HSNET		; Is this a network number?
+	  TRNA			; yes or yes
+	   CALL IMSRST		; Not known up, so send reset
+IMPRC2:	CAMGE Q3,[MNTSEC,,NHOSTS-1] ; Done all hosts yet?
+	AOJA Q3,IMPRC1		; No, do another
+
+IMPEET:
+REPEAT 0,<
+	MOVSI Q3,-IMPNLK	; Indicate now echo checking
+	MOVE T1,[UPROBI-UPROBT]	; Set time to wake up
+>
+REPEAT 1,<
+	SETO Q3,		; No longer RSTing
+	MOVSI T1,77777		; Wake up much later
+>
+	JRST IMPET1
+
+IMPRCC:	MOVE T1,IMPNOL		; Number of links in use
+	MOVE CX,ASNTHR		; Check space in Network area
+	LSH CX,3		; (*8)
+	CAMGE CX,NETFRE+2	; Don't use these for echo testing
+	 CAIL T1,IMPNLK/3
+	  RET
+	RETSKP			; OK to send
+
+REPEAT 0,<
+;;; Echo tester
+IMPET:	CALL IMPRCC		; Wait if link tables near full
+	 JRST [	MOVEI T1,^D5000	; Try again in 5 seconds
+		JRST IMPCC6]
+	MOVE Q2,Q3		; Get index
+	SETSEC Q2,ANBSEC	; in storage section
+	MOVE T1,IMPLT1(Q2)	; Get state,link.
+	TXNE T1,L1%FRE		; Active?
+	 JRST IMPET4		; No, get next
+	LOAD T1,LTHOST,(Q2)	; Get the host number
+	CALL NETCMP		; Same net?
+	IFSKP.
+	MNTCALL NTSCHK		; Check if up
+	 TRNA			; interface down
+	  CALL IMPNOP		; And send nop (echo might be better
+				;  but some sites complained)
+	ENDIF.
+
+IMPET4:	AOBJP Q3,IMPEET
+	TRNE Q3,7		; Wait every eighth entry
+	 JRST IMPET		; Not time to wait. Try another.
+	MOVEI T1,UPROBT*8/IMPNLK ; Delay for correct interval
+>
+IMPET1:	MOVEM Q3,IMPCCH(P1)	; Save current state
+IMPCC6:	ADD T1,TODCLK		; Compute when to do it again
+	MOVEM T1,IMPTIM
+	JRST NETCH1		; and loop
+
+NTDSET::MOVE	t1,TODCLK	;3032
+	Camge	t1,Imptim	;3032 set up in loop?
+	  Ret			;3032 Yes
+	Addi	t1,^D5000	;3032 No, Do it
+	Movem	t1,Imptim	;3032
+	Move	t1,Todclk	;3032
+	Ret			;3032
+
+
+
+
+
+; Check for overdue RFNM's
+; Count down RFNMC field if non-zero.
+; If it reaches 0, then generate BUGINF cause RFNM seems lost.
+
+RFNCHK:	IMSCLK(IMCRFN)		; Charge imcrfn
+	PUTSEC P2,ANBSEC	; Set to scan conn table
+	HRREI P1,-IMPNLK	; Table this big
+RFNCK0:	MOVX Q2,RFNMCM		; Get mask for RFNM count
+	MOVX IMPUN,L1%FRE
+RFNCK2:	TDNN IMPUN,IMPLT1(P2)	; Connection in use?
+	 TDNN Q2,IMPLT2(P2)	; RFNM set here?
+	  TRNA
+	   JRST RFNCK8		; Yes, and Yes
+RFNCK1:	AOS P2			; Try another link
+	AOJL P1,RFNCK0		; Loop
+	JRST RFNCK4		; When whole table done
+
+RFNCK8:	LOAD Q3,RFNMC,(P2)	; Get RFNM count, this field.
+	SOJE Q3,RFNCK5		; Decrement count, jump if exhausted
+	STOR Q3,RFNMC,(P2)	; Store reduced count
+	JRST RFNCK1		; Go check next one
+
+RFNCK5:	PIOFF			; Prevent confusion if PI stores buffer
+	HRRZ T2,IMPLT3(P2)	; While we get message to retransmit
+	HLLZS IMPLT3(P2)	; And clear the pointer
+	PION
+	JUMPE T2,RFNCK3		; Apparently hasn't made it thru Q yet
+	SETSEC T2,ANBSEC	; Set the section number for buffer
+	LOAD T1,LTHOST,(P2)	; Get host for this LT entry
+	MOVSI IMPUN,(RXMTF)
+	CALL LCLHST		; Check if its one of me
+	 TDNE IMPUN,IMPLT2(P2)	; Or retransmission wanted?
+	  JRST RFNCK7		; Then retransmit
+	CALL RLNTBF		; Else release the buffer
+	STOR Q3,RFNMC,(P2)	; Clear the count field after discard.
+	LOAD T2,LTLINK,(P2)	; Get link for bug (already have host)
+	MNTBUG(INF,IMPRNO,<RFNM OVERDUE>,<<T1,D>,<T2,D>>)
+	AOS IMPNOS		; Cause output scan to restart output
+RFNCK6:	JRST RFNCK1		; Go re-load unit and count
+
+RFNCK4:	MOVEI T1,RFNTMO
+	ADD T1,TODCLK		; Set next check for rfntmo msec.
+	MOVEM T1,RFNTIM
+;3032	RET
+	callret ntdset		;3032 Set time in future
+
+RFNCK7:	IORM Q2,IMPLT2(P2)	; Set timeout count back to max
+	CALL IMPQOA		; Put message back on output queue
+	JRST RFNCK6		; Go to next item
+
+RFNCK3:	IORM Q2,IMPLT2(P2)	; Set timeout count back to max
+	LOAD T1,LTHOST,(P2)	; Get host and link for bug typeout
+	LOAD T2,LTLINK,(P2)	; ..
+	MNTBUG(INF,IMPMSO,<MESSAGE STUCK IN OUTPUT QUEUE>,<<T1,D>,<T2,D>>)
+	JRST RFNCK6		; Go on to next item
+
+;;; Here at PI level to queue an irreg Imp-to-Host message.
+;;; The input buffer address is in T1
+
+IMP8XQ::
+	AOS T3,IMP8XI		; Increment input index
+	CAIL T3,IMP8XS
+	SETZB T3,IMP8XI		; Wraparound
+	CAMN T3,IMP8XO		; Overflow?
+	 MNTBUG(INF,IMPXBO,<IRREG MSG BUFFER OVERFLOW>)
+	MOVE T2,T1		; Point to the buffer
+	ADDI T2,.NBLD0		; Starting at the leader
+	IMULI T3,.NBLD2		; This many words per irreg msg
+	HRLI T3,-.NBLD2		; Number to copy
+I8XQL1:	MOVE T4,0(T2)		; Read a word
+	MOVEM T4,IMP8XB(T3)	; Put it in the buffer
+	ADDI T2,1		; To next word
+	AOBJN T3,I8XQL1		; Do the whole leader
+	AOS IMP8XC		; Count this message
+	RET
+
+;;; Routine to get irreg messages from above buffering, and act on them.
+;;; Called from NCPFRK when IMP8XC says there is stuff to do.
+
+IMP8XM:	IMSCLK(IMC8XM)		; Charge NCPFRK's time to this clock
+	SETZ T3,		; Clear
+	EXCH T3,IMP8XC		; The counter
+	PUSH P,T3		; Save count 
+IMP8X1:	SOSGE 0(P)		; Decrement counter
+	 JRST IMP8X2		; Done
+	AOS T3,IMP8XO		; Retrieve stuff from queue
+	CAIL T3,IMP8XS
+	 SETZB T3,IMP8XO	; Wraparound
+	IMULI T3,.NBLD2		; Words per message
+REPEAT 0,<
+	MOVEI T1,IMP8XB(T3)	; Here's where to start reading
+	CALL DBGIIM		; Record the msg in debug buffer
+> ;; END REPEAT 0
+	MOVEI P1,IMP8XB-1(T3)	; Point right for defstrs
+	LOAD T1,IHADR,(P1)	; Get address
+	LOAD T2,IHNET,(P1)	; And Net
+	LSH T2,^D24		; Shift over and
+	IOR T1,T2		; Merge them
+	LOAD T2,IHLNK,(P1)	; Get the link number
+	LOAD T4,IHSTY,(P1)	; Get the subtype, while we're here.
+	LOAD T3,IHMTY,(P1)	; Prepare to dispatch on msg type
+	CAIL T3,NIMPMT		; Make sure it's not garbage
+	JRST IMP8XX		; If so, give error
+	XCT IMPMTT(T3)		; Dispatch to appropriate routine
+	JRST IMP8X1		; Loop until no more
+
+;;; Here when all processed
+IMP8X2:	POP P,0(P)		; Flush counter
+	RET			; And return
+
+
+;Dispatch table for handling message type of irreg I2H messages.
+
+XX==CALL IMP8XX			; Unimplemented code
+
+IMPMTT:	MNTBUG(INF,IMPRMI,<IMP - REGULAR MESSAGE ON IRREG QUEUE>)
+	CALL IMPEC1		; Error in leader
+	CALL IMPDN2		; Imp going down
+	XX			; Formerly blocked link
+	CALL IMPEC4		; Nop. Check host address.
+	CALL IMRFNM		; RFNM
+	CALL IMPEC6		; Dead host status
+	CALL IMPEC7		; Destination dead
+	CALL IMPEC8		; Error in data
+	CALL IMPEC9		; Incomplete transmission
+	CALL IMPE10		; Imp dropped ready line
+;	XX			; Refused, try again
+;	XX			; Refused, will notify
+;	XX			; Refused, still trying
+;	XX			; Ready for named previous msg
+NIMPMT==.-IMPMTT		; Range check for dispatch
+
+;;; Irregular message processors
+;;; P1 points to message in buffer.
+;;; T1 contains host number
+;;; T2 contains link number
+;;; T3 contains the message type, which caused the dispatch
+;;; T4 contains subtype of this msg
+
+; Error in leader (type 1)
+
+IMPEC1:	TXNN  T1,77777777	; Is host field zero?
+	 RET			; Some phony ones come from site zero
+	JUMPE T4,IMPEC8		; If subtype zero, retransmit
+	JRST IMP8XX		; Anything else should get printed
+
+;;; Imp going down (type 2)
+
+IMPDN2:	MOVE T2,.NBLD1(P1)	; Get 16 bits of data
+	MOVE T3,.NBLD2(P1)	; Describing the outage
+	LSHC T2,^D12		; Build in one word
+	ANDX T2,<177777B31>
+	MOVEM T2,IMPGDM		; Save it for printing
+;;; Only one cell for all nets at present
+	AOS JB0FLG		; Have job zero worry about it
+	RET
+
+;;; Nop from imp. Contains my net address. Check to make sure I agree.
+
+IMPEC4: CALL LCLHST		; See if its one of me
+	MNTBUG(INF,IMPHNW,<LHOSTN DISAGREES WITH THE IMP>)
+;;; Theoreticaly we should reset host tables for this number and
+;;; the old one
+	RET			; Done with the NOP
+
+; RFNM (type 5)
+
+IMRFNM:	TXO T2,L1%SND		; This is a send connection
+	ILOCK			; Lock the connection tables
+	CALL LNKLUK		; Lookup in link table
+	 JRST BADIRY		; Not found
+	MOVX T2,RFNMCM		; Prepare RFNM outstanding flags
+	PIOFF			; If RFNM returns before msg out done
+	ANDCAM T2,IMPLT2(T1)	; Clear RFNM and check flags
+	HRRZ T2,IMPLT3(T1)	; Get retransmit buffer
+	HLLZS IMPLT3(T1)	; Forget it in link table
+	PION
+	SETSEC T2,ANBSEC	; It's in this section
+	TRNE T2,-1		; Unless there was none,
+	 CALL RLNTBF		; Release it.
+	HLRE IMPUN,IMPLT1(T1)	; Get IMPUN from LT
+	SETSEC IMPUN,ANBSEC	; In right section
+	MOVSI T2,(RXMTF)
+	TDNN T2,IMPLT2(T1)	; Have we been retransmitting?
+	 JRST IMPKO1		; No. Just send next message
+	ANDCAM T2,IMPLT2(T1)	; Yes. Stop retransmitting
+	CALL IMPKO1		; Send next message
+	HRL CX,IMPUN		; Check unit number
+	JUMPGE CX,SVCRST	; if not link 0, generate service restored
+	RET			; otherwise done
+
+;;; Dead host status (type 6)
+
+IMPEC6:	LOAD T3,IHHT2,(P1)	; See if the one we have to ignore,
+	TXNE T3,<<HTY%HP>_-4>	; According to 1822
+	 RET			; Yes. Ignore it
+	CALL HSTHSH		; Get table index for host number
+	 JUMPL T2,IMPC61	; No room, if jump. Else new.
+	MOVEM T1,HOSTNN(T2)	; Put host number in hash table, if new
+	MOVE T3,.NBLD1(P1)	; Collect reason and times from IMP
+	MOVE T4,.NBLD2(P1)
+	LSHC T3,-^D<36-8>
+	ANDI T4,177777		; Keep 16 bits
+	IORI T4,(HS%VAL)	; Mark as valid
+	SKIPGE HSTSTS(T2)	; Preserve "up" bit
+	IORI T4,(HS%UP)		; ..
+	HRLM T4,HSTSTS(T2)	; All status into LH
+	ANDI T4,17		; Extract sub-type
+	CAIE T4,2		; Is it simply tardy?
+	CAIN T4,^D10		; Or at a bpt
+IMPC61:	 RET			; Yes, no further action
+	JRST HSTDED		; And declare it dead
+
+;;; Destination dead (type 7)
+
+IMPEC7:	PUSH P,T2		; Save link
+	CALL HSTHSH		; Find host in hash table
+	 JUMPL T2,IMPC71	; Jump if no room, else new.
+	MOVEM T1,HOSTNN(T2)	; In case new, set host number
+	SKIPL HSTSTS(T2)	; Is it up?
+	 JRST [	POP P,T2	; No, restore stack. Get link
+		JRST HSTDD1]	; Declare it down
+IMPC71:	POP P,T2		; Restore link
+	TXO T2,L1%SND		; Send connection
+	ILOCK
+	CALL LNKLUK		; Find the link
+	 JRST BADIRY		; Not found?
+IMPECC:	MOVSI T2,(RXMTF)	; Try to send the buffer again
+	IORM T2,IMPLT2(T1)	; Cause retransmission
+	HLRE IMPUN,IMPLT1(T1)	; Get "unit"
+	IUNLK
+	JUMPL IMPUN,R		; Done if control connection
+	SETSEC IMPUN,ANBSEC	; Place in right section
+	CALLRET SVCINT		; Else perform service interruption
+
+;;;
+;;; Host Dead, Host number in T1
+;;;
+HSTDED::CALL HSTHSH		; Find hash index for host in T1
+	 JUMPL T2,HSTDD1	; If no room, jump around
+	MOVEM T1,HOSTNN(T2)	; Update host number, in case new.
+	MOVX IMPUN,HS%UP	; Clear the up/down flag for host
+	ANDCAM IMPUN,HSTSTS(T2)	; Mark him down
+HSTDD1:	CALL IMPXLT		; Clear link table for dead host
+	CALLRET NETHDN		; Clean up any connections to host
+
+;;; Error in data & incomplete transmission (types 8 & 9)
+
+IMPEC8:
+IMPEC9:	TXO T2,L1%SND		; Flag as a send connection
+	ILOCK			; Lock the connection tables
+	CALL LNKLUK		; Get LT index for this one
+	 JRST BADIRY		; Not there, can't retransmit
+	PIOFF			; Prevent PI from storing in IMPLT3
+	HRRZ T2,IMPLT3(T1)	; Get buffer for retransmission
+	HLLZS IMPLT3(T1)
+	PION
+	JUMPE T2,IMPECC		; None there now. Retransmit later
+	IUNLK
+	SETSEC T2,ANBSEC	; In right section
+	MOVX T3,RFNMCM		; Reset RFNM counter
+	IORM T3,IMPLT2(T1)	; ....
+	CALLRET IMPQOA		; Put it back on output queue
+
+; Interface reset (type 10)
+
+IMPE10:	CALL FNDNCT		; Find NCT from host number
+	 RET			; Interface is not up, so no active hosts
+	HRREI P2,-IMPNLK	; Make a counter
+	PUTSEC P3,ANBSEC	; Make index to tables
+IMPRSY:	LOAD T1,LTHOST,(P3)	; Get host number
+	CALL NETCMP		; Check if on this interface
+	 JRST IMPXSY		; No, try next
+	MOVE T1,P3		; Get index
+	ILOCK			; Lock the connection
+	MOVE T2,IMPLT1(P3)
+	TXNE T2,L1%FRE		; In use?
+	 JRST IMPZSY		; No
+	TXNN T2,L1%LNK		; Link 0?
+	 JRST IMPZSY		; Yes, control
+	TXNE T2,L1%SND		; Send?
+	 JRST IMPSSY		; Yes, send sync of allocates
+	LOAD T2,LTLINK,(P3)	; Get link from IMPLT1
+	LOAD T1,LTHOST,(P3)	; Get host number
+	IUNLK			; Unlock connection
+	CALL IMPRAP		; Send RAP now
+	JRST IMPXSY
+
+IMPSSY:	CALL IMPSYN		; Re-sync allocation
+IMPZSY:	IUNLK
+IMPXSY:	AOS P3			; Increment index
+	AOJL P2,IMPRSY		; Loop
+
+;;; Now, for hosts who don't understand the H-H protocol extensions for
+;;;  connection reliability,  have to mark them dead.
+	HRREI P2,-NHOSTS	; scan the Hash table
+	PUTSEC P3,MNTSEC	; Set pointer to right section
+IMPOSY:	SKIPN T1,HOSTNN(P3)	; Get a host number
+	 JRST IMPOSZ		; Slot not in use
+	CALL NETCMP		; On this interface?
+	 JRST IMPOSZ		; No, ignore it
+	CALL CHKNWP		; Does this host understand?
+	 JRST [	SKIPGE HSTSTS(P3) ; No. IFF we think it's up,
+		CALL HSTDED	; Mark it down.
+		JRST .+1]
+IMPOSZ:	AOS P3			; Incr index
+	AOJL P2,IMPOSY		; And loop
+	AOS IMPNOS		; Scan for output to pick up rarrf's
+	RET
+
+;;;
+;;; Check if host for control message knows about new protocol stuff
+;;;	T1/  HOST NUMBER
+
+CHKNWP::
+	SAVET			; Be transparent
+	CALL HSTHSH		; See if the host is known
+	 RET			; Not a known host
+	MOVE T2,HSTSTS(T2)	; Get status
+	TXNN T2,HS%NEW		; Does it know the new stuff?( or not NCP )
+	 RET			; No. Non-skip return
+	RETSKP			; Yes. Skip return
+
+;;;
+;;; MARK NEW PROTOCOL BIT FOR HOST
+;;;	T1/  HOST NUMBER
+
+MRKNWP:	SAVET			; Be transparent
+	CALL HSTHSH		; See if host is known
+	 JUMPL T2,R		; If table full, return.
+	MOVEM T1,HOSTNN(T2)	; In case new, set the host address
+	MOVX T3,HS%NEW		; Set the new protocol bit
+	IORM T3,HSTSTS(T2)	; For this host
+	RET
+
+;;;
+;;; Error tail ends for irregular msg processors
+;;;
+BADIRY:	IUNLK
+	MOVE T2,IMP8XO		; Point to the message again
+	IMULI T2,.NBLD2		; Offset into buffer
+	MOVEI T4,IMP8XB-1(T2)	; For structure def's
+	LOAD T1,IHADR,(T4)	; Address
+	LOAD T2,IHNET,(T4)	; Plus net
+	LSH T2,^D24		; ...
+	IOR T1,T2		; ....
+	LOAD T2,IHLNK,(T4)	; Link number
+	LOAD T3,IHMTY,(T4)	; Message type
+	LOAD T4,IHSTY,(T4)	;3032 Get the subtype
+;;; Fall trough to error message
+
+IMP8XX:	MNTBUG(INF,IMPXUT,<Received irreg msg with unknown link or type>,<<T1,HOST>,<T2,LINK>,<T3,TYPE>,<T4,SUBTYP>>)
+	RET
+
+;;; Scan for input ready on control link connection
+
+IMPCN0:	IMSCLK(IMCCNP)		; Charge to imccnp
+	MOVX IMPUN,L1%SND+L1%FRE+L1%LNK	; Connection must be receive, link 0
+	PUSH P,BHC		; Put a zero on stack
+	HRREI Q3,-IMPNLK	; Make an counter
+	PUTSEC Q2,ANBSEC	; and an index
+IMPCN4:	TDNN IMPUN,IMPLT1(Q2)	; Desired connection?
+	 JRST IMPCN8		; Yes
+IMPCN2:	AOS Q2			; Inc pointer
+	AOJL Q3,IMPCN4		; Loop
+	JRST IMPCN5		; done
+
+IMPCN8:	AOS 0(P)		; Count number of msgs seen
+	MOVE T1,Q2		; Conn index
+	PUSH P,IMPUN		; Save these ac's
+	PUSH P,Q2
+	PUSH P,Q3
+	CALL IMPCNP		; Go process this host's control msgs
+	POP P,Q3
+	POP P,Q2		; Restore ac's
+	POP P,IMPUN
+	MOVE T1,Q2
+	CALL IMPCLL		; Close "connection"
+	JRST IMPCN2		; And scan rest of table
+
+IMPCN5:	POP P,T1		; Done. Get count of processed msgs
+	JUMPN T1,R		; If any, done.
+	MNTBUG(INF,IMPCTH,<IMPNCL TOO HIGH>)
+	SOSGE IMPNCL		; Count it down so don't loop.
+	 SETZM IMPNCL
+	RET
+
+;;;
+;;; Process control message
+;;;
+IMPCNP:	PUSH P,T1		; Save LT index
+	LOAD T1,LTHOST,(T1)	; Get host
+	MOVEM T1,IMPCHO		; And leave it for following commands
+	SETZM IMPCHU		; Say host not ready (no rst/rrp)
+	CALL HSTHSH		; See if host is known
+	 JUMPL T2,IMPCN1	; No. If table full, jump
+	MOVEM T1,HOSTNN(T2)	; In case new, set host address
+	SKIPGE HSTSTS(T2)	; If host is known to be up,
+	 SETOM IMPCHU		; Then say it's up
+IMPCN1:	POP P,T1		; Restore link table index
+IMP8T6:	CALL UPBYT		; Get next op code
+	 RET			; None left...done
+	MOVEM T3,I8COP		; Save last control op code
+	CAIL T3,I8NCCM		; Legal code?
+	 JRST IMP8T4		; No, flush whole message
+	MOVEI Q2,I8CCM(T3)	; Address of table entry for this code
+	HRLI Q2,220300		; Pntr for 3-bit bytes specifying fields
+	HLRZ Q3,I8CCM(T3)	; Get routine dispatch address
+	MOVEI T4,I8CAL		; Args buffer
+IMP8T1:	ILDB IMPUN,Q2		; Number of (8-bit) bytes in next arg
+	SETZ T2,0		; Clear word to construct arg
+	JUMPN IMPUN,IMP8T2	; 0 means no more args
+	CAIN Q3,IM8NOP		; Check for NOP's at this level
+	 JRST IMP8T6		; Discard quickly
+	CAIE Q3,IM8RST		; Is RST?
+	CAIN Q3,IM8RRP		; Or RRP?
+	 SETOM IMPCHU		; Yes, consider him up
+	SKIPN IMPCHU		; Is he up?
+	 XMOVEI Q3,IMSRST	; No. Force call to send RST
+	PUSH P,T1		; Preserve T1
+	MOVE Q2,[XWD IMPCHO,T1]	; Move args to acs 1-6
+	BLT Q2,Q2		; T1 (IMPCHO) always gets host number
+	CALL 0(Q3)		; Do function
+	POP P,T1		; Restore T1 (LT index)
+	JRST IMP8T6		; See if another
+
+IMP8T2:	PUSH P,T2		; Preserve T2
+	CALL UPBYT		; Get a byte of argument
+	 JRST IMP8T5		; Whoops, short message
+	POP P,T2
+	ROT T3,-^D8		; And shift it
+	LSHC T2,^D8		; Into the arg being accumulated
+	SOJG IMPUN,IMP8T2	; All bytes packed?
+	MOVEM T2,0(T4)		; Yes, store arg in buffer
+	AOJA T4,IMP8T1		; And see if more args
+
+IMP8T5:	SUB P,BHC+1		; Clean up stack
+IMP8T4:	MOVE T2,IMPCHO		; Screwed up control msg
+	MNTBUG(INF,IMPIFC,<ILL FMT CTL MSG>,<<T2,D>,<T3,D>>)
+	RET			; Let impcll flush rest of message(s)
+
+;;; Control routines
+;;;
+;;;	T1/  HOST NUMBER
+;;;	T2/  LINK NUMBER, USUALLY
+;;;	T3-T6/	8 BIT BYTES OF ARGUMENT(S)
+
+;;; Nop (type 0)
+
+IM8NOP==:R		; No action
+
+;;; Receiver to sender request for connection (type 1)
+
+IM8RTS=:RECRTS		; Code in  netwrk
+
+;;; Sender to receiver request for connection (type 2)
+
+IM8STR=:RECSTR		; Code in netwrk
+
+;;; Close connection (type 3)
+
+IM8CLS=:RECCLS		; Code in netwrk
+
+;;; Allocate (type 4)
+
+IM8ALL:	TXO T2,L1%SND		; Link zero, send connection
+	ILOCK
+	CALL LNKLUK		; Lookup in connect table
+	 CALL BADLKS		; Not found
+	HLRE IMPUN,IMPLT1(T1)	; Get unit
+	JUMPL IMPUN,ULKIDV	; Control connection, shouldn't happen
+	SETSEC IMPUN,ANBSEC	; Put in right section
+	MOVSI T2,(RARF)		; Waiting for RAR?
+	TDNE T2,IMPLT2(T1)
+	 JRST ULKIDV		; Yes, ignore all allocates
+	HRRZ T2,IMPLT4(T1)	; Get current msg alloc
+	ADD T2,T3
+	CAILE T2,777777		; Bigger than max?
+	JRST IMPB06		; Yes
+	HRRM T2,IMPLT4(T1)	; Legal msg allocation. Update it.
+	ADDB T4,NETBAL(IMPUN)	; Update bit allocation, too
+	CAML T4,[1B3]		; Excessive?
+	JRST IMPB06
+	HRRZ T2,NETBUF(IMPUN)	; Get NVT number
+	CALL NVTCHK		; NVT attached?
+	 JRST IMPKO1		; No, test for more output for this conn
+	IUNLK
+	PUSH P,T2		; Save addr of TTY dynamic data
+	CALL NETTCS		; Yes, pack up more characters
+	POP P,T2		; Restore TTY data area
+	CALL ULKTTY		; Release TTY data base
+	JRST IMPCKO		; And try to send
+
+IMPB06:	LOAD T2,LTLINK,(T1)	; Report the link
+	LOAD T1,LTHOST,(T1)	; And the host
+	IUNLK
+	MNTBUG(INF,IMPREA,<RECD EXCESS ALL>,<<T1,D>,<T2,D>>)
+	RET
+
+; Give back (code 5)
+
+IM8GVB:	TXO T2,L1%SND		; Send connection
+	ILOCK
+	CALL LNKLUK		; Find the link
+	 CALL BADLKS		; Not found
+	HLRE IMPUN,IMPLT1(T1)	; Get unit
+	JUMPL IMPUN,ULKIDV	; Control conn, shouldn't happen
+	SETSEC IMPUN,ANBSEC	; Put in right section
+	HRRZ T2,IMPLT4(T1)	; Msg alloc
+	CAIL T3,200		; Check fraction. All msgs?
+	JRST IM8GV1		; Yes
+	IMUL T2,T3		; No, calc how much
+	IDIVI T2,200
+IM8GV1:	HRRZ T3,IMPLT4(T1)
+	SUB T3,T2		; Reduce current msg alloc
+	HRRM T3,IMPLT4(T1)	; Update in link table
+	PUSH P,T2		; Save amount to be returned
+	MOVE T2,NETBAL(IMPUN)	; Bit allocation we have now
+	CAIL T4,200		; Return all?
+	JRST IM8GV2		; Yes
+	MUL T2,T4		; No, calc how much
+	DIVI T2,200
+IM8GV2:	MOVN T3,T2		; Neg of amount requested back
+	ADDM T3,NETBAL(IMPUN)	; Reduce bit alloc
+	MOVE T4,T2		; Setup call for RET
+	POP P,T3
+	LOAD T2,LTLINK,(T1)	; Get link from IMPLT1
+	LOAD T1,LTHOST,(T1)	; Get host
+	IUNLK
+	CALLRET IMPRET		; Send the RET
+
+;;; Return (code 6)
+
+IM8RET:
+	MNTBUG (INF,IMPURT,<IMPDV received unexpected RET>,<<T1,D>,<T2,D>>)
+	RET			; Never send GVB, so should never get RET
+
+;;; Interrupt from receiver (code 7)
+
+IM8INR:	TXO T2,L1%SND		; Send connection
+	ILOCK
+	CALL LNKLUK		; Is there such a connection?
+	 CALL BADLKS		; No such connection
+	HLRE IMPUN,IMPLT1(T1)	; Unit
+	LOAD T1,LTHOST,(T1)	; Recover host number
+	IUNLK
+	JUMPL IMPUN,R		; Control connection, shouldn't happen
+	SETSEC IMPUN,ANBSEC	; In right section
+	CALLRET RECINR		; Not specified for nvt
+
+;;;; Interrupt from sender (code 8)
+
+IM8INS:	ILOCK			; Receive connection
+	CALL LNKLUK		; Is there such a connection?
+	 CALL BADLKR		; Nope, error.
+	HLRE IMPUN,IMPLT1(T1)	; Yes, get unit.
+	LOAD T1,LTHOST,(T1)	; And recover host number
+	IUNLK
+	JUMPL IMPUN,R		; Ignore on control conn's
+	SETSEC IMPUN,ANBSEC
+	HRRZ T2,NETBUF(IMPUN)	; Get NVT number
+	CALL NVTCHK		; Is it an NVT?
+	 JRST RECINS		; Isn't nvt, go do regular connection
+	PUSH P,T2		; Save TTY data base pointer
+	CALL NVTDSC		; Decrement sync count and re-alloc if
+				;  necessary.
+	POP P,T2		; Get back address of dynamic data
+	CALLRET ULKTTY		; Unlock TTY data base
+
+;;; Echo and echo reply (code 9 & 10)
+
+IM8ECO:	CALLRET IMPERP		; Send reply
+
+IM8ERP:	RET			; If not equal then ...
+
+;;; Error (code 11)
+;;;
+;;;	T1/  HOST NUMBER
+;;;	T2/  TYPE OF ERROR
+;;;	T3-5/ ARGS OF THE ERR
+
+IM8ERR:
+	MNTBUG(INF,IMPRNE,<RECD NCP ERR>,<<T1,HOST>,<T2,TYPE>,<T3,ARG1>,<T4,ARG2>>)
+	RET
+
+;;; Reset and reset-reply ctrl msg (codes 12 & 13)
+
+IM8RST:	PUSH P,T1		; Save host address
+	CALL RECRST		; Notify fsm
+	POP P,T1		; Recover host address
+IM8RRP:	CALL HSTHSH		; See if we have a slot for it
+	 JUMPL T2,R		; If not, gonna have troubles here
+	MOVEM T1,HOSTNN(T2)	; In case new, host addr into hash table
+	MOVX T3,<HS%UP+HS%VAL>	; Valid info, host up.
+	HLLM T3,HSTSTS(T2)	; Set status into table
+	RET
+
+;;; Reset allocate by receiver (code 14)
+
+IM8RAR:	CALL MRKNWP		; MARK THIS HOST AS USING NEW PROTOCOL
+IM8RR1:	TXO T2,L1%SND		; This is a send connection
+	ILOCK
+	CALL LNKLUK		; Find the link
+	 CALL BADLKS
+	HLRE IMPUN,IMPLT1(T1)	; Check for control conn
+	JUMPL IMPUN,ULKIDV	; If control conn, no alloc's.
+	SETSEC IMPUN,ANBSEC
+	MOVSI T2,(RARF)		; No longer waiting for RAR
+	ANDCAM T2,IMPLT2(T1)	; Clear resync in progress flag
+	CALLRET ULKIDV
+
+;;; Reset allocate by sender (code 15)
+;;; Set allocation to zero plus whatever we have received but not 
+;;; yet processed
+
+IM8RAS:	CALL MRKNWP		; MARK THIS HOST AS USING NEW PROTOCOL
+				; Leave L1%SND off in T2, we are rcvr
+	ILOCK
+	CALL LNKLUK
+	 CALL BADLKR
+	HLRE IMPUN,IMPLT1(T1)	; Is it a control link?
+	JUMPL IMPUN,ULKIDV	; Shouldn't be. No alloc's.
+	SETSEC IMPUN,ANBSEC
+	HLLZS IMPLT4(T1)	; Clear message allocation
+	HLRZ T4,IMPLT4(T1)	; ANY CURRENT BUFFER?
+	JUMPE T4,IM8RA1		; NO
+	SETSEC T4,ANBSEC	; Yes, set its section number
+	MOVE T4,.NBCNT(T4)	; ACCUMULATE BYTES
+IM8RA1:	HLRZ T2,IMPLT3(T1)	; GET BUFFER
+	JUMPE T2,IM8RA3		; NONE
+IM8RA2:	SETSEC T2,ANBSEC	; Point to it in right section
+	LOAD T3,HHCNT,(T2)	; Number of bytes from H-H header
+	ADD T4,T3		; Accumulate bytes
+	AOS IMPLT4(T1)		; COUNT MSGS RCVD ALREADY
+	HLRZ T2,0(T2)		; NEXT BUFFER
+	JUMPN T2,IM8RA2		; If there is one.
+IM8RA3:	LOAD T3,ILTBS,(T1)	; Connection byte size
+	IMUL T3,T4
+	MOVEM T3,NETBAL(IMPUN)	; Bits we have rcvd already
+	IUNLK
+	LOAD T2,LTLINK,(T1)	; Get link from IMPLT1
+	LOAD T1,LTHOST,(T1)	; Get host
+	CALL IMPRAR
+	HRRZ T2,NETBUF(IMPUN)	; Get the NVT number, if any.
+	CALL NVTCHK		; Is there one?
+	 JRST NETRAL		; No. Do normal reallocation
+	PUSH P,T2		; Save TTY data pointer
+	CALL NVTRAL		; Reallocate for NVT
+	POP P,T2		; Restore pointer to TTY data
+	CALLRET ULKTTY		; Unlock TTY data base
+
+;;; Reset allocate please (code 16)
+
+IM8RAP:	CALL MRKNWP		; He used new protocol, he must understand it.
+	TXO T2,L1%SND		; This is a send connection
+	ILOCK
+	CALL LNKLUK		; Try to find control link
+	 CALL BADLKS
+	HLRE IMPUN,IMPLT1(T1)	; Get unit
+	JUMPL IMPUN,ULKIDV	; Oughta be a control conn
+	SETSEC IMPUN,ANBSEC
+	MOVSI T2,(RARF!RARRF)	; Set RAR espected, send RAS when no
+	IORM T2,IMPLT2(T1)	;   RFNM's outstanding
+	JRST IMPKO1		; Go check for output possible
+
+;;; Non-existent link from receiver and sender (codes 17 & 18)
+
+IM8NXR:	TXO T2,L1%SND		; Here if we are sender
+IM8NXS:	CALL MRKNWP		; MARK THIS HOST AS USING NEW PROTOCOL
+	ILOCK
+	CALL LNKLUK		; Look for such a connection
+	 JRST ULKIDV		; Not there
+	HLRE IMPUN,IMPLT1(T1)	; Get IMPUN for the conn
+	JUMPL IMPUN,ULKIDV	; Ignore if control conn
+	SETSEC IMPUN,ANBSEC
+	IUNLK
+	CALLRET SK2DWN		; Close it, and friend if NVT
+
+;;; Link lookup failure for receivers and senders
+
+BADLKR:	SKIPA Q3,[IMPNXR]	; Close routine for rcv conn's
+BADLKS:	MOVEI Q3,IMPNXS		; Close routine for snd conn's
+	IUNLK
+	MOVE T2,T3		; Get link
+	ANDX T2,L1%LNK		; Just the link
+	PUSH P,T2		; Save link for BUGINF
+	PUSH P,T1		; And host, too
+	CALL 0(Q3)		; Call IMPNXR or IMPNXS
+	POP P,T1		; Restore host,
+	POP P,T2		; and link,
+	POP P,T3		; And PC of caller
+	MNTBUG(INF,IMPCUL,<RECD CTL MSG FOR UNKNOWN LINK>,<<T1,D>,<T2,D>,<T3,D>>)
+	RET
+
+;;; Control table for control opcodes
+;;; Second argument is pattern of bytes/arg for arguments of the op.
+
+	DEFINE CTOP (A,C)
+<	XWD IM8'A,C>
+
+I8CCM:	CTOP NOP,0
+	CTOP RTS,441000
+	CTOP STR,441000
+	CTOP CLS,440000
+	CTOP ALL,124000
+	CTOP GVB,111000
+	CTOP RET,124000
+	CTOP INR,100000
+	CTOP INS,100000
+	CTOP ECO,100000
+
+	CTOP ERP,100000
+	CTOP ERR,144200
+	CTOP RST,0
+	CTOP RRP,0
+	CTOP RAR,100000
+	CTOP RAS,100000
+	CTOP RAP,100000
+	CTOP NXR,100000
+	CTOP NXS,100000
+I8NCCM==.-I8CCM
+
+;;; Calls from ncp
+
+;;; Open link, i.e. associate host-link and unit
+;;; T1/ host
+;;; T2/ link
+;;; T3/ byte size
+
+IMPOPS::TXO T2,L1%SND		; Make this a send connection
+IMPOPL::ILOCK
+	CALL LNKLUK		; Now in table?
+	 JRST IMPOP0		; No, slot to use returned in T2
+	PUSH P,T1		; Already open. Wrong. Save LT index
+	PUSH P,T2		; And T2
+	LOAD T2,LTHOST,(T1)	; Host which already has it
+	HRRZ T3,IMPLT1(T1)	; Link and send bit
+	IUNLK
+	MNTBUG(INF,IMPLAE,<IMPOPL: Link already exists>,<<T2,D>,<T3,D>>)
+	POP P,T2		; Restore T2
+	POP P,T1		; And T1
+	RET
+
+IMPOP0:	CALL IMPOP1		; New connection. Go update tables.
+	IUNLK
+	RET
+
+;;; Here when LNKLUK has failed, and want to add a new entry.
+;;; At this point, T2 points to a usable slot. T1 has the Host addr,
+;;; and T3 has the bytesize in LH and LNKLUK's T2 arg in RH, i.e., the
+;;; link and L1%SND.
+
+IMPOP1:	EXCH T1,T2		; Put LT index into T1 as usual.
+	SETZM IMPLT2(T1)	; Init buffer queue
+	SETZM IMPLT3(T1)	; No buffers
+	SETZM IMPLT4(T1)	; No msg allocation
+	SETZM IMPLT5(T1)	; Clear everything in site word
+	HRRZM T3,IMPLT1(T1)	; Save link and SND flag
+	HRLM IMPUN,IMPLT1(T1)	; Remember the unit index
+	STOR T2,LTHOST,(T1)	; Put host into LT
+	HLRZS T3		; Get bytesize back to RH of T3
+	STOR T3,ILTBS,(T1)	; Set byte size
+	RET
+
+;;; Close link, inverse of above
+;;; 1/	LT INDEX
+
+IMPCLL::ILOCK
+	CALL IMPLL0		; Go do the work
+	IUNLK
+	RET
+
+IMPLL0:	MOVEI T2,L1%FRE
+	TDNE T2,IMPLT1(T1)	; Was link really in use?
+	RET			; No, do nothing else
+	EXCH T2,IMPLT1(T1)	; Set entry to deleted
+	TXNE T2,L1%LNK		; Control link?
+	 JRST IMPLL9		; No, skip this
+	TXNE T2,L1%SND		; Send?
+	 SOSA IMPNOL		; Yes, decrease count of send cl's
+	  SOS IMPNCL		; Else decrease count of recv cl's
+IMPLL9:	AOS LNKNDL		; Count deletes
+	CALLRET IMPLL1		; Flush messages
+
+;;; Set done flag for connection
+;;; T1/ conn index
+
+IMPSDB::MOVSI T2,(LTDF)
+	IORM T2,IMPLT2(T1)
+	AOS IMPNOS		; Make output be looked at
+	RET
+
+;;; Abort link (called by ncp if transmission aborted)
+
+IMPABL::ILOCK
+	CALL IMPLL3		; Clear Q's, Don't clear RFNM count
+	IUNLK
+	RET
+
+;;; Clear link table for particular host, from HSTDED
+
+IMPXLT:	STKVAR <IMPXHS,INDEX>
+	MOVEM T1,IMPXHS		; Save host number
+	ILOCK
+	PUTSEC T1,ANBSEC	; Point into right section
+	HRREI T3,-IMPNLK	; Set to scan conn table
+	MOVEM T3,INDEX		; SAVE COUNTER
+IMPXLL:	LOAD T2,LTHOST,(T1)	; Get host number
+	CAME T2,IMPXHS		; Specified one?
+	 JRST IMPXLN		; No, look for more.
+	LOAD T2,LTLINK,(T1)	; Get link from IMPLT1
+	JUMPE T2,[CALL IMPLL0	; If control link, flush all
+		JRST IMPXLN]
+	CALL IMPLL1		; Else flush queued messages
+IMPXLN:	AOS T1			; Ckeck all connections
+	AOSGE INDEX		; INCREMENT COUNTER
+	 JRST IMPXLL		; AND LOOP
+	IUNLK
+	MOVE T1,IMPXHS		; Restore T1
+	RET
+
+;;; Resync allocation, from interface reset msg
+
+IMPSYN::PUSH P,T1		; Save LT index
+	LOAD T1,LTHOST,(T1)	; Get host number
+	CALL CHKNWP		; NEW PROTOCOL?
+	 JRST [	POP P,T1	; No, can't do this
+		RET]
+	POP P,T1		; Restore LT index
+	MOVSI T2,(RARF!RARRF)	; Set RAR expected, and send RAS when
+	IORM T2,IMPLT2(T1)	;  no more RFNM's are out
+	AOS IMPNOS		; Cause output scan for that
+	RET
+
+;;; Flush all messages for a connection
+;;;	T1/  LT index
+
+IMPLL3:	TDZA T2,T2		;DON'T CLEAR RFNM COUNT
+IMPLL1:	MOVX T2,RFNMCM		;CLEAR RFNM COUNT
+	STKVAR <IMPLFG,IMPLLT>
+	MOVEM T2,IMPLFG		; Save for a bit later on
+	HLRZ T2,IMPLT4(T1)	; Get current buffer addr
+	HRRZS IMPLT4(T1)	; And say there is no more current one
+	MOVEM T1,IMPLLT		; Save LT index
+	SETSEC T2,ANBSEC	; If there's a buffer, set section
+	TRNE T2,-1		; Is there one?
+	 CALL RLNTBF		; Yes, release it to free pool
+	MOVE T1,IMPLLT		; Get back lt index
+	HLLZS IMPLT2(T1)	; Fix tail pointer
+	PIOFF
+	MOVE T2,IMPLFG		; Clear these bits, either 0 or RFNMCM
+	ANDCAM T2,IMPLT2(T1)	; Cancel outstanding RFNM
+	HRRZ T2,IMPLT3(T1)	; Get retransmit buffer
+	HLLZS IMPLT3(T1)	; Zero re-xmit buffer pointer
+	PION
+	SETSEC T2,ANBSEC	; Section pointer, if any buffer
+	TRNE T2,-1		; Only release if it exists
+IMPLL2:	CALL RLNTBF		; Yes, release it
+	MOVE T1,IMPLLT		; Restore the LT index
+	HLRZ T2,IMPLT3(T1)	; Release any buffers on queue
+	JUMPE T2,R		; Quit at end of list
+	SETSEC T2,ANBSEC	; Point into right section
+	HLLZ T3,0(T2)		; Step to next in chain
+	HLLM T3,IMPLT3(T1)	; Save its address
+	SKIPN T3		; Any more?
+	HRRM T3,IMPLT2(T1)	; If no more, zero tail pointer
+	JRST IMPLL2		; And go release this one
+
+;;; Control message senders
+
+;;; NOP, RTS, STR, CLS, ALL, GVB, RET, INR, INS, ECO, ERP
+
+IMPNOP:	CALL IMPSCM		; Send NOP message
+	 XWD 0,0		; No args, opcode zero
+	RET
+
+IMPRTS::CALL IMPSCM		; Send RTS message
+	 XWD 441000,1		; Arg descriptor,,opcode
+	RET
+
+IMPSTR::CALL IMPSCM		; Send STR message
+	 XWD 441000,2
+	RET
+
+IMPCLS::CALL IMPSCM		; Send CLS message
+	 XWD 440000,3
+	RET
+
+;;; Allocation to sender. Called from NCP with Msgs to allocate in T3,
+;;;  and bits to allocate in T4.
+
+IMPALL::CAIGE T3,0		; Don't send neg allocs
+	SETZ T3,
+	CAIGE T4,0		; Check bits, too
+	SETZ T4,
+	PUSH P,T1
+	LOAD T1,LTIDX,(IMPUN)	; Get connection index
+	SETSEC T1,ANBSEC	; In right section
+	PUSH P,T2
+	MOVSI T2,(RARF)		; Waiting for ras?
+	TDNE T2,IMPLT2(T1)
+	 JRST [	POP P,T2	; Yes. do nothing
+		POP P,T1
+		RET]
+	POP P,T2		; No, get back T2
+	ADDM T3,IMPLT4(T1)	; Update msg alloc
+	POP P,T1
+	ADDM T4,NETBAL(IMPUN)	; Bit alloc
+	CALL IMPSCM		; Send the ALL message
+	 XWD 124000,4
+	RET
+
+IMPGVB:	CALL IMPSCM		; Send a GVB (unused)
+	 XWD 111000,5
+	RET
+
+IMPRET:	CALL IMPSCM		; Send a RETurn
+	 XWD 124000,6
+	RET
+
+;;; Control message senders (continued)
+
+IMPINR::CALL IMPSCM		; Send an INR
+	 XWD 100000,7
+	RET
+
+IMPINS::CALL IMPSCM		; Send an INS
+	 XWD 100000,^D8
+	RET
+
+IMPECO:	CALL IMPSCM		; Send an EChO
+	 XWD 100000,^D9
+	RET
+
+IMPERP:	CALL IMPSCM		; Send an Echo RePly
+	 XWD 100000,^D10
+	RET
+
+IMPERR::CALL IMPSCM		; Send an ERRor
+	 XWD 114410,^D11
+	RET
+
+IMSRST::CALL IMPSCM		; Send a RST
+	 XWD 0,^D12
+	RET
+
+IMPRRP::CALL IMPSCM		; Send a reset reply
+	 XWD 0,^D13
+	RET
+
+IMPRAR:	CALL CHKNWP		; If host can do these,
+	 RET
+	CALL IMPSCM
+	 100000,,^D14
+	RET
+
+IMPRAS:	CALL CHKNWP		; If host can do these,
+	 JRST IM8RR1		; Resync not implemented -- sim rar
+	CALL IMPSCM
+	 100000,,^D15
+	RET
+
+IMPRAP:	CALL CHKNWP		; If host can do these,
+	 RET
+	CALL IMPSCM		; Send RAP
+	 100000,,^D16
+	RET
+
+IMPNXR:	CALL CHKNWP
+	 RET
+	CALL IMPSCM
+	 100000,,^D17
+	RET
+
+IMPNXS:	CALL CHKNWP
+	 RET
+	CALL IMPSCM
+	 100000,,^D18
+	RET
+
+;;; Send control message
+;;; 1/  dest host
+;;; 2-n/ arguments. Most args is ERR, which has 4, in 2-5
+;;; @0(P)/  xwd arg descriptor, opcode
+
+IMPSCM:	PUSH P,P4		; Save one AC first
+	MOVE P4,-1(P)		; Get calling PC
+	MOVE P4,0(P4)		; Get arg descriptor, after call inst
+	CALL IMPSC0		; Now do the work
+	POP P,P4		; Restore this AC
+	RETSKP			; And skip over the arg descriptor
+
+IMPSC0:	SAVEPQ			; Save IMPUN, Q2-3, P1-6
+	STKVAR <IMPSBP,<IMPSBF,5>>
+	MOVEI P1,IMPSBF		; Get address of buffer
+	HRLI P1,(<POINT 8,0,31>); Construct byte pointer, 8 bits.
+	MOVEM P1,IMPSBP		; Save it for later use
+	IDPB P4,P1		; Store opcode as first byte of message
+	MOVEI P2,1		; Init message byte count
+	MOVEI P5,T2		; Index to args in AC's 2-5
+IMPSC4:	SETZ P3,0		; Zero P3 before getting next arg desc
+	LSHC P3,3		; Next arg descriptor byte
+	JUMPE P3,IMPSC3		; 0 means done
+	ADDI P2,0(P3)		; Accumulate byte count of message
+	MOVNI Q2,0(P3)		; Compute number of bits to left of arg
+	IMULI Q2,^D8		; Number bytes times bits per byte
+	ADDI Q2,^D36		; Subtracted from size of word
+	MOVE Q3,0(P5)		; Get next arg from ac's
+	LSH Q3,0(Q2)		; Shift out unused bits
+IMPSC2:	ROT Q3,^D8		; Shift next byte into place
+	IDPB Q3,P1		; Store it in message buffer
+	SOJG P3,IMPSC2		; For all bytes
+	AOJA P5,IMPSC4		; Index arg pointer
+
+IMPSC3:	MOVX T2,L1%SND		; Send connection, link 0, Host in T1
+	ILOCK
+	CALL LNKLUK		; See if connection now exists
+	 JRST [	HRLI T3,^D8	; Doesn't, create it
+		CALL IMPOP1
+		AOS IMPNOL	; Count open output links
+		HRROS IMPLT1(T1) ; Set unit neg
+		MOVEI T3,377777	; Set infinite msg alloc
+		HRRM T3,IMPLT4(T1)
+		MOVSI T3,(HIPFLG)
+		IORM T3,IMPLT2(T1)	; Set high priority flag
+		JRST .+1]
+	MOVE T3,IMPSBP		; Get byte pointer
+	MOVEI T4,0(P2)		; Count
+	CALLRET PKMSG0		; Pack and try to send msg. Does IUNLK.
+
+;;; Special raw message routines
+
+	SWAPCD
+
+;;; Assign a special message queue
+
+.ASNSQ::MCENT
+	CALL CKNTWZ
+	 RETERR
+	SKIPN NETSUP		;3032 Network initialized?
+	 RETERR (BOTX05)	;3032 Not yet
+	CALL ASNSQ0		; Work routine
+	 RETERR			; Fail, return error code
+	XCTU [HRRZM P3,1]	; Success, return a queue number
+	SMRETN			; Return to user
+
+ASNSQ0:	STKVAR <ASMSK0,ASVAL0,ASMSK1,ASVAL1,ASMSK2,ASVAL2,ASIVAL>
+	UMOVE Q3,1		; Mask
+	UMOVE Q2,2		; Value
+	TLNE Q3,-1		; 96 bit format?
+	JRST ASNS32		; No. Convert old format.
+	UMOVE T1,0(Q3)		; Get user's mask in 32 bit per word
+	UMOVE T2,1(Q3)
+	LSH T1,-4		; Butt the 64 bits together
+	LSHC T1,4
+	MOVEM T1,ASMSK0
+	LSH T2,-^D8
+	UMOVE T3,2(Q3)		; Third 32 bits
+	TRZ T3,17		; Make sure no junk from user
+	LSHC T2,^D8
+	MOVEM T2,ASMSK1
+	MOVEM T3,ASMSK2
+	UMOVE T1,4(Q3)		; Get user's value in 32 bit per word
+	UMOVE T2,5(Q3)
+	LSH T1,-4		; Butt the 64 bits together
+	LSHC T1,4
+	MOVEM T1,ASVAL0
+	LSH T2,-^D8
+	UMOVE T3,6(Q3)		; Third 32 bits
+	TRZ T3,17		; Make sure no junk from user
+	LSHC T2,^D8
+	MOVEM T2,ASVAL1
+	MOVEM T3,ASVAL2
+	UMOVE T1,3(Q3)		; Get last two args for internet byte
+	UMOVE T3,7(Q3)		; ..
+	LSH T1,^D8		; Compress for now into one arg
+	IOR T1,T3		; Matching old AC3
+	MOVEM T1,ASIVAL		; Save in local block
+	JRST ASNS9X		; Join 32-bit code
+
+;Here for old style mask and value arguments
+
+ASNS32:	TRZN Q3,1		; Want internet compare?
+	TDZA T2,T2		; No, assume zero
+	UMOVE T2,3		; Yes, get mask and value
+	ANDI T2,177777		; Just two 8-bit fields
+	MOVEM T2,ASIVAL		; Save internet temp
+;Long sequence of code to convert 32 to 96 bit leader mask and value
+	MOVE T1,Q3		; Build first mask and value words
+	MOVE T2,Q2		; ..
+	LSH T1,^D<7-31>		; Message type field
+	LSH T2,^D<7-31>
+	ANDI T1,17B31		; Just four bits of message type
+	ANDI T2,17B31		; ..
+	MOVEM T1,ASMSK0
+	MOVEM T2,ASVAL0
+	MOVE T1,Q3		; Now second word of leader
+	MOVE T2,Q2
+	LSH T1,-^D12		; Align link and imp numbers
+	LSH T2,-^D12
+	ANDI T1,77B27+377
+	ANDI T2,77B27+377	; Link and 6 bits of Imp
+	TXNE Q3,<FRMIMP+377B15>	; If looking for some real site(s),
+	TXO T1,<374B11+177700B27> ; Make mask be full width on addresses
+	LDB T3,[POINT 2,Q3,9]	; Move host bits over
+	DPB T3,[POINT 2,T1,11]	; in mask
+	LDB T3,[POINT 2,Q2,9]	; and value
+	TXNE Q2,FRMIMP		; Talking about a fake host?
+	ADDI T3,FKHOST		; Yes.  Convert the host number
+	DPB T3,[POINT 8,T2,11]	; Store in value word
+	MOVEM T1,ASMSK1		; Save converted mask, second word
+	MOVEM T2,ASVAL1		; and corresponding value
+	MOVE T1,Q3		; Now build the third word
+	MOVE T2,Q2
+	ANDI T1,377B31
+	ANDI T2,377B31
+	LSH T1,^D<31-7>		; Position for 96 bit leader
+	LSH T2,^D<31-7>
+	MOVEM T1,ASMSK2
+	MOVEM T2,ASVAL2		; Save for comparisons
+;;; Fall thru
+
+;;; Falls thru from above
+;;; Now have converted masks from 32 to 96 bit format if needed
+
+ASNS9X:	NOINT			; Protect lock
+	AOSE SQLCK
+	 CALL SQLWAT
+	MOVSI P2,-NSQ		; Search thru special Q tables
+	SETZ P3,		; Remember a free slot when found
+ASNSQL:	SKIPGE SQJOB(P2)	; Assigned?
+	 JRST [	JUMPL P3,ASNSQN
+		MOVE P3,P2	; First free one. Remember it.
+		JRST ASNSQN]
+	HRLZ T3,ASIVAL		; Check internet byte
+	AND T3,SQJOB(P2)	; GET JOINT MASK
+	LSH T3,-^D26		; RIGHT JUSTIFY
+	ANDI T3,377		; FLUSH EXTRANEOUS BITS
+	MOVE T2,ASIVAL		; Get value
+	TSC T2,SQJOB(P2)	; COMPARE VALUES
+	AND T2,T3		; ONLY WHERE IT COUNTS
+	JUMPN T2,ASNSQN		; DIFFERENT IS OK
+	MOVE T1,ASMSK0		; User's mask
+	AND T1,SQMSK1(P2)	; This queue's mask
+	MOVE T2,ASVAL0		; User's value
+	XOR T2,SQVAL1(P2)	; This queue's value
+	TDNE T1,T2		; Must be different in joint mask bits
+	JRST ASNSQN		; They are different. Ok.
+	MOVE T1,ASMSK1		; User's mask
+	AND T1,SQMSK2(P2)	; This queue's mask
+	MOVE T2,ASVAL1		; User's value
+	XOR T2,SQVAL2(P2)	; This queue's value
+	TDNE T1,T2		; Must be different in joint mask bits
+	JRST ASNSQN		; They are different. Ok.
+	MOVE T1,ASMSK2		; User's mask
+	AND T1,SQMSK3(P2)	; This queue's mask
+	MOVE T2,ASVAL2		; User's value
+	XOR T2,SQVAL3(P2)	; This queue's value
+	TDNN T1,T2		; Must be different in joint mask bits
+	 JRST ASNSQF		; Else fail
+ASNSQN:	AOBJN P2,ASNSQL		; Test all possibilities
+; Fall thru
+
+;Falls thru. All possible queues have been scanned for conflict or free.
+	MOVEI T1,ASNSX1		; In case no free slots
+	JUMPGE P3,ASNSF1	; Jump if none free
+	MOVE T1,ASMSK0		; Store the newly assigned masks, vals.
+	MOVEM T1,SQMSK1(P3)	; Store mask in table
+	MOVE T1,ASVAL0
+	AND T1,ASMSK0		; Just meaningful bits
+	MOVEM T1,SQVAL1(P3)	; Store value field
+	MOVE T1,ASMSK1		; Store the newly assigned masks, vals.
+	MOVEM T1,SQMSK2(P3)	; Store mask in table
+	MOVE T1,ASVAL1
+	AND T1,ASMSK1		; Just meaningful bits
+	MOVEM T1,SQVAL2(P3)	; Store value field
+	MOVE T1,ASMSK2		; Store the newly assigned masks, vals.
+	AND T1,[377B7]		; Only 80 bits are ckecked.
+	MOVEM T1,SQMSK3(P3)	; Store mask in table
+	MOVE T1,ASVAL2
+	AND T1,ASMSK2		; Just meaningful bits
+	MOVEM T1,SQVAL3(P3)	; Store value field
+	MOVE T2,ASIVAL		; Internet bytes
+	HRL T2,JOBNO
+	MOVSM T2,SQJOB(P3)
+	SETOM SQLCK
+	RETSKP			; Good return to jacket routine
+
+ASNSQF:	MOVEI T1,ASNSX2
+ASNSF1:	SETOM SQLCK
+	RET			; Fail return to jacket routine
+
+;;; RELSQ - Release special q
+;;;
+;;;	1/  SPECIAL QUEUE HANDLE, OR -1 FOR ALL
+
+.RELSQ::MCENT			; Enter monitor context
+	SKIPN NETSUP		;3032 Network initialized?
+	 RETERR (BOTX05)	;3032 Not yet
+	NOINT			; Cover the use of SQLCK
+	AOSE SQLCK		; Try to get it
+	 CALL SQLWAT		; Failed. Wait.
+	CAMN T1,[-1]		; User want to release all Q's?
+	 JRST RELASQ		; Yes.
+	CAIL T1,0		; No. Legal Q number?
+	CAIL T1,NSQ		; ..
+	 JRST RELSQ1		; No. Just ignore the call
+	CALL REL1SQ		; Release just one.
+RELSQ1:	SETOM SQLCK		; Free the lock
+	MRETNG
+
+RELASQ:	MOVSI T4,-NSQ		; Here to release all Q's for this job
+RELAS1:	HRRZ T1,T4		; Try to release this one
+	CALL REL1SQ		; ..
+	AOBJN T4,RELAS1		; Now try the rest
+	JRST RELSQ1		; Release lock and return good.
+
+REL1SQ:	HRRZ T2,SQJOB(T1)	; Who owns this queue?
+	CAME T2,JOBNO		; Is it me?
+	 RET			; No, so just forget it
+	SETOM SQJOB(T1)		; Yes. Release it
+REL1S1:	CALL SIQGET		; Better discard any messages
+	 RET			; No more.
+	CALL RLNTBF		; Release this one
+	JRST REL1S1		; Keep on till all released
+
+; .RCVIM, receive raw messages.  B0 off for 32-bit leader format
+;  in user area, and B0 on for 96-bit leader format in user area.
+;  B1 on for 32 bit data in user area, off for 36 bit data packing.
+;  Called by
+;	MOVEI 1,SQH
+;	TLO 1,(1B0)		; If want 96 bit leader
+;	TLO 1,(1B1)		; If want data as 32-bit form in user area
+;	MOVEI 2,BUFFER
+;	RCVIM
+;	 error
+;	OK
+
+.RCVIM::MCENT			; Standard JSYS entry
+	SKIPN NETSUP		;3032 Network initialized?
+	 RETERR (BOTX05)	;3032 Not yet
+RCVIM1:	NOINT			; Cover lock of SQLCK
+	UMOVE P1,1		; Get user's arguments
+	HRRZ T1,P1		; Verify the queue handle
+	CALL CHKSQ		; Check for accessibility to special Q
+	 JRST MRETNE		; No access
+	CALL SIQGET		; Get the message, full addr in T2
+	 JRST [	OKINT		; None there
+		MDISMS		; Wait for one to arrive
+		JRST RCVIM1]	; Try again
+	JUMPGE P1,RCVIM0	; Jump if 32 bit leader
+	DMOVE T3,.NBLD1(T2)	; If 96 bits, make 3 32 bit words
+	LSHC T3,-^D8		; Last 32 bits of leader
+	MOVE T3,.NBLD2(T2)	; Possible 4 bits of data in B32-35
+	DPB T3,[POINT 4,T4,35]	; ..
+	MOVEM T4,.NBLD2(T2)	; Pretty third leader word
+	DMOVE T3,.NBLD0(T2)	; First 72 bits of leader
+	LSHC T3,-4		; Put bits 32-35 in second word
+	LSH T3,4		; Restore bits 0-31
+	ANDCMI T4,17		; Turn off four junk bits in second word
+	DMOVEM T3,.NBLD0(T2)	; Restore 64 bits to buffer
+RCVIM0:	TLNE P1,(1B1)		; User want data in 32 bit form?
+	JRST RCVI1X		; Yes. Don't need to convert it
+	MOVE P2,T2		; Need to convert back to 36 bit form
+	ADDI P2,.NBLD2+1	; Point to second word of data
+	MOVE Q2,T2		; And make writer pointer, too
+	ADDI Q2,.NBLD2		; But points to first word of data
+	LOAD Q3,NBBSZ,(T2)	; How many words in buffer
+	ADD Q3,T2		; Word after last one to read
+	MOVSI T1,-10		; State counter
+RCVIL1:	DMOVE T3,-1(P2)		; Get some IMP bits
+	CAML P2,Q3		; Beyond real end of data?
+	MOVEI T4,0		; If so, make zeros for padding
+	LSH T3,-4		; Crunch out the 4 bits of junk
+	LSHC T3,@RCVIT1(T1)	; Shift together 36 good bits
+	MOVEM T3,0(Q2)		; Put them back in buffer
+	AOBJN T1,RCVIN1		; Step the state counter
+	MOVSI T1,-10		; Restart it
+	ADDI P2,1		; Move up 1 of each 9 words
+RCVIN1:	ADDI Q2,1		; Step the writer,
+	CAMG P2,Q3		; Read them all?
+	AOJA P2,RCVIL1		; No, loop some more.
+	SUB Q2,T2		; When done, find new length, for user.
+	SKIPA			; End of converter to 36 bit form
+RCVI1X:	LOAD Q2,NBBSZ,(T2)	; For 32 bits, believe interrupt service
+	UMOVE T1,2		; Get user's buffer
+	HRRZ T3,Q2		; Size of buffer in monitor
+	SKIPL P1		; User want short leaders?
+	SUBI T3,2		; Yes, he will get only this length.
+	UMOVEM T3,.NBHDR(T1)	; Give user the size he will see
+	PUSH P,T2		; Don't clobber buffer address
+	MOVEI T3,1(T1)		; Word after user's header
+	AOS T2			; Word after monitor bfr header
+	MOVEI T1,0(Q2)		; Count to move to user space
+	JUMPL P1,RCVI1Y		; No corrections if user gets long ldr
+	ADDI T2,2		; Start two words later in buffer
+	SUBI T1,2		; And xfer two fewer, if old style leader
+RCVI1Y:	CALL BLTMU		; Give words to user
+	POP P,T2		; Get back pointer to buffer
+	JUMPL P1,RCVIM2		; If wants long ldr, go give it to user
+
+; Here to convert leader to look like old 32-bit leader format
+
+RCVIM3:	MOVE T4,.NBLD2(T2)	; Get the low 4 bits
+	LSH T4,^D32		; Rest of word shifts in from left
+	LOAD T3,IHSTY,(T2)	; And build the remaining 32 bits
+	LSHC T3,-4		; ..
+	LOAD T3,IHMI2,(T2)	; Do all 12 bits of msg ID
+	LSHC T3,-4
+	LOAD T3,IHLNK,(T2)	; Rest of link
+	LSHC T3,-^D8
+	LOAD T3,IHIMP,(T2)	; IMP number
+	LSHC T3,-6
+	LOAD T3,IHHST,(T2)	; Host portion of address
+	LSHC T3,-2
+	LOAD T3,IHMTY,(T2)	; Message type
+	LSHC T3,-^D8
+	LOAD T3,IHHST,(T2)	; Check again on host number
+	CAIL T3,FKHOST		; Fake host?
+	TXO T4,FRMIMP		; Yes, set "From IMP" bit
+	UMOVE T1,2		; User's buffer address again
+	UMOVE T3,.NBLD0(T1)	; Preserve 4 data bits, if 36 bit
+	ANDI T3,17		; That's these
+	TRO T4,(T3)		; Put them with leader
+	UMOVEM T4,.NBLD0(T1)	; Give user this leader
+RCVIM2:	CALL RLNTBF		; Release the buffer
+	SMRETN			; Return
+
+;Table for shifting 32 bit words back into 36 bits, for RCVIM
+
+RCVIT1:	IFIW!4		; Shifts done indirect thru this table
+	IFIW!10
+	IFIW!14
+	IFIW!20
+	IFIW!24
+	IFIW!30
+	IFIW!34
+	IFIW!40
+
+	RESCD
+
+SIQGET:	MOVE T2,TODCLK		; Update time to discard msgs
+	ADDI T2,SIQTM0		; Since this user has been active
+	MOVEM T2,SIQTIM(T1)	; Reset time
+	NOSKED			; Protect these queues from MLCFRK
+	MOVE T2,SIQIBO(T1)	; Get buffer address for this Q
+	JUMPE T2,SIQEMT		; Jump if none there
+	HLRZ T3,0(T2)		; There is one. Get it's successor.
+	JUMPN T3,SIQGT1		; Jump if there is a successor too
+	SETZM SIQIBI(T1)	; No successor. Clear tail pointer
+	SKIPA			; Don't put in section number
+SIQGT1:	SETSEC T3,ANBSEC	; Section goes with address
+	MOVEM T3,SIQIBO(T1)	; New next-out
+	SOS SIQSPC(T1)		; Credit space used
+	OKSKED			; Queues may be touched now
+	RETSKP			; Success return from SIQGET
+				; Return with buffer addr in T2
+
+SIQEMT:	OKSKED			; None on queue.
+	HRLZI T1,SIQIBO(T1)	; Cell which will become non-zero
+	HRRI T1,DISNT		; When a message arrives
+	RET			; For caller to do MDISMS with
+
+	SWAPCD
+
+; .sndim: send special message
+;	AC1/ RH = SQH, B0 = User wants 96 bit leader, B1 = User wants
+;			data left as 32 bits per word
+
+.SNDIM::MCENT
+	SKIPN NETSUP		;3032 Network initialized?
+	 RETERR (BOTX05)	;3032 Not yet
+	UMOVE P1,1		; User's SQH in RH, bits in LH
+	UMOVE P2,2		; User's buffer address
+	UMOVE P3,.NBHDR(P2)	; Size word of that buffer
+	HRRZ T1,P1
+	CALL CHKSQ		; Check access to special q
+	 RETERR
+	NOINT
+	MOVEI T2,0(P3)		; User's buffer size
+	SKIPL P1		; If converting from 32bit in user space,
+	ADDI T2,2		; Less two for leader expansion
+	CAILE T2,.NBLD2		; At least a full leader?
+	CAML T2,MAXWPM		; And not too much?
+	 RETERR (SNDIX1)	; Bad size
+	CALL ASNTBF		; Get a buffer
+	 RETERR (SNDIX2)	; No buffers available
+	PUSH P,T1		; Save buffer address
+	MOVEI T2,1(P2)		; Source in user area, after header
+	MOVE T3,T1		; Destination in monitor space,
+	ADDI T3,1		; Skip the header here, too
+	SKIPL P1		; But if have to convert leader from 32bit
+	ADDI T3,2		; Leave room for more leader
+	LOAD T1,NBBSZ,(T1)	; Number of words to transfer,
+	SUBI T1,1		; Less the header
+	SKIPL P1		; And if converting leader,
+	SUBI T1,2		; Two less for that
+	CALL BLTUM		; Move from user space
+	POP P,T2		; The buffer addr again
+	LOAD T1,NBBSZ,(T2)	; Check size
+	MOVEI T3,1(T1)		; Point just after data
+	ADD T1,T2		; Address the buffer
+	CAMGE T3,MAXWPM		; Is buffer full?
+	SETZM 0(T1)		; No, so clear any possible pad bits
+	JUMPGE P1,SNDIM1	; If need to convert leader fm 32 bit
+	DMOVE T3,.NBLD0(T2)	; Change from pretty to packed 96 bit ldr
+	LSH T3,-4		; Crunch out 4 unused bits
+	LSHC T3,4		; ..
+	MOVEM T3,.NBLD0(T2)	; First 36 bits of leader
+	MOVE T3,T4		; Second word coming up
+	MOVE T4,.NBLD2(T2)	; And third
+	LSH T3,-^D8		; Remove unused bits
+	LSHC T3,^D8		; Compress, making 8 bits of fill
+	MOVEM T3,.NBLD1(T2)	; Put back in buffer
+	MOVEM T4,.NBLD2(T2)	; And stash last 36 (24) bits
+	JRST SNDIM2		; Now go consider the data portion
+
+;Here if user is giving us a 32 bit leader. Must make a 96 bit one.
+
+SNDIM1:	MOVE T4,.NBLD2(T2)	; Get 32 bit form leader from user
+	SETZM .NBLD0(T2)	; Clear space for the 96 bit leader
+	SETZM .NBLD1(T2)
+	MOVEI T3,17		; Four bits of data after leader
+	ANDM T3,.NBLD2(T2)
+	MOVEI T3,0		; Select priority bit
+	TXNE T4,IMPHIP		; Old form prio bit
+	MOVEI T3,<HTY%HP_-4>	; New form of it
+	STOR T3,IHHT2,(T2)	; Put it in new leader
+	LDB T3,[POINT 2,T4,3]	; Two low IMP flags
+	LSH T3,2		; Room for two new ones
+	STOR T3,IHLDF,(T2)	; In leader flags half-byte
+	LDB T1,[POINT 4,T4,7]	; Message type
+	LDB T3,[POINT 4,T4,31]	; Message subtype
+	CAIN T1,3		; Old uncontrolled message?
+	JRST [	MOVEI T1,.IHREG	; Becomes regular message
+		MOVEI T3,3	; Of subtype three
+		JRST .+1]
+	STOR T1,IHMTY,(T2)	; Message type in buffer
+	STOR T3,IHSTY,(T2)	; Subtype in buffer
+	LSH T4,-^D8		; Now deal with 12 bits of msg ID
+	MOVEI T3,(T4)		; Copy it
+	STOR T3,IHMI2,(T2)	; The four bits in word LD2
+	LSH T4,-4		; The link (top 8 bits)
+	STOR T4,IHLNK,(T2)	; Copy link
+	LSH T4,-^D8		; Next is the Imp and Host number
+	MOVEI T3,(T4)		; Imp number
+	ANDI T3,77		; Six bits only
+	STOR T3,IHIMP,(T2)	; ..
+	LSH T4,-6		; High two bits are host on imp
+	MOVEI T3,(T4)
+	ANDI T3,3		; Just two bits
+	TXNE T4,<FRMIMP_-^D26>	; Was it for a fake host?
+	ADDI T3,FKHOST		; Convert to high host number
+	STOR T3,IHHST,(T2)	; Put it in leader
+SNDIM2:
+; Now have message in IMP buffer, converted to compressed
+;  96 bit leader format. Now check for legality of addresses.
+	MOVE T3,SQJOB(P1)	; GET INTERNET DISPATCH MASK AND VAL
+	TLNN P1,(1B1)		; IF USER DATA IS 36-BIT LAYOUT,
+	 JRST SNDIMO		; handle differently
+	MOVE T3,.NBHHL+2(T2)	; Get word with protocol field from pkt
+	LSH T3,-2		; Align with byte of queue spec
+	JRST SNDIMQ		; Go check it
+
+SNDIMO:	DMOVE T3,.NBHHL+1(T2)	; Get words with protocol field
+	LSHC T3,^D22		; Align with byte of mask
+SNDIMQ:	XOR T3,SQJOB(P1)	; Compare with queue spec
+	LSH T3,8		; Align with mask
+	AND T3,SQJOB(P1)	; Only look at these bits
+	TLNE T3,177400		; AND ONLY THESE TOO
+	 JRST SNDIXR		; NOT RIGHT
+	MOVE T3,.NBLD0(T2)	; And header
+	XOR T3,SQVAL1(P1)	; Difference with value
+	TDNE T3,SQMSK1(P1)	; Must be equal in masked bits
+SNDIXR:	 JRST [	MOVEI T1,SNDIX4
+		JRST SNDIXX]
+	MOVE T3,.NBLD1(T2)	; All three leader words must be OK
+	XOR T3,SQVAL2(P1)	; ..
+	TDNE T3,SQMSK2(P1)	; ..
+	JRST SNDIXR		; Not right.
+	MOVE T3,.NBLD2(T2)	; All three leader words must be OK
+	XOR T3,SQVAL3(P1)	; ..
+	TDNE T3,SQMSK3(P1)	; ..
+	JRST SNDIXR		; Not right.
+	MOVEI T3,ITY%LL		; Now tell IMP this is 96-bit msg
+	STOR T3,IHFTY,(T2)	; ..
+	LOAD T3,IHMTY,(T2)	; Only allow sending regular messages
+	LOAD T1,IHLNK,(T2)	; And on non-NCP links
+	CAIN T3,.IHREG		; ..
+	CAIG T1,LLINK		; ..
+	JRST [	MOVEI T1,SNDIX3
+		JRST SNDIXX]	; Invalid destination or type
+;Now may need to convert 36 bit data to 32 bits.
+	TLNE P1,(1B1)		; User gave us 32 bit data form?
+	JRST SNDIM5		; Yes. Go send it.
+	LOAD P2,NBBSZ,(T2)	; Get number of supplied words
+	SUBI P2,.NBHHL		; First word to work on
+	MOVEI Q2,0(P2)		; For reading in loop
+	IMULI Q2,^D9		; Convert to needed words in 32 bit
+	IDIVI Q2,^D8		; ..
+	MOVEI P3,.NBLD2(Q2)	; Where to write into
+	MOVEI T1,.NBHHL(Q2)	; Figure length to write
+	SKIPE Q3		; Partial word?
+	ADDI T1,1		; One more in destination
+	CAML T1,MAXWPM		; Will this fit in buffer?
+	 JRST [	MOVEI T1,SNDIX1	; No
+		JRST SNDIXX]
+	STOR T1,NBBSZ,(T2)	; Update for interrupt routine
+	MOVEI Q2,.NBLD2(P2)	; Length to read from
+	ADD P3,T2		; Point into the buffer
+	ADD Q2,T2		; For these pointers
+	TRC Q3,7		; make aobjn pointer
+	HRLI Q3,-10(Q3)		; ..
+	SETZM 1(P3)		; Make sure any padding is 0.
+SNDIL2:	MOVE T1,0(Q2)		; Get 36 bits to shuffle
+	DPB T1,SNDIT2(Q3)	; Store right part of word
+	LSH T1,@SNDIT1(Q3)	; Shift left part down
+	MOVEM T1,0(P3)		; And store it (B32-B35 are junk)
+	AOBJN Q3,SNDIN2		; Step the state counter
+	MOVSI Q3,-10		; Restart it
+	SUBI P3,1		; Skip a word in destination
+SNDIN2:	SUBI P3,1		; Back up through the buffer
+	SUBI Q2,1		; ..
+	SOJGE P2,SNDIL2		; Count the words
+SNDIM5:	MOVE T4,NETFLD		; Get default network 
+	LSH T4,-4		; put in proper field
+	MOVE T1,.NBLD0(T2)	; get first word
+	TXNN T1,<377B15>	; Is the net specified?
+	 IOR T1,T4		; No, put one in
+	MOVEM T1,.NBLD0(T2)	; Replace word
+	NOSKED
+	CALL IMPQOA		; Put onto output q
+	OKSKED
+	JRST SKMRTN
+
+SNDIXX:	CALL RLNTBF		; Release the buffer, don't send it.
+	JRST MRETNE		; Fail return from SNDIM jsys
+
+; Tables for converting 36 to 32 bit buffer
+SNDIT1:	IFIW!<0,,-34>		;Table used for shifting bits right
+	IFIW!<0,,-30>
+	IFIW!<0,,-24>
+	IFIW!<0,,-20>
+	IFIW!<0,,-14>
+	IFIW!<0,,-10>
+	IFIW!<0,,-4>
+	IFIW!<0,,0>
+
+SNDIT2:	POINT 32,1(P3),31	;Table for storing right-hand part of word
+	POINT 28,1(P3),27
+	POINT 24,1(P3),23
+	POINT 20,1(P3),19
+	POINT 16,1(P3),15
+	POINT 12,1(P3),11
+	POINT 08,1(P3),07
+	POINT 04,1(P3),03
+
+;;; CHKSQ - Check for access to specific special Q
+;;;
+;;; ACCEPTS:
+;;;	T1/ SPECIAL QUEUE HANDLE
+;;;
+;;; RETURNS
+;;;	+1 FAILURE
+;;;	   T1/  ERROR CODE
+;;;	+2 SUCCESS
+;;;
+;;; CLOBBERS T2
+
+CHKSQ:	HRRZ T2,T1		; Check RH only
+	CAIL T2,NSQ		; Is it in range?
+	 JRST [	MOVEI T1,SQX1	; No, give error code
+		RET]		; And fail return
+	HRRZ T2,SQJOB(T1)	; It's a legal number. Who owns it?
+	CAMN T2,JOBNO		; Is it me?
+	 JRST RSKP		; Yes, give success return
+	MOVEI T1,SQX2		; No, give error code
+	RET			; And fail return
+
+;;; CKNTWZ - Check for net wizardry
+;;; RETURNS:
+;;;	+1 Not Net Wizard. Error code in T1
+;;;	+2 Net Wizard
+
+CKNTWZ:	MOVEI T2,SC%NWZ		; Required capability bit2,SC%NWZ
+	TDNE T2,CAPENB		; Do we have it?
+	 JRST RSKP		; Yes. Success return
+	MOVEI T1,NTWZX1		; No, give failure code
+	RET			; And non-skip return
+
+;;; SQLWAT - Wait for SQ Lock to clear
+
+SQLWAT:	PUSH P,T1		; Be transparent
+	MOVEI T1,SQLTST		; Scheduler test
+	MDISMS			; Wait for it
+	POP P,T1		; Restore AC
+	RET			; And return
+
+	RESCD
+
+;;; The Sched test itself, must be resident
+
+SQLTST:	AOSE SQLCK		; Try to get the lock
+	JRST 0(T4)		; Didn't get it
+	JRST 1(T4)		; Have the lock. Run the fork
+
+;;; SIQCHK: check for unclaimed messages
+;;; Called from NCPFRK with TODCLK in T1
+;;; Returns T1/ Time to come back here again
+
+SIQCHK:	MOVX T3,^D31000		; Check back in 31 seconds if none
+	ADD T3,T1		; ..
+	MOVSI T2,-NSQ
+SIQCKL:	SKIPGE SQJOB(T2)	; Is this Q in use?
+	 JRST SIQCKE
+	CAMG T1,SIQTIM(T2)	; Yes, time to flush stuff?
+	 JRST SIQCKX		; No
+	PUSH P,T1		; Yes, remove stuff
+	PUSH P,T2
+	PUSH P,T3
+	HRRZ T1,T2
+	CALL REL1S1		; Release all messages on this Q
+	POP P,T3
+	POP P,T2
+	POP P,T1
+SIQCKX:	CAML T3,SIQTIM(T2)	; This next one to expire?
+	 MOVE T3,SIQTIM(T2)	; T3 := next one which will expire
+SIQCKE:	AOBJN T2,SIQCKL		; Check all queues
+	MOVE T1,T3		; When to call back
+	RET
+
+;;; Lookup host-link
+;;; ACCEPTS:  1/ HOST ADDRESS
+;;;	    2/ B28-35, link; B18, direction (1=send)
+;;;	    3/ Bytesize, which must be preserved, but isn't used here
+;;;
+;;; RETURNS	+1  Entry not found
+;;;		 	T1/ Unchanged
+;;;			T2/ Link table index of free item
+;;;			T3/ Size,,Link+SND bit
+;;;		+2  Entry found
+;;;			T1/ Link table index
+;;;			T3/ Unchanged
+
+LNKLUK::
+	STKVAR <LNKLT2,LNKLT3,LNKLT4,LNKLPT,LNKLQ2>	; Note - This STKVAR is
+				;  also at IMPHFL and IMPPIL
+	MOVEM T2,LNKLT2		; Remember the link and Send bit
+	MOVEM T3,LNKLT3		; Preserve this AC
+	MOVEM Q2,LNKLQ2
+	MOVSI T3,(1B1)		; Bit says no deleted entry found
+LNKL6:	MOVEM T4,LNKLT4		; Save another AC
+	SKIPN T1		; Valid host address?
+	 MNTBUG (INF,LNKLH0,<LNKLUK: Host argument of 0>)	; No
+	MOVEM T1,LNKLPT		; Save argument
+	HRRZ T1,LNKLPT		; Part of host number
+	HLRZ T2,LNKLPT		; Other part
+	ADD T2,LNKLT2		; Link and send bit
+	XOR T1,T2		; Mix them together
+	IMUL T1,[5654123]	; Compute hash from argument
+	LSH T1,-^D9
+	IDIVI T1,IMPNLK		; Remainder gives initial index
+	SETSEC T2,ANBSEC	; Put it in right section for tables
+	MOVE T1,T2		; Copy the initial probe
+	EXCH T1,LNKLPT		; Get host, save initial probe
+	HRREI Q2,-IMPNLK(T2)	; setup counter for remainder of table
+LNKL2:	HRRZ T4,IMPLT1(T2)	; Get the link and Send/Free bits
+	CAME T4,LNKLT2		; Match the calling arg?
+	JRST LNKL7		; No
+	LOAD T4,LTHOST,(T2)	; Get host in this table slot
+	CAMN T4,T1		; Desired entry?
+	 JRST [	MOVE T1,T2	; Yes, get index in T1
+		MOVE T3,LNKLT3	; And restore AC's
+		MOVE T4,LNKLT4	; ..
+		MOVE Q2,LNKLQ2	; ...
+		RETSKP]		; Return good
+	HRRZ T4,IMPLT1(T2)	; Not right. Get back free/send bits
+LNKL7:	TRNE T4,L1%FRE		; Special?  I.e. free or deleted?
+	JRST [	TLNE T3,(1B2)	; Yes, called by rehash or PI level?
+		JRST LNKL4	; Yes
+		TXNE T4,L1%SND	; This a free entry?
+		JRST LNKL3	; Yes, search done, not found
+		TLZE T3,(1B1)	; This first deleted entry encountered?
+		HRRI T3,0(T2)	; Yes, save its position
+		JRST .+1]
+LNKL5:	AOS T2			; Increment
+	AOJL Q2,LNKL2		; Loop
+	JUMPL T3,[TLNN T3,(1B1)	; Table full, was delete seen?
+		JRST LNKL3	; Yes, use it
+		MNTBUG (INF,IMPLTF,<IMPLT FULL>)
+		JRST LNKL1]	; Return not found
+	HRRZ Q2,LNKLPT		; Get wraparound pointer
+	MOVNS Q2		; Into counter
+	PUTSEC T2,ANBSEC	; Reset pointer also
+	TLO T3,(1B0)		; Remember wraparound
+	JRST LNKL2		; Check top entry of table
+
+LNKL3:	TLNN T3,(1B1)		; Not found. Delete encountered?
+	MOVEI T2,0(T3)		; Yes, use that for new entry
+	SETSEC T2,ANBSEC	; In right section
+LNKL1:	MOVE T4,LNKLT4		; Restore T4
+	HRLZ T3,LNKLT3		; Put bytesize in LH of T3
+	HRR T3,LNKLT2		; And caller's T2 in RH of T3
+	MOVE Q2,LNKLQ2		; Restore Q2
+	RET			; Return "not found"
+
+LNKL4:	TLNE T3,(1B3)		; PI level call?
+	 JRST LNKL5		; Yes. Ignore deleted/free entries
+	MOVX T4,L1%FRE		; No, rehash. Make deleted
+	MOVEM T4,IMPLT1(T2)
+	SETZM IMPLT5(T2)	; And discard old host
+	JRST LNKL5		; Try another slot
+
+;;; Special entry used only by rehash routine.
+;;; It assumes item will be found, and it sets any 'free' entries
+;;;  encountered to be 'deleted'.
+
+IMPHFL:	STKVAR <LNKLT2,LNKLT3,LNKLT4,LNKLPT,LNKLQ2>	; Note -- this STKVAR is
+				; also at IMPPIL and LNKLUK
+	MOVEM T2,LNKLT2		; Remember the link and Send bit
+	MOVEM T3,LNKLT3		; Save this AC
+	MOVEM Q2,LNKLQ2		; and this
+	MOVSI T3,(1B2)		; Controls action on special entries
+	JRST LNKL6		; Go join scan
+
+;;; Special entry from IMODN2 to find entry to store retransmit buffer
+;;; Searches entire table for entry regardless of deletes and frees
+
+IMPPIL::
+	STKVAR <LNKLT2,LNKLT3,LNKLT4,LNKLPT,LNKLQ2>	; Note -- this STKVAR is
+				; also at IMPHFL and LNKLUK
+	MOVEM T2,LNKLT2		; Remember the link and Send bit
+	MOVEM T3,LNKLT3		; Save this AC
+	MOVEM Q2,LNKLQ2
+	MOVSI T3,(1B2+1B3)	; Flags that this is the PI entry
+	JRST LNKL6		; Go join scan
+
+;;; Routine to garbage collect hash table.
+;;; Sets all deleted entries to free then calls lookup
+;;; routine to mark all needed entries deleted to enable all entries
+;;; to be found.
+;;; Lookup routine will change any 'free' entries passed over during
+;;; a search to 'deleted'.  Thus all 'deleted' entries not currently
+;;; necessary will be flushed.
+
+IMPGC:	IMSCLK(IMCGC)		; Charge time to IMCGC
+	ILOCK
+	SETZM LNKNDL		; Clear delete count
+	HRREI Q2,-IMPNLK	; Prepare to scan link table
+	PUTSEC Q3,ANBSEC	; ...
+	MOVX T1,L1%FRE		; Prepare these flags for quick scan
+	MOVX T2,L1%FRE!L1%SND	; ..
+IMPGC1:	TDNN T1,IMPLT1(Q3)	; Free or deleted?
+	 JRST IMPGC0		; No, in use.
+	MOVEM T2,IMPLT1(Q3)	; Yes, set it to free
+	SETZM IMPLT5(Q3)	; Clear host field, too
+IMPGC0:	AOS Q3
+	AOJL Q2,IMPGC1		; Loop
+	HRREI Q2,-IMPNLK	; Prepare to scan again
+	PUTSEC Q3,ANBSEC	; ...
+IMPGC2:	HRRZ T2,IMPLT1(Q3)	; For every entry
+	LOAD T1,LTHOST,(Q3)	;  (two words of argument)
+	TXNE T2,L1%FRE		; That is not
+	 JRST IMPGC3		; Deleted or free
+	CALL IMPHFL		; Marked necessary deleted entries
+	 MNTBUG(INF,IMPIFH,<IMPGC-IMPOSSIBLE FAILURE OF IMPHFL>)
+IMPGC3:	AOS Q3
+	AOJL Q2,IMPGC2		; Finish second pass for all slots
+	IUNLK
+	RET
+
+;;; UPBYT - Unpack byte from current msg for a connection
+;;;
+;;;	ACCEPTS T1/ connection index
+;;;
+;;;	RETURNS +1 IF NONE THERE
+;;;		+2 IF OK,  BYTE IN T3
+;;;
+;;; Called by, among others, the Control msg processor for each byte of
+;;; a control message.
+
+UPBYT::	ILOCK
+	HLRZ T2,IMPLT4(T1)	; Get current buffer
+	JUMPN T2,UPBYT1		; Is there a buffer?
+	CALL UPBGNB		; No buffer, try to get one
+	 RET			; Failed, return noskip
+UPBYT1:	SETSEC T2,ANBSEC	; In buffer section
+	ILDB T3,.NBPTR(T2)	; Get byte, byte ptr in bfr header
+	SOSG .NBCNT(T2)		; Count down bytes in bfr
+	 CALL UPBRB		; Now empty, release bfr
+	IUNLK
+	RETSKP			; Success return
+
+;;; UPMSG -  Unpack message
+;;;
+;;; ACCEPTS
+;;; T1/	LT INDEX
+;;; T3/	STORE BYTE POINTER
+;;; T4/	MAX BYTE COUNT
+
+;;; RETURNS +1	FAILURE - NO BUFFER. T1 SET UP FOR WAIT
+;;;	 +2	SUCCESS,
+;;;		T1/	UNCHANGED
+;;;		T2/	CLOBBERED
+;;;		T3/	UPDATED
+;;;		T4/	UPDATED
+
+UPMSG::	STKVAR <UPMSBP,UPMSCT,<UPMST1,2>>
+	ILOCK
+	MOVEM T3,UPMSBP		; Save store pointer
+	HLRZ T2,IMPLT4(T1)	; Get current buffer
+	JUMPN T2,UPMSG1		; Is there one?
+	CALL UPBGNB		; None, try to get one
+	 RETBAD (,<MOVE T3,UPMSBP>) ; Failer, return bad. IUNLK done.
+UPMSG1:	SETSEC T2,ANBSEC	; In the right section
+	MOVE T3,.NBCNT(T2)	; Get buffer count
+	CAML T3,T4		; Less than what he wanted?
+	 MOVE T3,T4		; No, use what he asked for
+	SUB T4,T3		; Update user's count
+	MOVEM T4,UPMSCT		; Save updated count
+
+REPEAT 0,<			; Old buffer unpacker
+	MOVN T4,T3		; Get neg of number to copy
+	ADDM T4,.NBCNT(T2)	; Update buffer count
+UPMSG2:	SOJL T3,UPMSG3		; Account for a byte
+	ILDB T4,.NBPTR(T2)	; Load using pointer in buffer (Indexed by T2
+				;  to get to ANBSEC section.)
+	IDPB T4,UPMSBP		; Store byte for user
+	JRST UPMSG2		; Loop for all bytes in count
+
+   REPEAT 0,<		; DEC removed this ?!?
+	PUSH P,T1		; Save lt index
+	MOVE T1,.NBPTR(T2)	; Get buffer pointer
+	EXCH T2,-2(P)		; Save buffer location, get tgt
+	MOVX T4,1B5		; Transfer monitor to monitor, no LSN
+	PUSH P,IMPUN		; PRESERVE INDEX
+	CALL BYTBLT		; Transfer the bytes
+	POP P,IMPUN		; RESTORE UNIT
+	EXCH T2,-2(P)		; Save updated tgt, get buffer loc
+	MOVEM T1,.NBPTR(T2)	; Store update buffer pointer
+   >
+>
+
+	JUMPE T3,UPMSG3
+	MOVN T4,T3		;GET NEG. NO. OF CHAR. TO PROCESS
+	ADDM T4,.NBCNT(T2)	;UPDATE BUFFER COUNT
+	CAIG T3,3		;DON'T BOTHER FOR JUST 3
+	 JRST UPMSG2
+	MOVE T3,.NBPTR(T2)	;CHECK FOR START OF WORD
+	TLNE T3,700000		;AS THE P FIELD IN BOTH POINTERS
+	 JRST UPMSG2		;IF SO DO A BLT
+	MOVE T3,UPMSBP
+	TLNE T3,700000
+	 JRST UPMSG2
+	DMOVEM T1,UPMST1	;SAVE LT AND BUFFER ADR
+	MOVN T3,T4		;GET COUNT
+	ADJBP T3,.NBPTR(T2)
+	MOVEI T1,(T3)		;GET FINAL ADR
+	EXCH T3,.NBPTR(T2)	;CONVERT POINTER TO ADR
+	SUBI T1,(T3)		;FINAL - (START - 1)
+	ADDI T2,1(T3)
+	MOVN T3,T4		;GET COUNT
+	ADJBP T3,UPMSBP
+	EXCH T3,UPMSBP		;CONVERT POINTER TO ADR
+	MOVEI T3,1(T3)
+	CALL XBLTA		;DO RIGHT BLT
+	DMOVE T1,UPMST1		;RESTORE LT AND ADR
+	JRST UPMSG3		;BYPASS BYTE LOOP
+UPMSG2:	ILDB T3,.NBPTR(T2)	;LOAD BYTE FROM BUFFER USING BYTE
+				; POINTER IN BUFFER (IT IS INDEXED BY T2
+				; TO GET TO ANBSEC SECTION.)
+	IDPB T3,UPMSBP		;STORE BYTE
+	AOJL T4,UPMSG2		;GO DO ANOTHER BYTE
+
+UPMSG3:	MOVE T4,UPMSCT		; Get updated count back
+	SKIPG .NBCNT(T2)	; Imp bfr now exhausted?
+	CALL UPBRB		; Yes, release it
+	IUNLK
+	MOVE T3,UPMSBP		; Caller gets updated pointer
+	RETSKP
+
+;;; UPBGNB - Try to get next input bfr
+;;;
+;;; ACCEPTS
+;;;	T1/  LINK TABLE INDEX
+;;;
+;;; RETURNS +1  FAILURE
+;;;		T1/ SET UP FOR WAIT
+;;;	 +2  SUCCESS
+;;;		T1/ UNCHANGED
+;;;		T2/ BUFFER ADDRESS
+;;; CLOBBERS T3
+
+UPBGNB:	HLRZ T2,IMPLT3(T1)	; Check queue of in bfrs
+	JUMPE T2,UPBG1		; None
+	PUSH P,T4		; There is one. Save T4
+	SETSEC T2,ANBSEC	; Set section number
+	LOAD T3,NBQUE,(T2)	; Unqueue this buffer
+	SKIPN T3		; Is there a successor?
+	HLLZS IMPLT2(T1)	; No. Make input buffer list empty
+	HRLM T3,IMPLT3(T1)	; Output buffer pointer
+	HRLM T2,IMPLT4(T1)	; Save current bfr adr
+	PUSH P,.NBLD0(T2)	; Save header in case of error
+	PUSH P,.NBLD1(T2)
+	PUSH P,.NBLD2(T2)
+	PUSH P,.NBHHL(T2)
+	LOAD T4,NBBSZ,(T2)	; Number words in buffer
+	CAIGE T4,.NBDW0		; At least overhead words present?
+	JRST UPBGNE		; No, msg too short
+	LOAD T3,HHCNT,(T2)	; Byte count for this buffer
+	JUMPE T3,UPBGNE		; 0 is illegal, but in case...
+	LOAD T4,HHSIZ,(T2)	; Get byte size
+	MOVEM T3,.NBCNT(T2)	; Leave byte count in full word
+	LOAD T3,ILTBS,(T1)	; Byte size for connection
+	CAME T3,T4		; Same?
+	JRST UPBGNE		; No
+	MOVE T3,[POINT 0,.NBDW0-1(T2),35] ; Build byte pointer, T2 as XR
+	TRNN T4,7		; Get bit offset right
+	 HRLI T3,(<POINT 0,(T2),31>)
+	DPB T4,[POINT 6,T3,11]	; Put byte size into the pointer
+	MOVEM T3,.NBPTR(T2)	; Save for passing bytes thru
+	MOVEI T3,^D36		; Compute max bytes which could be
+	IDIV T3,T4		; As words*(bytes/wd)
+	LOAD T4,NBBSZ,(T2)	; Number of words
+	IMULI T3,-.NBDW0(T4)	; But not counting overhead
+	CAMGE T3,.NBCNT(T2)	; Actual greater than max?
+	JRST UPBGNE		; Yes, lossage
+	SUB P,BHC+4		; Discard original header words
+	POP P,T4		; Restore T4
+	RETSKP			; Success return
+
+UPBGNE:	CALL UPBRB		; Release defective buffer
+	POP P,T4		; Restore leader
+	POP P,T3
+	POP P,T2
+	EXCH T1,(P)
+	MNTBUG(INF,IMPBSC,<Message has bad size or count>,<<T1,D>,<T2,D>,<T3,D>,<T4,D>>)
+	POP P,T1
+	POP P,T4
+	JRST UPBGNB		; Try for another one
+
+;;; No input ready, return activation test
+
+UPBG1:	MOVSI T1,0(T1)		; Connection index
+	HRRI T1,UPBGT		; Wait for input or closed conn
+	IUNLK
+	RET
+
+;;; UPBGT - Scheduler activation test
+
+UPBGT:	SE1ENT			; Goto section one for test
+	MOVSI T3,777777		; For non-zero address check
+	MOVSI T2,(LTDF)		; Check done flag
+	SETSEC T1,ANBSEC	; In right section
+	TDNN T2,IMPLT2(T1)	; If set, or
+	TDNE T3,IMPLT3(T1)	; If bfr(s) appeared
+	 JRST TSTEX1		; return good
+	JRST TSTEX0		; ELSE BAD
+
+;;; UPBRB - Release input buffer
+;;;
+;;;	T1/ Link table index
+;;;	T2/ Buffer address
+
+UPBRB:	HLRZ T2,IMPLT4(T1)	; Get current buffer
+	SETSEC T2,ANBSEC	; In the right section
+	HRRZS IMPLT4(T1)	; Clear current buffer field
+	TRNE T2,-1		; If there is one
+	 CALL RLNTBF		; Release bfr back to pool
+	SOSL IMPLT4(T1)		; Count msgs processed
+	RET
+	LOAD T2,LTHOST,(T1)	; Show the host/link
+	HRRZ T3,IMPLT1(T1)
+	MNTBUG(INF,IMPREM,<UPBRB: Received excessive messages>,<<T1,D>,<T2,D>,<T3,D>>)
+	SETZM IMPLT4(T1)	; Clear the count
+	RET
+
+;;; IMPCKO and IMPKO1 - Check connection for output possible
+;;; Called on receipt of RFNM, allocation, etc.
+;;;	T1/ connection index
+;;; Do output if RFNM clear, msg alloc non-0, and output exists
+
+IMPCKO:	ILOCK (JRST IMPROS)	; If can't check now, set request flag
+IMPKO1:	MOVSI T3,(RFNMC!ILCKB)
+	TDNE T3,IMPLT2(T1)	; RFNM out or connection locked?
+	JRST IMPKO2		; Yes, will try again later
+	HLRZ T2,IMPLT3(T1)	; Any buffers?
+	JUMPN T2,[SETSEC T2,ANBSEC ; Jump if so. Put in section number
+		CALL IMPQO1	; Give it to the IMP out queue
+		JRST IMPKO1]	; And see if any more
+	HLRZ T2,IMPLT4(T1)	; No more full, see if partial bfr exists
+	JUMPN T2,[SETSEC T2,ANBSEC ; Put in right section
+		CALL PKQOB	; Complete it and send
+		JRST IMPKO1]	; Then see if any more
+	LOAD T2,LTLINK,(T1)	; That's all the buffers.
+	JUMPE T2,[CALL IMPLL0	; If a control link, delete it.
+		JRST IMPKO2]	; And done.
+	MOVSI T2,(RARRF)	; Now all sent. Want a RAS from us?
+	TDNN T2,IMPLT2(T1)	; I.e., RAP rcvd?
+	 JRST IMPKO4		; No. Don't.
+	PUSH P,T1		; Yes, save LT index
+	ANDCAM T2,IMPLT2(T1)	; Don't do it again
+	HLRZ IMPUN,IMPLT1(T1)	; Get NETWRK unit number
+	SETSEC IMPUN,ANBSEC
+	SETZM NETBAL(IMPUN)	; Clear believed bit allocation
+	HLLZS IMPLT4(T1)	; Clear msg allocation, too.
+	IUNLK
+	LOAD T2,LTLINK,(T1)	; Get link from IMPLT1
+	LOAD T1,LTHOST,(T1)	; Get host
+	CALL IMPRAS		; Ask for corrected allocations
+	POP P,T1		; Restore LT index
+	JRST IMPKO3
+
+IMPKO4:	IUNLK
+IMPKO3:	HLRZ IMPUN,IMPLT1(T1)	; Pick up pseudo-unit for NETWRK
+	SETSEC IMPUN,ANBSEC
+	MOVSI T2,(LTDF)
+	TDNN T2,IMPLT2(T1)	; Done flag set?
+	 RET			; No. done
+	ANDCAM T2,IMPLT2(T1)	; Only see it once
+	PUSH P,T1		; Save LT index
+	PUSH P,Q2		; Preserve Q2
+	CALL RCFRFN		; Yes, notify NCP, step FSM
+	POP P,Q2		; Restore Q2
+	POP P,T1		; and index
+	RET
+
+IMPKO2:	IUNLK			; Always returns with lock clear
+	RET
+
+IMPROS:	AOS IMPNOS
+	RET
+
+;;; PKBYT -  Pack byte for output
+;;;	T1/	CONNECTION INDEX
+;;;	T3/	BYTE
+;;;	T2 Clobbered
+;;;
+;;;	Returns +2 always,
+;;;	 +1 reserved for non-blocking case, if no bfrs available
+
+PKBYT::	ILOCK
+	HLRZ T2,IMPLT4(T1)	; Is there a buffer to put char in?
+	JUMPN T2,PKBY2		; Jump if so
+	CALL PKBY1		; No current buffer, get a new one
+	 JRST PKBY5		; No buffers available
+PKBY2:	SETSEC T2,ANBSEC	; Put in section number
+	IDPB T3,.NBPTR(T2)	; Put the byte in the buffer
+	MOVSI T3,(ILCKB)	; Clear the connection lock
+	ANDCAM T3,IMPLT2(T1)	; ..
+	SOSG .NBCNT(T2)		; If bfr now full,
+	 CALL PKQOB		; Put bfr on output queue
+	CALL IMPKO1		; Send if possible (does iunlk)
+	RETSKP			; Successfully done
+
+PKBY5:	IUNLK			; Here if no buffers available
+	CALL IMPB03		; Complain and garbage collect
+	JRST PKBYT
+
+;;; PKCHK - Check maximum bytes that can be sent due to msg alloc
+;;; and partial msg already constructed.  Leave connection locked.
+;;;
+;;;	T1/ LT index
+;;;
+;;; Returns +1 always
+;;;	T2/ Maximum bytes that can be sent
+
+PKCHK::	ILOCK
+PKCHK0:	PUSH P,T3
+	SETZ T2,		; Answer in T2
+	MOVSI T3,(ILCKB)
+	TDNE T3,IMPLT2(T1)	; There should only be one fork trying
+	 JRST PKCHK2		; at a time since files are interlocked
+				; by FILLCK, NVT transmission is only from
+				; NCPFRK, and control links have no
+				; flow control.
+	IORM T3,IMPLT2(T1)	; Lock connection so state can't change
+	LOAD T3,ILTBS,(T1)	; Get byte size
+	HLRZ T2,IMPLT4(T1)	; get current buffer
+	JUMPE T2,PKCHK1		; If none, contribution is zero
+	SETSEC T2,ANBSEC	; There is one. Set its section.
+	MOVE T2,.NBCNT(T2)	; Get bytes left in it
+	IMUL T2,T3		; Times byte size is bits
+PKCHK1:	PUSH P,T3		; Save link's bytesize
+	HRRZ T3,IMPLT4(T1)	; Get message allocation left
+	JUMPG T3,[IMUL T3,MAXBPM ; Times bits in a msg if full
+		ADD T2,T3	; Add that to current buffer's residue
+		JRST .+1]	; And check that against bit allocation
+	POP P,T3		; No msg allocation, just restore byte size
+	CAMLE T2,NETBAL(IMPUN)	; More than bit allocation?
+	 MOVE T2,NETBAL(IMPUN)	; Yes. limit is bit allocation.
+	IDIV T2,T3		; Convert to bytes, for caller.
+PKCHK2:	POP P,T3
+	IUNLK
+	RET
+
+;;; Unlock connection
+
+PKULCK::MOVSI T2,(ILCKB)	; Clear connection locked flag
+	ANDCAM T2,IMPLT2(T1)	;  for this connection
+	MOVE T2,IMPLT3(T1)	; Any buffers to be sent?
+	IOR T2,IMPLT4(T1)
+	TLNN T2,-1
+	 RET			; None to send, just return
+	CALLRET IMPCKO		; Yes, try to send them
+
+;;; PKMSG and PKMSG0 - Pack msg and try to send
+;;;	T1/ connection index
+;;;	T3/ byte ptr
+;;;	T4/ byte count
+
+PKMSG::	ILOCK
+PKMSG0:	CALL PKMSG2		; Get the message packed up
+	PUSH P,T3		; Preserve caller's pointer
+	CALL IMPKO1		; Send if possible. Does IUNLK.
+	POP P,T3
+	RET
+
+;;; PKMSG1 - Like PKMSG, but doesn't try to send the message.
+
+PKMSG1::ILOCK
+	CALL PKMSG2		; PACK IT UP
+	IUNLK
+	RET
+
+;;; PKMSG2 - work routine for PKMSG.
+;;; Routine to move bytes from source buffer ro network output buffer
+;;;	T1/ CONNECTION INDEX
+;;;	T3/ SOURCE BYTE PTR
+;;;	T4/ BYTE COUNT
+
+PKMSG2:	STKVAR <PKMSCT,PKMSBP,<PKMST1,2>>
+PKMS1:	MOVX T2,ILCKB		; LOCK CONNECTION
+	IORM T2,IMPLT2(T1)
+	MOVEM T3,PKMSBP		; Save the source pointer
+	MOVEM T4,PKMSCT		; Save the byte count
+	HLRZ T2,IMPLT4(T1)	; Get current bfr
+	JUMPN T2,PKMS2		; Is there one?
+PKMS4:	CALL PKBY1		; Assign buffer, get its pointer & count
+	 JRST PKMS5		; Couldn't get one. Go try to free one.
+	MOVE T4,PKMSCT		; Get byte count back
+	CAMLE T4,.NBCNT(T2)	; New buffer big enough?
+	 JRST PKMSL		; Message too long
+
+REPEAT 0,<			; Old buffer packer
+PKMS3:	MOVNS T4		; Negative byte count
+	ADDM T4,.NBCNT(T2)	; Update buffer count
+	ADDM T4,PKMSCT		; Maintain residual count
+   REPEAT 0,<		;DEC took this out?!?!?
+	PUSH P,T2		; Save buffer loc
+	MOVE T2,.NBPTR(T2)	; Target to 2
+	MOVX T4,1B5		; Mode is monitor to monitor, no LSN
+	PUSH P,IMPUN		; SAVE INDEX
+	CALL BYTBLT		; Transfer bytes
+	POP P,IMPUN		; RESTORE INDEX
+	EXCH T2,0(P)		; Get buffer location, save updated ptr
+	POP P,.NBPTR(T2)	; Store updated pointer
+   >
+PKMS0:	AOJG T4,PKMSD		; Account for a byte
+	ILDB T3,PKMSBP		; Do a dumb, slow byte loop
+	IDPB T3,.NBPTR(T2)	; Put byte in buffer
+				; Buffer's pointer uses T2 to get section set.
+	JRST PKMS0		; Continue this dumb loop
+>
+
+PKMS3:	JUMPE T4,PKMSD
+	MOVNS T4		;NEGATIVE COUNT TO 4
+	ADDM T4,.NBCNT(T2)	;UPDATE BUFFER COUNT
+	ADDM T4,PKMSCT		;MAINTAIN RESIDUAL COUNT
+	MOVN T3,T4		;GET COUNT
+	CAIG T3,3		;DON'T BOTHER FOR JUST 3
+	 JRST PKMS0
+	MOVE T3,.NBPTR(T2)	;CHECK FOR START OF WORD
+	TLNE T3,700000		;AS THE P FIELD IN BOTH POINTERS
+	 JRST PKMS0		;IF SO DO A BLT
+	MOVE T3,PKMSBP
+	TLNE T3,700000
+	 JRST PKMS0
+	DMOVEM T1,PKMST1	;SAVE LT AND BUFFER ADR
+	MOVN T3,T4		;GET COUNT
+	ADJBP T3,.NBPTR(T2)
+	MOVEI T1,(T3)		;GET FINAL ADR
+	EXCH T3,.NBPTR(T2)	;CONVERT POINTER TO ADR
+	SUBI T1,(T3)		;FINAL - (START - 1)
+	MOVEI T3,1(T3)
+	ADD T3,T2
+	MOVN T2,T4		;GET COUNT
+	ADJBP T2,PKMSBP
+	EXCH T2,PKMSBP
+	MOVEI T2,1(T2)
+	CALL XBLTA		;DO RIGHT BLT
+	DMOVE T1,PKMST1		;RESTORE LT AND ADR
+	JRST PKMSD		;BYPASS BYTE LOOP
+PKMS0:	ILDB T3,PKMSBP		;LOAD BYTE
+	IDPB T3,.NBPTR(T2)	;STORE BYTE IN BUFFER USING BYTE
+				; POINTER IN BUFFER (IT IS INDEXED BY T2
+				; TO GET TO ANBSEC SECTION.)
+	AOJL T4,PKMS0		;GO DO ANOTHER BYTE
+
+PKMSD:	MOVSI T3,(ILCKB)	; Now unlock the connection
+	ANDCAM T3,IMPLT2(T1)
+	SKIPG .NBCNT(T2)	; Bfr now full?
+	CALL PKQOB		; Yes
+	MOVE T3,PKMSBP		; Get remaining count and pointer
+	MOVE T4,PKMSCT		; ..
+	JUMPG T4,PKMS1		; Go for more if some left.
+	SKIPE T4		; Make sure we didn't go negative
+	MNTBUG(INF,IMPNBC,<PKMSG: NEGATIVE RESIDUAL BYTE COUNT>)
+	RET
+
+PKMSL:
+	MNTBUG(INF,IMPMSL,<PKMSG - MSG TOO LARGE>)
+	MOVE T4,.NBCNT(T2)	; Just send what we can
+	JRST PKMS3		; Go send that
+
+PKMS2:	SETSEC T2,ANBSEC	; Point into right section
+	CAMG T4,.NBCNT(T2)	; Enough room in current bfr?
+	JRST PKMS3		; Yes
+	HLRZ T4,IMPLT1(T1)	; No, see if it's a control link
+	CAIN T4,-1		; By checking pseudo-unit. Control?
+	 JRST PKMS6		; Yes. Protocol says control msg can't
+				;  cross a net message boundary.
+	MOVE T4,.NBCNT(T2)	; Ok to split. Here's space in curr bfr
+	JRST PKMS3		; Go use it
+
+PKMS6:	CALL PKQOB		; No, finish current bfr
+	JRST PKMS4		; Start a new one
+
+PKMS5:	IUNLK
+	CALL IMPB03		; See if we can free some buffers
+	ILOCK
+	MOVE T4,PKMSCT		; Get count back
+	JRST PKMS1		; Go try again
+
+;;; PKBY1 - Assign and init a bfr for output use
+;;;
+;;; Accepts: T1/	Link table index
+;;;
+;;; Returns: +1	No buffer
+;;;	  +2	Buffer assigned, address in T2
+
+PKBY1:	PUSH P,T3
+	HRRZ T3,IMPLT4(T1)	; Get msg allocation
+	JUMPG T3,PKBY4		; Ok
+	LOAD T2,LTHOST,(T1)	; Get host for error msg
+	LOAD T3,LTLINK,(T1)	; And link, too
+	MNTBUG(INF,IMPNMA,<PKBY1: NO MSG ALLOCATION>,<<T2,D>,<T3,D>>)
+	AOS IMPLT4(T1)		; Pretend we had a msg allocate
+PKBY4:	MOVEI T2,^D36		; Compute number of bits per output wd
+	LOAD T4,ILTBS,(T1)	; As (36/BS)*BS
+	IDIVI T2,0(T4)
+	IMULI T2,0(T4)
+	MOVEI T4,0(T2)		; Get number of bits
+	MOVE T2,IMPLT1(T1)	; Get proper size for output msg
+	TXNE T2,L1%LNK		; For link 0?
+	SKIPA T2,MAXBPM		; No, usual regular max
+	MOVEI T2,^D<120*8>	; For ctrl link, max is 120 bytes
+	IDIVI T2,0(T4)		; Wds = bits / (bits/wd)
+	ADDI T2,.NBDW0		; Plus overhead
+	PUSH P,T1		; Save LT index
+	CALL ASNTBF		; Assign bfr
+	JRST [	POP P,T1	; No buffer available
+		POP P,T3	; Restore AC's
+		RET]		; And return non-skip
+	MOVE T2,T1		; Buffer address to be filled
+	POP P,T1		; Link table index
+	HRLM T2,IMPLT4(T1)	; Set as current buffer
+	SOS IMPLT4(T1)		; Consume allocate
+	MOVEI T3,^D36		; Compute number of bytes
+	LOAD T4,ILTBS,(T1)	; Which will fit in buffer.
+	IDIVI T3,0(T4)		; I.e. words*(36/bytesize), 1 or 4
+	LOAD T4,NBBSZ,(T2)	; Number of words in bfr
+	IMULI T3,-.NBDW0(T4)	; Less header overhead
+	MOVEM T3,.NBCNT(T2)	; Setup counter
+	HRLM T3,0(T2)		; Remember original count
+	LOAD T4,ILTBS,(T1)	; Byte size
+	MOVE T3,[POINT 0,.NBDW0-1(T2),35] ; Build byte pointer, T2 as XR
+	TRNN T4,7		; Get bit offset right
+	 HRLI T3,(<POINT 0,(T2),31>)
+	DPB T4,[POINT 6,T3,11]	; Put byte size in pointer
+	MOVEM T3,.NBPTR(T2)	; Save for bytes to be stored
+	SETZM .NBDW0(T2)	; Clear first few bytes
+	POP P,T3
+	RETSKP			; Success return
+
+;;; PKQOB - Put output buffer on queue
+;;;
+;;; Accepts T1/ LT index
+
+PKQOB:	HLRZ T2,IMPLT4(T1)	; Get current buffer
+	HRRZS IMPLT4(T1)	; Clear ptr
+	SETSEC T2,ANBSEC	; In the buffer section
+	HRRZ T4,.NBPTR(T2)	; Offset of last word containing data
+	AOS T4			; Plus one
+	STOR T4,NBBSZ,(T2)	; Gives actual words in use
+	HLRZ T3,0(T2)		; Get original byte count
+	SUB T3,.NBCNT(T2)	; Minus current count gives bytes in bfr
+	SETZM .NBHHL(T2)	; Caution! Same word as .NBCNT!!!
+	STOR T3,HHCNT,(T2)	; Store for foreign host
+	LOAD T3,ILTBS,(T1)	; Byte size
+	STOR T3,HHSIZ,(T2)	; Put in header
+	SETZM .NBLD0(T2)	; Clear imp header
+	SETZM .NBLD1(T2)	; ..
+	SETZM .NBLD2(T2)	; ..
+	MOVEI T4,ITY%LL		; Declare format of this message
+	STOR T4,IHFTY,(T2)	; ..
+	LOAD T3,LTLINK,(T1)	; Build the leader.
+	STOR T3,IHLNK,(T2)	; Put in the link
+	LOAD T3,LTHOST,(T1)	; Get host
+	STOR T3,IHADR,(T2)	; Address
+	LSH T3,-^D24		; Get net number
+	STOR T3,IHNET,(T2)	; Set it also
+	MOVE T3,IMPLT2(T1)
+	MOVEI T4,HTY%NP		; Max number of packets
+	TLNE T3,(HIPFLG)	; If high priority connection,
+	 TXO T4,HTY%HP		; Set high priority in handling type
+	STOR T4,IHHTY,(T2)
+	LSH T4,-4		; High part isn't contiguous
+	STOR T4,IHHT2,(T2)	; So store it (Hi Prio bit) too
+	SETZRO NBQUE,(T2)	; Put bfr on queue
+	TRNN T3,-1		; Is there a buffer on this chain?
+	JRST [	HRLM T2,IMPLT3(T1) ; No. Fix up IMPLT3 also
+		JRST PKQOB1]	; Go set input pointer
+	SETSEC T3,ANBSEC	; Set section number for buffers
+	HRLM T2,0(T3)		; Chain this buffer to last one
+PKQOB1:	HRRM T2,IMPLT2(T1)	; And set tail pointer to this one
+				; Fall into output check
+
+;;; Put bfr on IMP output queue if no RFNM outstanding
+
+IMPQOB:	MOVX T3,RFNMCM!ILCKB
+	TDNE T3,IMPLT2(T1)	; RFNM now out or locked connection?
+	RET			; Yes, don't send
+	HLRZ T2,IMPLT3(T1)	; Head of output queue
+	JUMPE T2,R		; Return if no bfrs to go
+	SETSEC T2,ANBSEC	; Point into buffer section
+IMPQO1:	MOVX T3,RFNMCM		; Set timeout count for RFNM wait
+	IORM T3,IMPLT2(T1)	; in link table
+	HLLZ T3,0(T2)		; See if buffer has a successor
+	SKIPN T3		; ..
+	HLLZS IMPLT2(T1)	; If not, clear tail pointer
+	HLLM T3,IMPLT3(T1)	; And always update head pointer
+;;; Fall through
+
+;;; IMPQOA - Here for queueing host-imp messages on NCP type nets
+;;; Buffer addr in T2
+;;;
+IMPQOA:	SAVET			; Save some scratch
+	CALL IMPLKB		; Lock bfr for pi service routine
+	LOAD T1,IHHT2,(T2)	; Check msg's priority
+	XMOVEI T3,NTLSND	; Low priority Q routine
+	TRNE T1,<HTY%HP>_-4	; Is priority bit set in message
+	 XMOVEI T3,NTHSND	; High priority q routine
+	LOAD T1,IHADR,(T2)	; get address
+	LOAD T4,IHNET,(T2)	; And net
+	LSH T4,^D24		; Put in right position
+	IOR T1,T4		; put in net field
+	CALL @T3		; Put on proper Q
+	 SKIPA			; Failed
+	RET			; And return
+
+;;; Here if queue failed, buffer address in T2
+IMPQOF:	PUSH P,T2		; Save address
+	MOVE T1,T2		; Put buffer into right reg
+	CALL IMPGHL		; Get Host-Link pair for LNKLUK in T1,T2
+	 JRST IMPQF4		; Fake host or something non-NCP
+	CALL IMPPIL		; Get lt index for this
+	 JRST IMPQF4		; Not there
+	HRRZ T2,IMPLT3(T1)	; Be sure nothing is on re-xmit Q already
+	JUMPN T2,IMPQF4		; Anomalous, but what can you do?
+	POP P,T2		; Get address back
+	HRRM T2,IMPLT3(T1)	; Save for rexmission if RFNM times out
+	MOVE T1,T2		; Place in the right register
+	CALLRET MULKSP		; Unlock bfr
+
+; Here if not an NCP buffer
+IMPQF4:	POP P,T2		; GET BUFFER ADDRESS
+	CALLRET IMPRBF		; RELEASE OR PUT ON FREE LIST
+
+
+
+;;; Lock IMP buffer. For now, lock only once, since two buffers
+;;; per page are allocated, and they don't cross page boundaries.
+;;; If buffer size is changed, must lock beginning and end, in case of
+;;; crossing page boundaries.
+
+IMPLKB::
+	PUSH P,T1		; Save T1 and T2
+	PUSH P,T2
+	LOAD T1,NBBSZ,(T2)	; GET SIZE FIELD
+	CAMLE T1,MAXWPM		; MAKE SURE NOT ON FREELIST
+	 JSP CX,IMPALF		; Error if so
+	MOVE T1,T2		; Buffer addr in right AC
+	CALL MLKMA		; Lock beginning
+   REPEAT 0,<			; As long as buffer size is constant 400
+	MOVE T1,0(P)
+	ADD T1,0(T1)		; Compute end
+	MOVEI T1,-1(T1)
+	CALL MLKMA		; LOCK END
+   > ; End repeat 0
+	POP P,T2
+	POP P,T1
+	RET
+
+
+;;; IMPIST - Start input if needed on all NCP type nets
+IMPIST:	SKIPN NOIBFS		; Did we ever run out of input buffers?
+	 RET			; No, must be running
+	SETZM NOIBFS		; Clear flag
+	SKIPA P1,NCTVT		; Get first address
+IMPIS1:	LOAD P1,NTLNK,(P1)	; Get link to next
+	JUMPE P1,R		; If done
+	LOAD T1,NTTYP,(P1)	; Get type
+	CAIE T1,NT.NCP		; NCP?
+	IFSKP.
+	 MNTCALL NTISRT		; Yes, start input if needed
+	ENDIF.
+	JRST IMPIS1		; Loop through all
+
+;;; Initialization -  Called at process level by NCPFRK
+;;; Initializes all common variables and each NCP type
+;;; network
+
+;;; SQINI -- Initialize special q variables
+SQINI:	MOVSI T2,-NSQ		; EMPTY AND FREE ALL SPECIAL QUEUES
+	SETOM SQJOB(T2)
+	AOBJN T2,.-1
+	SETOM SQLCK
+	RET
+
+IMPIN0:
+	MOVEI T1,BIMPLK		; Beginning of storage to lock
+	SETSEC T1,ANBSEC
+	MOVEI T2,EIMPLK		; End of storage
+	SETSEC T2,ANBSEC	; Also in this section
+	CALL LKSTOR		; Lock it down
+	MOVX T2,L1%SND+L1%FRE	; Free entry for IMPLT1
+	PUTSEC T1,ANBSEC	; In this section
+	MOVEM T2,IMPLT1(T1)	; Set entry free
+	MOVE T2,[XWD IMPLT1,IMPLT1+1]	; for each entry
+	BLT T2,IMPLT1+IMPNLK-1(T1)	; Set the bits
+	SETOM IDVLCK		; INIT IDVLCK
+	CALL IMPRSN		; Reset variables
+	SKIPA P1,NCTVT		; Point to first NCT
+IMPIN1:	LOAD P1,NTLNK,(P1)	; Get next on list
+	JUMPE P1,R		; If done
+	LOAD T1,NTTYP,(P1)	; Get type
+	CAIE T1,NT.NCP		; NCP?
+	 JRST IMPIN1		; No, try next
+	SETZM HSTGDM(P1)	; Cancel any residual host going down
+	CALL LGTAD		;Get internal date/time
+	MOVEM T1,NTXDNT(P1)	; Store as last time net went off
+	JRST IMPIN1		; And loop
+
+
+IMPRSN:	SETZM IMPNCL		; Clear irreg msg q variables
+	SETZM IMP8XI
+	SETZM IMP8XO
+	SETZM IMP8XC
+	MOVEI T1,^D120000	; Start timers
+	ADD T1,TODCLK		; In two minutes
+	MOVEM T1,NETTIM		; Set alarm clocks to infinity
+	MOVEM T1,RFNTIM
+	MOVEI T1,^D1000		; Start probeing hosts
+	ADD T1,TODCLK		; After NOPs etc ave had a chance to settle
+	MOVEM T1,IMPTIM		; ...
+	RET
+
+
+; Various impbug's from above
+
+IMPB03:	SKIPN IMINFB		; ANY BUFFERS RELEASE BY PI ROUTINES?
+	 JRST IMPB04		; NO
+	SAVET
+	CALLRET IMINRF
+
+IMPB04:	PUSH P,T1
+	MOVEI T1,^D1000
+	DISMS			; Wait for 10 sec, then try again
+	POP P,T1
+	RET
+
+
+;;; CLOCK LEVEL CHECK ROUTINE
+
+IMPCHK::RET			; Null out this routine for now
+REPEAT 0,<			; Lets try to get by without this
+	SE1CAL			; Enter section 1
+	MOVEI T2,^D1000
+	MOVEM T2,IMPTM2		; Call this every second
+	PUSH P,P1		; Save NCT
+	SKIPA P1,NCTVT		; Point to first NCT
+IMPCH0:	LOAD P1,NTLNK,(P1)	; Get next in list
+	JUMPE P1,IMPCHX		; Exit if through list
+	SKIPN NTRDY(P1)		; Net on?
+	IFSKP.
+	 MNTCALL NTSCHK		; Check if down or was recently
+	  NOP
+	ENDIF.
+	JRST IMPCH0		; Loop through all
+IMPCHX:	POP P,P1		; Restore register
+	RET			; And return
+>	;; End of REPEAT 0
+
+;;; ASSIGN BUFFERS IN NETWORK AREA
+
+ASNTBF::
+	MOVE T1,FORKX		; IS THIS THE NCP FORK?
+	MOVE CX,ASNTHR		; NO, GIVE BUFFER ONLY IF ABOVE ASNTHR
+	SKIPE JOBNO		; LARGER FOR REGULAR USERS
+	 IMULI CX,3
+	CAML CX,NETFRE+2
+	 RET			; REFUSE REQUEST -- NOT ENOUGH SPACE
+
+ASNTBI::
+	NOINT
+	LOCK NETFRE+1		;LOCK NCP BUFFER FREE LIST
+	CAMLE T2,MAXWPM		;BE SURE REQUEST NOT LARGER THAN WHAT WE HAVE
+	 JSP CX,ASNTBX		;REFUSE, TOO LARGE
+	SKIPG T1,NETFRE		;GET POINTER TO CURRENT BUFFER
+	 JSP CX,ASNTBX		;THERE ISN'T ONE
+	HRRZS T1		; LOOK FOR GARBAGED LEFT HALF
+	JUMPE T1,ASNTBX		; ZERO ADDRESS, NONE AVAILABLE
+	SETSEC T1,ANBSEC	; MAKE SURE IN THE RIGHT SECTION
+	HRRZ CX,0(T1)		;GET CURRENT SIZE FIELD
+	CAMG CX,MAXWPM		;MAKE SURE ITS NOT IN USE
+	 JSP CX,ASNTBX
+	HRRM T2,0(T1)		;STASH REQUESTED SIZE
+	HLRZ T2,0(T1)		;GET POINTER TO NEXT ONE IN LIST
+	MOVEM T2,NETFRE		;THAT BECOMES FIRST ONE
+	SOS CX,NETFRE+2		;MAINTAIN COUNT OF FREE BUFFERS
+	AOSA 0(P)		;INDICATE SUCCESS
+
+ASNTBX:	AOSGE ABFCNT		; Check counter
+	 JRST ASNTX1		; Not cleared
+	MNTBUG (INF,NETABF,<ASNTBF: ASSIGN OF BUFFER FAILED>,<<CX,D>>)
+	MOVEI CX,^D20		; Don't scream to often
+	MOVNM CX,ABFCNT		; And reset counter
+ASNTX1:	UNLOCK NETFRE+1		;UNLOCK FREE LIST
+	OKINT
+	RET
+
+
+;;; RELEASE NETWORK BUFFERS
+
+RLNTBF::NOINT
+	LOCK NETFRE+1		;LOCK FREE LIST
+	CALL CHKBUF		; BUFFER IN BUFFER AREA?
+	 JSP CX,RLNTBX		; NO,IGNORE IT
+	HRRZ CX,0(T2)		;GET COUNT FIELD
+	CAMLE CX,MAXWPM		;MAKE SURE NOT ALREADY ON FREELIST
+	 JSP CX,RLNTBX		;IGNORE IT
+	MOVE CX,0(P)		;GET PC OF CALLER
+	HRL CX,NETFRE		;GET POINTER TO CURRENT FIRST BUFFER
+	MOVEM CX,0(T2)		;AND POINTS TO OLD FIRST ONE
+				;SIZE FIELD IS PC OF CALLER
+	HRRZS T2		; CLEAR SECTION NUMBER
+	MOVEM T2,NETFRE		;RETURNED ONE IS NOW FIRST
+	AOSA CX,NETFRE+2	;MAINTAIN TOTAL SPACE COUNT
+RLNTBX:	MNTBUG (INF,NETRBF,<RLNTBF: RELEASE OF BUFFER FAILED>,<<CX,D>>)
+	UNLOCK NETFRE+1		;UNLOCK FREE LIST
+	OKINT
+	RET
+
+
+; Routine to release buffers to input free list or network free list
+;
+;T2/	Pointer to buffer
+
+
+IMPRBF:: CALL CHKBUF		; REAL BUFFER?
+	 JRST IMPRBX		; NO, TRY TO TRAP
+	PIOFF			;PUT BUFFER ON RELEASED QUEUE OR FREELIST
+	MOVE CX,IMPNFI		;DO WE HAVE ENOUGH FREE NOW?
+	CAML CX,IMPNIB
+	 JRST IMPRB1
+	MOVE CX,MAXWPM		;THIS IS A FULL SIZE BUFFER
+	HRRM CX,0(T2)
+	MOVE CX,T2		;COPY ADDRESS
+	EXCH CX,IMPFRI		;PUT ON THE FREE LIST
+	HRLM CX,0(T2)
+	AOS IMPNFI		;KEEP COUNT OF THEM
+	PION
+	RET
+
+IMPRB1:	MOVE CX,T2		;COPY ADDRESS
+	EXCH CX,IMINFB		;TO BE GARBAGE COLLECTED BY NCPFRK
+	HRLM CX,0(T2)
+	PION
+	AOS IMPFLG		;CAUSE NCP FORK TO RELEASE THESE
+	MOVE T1,T2
+	CALLRET MULKSP		;NOW UNLOCK IT
+
+IMPRBX:	MOVE T1,0(P)		; GET PC OF CALLER
+	MNTBUG(INF,IMPRB0,<IMPRBF - ATTEMPT TO RELEASE 0 BUFFER>,<<T1,D>,<T2,D>>)
+	RET			; AND RETURN
+
+; CHKBUF - check that a buffer is properly in the network buffer 
+; area
+;T2/	Pointer to buffer
+; returns +2 if good
+
+CHKBUF::
+	CAMG T2,NETFRE+4	;BUFFER BEYOND UPPER BOUND?
+	CAMGE T2,NETFRE+3	;OR BELOW LOWER BOUND?
+	 RET			; BUFFER IS BAD
+	RETSKP			; GOOD
+
+;;; Multiply used BUGXXX's
+IMPAFB::
+	 MNTBUG(HLT,IMPULF,< ATTEMPT TO UNLOCK BUFFER ON FREELIST>,<<CX,D>>)
+	JRST 0(CX)		; If comes back
+
+
+IMPALF:	 MNTBUG(HLT,IMPLKF,<IMPLKB: ATTEMPT TO LOCK BUFFER ON FREELIST>,<<CX,D>>)
+	JRST 0(CX)		; If return
+
+;;;
+;;; BugXXX's common to various device drivers
+;;;
+IMPFLB::	MNTBUG(HLT,BADIFL,<IMP FREE LIST BAD>,<<CX,D>>)	
+	JRST 0(CX)		; Return to caller
+
+IMPNIT::	 MNTBUG(HLT,IMPIBF,<Internet buffers fouled>,<<CX,D>>)
+	JRST 0(CX)		; Back to caller
+
+	TNXEND
+	END

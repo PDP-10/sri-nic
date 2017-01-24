@@ -1,0 +1,244 @@
+
+
+; CFSUSR.NEW.1 & <MONITOR>CFSUSR.MAC.1 31-Mar-89 2322	PAGE 1
+
+
+
+LINE 1, PAGE 1
+1)	; Edit= 8973 to CFSUSR.MAC on 28-Sep-88 by GSCOTT
+1)	;Only output [Successfully joined CFS cluster] if we have seen another TOPS-20
+1)	;node on our CI.
+1)	; Edit= 8967 to CFSUSR.MAC on 13-Sep-88 by RASPUZZI, for SPR #21879
+1)	;Revamp edit 8871 such that CFS joining takes care of checking out the wire
+1)	;status of the local node before joining the CFS cluster.
+1)	; Edit= 8966 to CFSUSR.MAC on 13-Sep-88 by GSCOTT
+1)	;Always output the [Successfully joined CFS cluster] message if we did. 
+1)	; Edit= 8959 to CFSUSR.MAC on 1-Sep-88 by GSCOTT
+1)	;Wait 10 seconds before output of message in CFSJYN.
+1)	; Edit= 8957 to CFSUSR.MAC on 30-Aug-88 by GSCOTT
+1)	;Lowercase that join message.
+1)	; Edit= 8873 to CFSUSR.MAC on 10-Aug-88 by RASPUZZI
+1)	;Update BUG. documentation again.
+1)	; Edit= 8871 to CFSUSR.MAC on 29-Jul-88 by LOMARTIRE
+1)	;Prevent CFSVFL BUGHLTs and duplicate job numbers and other bad things that
+1)	;can happen when CFSJYN does not do its job!
+1)	; UPD ID= 8605, RIP:<7.MONITOR>CFSUSR.MAC.5,  11-Feb-88 17:11:11 by RASPUZZI
+LINE 1, PAGE 1
+2)	; UPD ID= 8605, RIP:<7.MONITOR>CFSUSR.MAC.5,  11-Feb-88 17:11:11 by RASPUZZI
+
+
+LINE 3, PAGE 3
+1)	;		     Table of Contents for AM70-CFSUSR
+1)	;
+LINE 3, PAGE 3
+2)	;		     Table of Contents for CFSUSR
+2)	;
+
+
+LINE 23, PAGE 4
+1)		STKVAR <DTIMER,REASON,SEEN20> ;[8973][7.1011] Get some space on stack
+1)		SETZM SEEN20		;[8973] KL has not been seen yet
+1)		CALL CFDLSN		;[7.1021] () Open a dump listener
+LINE 23, PAGE 4
+2)		STKVAR <DTIMER,REASON>	;[7.1011] Save some work registers
+2)		CALL CFDLSN		;[7.1021] () Open a dump listener
+
+
+LINE 1, PAGE 5
+1)	; Now we must wait until we have a CFS connection open to every TOPS-20 system
+1)	; already up.  This will allow for a deterministic way to insure that we are
+1)	; fully joined to the CI once we return from this routine.  [8959] We wait ten
+1)	; seconds before printing out a message for a node.  We wait 60 seconds
+1)	; between messages.
+1)	
+1)		CALL CFSPRT		;(/T1) Get our own port number
+1)		MOVEM T1,MYPOR4		;Store it
+
+; CFSUSR.NEW.1 & <MONITOR>CFSUSR.MAC.1 31-Mar-89 2322	PAGE 2
+
+
+1)		MOVSI P1,-C%SBLL	;Loop for all the nodes
+1)		MOVEI T1,^D10		;[8959][7.1011] Initial time of 10 seconds
+1)		MOVEM T1,DTIMER		;[7.1011] Store the initial delay time value
+1)	
+1)	;[8959] Here to check the next node number.
+1)	
+1)	CFSJY0:	MOVE T1,MYPOR4		;[8967] Get our node
+1)		CALL PTHSTS		;[8967] (T1/T1,T2) Is it sick?
+1)		 JRST CFSJY5		;[8967] It's ill, don't join cluster
+1)		TXNN T2,UDB%WA!UDB%WB	;[8967] Is path A or B good?
+1)		JRST CFSJY5		;[8967] Neither is good, leave now
+1)		HRRZ T1,P1		;[8959] Get the current node
+1)		CAMN T1,MYPOR4		;Is this our node?
+1)		JRST CFSJY1		;Yes, skip it
+1)		CALL PTHSTS		;(T1/T1,T2) What is path status to node
+1)		 JRST CFSJY5		;[8959] The port is not running - quit
+1)		TXNN T2,UDB%MA		;[8959] In maintenance mode?
+1)		TXNN T2,UDB%WA+UDB%WB	;[8959] Response on either wire?
+1)		JRST CFSJY1		;[8959] No response or in maint mode, quit
+1)		SKIPE T1,SBLIST(P1)	;[8871][7.1011] No, is System Block created?
+1)		IFSKP.			;[7.1011] No, so we must wait
+LINE 1, PAGE 5
+2)	; Now we must wait until we have a CFS connection open to every TOPS-20  
+2)	; system already up.  This will allow for a deterministic way to insure that
+2)	; we are fully joined to the CI once we return from this routine.
+2)	
+2)		CALL CFSPRT		;(/T1) Get our own port number
+2)		MOVEM T1,MYPOR4		;Store it
+2)		MOVSI P1,-C%SBLL	;Loop for all the nodes
+2)		MOVEI T1,5		;[7.1011] Store the initial delay time value
+2)		MOVEM T1,DTIMER		;[7.1011] 
+2)		DO.
+2)		  HRRZ T1,P1		;Get the current node
+2)		  CAMN T1,MYPOR4	;Is this our node?
+2)		  JRST CFSJY1		;Yes, skip it
+2)		  CALL PTHSTS		;(T1/T1,T2) What is path status to node
+2)		   EXIT.		;The port is not running - quit
+2)		  TXNN T2,UDB%WA+UDB%WB ;No-response on both wires?
+2)		  JRST CFSJY1		;Yes, skip it
+2)		  TXNE T2,UDB%MA	;No, is node in maintenance mode?
+2)		  JRST CFSJY1		;Yes, skip it
+2)		  SKIPE SBLIST(P1)	;[7.1011] No, is System Block created yet?
+2)		  IFSKP.		;[7.1011] No, so we must wait
+
+
+; CFSUSR.NEW.1 & <MONITOR>CFSUSR.MAC.1 31-Mar-89 2322	PAGE 3
+
+
+
+LINE 34, PAGE 5
+1)	        LOAD T1,SBVCST,(T1)	;[8871] Get VC state
+1)		CAIN T1,VC.OPN		;[8871] Is it open?
+1)		IFSKP.			;[8871] No, so we must wait
+1)		  HRROI T1,[ASCIZ/No open Virtual Circuit/] ;[8871] Save message
+1)		  MOVEM T1,REASON	;[8871] 
+1)		  JRST CFSJY2		;[8871] Go and wait a second
+1)		ENDIF.			;[8871] 
+1)		HRRZ T2,P1		;Get the node number again
+1)		CALL ISIT20		;(T2/) Is this a TOPS-20 system?
+1)		 JRST CFSJY1		;No, skip it
+1)		AOS SEEN20		;[8973] We have seen a TOPS-20 system out there
+1)		HRRZ T1,P1		;Get node number
+1)		CALL CFCNCK		;(T1/) Is there a CFS connection?
+1)		 SKIPA T1,[XWD -1,[ASCIZ/No CFS connection/]] ;[8959] Nope, load mess
+1)		JRST CFSJY1		;[8959] Yes, go check the next node
+1)		MOVEM T1,REASON		;[8959] Save reason and fall through
+1)	;	JRST CFSJY2		;[8959]  to publish the message
+   {Skipped 1 page and 1 line}
+1)	;[8959] Here if this node doesn't smell right.  Output a message if the DTIMER
+1)	;has counted down to zero.
+1)	
+1)	CFSJY2:	SOSL DTIMER		;[7.1011] Should a message be given?
+1)		IFSKP.			;[7.1011] Yes
+1)		  HRROI T1,[ASCIZ/
+1)	% Cannot join cluster with node /] ;[8957][7.1011] Print first part of message
+1)		  CALL PMES		;[7.1011] (T1/)
+1)		  HRRZ T1,P1		;[7.1011] Now print the node number in decimal
+1)		  CALL PNUM		;[7.1011] (T1/)
+1)		  HRROI T1,[ASCIZ/ because: /] ;[8957][7.1011]
+1)		  CALL PMES		;[7.1011] (T1/)
+LINE 26, PAGE 5
+2)		  HRRZ T2,P1		;Get the node number again
+2)		  CALL ISIT20		;(T2/) Is this a TOPS-20 system?
+2)		   JRST CFSJY1		;No, skip it
+   {Skipped 1 page and 1 line}
+2)		  HRRZ T1,P1		;Get node number
+2)		  CALL CFCNCK		;(T1/) Is there a CFS connection?
+2)		  IFNSK.		;No, there should be so we will wait
+2)		    HRROI T1,[ASCIZ/No CFS connection/]  ;[7.1011] Save message
+2)		    MOVEM T1,REASON	;[7.1011] 
+2)	CFSJY2:	    SOSL DTIMER		;[7.1011] Should a message be given?
+2)		    IFSKP.		;[7.1011] Yes
+2)		      HRROI T1,[ASCIZ/
+2)	%CANNOT JOIN CLUSTER WITH NODE /]  ;[7.1011] Print first part of message
+2)		      CALL PMES		;[7.1011] (T1/)
+2)		      HRRZ T1,P1	;[7.1011] Now print the node number in decimal
+2)		      CALL PNUM		;[7.1011] (T1/)
+2)		      HRROI T1,[ASCIZ/ BECAUSE: /]  ;[7.1011]
+
+; CFSUSR.NEW.1 & <MONITOR>CFSUSR.MAC.1 31-Mar-89 2322	PAGE 4
+
+
+2)		      CALL PMES		;[7.1011] (T1/)
+
+
+LINE 22, PAGE 6
+1)		DISMS			; to hope that things get solid
+1)		JRST CFSJY0		;[8959] Wait is over, check this node again
+1)	
+1)	;[8959] Here to check the next node number.
+1)	
+1)	CFSJY1: MOVEI T1,^D10		;[8959] Load ten second count
+1)	        MOVEM T1,DTIMER		;[7.1011] Reset delay time value
+1)		AOBJN P1,CFSJY0		;[8959] Continue with next node
+1)	
+1)	;[8959] Here if we have checked all nodes.  Output message saying we are done
+1)	;if we output a "cannot join" message.  We have to do a TTMSG since the "System
+1)	;restarting, wait..." message would come out ahead of this message, which would
+1)	;be confusing.  Using a TTMSG insures that this message comes out first.
+1)	
+1)		MOVE T1,CTYLNO		;[8959] Load the CTY's line number
+1)		TXO T1,.TTDES		;[8959] Turn that into a terminal designator
+1)		HRROI T2,[ASCIZ/
+1)	[Successfully joined CFS cluster]
+1)	/]				;[8959] Load a good message
+1)		SKIPE SEEN20		;[8973] Did we ever see a TOPS-20 node?
+1)		TTMSG%			;[8959] Yes, indicate that all is OK now
+1)		 ERJMP .+1		;[8959] Avoid MONNEJ (if this fails we are SOL)
+1)	
+1)	CFSJY5:	SETONE SCVER		;[8959] Set verify in job 0
+1)		AOS JB0FLG		; so awake it
+LINE 24, PAGE 6
+2)		    DISMS
+2)		    LOOP.		;Try again
+2)		  ENDIF.
+2)	CFSJY1:   MOVEI T1,5		;[7.1011] Reset delay time value
+2)	          MOVEM T1,DTIMER	;[7.1011] 
+2)		  AOBJN P1,TOP.		;Continue with next node
+2)		ENDDO.			;All done - we have joined the cluster
+2)		SETONE SCVER		;str verify in job 0
+2)		AOS JB0FLG		; so awake it
+
+
+LINE 21, PAGE 22
+1)	Cause:	LCL2GL as been called to convert a local job number to a global index,
+1)		but the local job number is invalid.
+1)	
+1)	Action:	If this problem is reproducible, set this BUGCHK dumpable and send in
+1)		an SPR along with the dump and instructions on reproducing the problem.
+1)	>)
+LINE 21, PAGE 22
+2)	Cause:	LCL2GL as been called to convert a local job number to a global
+2)		index, but the local job number is invalid.
+
+; CFSUSR.NEW.1 & <MONITOR>CFSUSR.MAC.1 31-Mar-89 2322	PAGE 5
+
+
+2)	
+2)	Action:	If this problem persists, change the CHK to a HLT and determine why
+2)		the caller is passing a bad job number.
+2)	
+2)	>)
+
+
+LINE 25, PAGE 24
+1)	Cause:	A "set CI offline" has been requested and SCA refuses to close a CFS
+1)		connection.  The call to SC.DIS to disconnect from the remote node
+1)		failed.  This may result in a CFRECN BUGHLT when the CI is put on-line.
+1)	
+1)	Action:	It is unlikely that this can be caused by a software problem.  Field
+1)		Service should run diagnostics on the CI20.  Field Service should make
+1)		sure that you have up to date hardware (most recent link boards) in
+1)		your CI20.  If this problem is reproducible, set this BUGCHK dumpable
+1)		and send in an SPR along with the dump and instructions on reproducing
+1)		the problem.
+1)	
+1)	Data:	NODE  - node number of remote
+LINE 25, PAGE 24
+2)	Cause:	A "set CI offline" has been requested and SCA refuses to close
+2)		a CFS connection.  The call to SC.DIS to disconnect from the remote
+2)		node failed.  This may result in a CFRECN BUGHLT when the CI is put
+2)		on-line.
+2)	
+2)	Data:	NODE  - node number of remote
+

@@ -1,0 +1,167 @@
+26-Nov-86 17:37:37-PST,7899;000000000005
+Mail-From: IAN created at 26-Nov-86 17:37:36
+Date: Wed 26 Nov 86 17:37:36-PST
+From: Ian Macky <Ian@SRI-NIC.ARPA>
+Subject: [David Eppstein <Eppstein@CS.COLUMBIA.EDU>: advice?]
+To: klh@SRI-NIC.ARPA
+Message-ID: <12258133351.17.IAN@SRI-NIC.ARPA>
+
+looky here!
+                ---------------
+
+Date: 26 Nov 1986  15:15 EST (Wed)
+From: David Eppstein <Eppstein@CS.COLUMBIA.EDU>
+To:   Ian Macky <Ian@SRI-NIC.ARPA>
+Subject: advice?
+
+I have kinda forgotten exactly what I was thinking of when I wrote
+that code, so this is pretty approximate.  First, an overview of how
+findcse finds common subexpressions (as its name suggests it does):
+
+      - In the first loop it goes back through the peephole buffer and
+	builds up a list of instructions that taken together calculate
+	the value in the target register (the one given it as an
+	argument).  In this case the list will just be the LDB.
+
+      - For each other register that can hold a computed value, in
+	parallel and with the state of each parallel computation held
+	in what is called in the comments a register match machine,
+	it goes back through the peephole buffer and sees if the
+	instructions which calculate the value in that other register
+	match the built up list of instructions.  This is the big loop.
+
+      - If we ever get such a match, then the built up list of
+	instructions for the target register value is not necessary,
+	because we can instead copy the value in the matching register
+	and it will be the same.  This is the common subexpr elimination.
+	The redundant instructions will be removed from the buffer and
+	the register containing the result will be the return value.
+	The caller might emit a MOVE or might just use that register.
+
+      - If all machines don't match, i.e. they find an instruction
+	which is part of how the value in their result registers was
+	calculated but which isn't part of how the target value was
+	calculated, then we know that the target value is not a common
+	subexpression so we have to keep its calculation (and return
+	zero to show that we are still using the old register).
+
+      - If we get to the beginning of the peephole buffer without any
+	machine matching then again there is no common subexpression.
+
+Building the target calculation instruction list (the first loop) should
+be pretty straightforward.  The second and longer loop is where the
+match machines go about their work.  Actually what happens is that we
+look at each instruction and there will usually be only one register
+changed, so only one match machine needs to be activated.  If the
+instruction changing the register is the same as the one the machine
+expects then the machine advances to the next instruction in the list;
+if it doesn't match the machine aborts.  Most of the state of each
+machine can be found in regmatch[], which says which instruction it
+wants to see next or whether it's aborted.
+
+One complication is that we have to tell whether a register used as an
+index was not changed between the machine's calculation's use of it
+and the target calculation's use.  This information is kept in isindex[].
+Isindex[reg] is the pointer to the earliest use of that register in
+the target calculation; if any machines are not yet that far back when
+we see an instruction changing that reg then all those machines are aborted.
+There is a possible bug here if the same register is used twice as an
+index in the target calculation, with a change to it in between the
+two uses; if this situation happens the first loop that builds the
+target calculation instruction list should abort because the second
+loop can't handle this, but I don't know whether it currently does.
+Something that probably hasn't come up but might be made to with
+sufficiently tricky code.  You should check this anyway (not that it
+is related to your current bug).
+
+Another complication is that, because of IDIVI, the register that a
+machine wakes up on is not always the same as the one it uses as the
+common subexpression value after a successful match.  There is another
+array that keeps track of this information (I forget the name).
+
+Yet another complication is to take care of instructions that can be
+skipped over.  There is a SKIPPED field in the address mode type of
+each instruction which the code should be looking at (I am pretty sure
+it does but it's been a while).
+
+
+What I've just described is the major function and description of
+findcse, hopefully less cryptically than you've found the code to be.
+The minor function of findcse was that it turned out to be convenient
+to put ILDB folding there, which is where your problem lies.
+
+LDB folding only happens when there is a single LDB (or DPB) as the
+target calculation.  If we find a matching LDB first, this is just a
+common subexpression like any other.  But if we find an IBP, then we
+want to turn both instructions into an ILDB.  Currently there is one
+thing which inhibits this, the jumped flag.  If we move back across a
+jump out of the peephole buffer, this is not a problem for common
+subexpressions but you don't want to pull the IBP across the jump
+because then it won't happen if the jump gets taken.  The bug seems to
+be that I didn't think that there might be other reasons not to move
+the IBP forward (like in your situation where it is used in a MOVEM).
+
+One solution might be to augment jumped to track whether the other
+things happen (there are functions in some file which can tell you if
+a register is used by an instruction, so this is not hard).  
+Perhaps a better solution would be to, instead of pulling the IBP
+forward, push the LDB back.  That is, drop the LDB instead of the IBP
+and make the IBP into an ILDB instead of making the LDB into an ILDB.
+This eliminates the jump problem and your problem, and you can flush
+the jumped flag.  What it adds instead is that you have to make sure
+nobody uses or changes the LDB register between the IBP and the LDB.
+Again the functions I mention above can keep track of that, and you
+just need a flag like jumped that says whether it's safe to make the fold.
+
+Doing it this way seems to me to be always better in that the code is
+equally good when it happens and it happens more often.  The only
+problem I can think of is if there is an IBP then a jump then a LDB
+into a register that is also calculated before the IBP and used at the
+destination of the jump.  E.g. consider the following code:
+
+    y=1; ++ptr; foo(x?y:*ptr)
+
+it could compile into something like
+
+	MOVEI R,1
+	MOVEM R,y
+	IBP ptr
+	SKIPE S,x
+	 JRST $1
+	LDB T,ptr
+	MOVE R,T
+   $1:: ...
+
+which would correctly become through my suggested change to findcse
+
+	MOVEI R,1
+	MOVEM R,y
+	ILDB T,ptr
+	SKIPE S,x
+	 JRST $1
+	MOVE R,T
+   $1:: ...
+
+but then I'm not sure whether changereg() would do the right thing
+(i.e. nothing rather than fold the MOVE back up into the ILDB).  It
+probably does but you should check to make sure (also make sure that
+my understanding of ?: code generation is correct in that reg R is
+reserved until the MOVE is generated so it can't already be generated
+as LDB R,ptr above causing the changed ILDB fold to screw up).
+If changereg is wrong in this situation there are probably also
+situations not involving ILDB which would be wrong...
+
+
+So anyway, in summary, I think changing the ILDB fold to leave the
+ILDB where the IBP was rather than where the LDB was will work, but
+you would also have to remove jumped, add a new flag which checks that
+the LDB register wasn't used between the two instructions, and look in
+a couple of other places to make sure there aren't more bugs.
+
+Sorry for making this message much longer and more complicated than it
+probably deserves.  I hope you've gotten something out of it...
+
+"*gurgle*  *splash*"?  No comprendo....
+
+-de
+-------

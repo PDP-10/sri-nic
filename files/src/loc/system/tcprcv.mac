@@ -1,0 +1,666 @@
+;SRC:<LOC.SYSTEM>TCPRCV.MAC.5, 21-Jan-87 09:45:48, Edit by KNIGHT
+; Correct file type in QUEUE% request
+;SRC:<LOC.SYSTEM>TCPRCV.MAC.4, 19-Mar-86 13:32:13, Edit by KNIGHT
+; Use form NORMNH
+;SRC:<LOC.SYSTEM>TCPRCV.MAC.3,  5-Mar-86 14:36:01, Edit by KNIGHT
+; MACSYM exists. Use it.
+;SRC:<LOC.SYSTEM>TCPRCV.MAC.2,  5-Mar-86 14:34:46, Edit by KNIGHT
+; The QUEUE% JSYS exists.  
+;SRC:<LOC.SYSTEM>TCPRCV.MAC.1, 27-Jan-86, Edit by VIVIAN
+;Change account to be LPTACC for NIC
+;<LARSON>TCPRCV.MAC.58, 14-Nov-84 11:21:47, Edit by LARSON
+;Added pstats option.
+;<LARSON>TCPRCV.MAC.57, 24-Oct-84 18:39:11, Edit by LARSON
+;Search anaunv for tcp/ip symbols now.
+;<LARSON>TCPRCV.MAC.56, 10-Oct-84 13:43:43, Edit by LARSON
+;New SRI-VAX address 20004405001
+;New SRI-OVAX address 20004405002
+;<LARSON>TCPRCV.MAC.52, 19-Oct-83 16:59:06, Edit by LARSON
+;Changed SRI-VAX address from 1200601111 to 1201201002
+;<LARSON>TCPRCV.MAC.51,  6-Sep-83 19:54:44, Edit by LARSON
+;Changed SRI-AI address from 1200400111 to 1201000002
+;<BILLW>TCPRCV.MAC.4,  1-Mar-83 17:39:13, Edit by BILLW
+;<SOURCES>KLLPT.MAC.1 13-May-80 17:50:21, Edit by LARSON
+	title	tcprcv
+	subttl	Get files to LPT over the net using TCP
+
+;  Copyright (c), 1984, Alan Larson.  All rights reserved.
+
+	search	monsym,macsym
+	search	anaunv		;symbols for arpanet tcp/ip
+
+eightb==0		;store file on disk in 7 bit bytes
+pstats==0		;print statistics
+
+;accumulators
+f==0				;flags
+t1=1				;jsys & temp
+t2=2
+t3=3
+t4=4
+p1=5				;preserved
+p2=6
+p3=7
+p4=10
+t=11				;used for counting pages of output file only
+p=17				;stack
+
+;values
+npdl==200			;stack size
+filpag==120			;file output page window
+
+opdef	call	[pushj	p, 0]
+opdef	ret	[popj	p, 0]
+
+go:	reset
+	move	p, [iowd npdl, pdl]
+	movei	1, .fhslf
+	rpcap
+	ior	3, 2
+	epcap
+
+; Build translation table for LF to ^S
+	movsi	t1,-100			;aobjn counter
+	move	t2,[400000,,400001]	;first word
+	movem	t2,ttbl(t1)		;store in word for 0-127
+	movem	t2,ttbl+100(t1)		;store in word for 128-255
+	add	t2,[2,,2]		;step to next value
+	aobjn	t1,.-3			;do all
+	movei	t2,400000+<"S"&37>	;code to generate ^S
+	hrlm	t2,ttbl+5		;store in cell for LF
+	hrlm	t2,ttbl+100+5		;store in cell for 200+LF
+
+
+loop:	setzm	lptjfn			;No output jfn yet
+	move	1,[cz%abt!.fhslf]	;Delete partial files, this fork.
+	clzff				;Clean up all files and jfns
+	 trn
+	dmove	1,[tcp%wt!tcpblk	;wait flag and connection block address
+		   ^d30]		;time to wait (seconds)
+	setzb	3,tcpblk+1		;clear retransmit params and local port
+	OPEN%
+	 jrst	[movei t1,^d30000	;error,
+		 disms			; wait 30 seconds
+		 jrst loop]		;  and try again
+
+	movem	1,jcn			; Save jcn
+
+   ifn pstats,<			;print statistics option
+	time			;get starting uptime
+	movem	t1,stime	;save it
+	setzm	nbytes		; and clear byte count
+   >;end ifn pstats
+
+; see if it is a known host
+	move	t1,jcn			;input jcn with tcp%js
+	tlo	t1,(tcp%sy)		;symbolic name given
+	hrroi	t2,[asciz /TFH/		;length 1 (negative),,address
+		    0]
+	hrroi	t3,t4			;length 1 (negative),,destination (t4)
+	STAT%				;get stats
+	 jrst	[pushj p,tcperr		;report error
+		 jrst getlpt]		;continue
+	movem	t4,fhost		;save foreign host number
+	setzm	vaxflg			;assmue it is not the vax
+	camn	t4,[20004405006]	; sri-kl?
+	 jrst	getlpt			;yes, accept
+	came	t4,[20004405001]	;is it the crvax?
+	camn	t4,[20004405002]	; or the ovax?
+	jrst	[setom vaxflg		;yes, set vax flag
+		 jrst getlpt]		; and accept
+	camn	t4,[20004405005]	;check for sri-gizmo
+	jrst	[setom vaxflg		;yes, set vax flag
+		 jrst getlpt]		; and accept
+
+
+;bad host
+	move	t1,jcn			;get jcn
+	CLOSE%				;dump them
+	 trn				;ignore errors
+	movei	t1,^d10000		;10 seconds
+	disms
+	move	t1,jcn			;be sure it is gone
+	ABORT%				;dump it
+	 trn
+	setzm	jcn			;no jcn left
+	movei	t1,^d5000		;5 seconds
+	disms
+	jrst	loop			;try again
+
+; Now get file for the lpt
+getlpt:	aos	lptnum			; Try next number
+	hrroi	1, lptnam
+	movei	2, 777
+	andb	2, lptnum		; Keep in range
+	move	3, [no%lfl+no%zro+3b17+10]
+	nout
+	 tdn				; Should not happen
+	move	2, [point 7, [asciz /TMP.LPT.1/]]
+getlp1:	ildb	3, 2
+	idpb	3, 1
+	jumpn	3, getlp1		; Make rest of string
+	movsi	1, (gj%new!gj%sht)	; Must be a new file
+	hrroi	2, lptnam
+	gtjfn
+	 jrst	[cain	1, gjfx27	; Not new?
+		  jrst	getlpt		; Yes, try again then
+		 jrst	nogo]
+	movei	2, of%wr
+	openf
+	 jrst	nogo
+	movem	1, lptjfn		; Save jfn
+;Get job name
+	setz	p1,			;clear name accumulator
+	move	t4,[point 6,p1]		;place to build name
+gtjnm1:	pushj	p,.bin			;get a character of name
+	 jrst	[pushj p,tcperr		;unexpected eof or error, report it
+		 jrst abort$]		;give up
+	caie	t2,","			;is this the comma?
+	caig	t2," "			; or less than space?
+	jrst	gtjnm2			;yes, all done
+	subi	t2,40			;make sixbit
+	tlne	t4,740000		;see if we have filled word
+	idpb	t2,t4			;no, store character
+	jrst	gtjnm1			;continue
+
+gtjnm2:	skipn	p1			;did we get a jobname?
+	move	p1,[sixbit /noname/]	;no, set a default
+	movem	p1,jobnam		;store the job name
+
+; get page limit
+	movei	t1,^d10000		;default page limit
+	movem	t1,paglim		;save it
+	caie	t2,","			;was name ended with a comma?
+	jrst	nolim			;no, just go on
+	setz	t3,			;clear page limit accumulator
+gtplm1:	pushj	p,.bin			;read a character
+	 jrst	[pushj p,tcperr		;unexpected eof or error, report it
+		 jrst abort$]		;give up
+	cail	t2,"0"			;check for decimal digit
+	caile	t2,"9"			; (both ends)
+	jrst	gtplm2			;not a digit, continue
+	imuli	t3,^d10			;shift accumulator
+	addi	t3,-"0"(t2)		;include new digit value
+	jrst	gtplm1			;loop for next digit
+gtplm2:	caie	t3,0			;is there a number there?
+	movem	t3,paglim		;yes, store it
+
+nolim:	caie	t2,15			;did line end with cr?
+	jrst	.+3			;no, don't get the lf
+	pushj	p,.bin			;yes, read the lf
+	 jrst	[pushj p,tcperr		;unexpected eof or error, report it
+		 jrst abort$]		;give up
+;initalize output buffer pointer and counter
+   ifn eightb,<
+	movei	t1,1000*4		;initalize
+	movem	t1,filbfc		; output byte counter
+	move	t1,[point 8,filpag_9]	;initalize
+	movem	t1,filbfp		; output byte pointer
+   >;end ifn eightb
+   ife eightb,<
+	movei	t1,1000*5		;initalize
+	movem	t1,filbfc		; output byte counter
+	move	t1,[point 7,filpag_9]	;initalize
+	movem	t1,filbfp		; output byte pointer
+   >;end ife eightb
+	setz	t,			;output page counter
+
+;check for input buffer empty
+	skiple	inpbfc			;check counter of bytes in input buffer
+	jrst	inloop			;not empty, begin loop
+	pushj	p,.bin2			;it was empty, load it
+	 jrst	eoftst			;error? See if it was eof.
+
+;
+;  input loop, copy from net to file
+;
+inloop:	move	t1,inpbfc		;get input byte counter
+	camle	t1,filbfc		;compare with file byte counter
+	move	t1,filbfc		;use file counter if it is less
+	movn	p3,t1			;get -length
+	move	t2,inpbfp		;get input buffer pointer
+	move	t4,t1			;copy byte counter
+	move	p1,filbfp		;get file byte pointer
+	SKIPE	VAXFLG			;is this from VAX?
+	JRST	[EXTEND T1,[MOVST TTBL	;YES, MOVE STRING, TRANSLATED
+			    0]		;NO FILL
+		  JRST [HRROI T1,[ASCIZ /extend instruction failed/]
+			ESOUT
+			HALTF]
+		 JRST .+3]		;CONTINUE IN LINE
+	extend	t1,[movslj		;move string, left justified
+		    0]			;no fill
+	 jrst	[hrroi t1,[asciz /extend instruction failed/]
+		 esout
+		 haltf]
+	addm	p3,inpbfc		;adjust input byte counter
+	movem	t2,inpbfp		;save new input pointer
+	addm	p3,filbfc		;adjust output byte counter
+	movem	p1,filbfp		;save new output pointer
+
+;check for output buffer full
+	skipg	filbfc			;is output buffer full?
+	pushj	p,dmpfil		;yes, write output buffer for file
+
+;check for empty input buffer
+iloop1:	skiple	inpbfc			;is input buffer empty?
+	jrst	inloop			;no
+	pushj	p,.bin2			;yes, read another buffer
+	 trna				;error, check for eof.
+	jrst	inloop			;process new buffers
+
+;check for end of file on net
+eoftst:	caie	t1,340+^d12		;end of file?
+	pushj	p,tcperr		;no, bad news
+	move	t1,jcn			;yes, get jcn
+	tlo	t1,(tcp%wt)		; set wait flag
+	CLOSE%				;  and close connection
+	 jrst	[movei t1,^d30000	;if close fails,
+		 disms			; wait 30 seconds
+		 move t1,jcn		;  then abort the connection
+		 ABORT%
+		  trn
+		 jrst .+1]
+	setzm	jcn			;we no longer have a jcn
+
+   ifn pstats,<			;print statistics option
+	time			;get ending uptime
+	subm	t1,stime	;see how long it took, save in stime
+	movei	t1,.priou	;send to primary output
+	seto	t2,		;-1 means current time
+	setz	t3,		;column format
+	odtim			;show it
+	hrroi	t2,[asciz / TCPRCV:  /]
+	sout			;show it
+	move	t2,nbytes	;get byte count
+	movei	t3,^d10		;decimal
+	nout			;show that
+	 trn			;ignore errors
+	hrroi	t2,[asciz / bytes from /]
+	setz	t3,
+	sout
+	move	t2,fhost
+	cvhst
+	 trn
+	hrroi	t2,[asciz / in /]
+	sout
+	move	t2,stime	;get elapsed time in milliseconds
+	movei	t3,^d10		;decimal
+	nout			;show that
+	 trn			;ignore errors
+	hrroi	t2,[asciz / milliseconds = /]
+	setz	t3,
+	sout
+	move	t2,nbytes	;get number of bytes
+	muli	t2,^d8000	;*8 for number of bits, *1000 because millisec
+	div	t2,stime	;compute baud rate
+	movei	t3,^d10		;decimal
+	nout			;show that
+	 trn			;ignore errors
+	hrroi	t2,[byte (7)" ","b","a","u","d",15,12]
+	setz	t3,
+	sout
+   >;end ifn pstats
+
+;scan backwards through page and kill trailing formfeed
+
+;write out last page of file
+	move	t4,filbfc		;get number of characters remaining
+					; in last file page (used below)
+	pushj	p,dmpfil		;yes, write output buffer for file
+
+	move	t1, lptjfn		;output file jfn
+	tlo	t1, (co%nrj)		; Keep the jfn
+	closf				;close it
+	 tdn
+	hrli	t1, .fbsiz		; Change the file size
+	seto	t2,
+	move	t3, t			;get file size in pages
+   ifn eightb,<
+	imuli	t3,1000*4		; and convert into characters
+   >;end ifn eightb
+   ife eightb,<
+	imuli	t3,1000*5		; and convert into characters
+   >;end ife eightb
+;;;	sub	t3,t4			;subtract unused characters in last
+;;;					; page (from above)
+	chfdb
+	hrli	t1, .fbbyv
+	movsi	t2, (fb%bsz)
+   ifn eightb,<
+	movsi	t3, 001000
+	chfdb				; And the byte size to 8
+   >;end ifn eightb
+   ife eightb,<
+	movsi	t3, 000700
+	chfdb				; And the byte size to 7
+   >;end ife eightb
+	call	queue			; Tell QUASAR to print the file
+	jrst	loop			; Go wait for the next one
+;
+;  report error creating output file
+;
+nogo:	hrroi	t1,[asciz /TCPRCV:	Error creating output file/]
+	esout
+	skipn	1,lptjfn		;close lpt jfn if present
+	 jrst	nogo2
+	tlo	1,(cz%abt)		;abort output, expunge file
+	closf
+	 tdn				;ignore errors
+nogo2:	jrst	loop			; and try again
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;								;;
+;;		Dump page to output file			;;
+;;								;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+dmpfil:	JUMPN	T,DMPFI2		;IS THIS THE FIRST PAGE?
+	SETZ	1,			;GET A NULL
+   ifn eightb,<
+	LDB	2,[POINT 8,FILPAG_9,7]	;GET FIRST BYTE
+	CAIN	2,14			;WAS IT A FORMFEED?
+	DPB	1,[POINT 8,FILPAG_9,7]	;YES, DESTROY IT, LPTSPL WILL GIVE ONE
+   >;end ifn eightb
+   ife eightb,<
+	LDB	2,[POINT 7,FILPAG_9,6]	;GET FIRST BYTE
+	CAIN	2,14			;WAS IT A FORMFEED?
+	DPB	1,[POINT 7,FILPAG_9,6]	;YES, DESTROY IT, LPTSPL WILL GIVE ONE
+   >;end ife eightb
+DMPFI2:	move	t1,[.fhslf,,filpag]	;source for pmap
+	hrlz	t2,lptjfn		;lpt jfn
+	hrr	t2,t			;output page
+	movsi	t3,(pm%rd!pm%wr)	;read, write
+	pmap				;Map page out to file
+	addi	t,1			;step to next file page
+   ifn eightb,<
+	movei	t1,1000*4		;initalize
+	movem	t1,filbfc		; output byte counter
+	move	t1,[point 8,filpag_9]	;initalize
+	movem	t1,filbfp		; output byte pointer
+   >;end ifn eightb
+   ife eightb,<
+	movei	t1,1000*5		;initalize
+	movem	t1,filbfc		; output byte counter
+	move	t1,[point 7,filpag_9]	;initalize
+	movem	t1,filbfp		; output byte pointer
+   >;end ife eightb
+	popj	p,			;return
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;								;;
+;;		Read one byte from TCP connection		;;
+;;								;;
+;;	Accepts:						;;
+;;	   T1:	The JCN.  [IGNORED FOR NOW]			;;
+;;								;;
+;;	Returns:						;;
+;;	    +1:	Failure.					;;
+;;	    +2:	Success.  Byte returned in T2.			;;
+;;								;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+.bin:	sosge	inpbfc		;count char
+	jrst	[pushj p,.bin2	;buffer empty, need refill
+		  popj p,	;error, return to check for eof
+		 jrst .bin]	;continue
+	ildb	t2,inpbfp	;get a byte from buffer
+	aos	(p)		;skip
+	popj	p,		; return
+
+.bin2:	setzm	inhdr		;set up input buffer header
+	movei	t2,inpbf	;address of buffer
+	movem	t2,inhdr+1	;save in header
+	movei	t2,inpbfl*4	;length in octets of input buffer
+	movem	t2,inhdr+2	;save in header
+	setzm	inhdr+3		;there are no buffer options
+	setzm	inhdr+4		;there is no IP info (whatever that is...)
+	move	t1,jcn		;get jcn
+	tlo	t1,(tcp%wt)	;wait for data
+	movei	t2,inhdr	; and buffer header address
+	RECV%
+	 popj	p,		;error, return
+	skipge	inhdr		;error in header?
+	 jrst	[hrroi t1,[asciz /Error in receive header after good RECV%/]
+		 esout		;show it
+		 haltf]		; and halt so we will be noticed
+	movei	t2,inpbfl*4	;input buffer length
+	sub	t2,inhdr+2	;subtract number unfilled
+	movem	t2,inpbfc	;save in count
+   ifn pstats,<			;print statistics option
+	addm	t2,nbytes	;count bytes
+   >;end ifn pstats
+	move	t2,[point 8,inpbf] ;pointer to data
+	movem	t2,inpbfp	;save it
+   ifn 0,<
+	hrroi	t1,[asciz |
+TCPRCV:	RECV% |]
+	psout
+	movei	t1,.priou	;primary output
+	move	t2,inpbfc	;length
+	movei	t3,^d10		;decimal
+	nout
+	 TRN			;ignore errors here
+	hrroi	t1,[asciz | (PUSHed)|]
+	move	t2,inhdr	;get header
+	tlne	t2,(tcp%pu)	;pushed?
+	psout			;yes
+	hrroi	t1,[byte (7)15,12]
+	psout
+   >;end ifn 0
+	aos	(p)		;skip
+	popj	p,		; return
+
+; Here if we get a bad error
+tcperr:	push	p,1
+	push	p,2
+	push	p,3
+
+;; we check for close at the expected times, other times are errors
+;;	move	2,1
+;;	andi	2,37
+;;	cain	2,^d12			;closed or closing ?
+;;	 jrst	TCPEOF
+	hrroi	1,[asciz /TCPRCV:  TCP Error at /]
+	esout
+	movei	1,.priou		;primary output
+	hrrz	2,-3(p)			;get return pc
+	subi	2,1			;back up to tcperr call
+	movei	3,^d8			;octal
+	nout				;show it
+	 trn				;ignore error here
+	hrroi	1,[asciz /, /]		;punctuation
+	psout				; and space
+	move	2,-2(p)			;get contents of AC1 back
+	andi	2,37
+	hrro	1,TERRTB(2)		;get error message string addr
+	skipe	TERRTB(2)	
+	psout				;show error
+	hrroi	1,[byte (7)15,12]	;crlf
+	psout				;show it
+	pop	p,3			;restore acs
+	pop	p,2
+	pop	p,1
+	popj	p,			;return
+
+
+TERRTB:	0
+	[asciz/Argument Error in jsys./]
+	0
+	[asciz/Connection Not Open./]
+	[asciz/Temporarily Out of Resources./]
+	[asciz\Wild foreign host/port only allowed if listening.\]
+	[asciz/Connection Already Exists./]
+	[asciz/Connection Error or Rejected/]
+	0
+	[asciz/Transmission Timeout./]
+	0
+	0
+	[asciz/Connection Closed or Closing /]
+	[asciz/Wild local port is illegal./]
+	[asciz/Connection Reset./]
+	[asciz/Bad Buffer Argument./]
+	[asciz/No space right now./]
+	[asciz/Bad Argument to CHANL./]
+	0
+	0
+	[asciz/Funny pointer to STAT./]
+	[asciz/Bad Transfer Size to STAT./]
+	[asciz/Invalid symbolic name given to STAT./]
+	0
+	0
+	0
+	0
+	0
+	0
+	[asciz/Cannot change security level./]
+	[asciz/Only internet fork can run TVTs./]
+	[asciz/TCP Not Available (not on or initialized)./]
+
+
+;
+;  Abort called after tcperr when we want to give up
+;
+abort$:	skipn	1,jcn			;get jcn if we had one
+	jrst	abort1			;none, just clean up files
+	tlo	1,(tcp%wt)		;wait for close to finish
+	CLOSE%				;close it if we can
+	 jrst	.+3			;no wait if it fails
+	movei	1,^d10000		;if it closed,
+	disms				; wait 10 seconds
+	move	1,jcn			;get jcn again
+	ABORT%				;abandon it
+	 trn				;ignore errors
+	setzm	jcn			;we no longer have a jcn
+abort1:	skipn	t1,lptjfn		;does lpt have a jfn?
+	jrst	go			;no, restart loop
+	tlo	t1,(cz%abt)		;abort the file
+	closf				;close it
+	 trn				;ignore errors
+	setzm	lptjfn			;we no longer have a jfn
+	jrst	go			; Try again then
+
+; Convert string to sixbit output in 1, input in 2, max count in 3
+cvsix:	ildb	4, 2			; Get a character
+	jumpe	4, cvsix2		; Done
+	cail	4, "`"
+	 trza	4, "@"			; Lowercase to sixbit
+	 subi	4, " "			; Uppercase to sixbit
+	idpb	4, 1
+	sojg	3, cvsix
+cvsix2:	ret
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;								;;
+;;	Send a message to QUASAR to get our file queued		;;
+;;								;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+queue:	saveac <1,2,3>
+	hrrzs 1			;flush any junk tagging along with the jfn
+	push 17,1		;for the rljfn% below
+	setzm quefil
+	move 2,[quefil,,quefil+1]
+	blt 2,quefil+^d49
+	move 2,1		;get jfn
+	hrroi 1,quefil
+	movx 3,fld(.jsaof,js%dev)!fld(.jsaof,js%dir)!fld(.jsaof,js%nam)!fld(.jsaof,js%typ)!fld(.jsaof,js%gen)!js%paf
+	jfns%
+	movei 1,lquarg
+	movei 2,quearg
+	queue%
+	ifjer.
+	  hrroi 1, [asciz /TCPRCV: Can't QUEUE file /]
+	  psout%
+	  hrroi 1, lptnam
+	  psout%
+	  hrroi 1,[asciz /, /]
+	  psout%
+	  movei 1,.priou	;primary output
+	  hrloi 2,.fhslf	;this fork, most recent error
+	  setz 3,		;no limits on length
+	  erstr%		;show error
+	   trna			;bad error code
+	    trn			;bad lengths?
+	  hrroi 1,[byte (7)15,12]	;crlf
+	  psout%		;send it
+	endif.
+	pop 17,1
+	rljfn%
+	 trn			;ignore any errors
+	ret			; all done
+
+quefil:	block ^d50		; filename for queue request
+quearg:	qu%nrs!fld(.quprt,qf%fnc)
+	0			; no response block
+	fld(^d50,qa%len)!fld(.qbfil,qa%typ)
+	-1,,quefil
+	qa%imm!fld(1,qa%len)!fld(.qbcop,qa%typ)
+	1			; 1 copy
+	qa%imm!fld(1,qa%len)!fld(.qbfmt,qa%typ)
+	.qbfas			; ascii file
+	qa%imm!fld(1,qa%len)!fld(.qbodp,qa%typ)
+	1			; delete the file upon request completion
+	fld(2,qa%len)!fld(.qbact,qa%typ)
+	-1,,[asciz/LPTACC/]	; the account to use
+	qa%imm!fld(1,qa%len)!fld(.qbfrm,qa%typ)
+	sixbit/NORMNH/		
+lquarg==:.-quearg
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;								;;
+;;			    Data, etc.				;;
+;;								;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;
+;  data for TCP connection
+;
+jcn:	block	1		;job connection number
+inhdr:	block	5		;input buffer header
+inpbfp:	block	1		;input buffer pointer
+inpbfc:	block	1		;input buffer counter
+inpbfl==30000			;input buffer length
+				; (if window exceeds 16 bits,
+				;  the TCP will foolishly advertize
+				;   a 0 window by losing high order bits)
+;inpbf:	block	inpbfl		;input buffer
+inpbf=200000			;input buffer address
+;;	outhdr:	block	5		;output buffer header
+;;	outbfp:	block	1		;output buffer pointer
+;;	outbfc:	block	1		;output buffer counter
+;;	outbfl==100			;output buffer length
+;;	outbuf:	block	outbfl		;output buffer
+
+filbfp:	block	1		;file output buffer pointer
+filbfc:	block	1		;file output buffer counter
+
+qsrpid:	0				; PID of QUASAR
+mypid:	0				; My PID
+lptjfn:	0				; Jfn for file to print
+vaxflg:	0				; Non-zero if VAX (we must convert
+					;  LF to ^S before printing)
+lptnum:	-1				; Used in making filename
+fhost:	0				; Foreign host number
+
+ttbl:	block	200			;LF to ^S translation table
+
+jobnam:	block	1			;job name (sixbit) from other system
+paglim:	block	1			;page limit from other system
+lptnam:	block	20			;name of queue file nnnTMP.LPT.1
+
+   ifn pstats,<			;print statistics option
+stime:	block	1		;start time (or elapsed time after subm)
+nbytes:	block	1		;count of bytes received on connection
+   >;end ifn pstats
+
+pdl:	block	npdl
+
+tcpblk:	200	;local port
+	0	;foreign host
+	0	;foreign port
+	0	;local host
+	0	;reserved.
+
+	end	go
+
+; Local modes:
+; Mode:MACRO
+; Comment Column:40
+; End:

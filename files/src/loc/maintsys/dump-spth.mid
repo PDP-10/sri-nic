@@ -1,0 +1,192 @@
+;-*-Midas-*-
+
+	Title @DUMP-SPTH
+
+.DECSAV
+
+A=5
+B=6
+C=7
+T=12
+TT=13
+T3=14
+T4=15
+P=17
+
+PDLen==40
+
+STGADR==77,,777777
+
+.INSRT MID:SYMBOLS
+.INSRT MID:MACROS
+
+JFN:	0
+FDBADR:	0
+SPTH:	0
+SPTO:	0
+NOFN:	0
+OFNaob:	0
+SSPT:	0
+usSPTH:	Block 10000
+SPTHfn:	Block 10000
+
+PDL:	-PDLen,,.
+	Block PDLen
+
+SymTab:	[.RSQZ 0,SPTH],,SPTH
+	[.RSQZ 0,SPTO],,SPTO
+	[.RSQZ 0,NOFN],,NOFN
+	[.RSQZ 0,SSPT],,SSPT
+nSyms==.-SymTab
+
+CRLF:	Asciz "
+"
+
+GJblok:	GJ%OLD\GJ%IFG\GJ%XTN+.GJALL
+	.NULIO,,.NULIO
+	-1,,[Asciz "DSK*"]	;Device
+	-1,,[Asciz "*"]		;Directory
+	-1,,[Asciz "*"]		;Name
+	-1,,[Asciz "*"]		;Type
+	-1,,[Asciz "*"]		;Version
+	0			;Protection
+	0			;Account
+	0			;JFN
+	G1%IIN
+
+.INSRT MID:PRARG
+
+Begin:	RESET%
+	Move P,PDL
+	Movei 1,.FHSLF
+	Seto 3,
+	EPCAP%			;Enable our capabilities
+	Type "Snooping monitor symbols..."
+	Call GetSym
+	Type "OK
+Grabbing SPTH..."
+	Hrlz 1,SSPT
+	Hrr 1,SPTH
+	Movei 2,usSPTH
+	PEEK%
+	  .Lose
+	TypeCR "OK
+Scanning file system..."
+	Call ScanFS
+	TypeCR "OK
+----------------------------------------------------------------------"
+	Move T,OFNaob
+Scan:	Skipn usSPTH(T)
+	  Jrst Next
+	Movei 1,.PRIOU
+	Movei 2,(T)
+	Move 3,[Field(4,NO%COL)+NO%LFL+8.]
+	NOUT%
+	  Nop
+	Type " --> "
+	Skipn 1,SPTHfn(T)
+	  Hrroi 1,[Asciz "?"]
+	PSOUT%
+	Type ", SC = "
+	Move 1,SPTO
+	Addi 1,(T)
+	Hrli 1,1
+	Movei 2,TT
+	PEEK%
+	  .Lose
+	Movei 1,.PRIOU
+	Hlrz 2,TT
+	Movei 3,10.
+	NOUT%
+	  Nop
+	Move TT,usSPTH(T)	;Get full word
+    IRP ahem,,[1,2,3,4,5,6,7,8.,9.,10.,11.]name,,[FILWB,THAWB,FILNB,SPTLKB,OFNWRB,OFNBAT,OFNERR,OFNDMO,OFNDUD,OFN2XB,SPAREH]
+	Txne TT,Bit(ahem)
+	  Jrst [Type ", !name"
+		Jrst .+1]
+    TERMIN
+	AType CRLF
+Next:	Aobjn T,Scan
+Die:	.Logout
+	Jrst Die
+
+GetSym:	Movsi T,-nSyms
+GetSy0:	Movei 1,.SNPSY
+	Hlrz 2,SymTab(T)
+	Move 2,(2)
+	Setz 3,
+	SNOOP%
+	  .Lose
+	Hrrz 3,SymTab(T)
+	Movem 2,(3)
+	Aobjn T,GetSy0
+	Return
+
+ScanFS:	Movei 1,GJblok
+	Hrroi 2,[Asciz "DSK*:<*>*.*.*"]
+	GTJFN%
+	  .Lose
+	Movem 1,JFN
+	Hrroi A,StrBuf
+	Movs 1,NOFN
+	Movns 1
+	Hrri 1,1
+	Movem 1,OFNaob
+	Setz T4,
+	Skipe usSPTH(1)
+	  Addi T4,1		;Count of active OFNs
+	Aobjn 1,.-2
+	Movei 1,.PRIOU
+	Movei 2,(T4)
+	Movei 3,10.
+	NOUT%
+	  Nop
+	TypeCR ". OFNs to look for (each '.' is a match):"
+
+ScanF0:	Hrrz 1,JFN
+	Move 2,[1,,.FBADR]
+	Movei 3,T
+	GTFDB%
+	  .Lose
+	Move TT,OFNaob
+ScanF1:	Skipn usSPTH(TT)
+	  Jrst ScanF2
+	Ldb T3,[.BP STGADR,usSPTH(TT)]	;Get the index block address
+	Camn T3,T
+	  Jrst [Skipe SPTHfn(TT)	;???
+		  Jrst ScanF2		;???
+		Movem A,SPTHfn(TT)
+		Move 1,A
+		Hrrz 2,JFN
+		Movx 3,JS%SPC
+		JFNS%
+		  .Lose
+		Hrroi A,2(1)
+		CType ".
+		Sojg T4,ScanF2
+		Move 1,JFN
+		RLJFN%
+		  Nop
+		Return]
+	Aobjn TT,ScanF1
+ScanF2:	Move 1,JFN
+	GNJFN%
+	  Skipa
+	    Jrst ScanF0
+	AType CRLF
+	Movei 1,.PRIOU
+	Movei 2,(T4)
+	Movei 3,10.
+	NOUT%
+	  Nop
+	TypeCR ". OFNs not found."
+	Return
+
+Variables
+Constants
+
+StrBuf:	0
+
+	Loc 770*1000		;Put symbols here
+
+	End Begin

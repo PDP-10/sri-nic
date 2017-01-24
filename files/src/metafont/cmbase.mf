@@ -1,0 +1,489 @@
+eps=.000314159;	% a very small random positive number
+proof=0; lowres=1; crs=2; dover=3; canon=4; canrst=5;
+	% symbolic names of modes
+designsize ptsize; % ignore error messages you get with old MF!
+if mode<0: mmode=-mode; new mode; mode=mmode;	% negative modes assume \\{mag} is set
+else: mag=1;
+fi;
+magnification mag;
+if mode=proof: proofmode; drawdisplay; titletrace;
+	pixels=18*mag; blacker=0; overcorr=1;	% for initial design of characters
+else:	if mode=lowres: fntmode; tfxmode; no modtrace;
+		pixels=(200/72.27)mag; blacker=.65; overcorr=.4;	% XGP, etc.
+	else: if mode=crs: crsmode; tfxmode; titletrace; no modtrace;
+			pixels=(16000/(3*72.27))mag; blacker=4; overcorr=1;	% Alphatype
+		else: if mode=dover: ocmode; tfmmode; dotwdmode; no modtrace;
+				overcorr=.6;
+				pixels=(384/72.27)mag; blacker=1.2;  % Dover
+			else: if mode=canon: chrmode; tfxmode; no modtrace;
+					pixels=(300/72.27)mag;
+					blacker=.2; overcorr=.4;	% Canon
+                          else: if mode=canrst: rstmode; tfxmode; no modtrace;
+					proofmode;
+					pixels=(300/72.27)mag;
+					blacker=.2; overcorr=.4;	% Canon
+				else: input mode;
+				fi;
+			  fi;
+			fi;
+		fi;
+	fi;
+fi;
+fontfacebyte 254-2*ptsize;
+hresolution pixels; vresolution pixels.
+
+subroutine fontbegin:	% Initialize before making a font:
+no eqtrace;	% Turn off tracing within this subroutine
+new typesize;	% the vertical size of the font
+new cf;		% conversion factor, approximately equal to \\{pixels}
+new h,hh,hhh,d,dd,m,e,o,oo,b,s,ssd,ssdoo,as,a;	% raster-oriented vertical dimensions
+new del; del=round pixels.pdel;	% raster-oriented displacement at corners
+new w0,w1,w2,w3,w4,w5,w6,w7,w8,w9,w10,w11;	% raster-oriented pen sizes
+new deltaw,bold;	% unrounded raster-oriented pen size values
+new armic,lcic;	% italic corrections commonly used
+new prt;	% rule thickness in points
+w0=round(pixels.pw+blacker);	% hairline width
+w1=round(pixels.pwi+blacker);	% stem width
+w2=round(pixels.pwii+blacker);	% curve width
+w3=round(pixels.pwiii+blacker);	% dot diameter
+w4=round(pixels.pwiv+blacker);	% uppercase stem width
+w5=round(pixels.pwv+blacker);	% uppercase curve width
+w6=round(pixels.pw.aspect+blacker);	% hairline height
+w7=round(pixels.pwi.aspect+blacker);	% stem height
+w8=round(pixels.pwii.aspect+blacker);	% curve height
+w9=round(pixels.pwiv.aspect+blacker);	% uppercase stem height
+prt=.25[pw,pwii];	% rule thickness in points
+w10=round(pixels.prt+.4);	% raster-oriented rule thickness
+w11=round(pixels(.25[pw,pwi])+blacker);	% hairline plus a little
+deltaw=pixels.(pwii-pwi);	% one step of boldening
+bold=.5[pwii,pwiii].pixels+blacker;
+
+% The following corrections are for low resolution:
+if w3/w1>5/4(pwiii/pwi): new w2,w3; w2=w3=w1;
+fi;
+if w2/w1>1.1(pwii/pwi): new w2; w2=w1;
+fi;
+if w5/w4>1.1(pwv/pwiv): new w5; w5=w4;
+fi;
+if w8/w7>1.1(pwii/pwi): new w8; w8=w7;
+fi;
+if w7/w1<.9aspect: new tmp; tmp=round .5[w7,w1]; new w7; w7=tmp;
+fi;
+if w8/w2<.9aspect: new tmp; tmp=round .5[w8,w2]; new w8; w8=tmp;
+fi;
+if w9/w4<.9aspect: new tmp; tmp=round .5[w9,w4]; new w9; w9=tmp;
+fi;
+if w0<3: new crisp; crisp=0;
+fi;
+hpenht w6;  vpenwd w0; lpenht w6; rpenht w6;
+typesize=ph+pd+2pb; cf.typesize=pixels.typesize-1;
+h=round cf.ph;  d=round cf.pd; 
+hh=round cf.phh; hhh=round cf.phhh; dd=round cf.pdd;
+m=round cf.px; a=.5 round 2cf.pa;
+o=round cf.po.overcorr; oo=round .5cf.po.overcorr;
+s=cf.ps; ssd=round cf.pssd; as=cf.pas+eps;
+if ssd>oo: ssdoo=oo;
+else: ssdoo=ssd;
+fi;
+b=-round(.5(h+d-typesize.pixels));
+e=good6 cf.pe;
+maxht h+b+4;
+trxy slant;
+if ucs0: armic=ph.slant+(sc-1)pu;
+else: armic=ph.slant+(sc-.5)pu;
+fi;
+if pwii>1.5pu: lcic=-.25pu;
+else: lcic=.5pwii-pu;
+fi.
+
+subroutine charbegin(var charno)	% seven-bit character code
+		(var charuw)		% character width in units
+	(var lftcorr, var rtcorr)	% sidebar corrections in units
+(var charh, var chard, var chari):	% \&{charht}, \&{chardp}, \&{charic} values in points
+no eqtrace; no calltrace; no drawdisplay;	% no tracing in this subroutine
+new uw,moduw;	% the correct character width in units
+new r;	% raster-oriented character width
+new u;	% raster-oriented design unit
+new tu;	% unmodified raster-oriented unit
+new italcorr;	% italic correction
+new lcorr,rcorr;	% left and right corrections
+if chari0: italcorr=chari; else: italcorr=0;
+fi;
+if danger0: % rounding of character width is necessary
+	lcorr=danger.round((lftcorr-ls)/danger);
+	rcorr=danger.round((rtcorr-ls)/danger);
+else: lcorr=lftcorr-ls; rcorr=rtcorr-ls;
+fi;
+tu=pu.pixels; uw=charuw-(lcorr+rcorr);
+if fixwidth=0: moduw=uw;
+else: moduw=9; new italcorr; italcorr=0;
+fi;
+r=charuw.u=round((moduw.tu-2).charuw/uw);
+charcode charno; charic italcorr;
+if charh>0: charht charh;
+else: charht 0;
+fi;
+if chard>0: chardp chard;
+else: chardp 0;
+fi;
+charwd moduw.pu; chardw moduw.tu;
+incx round(-lcorr.u);
+if mode=proof: call box(round lcorr.u);
+fi.
+
+subroutine box(var offset):	% Draw guidelines and box around a character:
+no drawtrace; no proofmode;
+new topp,bott,left,right,pos;
+topp=h+b; bott=-d-b;
+left=offset; right=offset+u.uw;
+x1=x3=x5=x7=x9=x11=x13=x15=x17=left;
+x2=x4=x6=x8=x10=x12=x14=x16=x18=right;
+y1=y2=0; cpen;  1 draw1..2;	% baseline
+y3=y4=e; draw3..4;	% e-height
+y5=y6=m; draw5..6;	% mean line (x-height)
+y7=y8=h; draw7..8;	% h-height
+y9=y10=topp; draw9..10;	% top of character
+y11=y12=-d; draw11..12;	% descender line
+y13=y14=bott; draw13..14;	% bottom of character
+trxy 0;	% temporarily turn off the slant
+y15=y16=topp;  y17=y18=bott;
+draw15..17; draw16..18;	% left and right edges
+if italcorr>0: x19=x20=right+italcorr.pixels;
+	y19=topp;  y20=0; draw19..20;	% show italic correction
+fi;
+trxy slant;	% restore slanted transformation
+pos=0; call unitlines.	% draw the unit guidelines
+
+subroutine unitlines:	% Recursive subroutine to draw guidelines:
+x1=x2=pos;y1=topp;y2=bott;cpen;
+if posleft: 1 draw1..2;
+fi;
+new pos; pos=x1+u;
+if posright: call unitlines;
+fi.
+% The following subroutines are used to draw common features of characters.
+
+subroutine rect(index i):	% plot a rectangle at point i
+if round(w0/2)=w0/2: x1=xi-.5; y1=yi;
+	lpen; (w0-2)/2 draw 1; rpen; w0/2 draw 1;
+else: lpen; (w0-1)/2 draw i; rpen; (w0-1)/2 draw i;
+fi.
+
+subroutine serif(index i)	% point where serif appears
+		(index k)	% $w$-variable for stem line
+		(index j)	% another point on the stem line
+		(var sl):	% serif length
+y1=yi;
+if yi<yj: y2=yi+s;
+else: y2=yi-s;
+fi;
+hpen;
+if sl<0: lft0x1=lft k xi+sl.u-eps;
+	lft0x2=lft k (y2-yi)/(yj-yi)[xi,xj];
+else: rt0x1=rt k xi+sl.u+eps;
+	rt0x2=rt k (y2-yi)/(yj-yi)[xi,xj];
+fi;
+no proofmode;
+x3=1/3[x1-sl.u,1/2[x1,x2]]; 
+y3=1/3[yi,1/2[y1,y2]];
+minvr 0; minvs 0;
+w0 ddraw 1{xi-x1,0}..3..2{xj-xi,yj-yi}, 1..i..2;	% serif stroke
+minvr 0.5; minvs 0.5;
+if crisp0: call rect(1);	% square it off
+fi.
+
+subroutine dserif(index i)	% point where dark serif appears
+		(index k)	% $w$-variable for stem line
+		(index j)	% another point on the stem line
+		(var sl):	% serif length
+y1=yi;
+if yi<yj: y2=yi+1.5s;
+else: y2=yi-1.5s;
+fi;
+hpen;
+if sl<0: lft0x1=lft k xi+sl.u-eps;
+	lft0x2=lft k (y2-yi)/(yj-yi)[xi,xj];
+else: rt0x1=rt k xi+sl.u+eps;
+	rt0x2=rt k (y2-yi)/(yj-yi)[xi,xj];
+fi;
+no proofmode;
+x3=1/2[x1-sl.u,1/2[x1,x2]]; 
+y3=1/2[yi,1/2[y1,y2]];
+minvr 0; minvs 0;
+w0 ddraw 1{xi-x1,0}..3..2{xj-xi,yj-yi}, 1..i..2;	% serif stroke
+minvr 0.5; minvs 0.5;
+if crisp0: call rect(1);	% square it off
+fi.
+
+subroutine sserif(index i)	% point where sheared serif appears
+		(index k)	% $w$-variable for stem line
+		(index j)	% another point on the stem line
+		(var sl):	% serif length
+hpen; lft0x1=lft k xi + sl.u-eps; x3=xi; rt0x2=rt k xi;
+y1=y3=yi-ssd; y2=yi;
+lpen#; wk draw 2..1;	% erase excess
+if crisp=0: hpen; w0 ddraw 2..1,3..1;	% diagonal down to the spur
+else: lpen; (w0-1-eps)/2 ddraw 2..1,3..1;	% diagonal down to the spur
+fi;
+call serif(3,k,j,sl).	% spur
+
+subroutine darc(index i)	% starting point
+		(index j)	% opposite corner point
+		(var maxwidth):	% the pen grows from $w0$ to this size
+x5=xi;  x2=x4=1/sqrttwo [xi,xj];  x3=xj;
+y5=yj;  y3=1/2[yi,yj];
+y2=1/sqrttwo [y3,yi];  y4=1/sqrttwo [y3,yj];
+hpen;  draw |w0|i{x3-xi,0}..|2/3[w0,maxwidth]|2{x3-xi,y3-yi}..
+	|maxwidth#|3{0,y3-yi}..
+	|2/3[w0,maxwidth]|4{x5-x3,y5-y3}..|w0|5{x5-x3,0}.
+
+subroutine arc(index i)		% horizontal endpoint
+		(index j)	% vertical endpoint
+		(var maxwidth):	% the pen grows from $w0$ to this size
+x1=1/sqrttwo[xi,xj]; y1=1/sqrttwo[yj,yi];
+hpen; draw |w0|i{xj-xi,0}..|2/3[w0,maxwidth]|1{xj-xi,yj-yi}..
+	|maxwidth|j{0,yj-yi}.
+
+subroutine arm(index i)		% starting point
+		(index j)	% horizontal endpoint
+		(index k)	% serif endpoint
+		(var delt):	% thickness control
+hpen;
+if pas0:
+	if w0=w4: x1=xk; y1=yj; 
+		w0 draw i..1; draw 1..k;
+	else: minvr 0; minvs 0;
+		x1=xj-delt; y1=.2[yj,yk];
+		x2=xk; y2=2[yj,yk];
+		x3=.5[xi,x1]; y3=yi; w0 draw i..3;
+		w0 ddraw 3..j..k, 3{xj-xi,0}..1..k(..2);
+		minvr 0.5; minvs 0.5;
+	fi;
+else: x1=xk; y1=yj; w0 draw i..1;
+fi.
+
+subroutine scomp(index i)	% starting point
+		(index p)	% turning point ($yp$ to be defined)
+		(index j)	% transition point (to be defined)
+		(index k)	% ending point
+		(var slope):	% ending slope
+% This subroutine computes $yp$, $xj$, $yj$ so that $yk-yj=\\{slope}.(xk-xj)$
+% and so that the following curve is consistent with an ellipse:
+% $i\{xp-xi,0\}\to p\{0,yp-yi\}\to j\{xk-xp,\\{slope}.(xk-xp)\}$.
+yk-yj=slope(xk-xj);
+new aa,bb; aa=slope(xp-xi); bb=yk-yi-slope(xk-xi);
+xj-xi=-2aa.bb(xp-xi)/(aa.aa+bb.bb);
+yp-yi=.5(bb.bb-aa.aa)/bb.
+
+subroutine sdraw(index i)	% starting point
+		(index p)	% upper turning point ($yp$ to be defined)
+		(index k)	% middle point
+		(index q)	% lower turning point ($yq$ to be defined)
+		(index j)	% ending point
+		(var penwd)	% effective width of hpen used
+		(var penht)	% effective pen height at point $k$
+		(var slope):	% slope at point $k$
+new w48,w49; w48=penht; w49=penwd;
+cpen; top6y5=top48yk; bot6y6=bot48yk; x5=x6=xk;
+if xp<xi: rt49xp=rt0x1; lft49xp=lft0x2; rt49xq=rt0x9; lft49xq=lft0x10;  
+else: lft49xp=lft0x1; rt49xp=rt0x2; lft49xq=lft0x9; rt49xq=rt0x10;
+fi;
+y2=yp; y9=yq;
+call scomp(i,1,3,5,slope);	% compute $y1$ and point 3
+call scomp(i,2,4,6,slope);	% compute $y2$ and point 4
+if (yi-y1)/(xi-x1)/(xi-x1)<(yi-y2)/(xi-x2)/(xi-x2):
+	new x1,y1,aa,x3,y3;	% correction to keep ellipses from crossing
+	2(yi-y2)/(xi-x2)/(xi-x2)=(yi-y5)aa-slope.slope/(yi-y5);
+	if xp<xi: xi-x1=1/sqrt aa;
+	else: xi-x1=-1/sqrt aa;
+	fi;
+	call scomp(i,1,3,5,slope);	% recompute $y1$ and point 3
+fi;
+call scomp(j,9,7,5,slope);	% compute $y9$ and point 7
+call scomp(j,10,8,6,slope);	% compute $y{10}$ and point 8
+if (yj-y10)/(xj-x10)/(xj-x10)>(yj-y9)/(xj-x9)/(xj-x9):
+	new x10,y10,aa,x8,y8;	% correction to keep ellipses from crossing
+	2(yj-y9)/(xj-x9)/(xj-x9)=(yj-y6)aa-slope.slope/(yj-y6);
+	if xq<xj: xj-x10=1/sqrt aa;
+	else: xj-x10=-1/sqrt aa;
+	fi;
+	call scomp(j,10,8,6,slope);	% recompute $y{10}$ and point 8
+fi;
+hpen; w0 ddraw i{x1-xi,0}..1{0,y1-yi}..3{xq-xp,slope(xq-xp)}..
+		7{xq-xp,slope(xq-xp)}..
+		9{0,yj-y9}..j{xj-x9,0},
+	i{x2-xi,0}..2{0,y2-yi}..4{xq-xp,slope(xq-xp)}..
+		8{xq-xp,slope(xq-xp)}..
+		10{0,yj-y10}..j{xj-x10,0}.	% the s-curve
+
+subroutine zcomp(index i)	% starting point
+		(index p)	% turning point ($xp$ to be defined)
+		(index j)	% transition point (to be defined)
+		(index k)	% ending point
+		(var slope):	% reciprocal of ending slope
+% This subroutine is dual to \\{scomp}.
+% It computes $xp$, $xj$, $yj$ so that $xk-xj=\\{slope}\cdot(yk-yj)$
+% and so that the following curve is consistent with an ellipse:
+% $i\{0,yp-yi\}\to p\{xp-xi,0\}\to j\{\\{slope}.(yk-yp),yk-yp\}$.
+xk-xj=slope(yk-yj);
+new aa,bb; aa=slope(yp-yi); bb=xk-xi-slope(yk-yi);
+yj-yi=-2aa.bb(yp-yi)/(aa.aa+bb.bb);
+xp-xi=.5(bb.bb-aa.aa)/bb.
+
+subroutine zdraw(index i)	% starting point
+		(index p)	% left turning point ($xp$ to be defined)
+		(index k)	% middle point
+		(index q)	% right turning point ($xq$ to be defined)
+		(index j)	% ending point
+		(var penht)	% effective height of hpen used
+		(var penwd)	% effective pen width at point $k$
+		(var slope):	% reciprocal of slope at point $k$
+% This subroutine is dual to \\{sdraw}.
+new w48,w49; w48=penwd; w49=penht;
+cpen; lft0x5=lft48xk; rt0x6=rt48xk; y5=y6=yk;
+if yp>yi: bot49yp=bot6y1; top49yp=top6y2;
+	bot49yq=bot6y9; top49yq=top6y10;  
+else: top49yp=top6y1; bot49yp=bot6y2;
+	top49yq=top6y9; bot49yq=bot6y10;
+fi;
+x2=xp; x9=xq;
+call zcomp(i,1,3,5,slope);	% compute $x1$ and point 3
+call zcomp(i,2,4,6,slope);	% compute $x2$ and point 4
+if (xi-x1)/(yi-y1)/(yi-y1)>(xi-x2)/(yi-y2)/(yi-y2):
+	new x1,y1,aa,x3,y3;	% correction to keep ellipses from crossing
+	2(xi-x2)/(yi-y2)/(yi-y2)=(xi-x5)aa-slope.slope/(xi-x5);
+	if yp<yi: yi-y1=1/sqrt aa;
+	else: yi-y1=-1/sqrt aa;
+	fi;
+	call zcomp(i,1,3,5,slope);	% recompute $x1$ and point 3
+fi;
+call zcomp(j,9,7,5,slope);	% compute $x9$ and point 7
+call zcomp(j,10,8,6,slope);	% compute $x{10}$ and point 8
+if (xj-x10)/(yj-y10)/(yj-y10)<(xj-x9)/(yj-y9)/(yj-y9):
+	new x10,y10,aa,x8,y8;	% correction to keep ellipses from crossing
+	2(xj-x9)/(yj-y9)/(yj-y9)=(xj-x6)aa-slope.slope/(xj-x6);
+	if yq<yj: yj-y10=1/sqrt aa;
+	else: yj-y10=-1/sqrt aa;
+	fi;
+	call zcomp(j,10,8,6,slope);	% recompute $x{10}$ and point 8
+fi;
+hpen; w0 ddraw i{0,y1-yi}..1{x1-xi,0}..3{slope(yq-yp),yq-yp}..
+		7{slope(yq-yp),yq-yp}..
+		9{xj-x9,0}..j{0,yj-y9},
+	i{0,y2-yi}..2{x2-xi,0}..4{slope(yq-yp),yq-yp}..
+		8{slope(yq-yp),yq-yp}..
+		10{xj-x10,0}..j{0,yj-y10}.	% the s-curve
+
+subroutine bar(index i, index j, index p):
+% This subroutine is similar to ``\&{vpen};\quad $wp$ \&{draw} $i\to j$'',
+% but the \&{vpen} slants with italic.
+no proofmode;	% the points computed aren't interesting
+vpen; top6y1=top p yi; bot6y2=bot p yi;
+top6y3=top p yj; bot6y4=bot p yj;
+x1=x2=xi; x3=x4=xj;
+w6 ddraw 1..3, 2..4.
+
+subroutine fstroke(index i)	% dot position
+		  (index j):	% $x$-coordinate of stem
+hpen; x1=xj; bot1yj=0; y1=.5[m,h];
+rt0x3=rt3xi; y3=yi;
+x2=.5[x3,x1]; top0y2=h+oo;
+draw |w1|j..|w1#|1{0,1}..|w0#|2{1,0}..3{0,-1};	% shoulder and stem
+cpen; w3 draw i;	% bulb
+if lcs0: call `a serif(j,1,1,-lcs);
+	call `b serif(j,1,1,lcs);	% serif
+fi.
+
+subroutine hstroke(index i)	% $x$-coordinate of left stem
+		(index j)	% $x$-coordinate of right stem
+		(index k):	% will be set to base of right stem
+hpen; xk=xj; bot1yk=0;
+rt0x1=rt1xi; y1=1/8[e,m]; yj=1/3[e,m];
+x2=.5[xi,xj]; top3y2=m+oo;
+new stwo; stwo = sqrt 1.23114413sqrttwo;	% the constant is $2^{3/10}$
+x3=1/stwo [x2,xj]; y3=1/stwo [yj,y2];
+no proofmode; rt0x4=rt1xj; lft0x5=lft1xj;
+x6=1/stwo[x2,x4]; x7=1/stwo[x2,x5];
+y4=y5=yj; y6=y7=1/stwo[y4,y2];
+w0 draw 1{0,1}..2{1,0};	% link
+ddraw 2{1,0}..6{x4-x2,y4-y2}..4{0,-1},
+	2{1,0}..7{x5-x2,y5-y2}..5{0,-1};	% shoulder
+w1 draw j..k.	% stem
+
+subroutine cdraw(index i, index j)	% given points
+		(index p, index q):	% given widths, $wpwq$
+% An implementation of the forbidden ``\&{cpen};\quad\&{draw} $|wp|i\to |wq|j$''.
+cpen; wp draw i;	% plot the bigger dot
+new aa; (aa+eps)sqrt((xj-xi)(xj-xi)+(yj-yi)(yj-yi))=wp-wq;
+x2-x1=aa(yi-yj); y2-y1=aa(xj-xi);
+xi=.5[x1,x2]; yi=.5[y1,y2];	% perpendicular points
+wq ddraw 1..j, 2..j.	% fill in the rest
+
+subroutine qcirc(index i)	% horizontal endpoint
+	(index j)	% intermediate point
+	(index k)	% vertical endpoint
+	(var size):	% size of \&{cpen} that draws a quarter circle
+cpen; xj=1/sqrttwo[xi,xk]; yj=1/sqrttwo[yk,yi];
+size draw i{xk-xi,0}..j{xk-xi,yk-yi}..k{0,yk-yi}.
+
+subroutine hcirc(index viii, index i, index ii, index iii, index iv, var size):
+xiv=xviii; yii=.5[yiv,yviii];
+call qcirc(viii,i,ii,size); call qcirc(iv,iii,ii,size).
+
+subroutine circle(index i, index ii, index iii, index iv,
+	index v, index vi, index vii, index viii, var size):
+xiv=xviii=.5[xvi,xii]; yii=yvi=.5[yiv,yviii];
+call qcirc(viii,i,ii,size); call qcirc(iv,iii,ii,size);
+call qcirc(iv,v,vi,size); call qcirc(viii,vii,vi,size).
+
+subroutine entry(var z)		% $x$-coordinate for upward stroke
+	(index j):	% $x$-coordinate for downward stroke ($yj$ will be set)
+% This subroutine draws a little hook at the beginning left of an italic character,
+% ending with the pen traveline vertically at point $j$ with size $w1$.
+hpen; x1=good0z; y1=2/3m; yj=3/4m; x2=xj-1.5u; top0y2=m+oo;
+draw |w0|1{(xj-2.5u)-x1,m}..|w0#|2{1,0}..|w1#|j{0,-1}.
+
+subroutine skewentry(var z)	% $x$-coordinate for upward stroke
+	(index j):	% $x$-coordinate for downward stroke ($yj$ will be set)
+% This subroutine is analogous to \\{entry}, but the pen starts out vertical
+% and ends at the skewed slope $\{-u,-m\}$ to compensate for optical illusion.
+hpen; x1=good0z; y1=2/3m; yj=3/4m;
+x2=xj-1.25u; top0y2=m+oo;
+draw |w0|1{0,1}..|w0#|2{1,0}..|w1#|j{-u,-m}.
+
+subroutine exit(index i)	% $x$-coordinate for downward stroke ($yi$ will be set)
+	(var z):	% $x$-coordinate for upward stroke
+% This subroutine draws a little hook at the ending right of an italic character,
+% beginning with the pen traveling vertically at point $i$ with size $w1$.
+hpen; x2=good0z; y2=1/3m; yi=1/4m; x1=xi+1.5u; bot0y1=-oo;
+draw |w1#|i{0,-1}..|w0#|1{1,0}..2{x2-(xi+2.5u),m}.
+
+subroutine skewexit(index i)	% $x$-coordinate for downward stroke ($yi$ will be set)
+	(var z):	% $x$-coordinate for upward stroke
+% This subroutine is analogous to \\{exit}, but the pen begins with the skewed
+% slope $\{-u,-m\}$ to compensate for optical illusion, and ends vertically.
+hpen; x2=good0z; y2=1/3m; yi=1/4m; x1=xi+1.25u; bot0y1=-oo;
+draw |w1#|i{-u,-m}..|w0#|1{1,0}..2{0,1}.
+
+subroutine italhstroke(index i)	% starting point
+		(index j):	% $x$-coordinate of right stem ($yj$ will be set)
+hpen; x1=.6[xi,xj]; x2=xj-.4u; top0y1=m+oo; y2=.75[e,y1];
+yj=.3[e,m];
+draw |w0|i{0,1}..|w0#|1{1,0}..|.75[w0,w1]|2..|w1#|j{0,-1}.
+
+subroutine pistroke:	% makes the bar of pi, tau, variant omega
+vpen; x1=good0(0); y1=m-m/3.14159;
+x2=2u; top7y2=m; y3=y2; x3=r-1.5u;
+draw |w6#|1{x2-x1,3.14159(y2-y1)}..|w7#|2{1,0}..3;	% bar
+cpen; w7 draw 3.	% make the end point round
+
+subroutine endv(index i):	% draws final bulb starting at this point
+cpen; x1=xi-u; x2=xi-6u; top2y1=m+oo; y2=y1;
+hpen; draw |w0#|i{0,1}..|w2#|1(..2);	% stroke
+cpen; w2 draw 1.	% bulb
+
+subroutine max(var a, var b):	% sets $\\{acc}=\max(a,b)$
+new acc;
+if a>b: acc=a;
+else: acc=b;
+fi.
